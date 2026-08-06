@@ -1,0 +1,16 @@
+# Non-stdlib dependencies for tools/workbook_audit/.
+#
+# openpyxl: workbook object model (sheets, cells, formulas-as-authored,
+#   merges, tables, data validations, protection). Assumed pre-installed
+#   per the audit brief ("Prefer Python standard libraries plus openpyxl").
+openpyxl>=3.1
+
+# olefile: reads the OLE Compound File container (vbaProject.bin) so the
+#   VBA project can be inventoried and decompiled. Added deliberately and
+#   documented per the brief's "Document any dependency added" — it is a
+#   single-purpose, zero-transitive-dependency, ~114KB package. We did NOT
+#   add oletools/pcodedmp (which depend on olefile plus several more
+#   packages) — the MS-OVBA decompression algorithm itself is implemented
+#   directly in tools/workbook_audit/vba_reader.py using only olefile +
+#   stdlib, to keep the dependency footprint minimal. See docs/audit-plan.md.
+olefile>=0.47

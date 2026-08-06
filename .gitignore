@@ -1,0 +1,15 @@
+# Source workbook — real client/rate data, never goes to the (public) remote.
+# The audit tooling expects it at this exact path locally; see docs/audit-plan.md.
+/Reference/ORLANDO ESTIMATE.xlsm
+
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editors
+.vscode/
+.idea/

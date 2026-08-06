@@ -1,0 +1,770 @@
+[
+  {
+    "module_name": "ThisWorkbook",
+    "worksheet_name": "ThisWorkbook",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet1",
+    "worksheet_name": "DATA",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet2",
+    "worksheet_name": "Base",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet3",
+    "worksheet_name": "Start Page",
+    "module_type": "document",
+    "line_count": 26,
+    "has_executable_code": true,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet4",
+    "worksheet_name": "SUPPLEMENTAL",
+    "module_type": "document",
+    "line_count": 11,
+    "has_executable_code": true,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet5",
+    "worksheet_name": "CHANGE ORDER",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet6",
+    "worksheet_name": " ESTIMATE",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet7",
+    "worksheet_name": "PROPOSAL",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet8",
+    "worksheet_name": "Flooring",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet9",
+    "worksheet_name": "Structure",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet10",
+    "worksheet_name": "Furniture",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet11",
+    "worksheet_name": "Accessories",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet12",
+    "worksheet_name": "AV",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet13",
+    "worksheet_name": "Hanging Sign",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet14",
+    "worksheet_name": "Cross Rental Furniture",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet15",
+    "worksheet_name": "Cross Rental AV",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet16",
+    "worksheet_name": "Cross Rental TBD 1",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet17",
+    "worksheet_name": "Cross Rental TBD 2",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet18",
+    "worksheet_name": "LABOR RATES ",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet19",
+    "worksheet_name": "Show Services",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet20",
+    "worksheet_name": "PMC ",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet21",
+    "worksheet_name": "Price Summary",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet22",
+    "worksheet_name": "COST SUMMARY",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet23",
+    "worksheet_name": "INVOICE REQUEST",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet24",
+    "worksheet_name": "INVOICE ",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet25",
+    "worksheet_name": "COMPONENT 1",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet26",
+    "worksheet_name": "COMPONENT 2",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet27",
+    "worksheet_name": "COMPONENT 3",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet28",
+    "worksheet_name": "COMPONENT 4",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet29",
+    "worksheet_name": "COMPONENT 5",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet30",
+    "worksheet_name": "COMPONENT 6",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet31",
+    "worksheet_name": "COMPONENT 7",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet32",
+    "worksheet_name": "COMPONENT 8",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet33",
+    "worksheet_name": "COMPONENT 9",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet34",
+    "worksheet_name": "COMPONENT 10",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet35",
+    "worksheet_name": "COMPONENT 11",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet36",
+    "worksheet_name": "COMPONENT 12",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet37",
+    "worksheet_name": "COMPONENT 13",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet38",
+    "worksheet_name": "COMPONENT 14",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet39",
+    "worksheet_name": "COMPONENT 15",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet40",
+    "worksheet_name": "COMPONENT 16",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet41",
+    "worksheet_name": "COMPONENT 17",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet42",
+    "worksheet_name": "COMPONENT 18",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet43",
+    "worksheet_name": "COMPONENT 19",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet44",
+    "worksheet_name": "COMPONENT 20",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet45",
+    "worksheet_name": "COMPONENT 21",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet46",
+    "worksheet_name": "DESIGN TIME 22",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet47",
+    "worksheet_name": "ENGINEERING 23",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet48",
+    "worksheet_name": "ESTIMATING 24",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet49",
+    "worksheet_name": "PRESET 25",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet50",
+    "worksheet_name": "PACKING 26",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet51",
+    "worksheet_name": "COMPONENT 27",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet52",
+    "worksheet_name": "COMPONENT 28",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet53",
+    "worksheet_name": "COMPONENT 29",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet54",
+    "worksheet_name": "COMPONENT 30",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet55",
+    "worksheet_name": "COMPONENT 31",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet56",
+    "worksheet_name": "COMPONENT 32",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet57",
+    "worksheet_name": "COMPONENT 33",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet58",
+    "worksheet_name": "COMPONENT 34",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet59",
+    "worksheet_name": "COMPONENT 35",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet60",
+    "worksheet_name": "COMPONENT 36",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet61",
+    "worksheet_name": "COMPONENT 37",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet62",
+    "worksheet_name": "COMPONENT 38",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet63",
+    "worksheet_name": "COMPONENT 39",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet64",
+    "worksheet_name": "COMPONENT 40",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet65",
+    "worksheet_name": "MATERIALS B-DOWN",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet66",
+    "worksheet_name": "COMPONENT 41",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet67",
+    "worksheet_name": "COMPONENT 42",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet68",
+    "worksheet_name": "COMPONENT 43",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet69",
+    "worksheet_name": "COMPONENT 44",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet70",
+    "worksheet_name": "COMPONENT 45",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet71",
+    "worksheet_name": "COMPONENT 46",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet72",
+    "worksheet_name": "COMPONENT 47",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet73",
+    "worksheet_name": "COMPONENT 48",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet74",
+    "worksheet_name": "COMPONENT 49",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet75",
+    "worksheet_name": "OPTION (1)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet76",
+    "worksheet_name": "OPTION (2)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet77",
+    "worksheet_name": "OPTION (3)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet78",
+    "worksheet_name": "OPTION (4)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet79",
+    "worksheet_name": "OPTION (5)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet80",
+    "worksheet_name": "OPTION (6)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet81",
+    "worksheet_name": "OPTION (7)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet82",
+    "worksheet_name": "OPTION (8)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet83",
+    "worksheet_name": "OPTION (9)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet84",
+    "worksheet_name": "OPTION (10)",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet85",
+    "worksheet_name": "PACKING",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet86",
+    "worksheet_name": "SKIDS",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet87",
+    "worksheet_name": "ENG. DRAWINGS",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet88",
+    "worksheet_name": "CRATING",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet89",
+    "worksheet_name": "TRUCKING & LOAD LIST",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet90",
+    "worksheet_name": "MATERIALS SUMMARY",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet91",
+    "worksheet_name": "WORK ORDER",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet92",
+    "worksheet_name": "Standard Cost Sheet",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet93",
+    "worksheet_name": "PRICE OPTIONS",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet94",
+    "worksheet_name": "Hanging Sign Coverup",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  },
+  {
+    "module_name": "Sheet95",
+    "worksheet_name": "PRODUCTION NOTES",
+    "module_type": "document",
+    "line_count": 9,
+    "has_executable_code": false,
+    "auto_triggers_present": []
+  }
+]

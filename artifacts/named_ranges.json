@@ -1,0 +1,72 @@
+[
+  {
+    "name": "BoothNumber",
+    "refers_to": "#REF!",
+    "local_sheet_id": null,
+    "hidden": false,
+    "is_ref_error": true
+  },
+  {
+    "name": "Exhibitor",
+    "refers_to": "#REF!",
+    "local_sheet_id": null,
+    "hidden": false,
+    "is_ref_error": true
+  },
+  {
+    "name": "_xlnm.Print_Area",
+    "refers_to": "'INVOICE '!$A$1:$J$38",
+    "local_sheet_id": "23",
+    "hidden": false,
+    "is_ref_error": false
+  },
+  {
+    "name": "_xlnm.Print_Area",
+    "refers_to": "'INVOICE REQUEST'!$A$1:$D$42",
+    "local_sheet_id": "22",
+    "hidden": false,
+    "is_ref_error": false
+  },
+  {
+    "name": "_xlnm.Print_Area",
+    "refers_to": "'Price Summary'!$A$1:$H$115",
+    "local_sheet_id": "8",
+    "hidden": false,
+    "is_ref_error": false
+  },
+  {
+    "name": "_xlnm.Print_Area",
+    "refers_to": "PROPOSAL!$A$1:$I$396",
+    "local_sheet_id": "7",
+    "hidden": false,
+    "is_ref_error": false
+  },
+  {
+    "name": "_xlnm.Print_Area",
+    "refers_to": "'Start Page'!$A$2:$D$128",
+    "local_sheet_id": "2",
+    "hidden": false,
+    "is_ref_error": false
+  },
+  {
+    "name": "_xlnm.Print_Area",
+    "refers_to": "'WORK ORDER'!$A$1:$H$312",
+    "local_sheet_id": "91",
+    "hidden": false,
+    "is_ref_error": false
+  },
+  {
+    "name": "_xlnm.Print_Titles",
+    "refers_to": "'Start Page'!$2:$36",
+    "local_sheet_id": "2",
+    "hidden": false,
+    "is_ref_error": false
+  },
+  {
+    "name": "ShowName",
+    "refers_to": "#REF!",
+    "local_sheet_id": null,
+    "hidden": false,
+    "is_ref_error": true
+  }
+]

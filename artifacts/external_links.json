@@ -1,0 +1,35 @@
+[
+  {
+    "rel_id": "rId1",
+    "target": "Z-DRIVE%20ORLANDO-EAC/(EXHIBTOR)/ESTIMATE/MASTER%20-%20(CLIENT,%20B#,SIZE,DATE,INT).xlsm",
+    "target_mode": "External",
+    "sheet_names": [
+      "Data",
+      "JOB INFORMATION",
+      "EXHIBITOR REVENUE",
+      "JOB ESTIMATE",
+      "TRUCKING & LOAD LIST",
+      "RATES",
+      "CUSTOMER LABOR PRICE",
+      "SUPPLEMENTAL",
+      "PRODUCTION NOTES",
+      "REVENUE VS COST ",
+      "COMPARISON"
+    ],
+    "cached_sheets_with_errors": [
+      "Data",
+      "EXHIBITOR REVENUE",
+      "JOB ESTIMATE",
+      "RATES",
+      "CUSTOMER LABOR PRICE",
+      "SUPPLEMENTAL",
+      "PRODUCTION NOTES",
+      "REVENUE VS COST ",
+      "COMPARISON"
+    ],
+    "cached_sheets_with_data": [
+      "JOB INFORMATION",
+      "TRUCKING & LOAD LIST"
+    ]
+  }
+]
