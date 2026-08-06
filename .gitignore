@@ -2,6 +2,11 @@
 # The audit tooling expects it at this exact path locally; see docs/audit-plan.md.
 /Reference/ORLANDO ESTIMATE.xlsm
 
+# Real employee names to redact from generated artifacts — see
+# tools/workbook_audit/redact_local.py's own docstring for why this can't
+# be committed either.
+/tools/workbook_audit/redact_local.py
+
 # OS
 .DS_Store
 
@@ -13,3 +18,9 @@ __pycache__/
 # Editors
 .vscode/
 .idea/
+
+# Phase 1 generated run output (regenerate with: python3 -m tools.workbook_import.run_phase1)
+# Includes the synthetic fixture .xlsm/.xlsx (binary, regenerable) and the
+# staging SQLite DB -- not audit deliverables, unlike artifacts/*.json.
+/artifacts/phase1_runs/
+/artifacts/phase1_staging.db

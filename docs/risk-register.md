@@ -5,9 +5,18 @@ Consolidated from `docs/business-rules.md`, `docs/workbook-dependency-map.md`,
 against the ForgeOS migration goal (accurate, reproducible, auditable
 estimating), not against the workbook continuing to be used as-is.
 
+**Phase 1 note:** R1 and R18 were re-investigated once a LibreOffice
+headless recalculation engine became available (`tools/workbook_import/recalc.py`)
+— the first point in this project where a computed (not just authored)
+formula value is trusted, per `docs/migration-plan.md` Phase 1. R18 closed
+outright via static cell-tracing (no recalculation needed once the two
+row bands' headers were read); R1's repair path was additionally verified
+by recalculating a patched scratch copy. This uncovered R19, a new finding
+neither prior pass had surfaced.
+
 | # | Category | Finding | Evidence | Severity | Confidence |
 |---|---|---|---|---|---|
-| R1 | Formula inconsistencies | `PRICE OPTIONS` sheet: 1,068 formulas, effectively 100% of the sheet's logic, reference `'COST SUMMARY'!#REF!` — the sheet cannot compute anything. | business-rules.md Rule 7; 365 `#REF!` formulas workbook-wide, majority here | **High** | High (broken) / Low (why) |
+| R1 | Formula inconsistencies | `PRICE OPTIONS` sheet: 1,068 formulas reference `'COST SUMMARY'!#REF!`. **UPDATE (Phase 1):** repair path found and verified by live LibreOffice recalculation — re-pointing to `COST SUMMARY!A/B/AD<same row>` restores full, internally-consistent computation (tested on row 33; margin% + cost-ratio% summed to exactly 1.0). Mechanically fixable; business intent behind the 43/57…65/35 tiers and `×1.075` still needs stakeholder sign-off before trusting the output. | business-rules.md Rule 7 | **Medium** ↓ from High — mechanical risk retired, business-intent risk remains | High (repair verified) / Low (tier/1.075 intent) |
 | R2 | Hidden assumptions | `Base!B23 = 1.03` is labeled "Professional Services, 4% of Grand Total" — the value corresponds to 3%, not 4%. Unknown which is correct. | business-rules.md Rule 8 | **High** — silently over/under-charges every job using this factor | High (mismatch exists) / Low (which is right) |
 | R3 | Hardcoded rates | 15 department labor rates hardcoded as literals on `COMPONENT 1` only, propagated to 43 sibling sheets via `=SUM('COMPONENT 1'!H<row>)`. No central rate table; no sheet protection on `COMPONENT 1`. | business-rules.md Rule 1 | **High** — single accidental overwrite corrupts every future estimate silently | High |
 | R4 | Duplicated logic | Two independent, disconnected labor-rate systems: `LABOR RATES` (city table, zero formula references anywhere) vs. `COMPONENT 1`'s department table. No formula bridges them. | business-rules.md Rule 10 | **Medium** — unclear if `LABOR RATES` is dead data or a manual-lookup source; risk is using the wrong one as ForgeOS's seed data | Medium |
@@ -24,13 +33,16 @@ estimating), not against the workbook continuing to be used as-is.
 | R15 | Tenant data isolation | N/A in the source (single-company, single-user file) — flagged only because ForgeOS must decide multi-tenant scope before Phase 2 schema work; the workbook provides zero guidance here. | data-model-v0.md cross-cutting notes | **Medium** (project-planning risk, not a workbook defect) | N/A |
 | R16 | Rounding | No workbook-wide rounding standard observed — spot-checked formulas (Rules 1–2, 6) do not wrap results in `ROUND()`; only 1 of 7 `ROUNDING`-category-tagged formulas found workbook-wide across 22,138 total (per `formula_catalog.json` category scan). Cent-level rounding behavior of a from-scratch ForgeOS engine may not match the workbook's floating-point-only results during Phase 1 comparison testing. | formula_catalog.json category distribution | **Low-Medium** — mainly a Phase 1 comparison-harness tolerance concern, not a business-logic defect | Medium |
 | R17 | Named ranges / dead references | 3 of 10 workbook-scoped named ranges (`BoothNumber`, `Exhibitor`, `ShowName`) are `#REF!` errors with zero remaining consumers. | input-output-map.md §6 | **Low** — pure cleanup item, no functional impact, but signals the file has accumulated unrepaired structural damage over time (raises confidence that R1/R6 are part of a pattern, not isolated incidents) | High |
-| R18 | Unresolved calculation duplication | `COST SUMMARY` appears to roll up costs via two separate mechanisms — a category-row block (confirmed, Rule 5) and a COMPONENT-family-referencing block (965 formulas, located but not cell-traced). If both represent the same underlying cost, a naive port would double-count. | business-rules.md Rule 5 open question | **High** — directly affects whether Phase 3's cost engine over-states costs | Low (not yet traced) |
+| R18 | ~~Unresolved calculation duplication~~ RESOLVED — not a duplication | `COST SUMMARY`'s two row bands (category sheets vs. COMPONENT sheets) were fully cell-traced. **They are not duplicates**: each has its own `MATERIALS`/`LABOR $`/`OVERHEAD`/`TOTAL` header set and feeds a distinct `Price Summary` subtotal section (`B5` for rentals, `B27` for custom components) — mirroring the same intentional two-block pattern already found on individual category sheets. No shared totals, no double-count. | business-rules.md Rule 5 | ~~High~~ **Closed** | High |
+| R19 | Hidden assumptions / formula inconsistencies | **New (Phase 1):** the `OVERHEAD` column in `COST SUMMARY` is silently dead workbook-wide — blank (no formula) in the category band, and unconditionally multiplied by `*0` in every row of the component band (e.g. `AB24 = (...)*0`). `TOTAL COST` (`AD` column) therefore never includes real overhead in either band, despite the column being labeled and structurally present. | business-rules.md Rule 5 | **High** — every historical estimate's recorded "total cost" is understated by whatever overhead allocation was meant to apply, silently inflating apparent margin | High |
 
 ## Top 5 by severity × likelihood (recommend resolving before Phase 3 locks in calculation logic)
 
+*Updated after Phase 1 investigation — R18 closed, R1 downgraded, R19 added.*
+
 1. **R9** — No version control / reproducibility mechanism (structural, affects the whole product).
-2. **R18** — Possible double-counting in COST SUMMARY (affects every job's cost baseline).
-3. **R1 / R11** — PRICE OPTIONS broken + two unreconciled margin systems (affects every job's price).
+2. **R19** — `OVERHEAD` silently zeroed workbook-wide, understating every historical "total cost" (new).
+3. **R11** — Two unreconciled margin systems (gross-up vs. PRICE OPTIONS' tier engine); R1's mechanics are now fixable but the *business intent* question stands.
 4. **R7** — Broken external link (blocks clean Phase 1 import for any sheet touching it).
 5. **R2** — Base!B23 label/value mismatch (small-looking but compounds across every job).
 

@@ -39,6 +39,38 @@ from tools.workbook_audit.vba_reader import extract_vba
 ARTIFACTS_DIR = REPO_ROOT / "artifacts"
 VBA_MODULES_DIR = ARTIFACTS_DIR / "vba_modules"
 
+# Real employee names appear verbatim in a few data-validation dropdown
+# lists (e.g. an account-executive picker on the CHANGE ORDER sheet).
+# artifacts/ is committed to a public repo, so these are redacted at
+# generation time -- NOT as a one-off hand edit to the generated JSON,
+# since that gets silently overwritten the next time this script runs (as
+# happened once already; see git history). Cell/sheet structure and
+# formula logic are unaffected -- only these literal string values change.
+#
+# The actual names are NOT hardcoded here (that would defeat the
+# redaction, since this file is committed) -- they live in
+# redact_local.py, which is gitignored, same as the source .xlsm itself.
+try:
+    from tools.workbook_audit.redact_local import REDACT_NAMES
+except ImportError:
+    REDACT_NAMES = {}
+
+
+def redact(text):
+    if not isinstance(text, str):
+        return text
+    for real, placeholder in REDACT_NAMES.items():
+        text = text.replace(real, placeholder)
+    return text
+
+
+def redact_inventory(inventory: list[dict]) -> list[dict]:
+    for sheet in inventory:
+        for dv in sheet.get("data_validations", []):
+            dv["formula1"] = redact(dv.get("formula1"))
+            dv["formula2"] = redact(dv.get("formula2"))
+    return inventory
+
 SHEET_TYPE_HEURISTICS = [
     (re.compile(r"^COMPONENT \d+$"), "template", "COMPONENT template"),
     (re.compile(r"^OPTION \(\d+\)$"), "template", "OPTION template"),
@@ -157,6 +189,7 @@ def main():
 
     print("Building workbook_inventory.json...")
     inventory = build_workbook_inventory(xml_pkg, oxl_sheets, wb)
+    inventory = redact_inventory(inventory)
     (ARTIFACTS_DIR / "workbook_inventory.json").write_text(json.dumps(inventory, indent=2, default=str))
 
     print("Writing formula_catalog.json...")

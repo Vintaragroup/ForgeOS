@@ -23,31 +23,51 @@ but all three should be resolved with business-side input before Phase 3
 
 ## Phase 1 — Read-only workbook importer + comparison harness
 
+**Status: tooling built and validated; exit criteria not yet met.** Full
+detail in `docs/phase1-findings.md`.
+
 **Goal:** prove ForgeOS can read a *populated* estimate workbook (not just
 this template) and reproduce its numbers, before writing a single line of
 new business logic.
 
 **Scope:**
-- Extend `tools/workbook_audit/` (or a sibling tool) to import a
-  *filled-in* copy of this workbook (real job data) into a staging
-  database matching a first-cut of `docs/data-model-v0.md`.
-- Since openpyxl cannot evaluate formulas, use a real Excel-compatible
-  calculation (e.g. LibreOffice headless, or Excel via COM/PowerShell on
-  Windows) to get authoritative computed values for comparison — this is
-  the first point in the project where recalculated values are trusted,
-  and must be clearly separated from the read-only Phase 0 tooling.
-- Build a diff/comparison harness: for a given job workbook, assert
-  ForgeOS's imported+recomputed totals match Excel's actual computed
-  totals at every rollup stage (component → category → COST SUMMARY →
-  Price Summary → ESTIMATE), not just the final number, so a mismatch is
-  localized to a specific stage.
-- Explicitly test against the two known-broken areas: confirm `PRICE
-  OPTIONS`'s `#REF!` cells and gauge whether any live job workbook
-  actually depends on them.
+- [x] Extend the tooling with a sibling package, `tools/workbook_import/`
+  (kept separate from the read-only `tools/workbook_audit/` on purpose),
+  to import a *filled-in* copy of this workbook into a staging database —
+  a narrow first-cut of `docs/data-model-v0.md` scoped to exactly what
+  the comparison harness needs.
+- [x] Stood up LibreOffice headless as the Excel-compatible calculation
+  engine (`tools/workbook_import/recalc.py`) — verified by hand that
+  `--convert-to` forces real recalculation, not a re-save of stale cached
+  values, before wrapping it in code. This is the first point in the
+  project where a recalculated value is trusted.
+- [x] Built a diff/comparison harness (`diff_harness.py`): for a given
+  job workbook, asserts an independent recompute of each section's
+  totals matches the workbook's own `COST SUMMARY` values, localizing
+  any mismatch to a specific stage. Currently wired through `COST
+  SUMMARY` for one component and one category section; extending to
+  every section and up through `Price Summary`/`ESTIMATE` is mechanical
+  (same pattern) but not yet done.
+- [x] Tested against the two known-broken areas: `PRICE OPTIONS`'s
+  `#REF!` cells were traced to `COST SUMMARY`'s live `AD` (total cost)
+  column and the repair was **verified empirically** by patching a
+  scratch copy and recalculating — see `docs/business-rules.md` Rule 7.
+  `COST SUMMARY`'s suspected double-count (R18) was **resolved as a
+  false alarm** — two intentional, non-overlapping rollup bands, not a
+  duplication — see Rule 5. One new finding surfaced in the process:
+  `OVERHEAD` is silently zeroed workbook-wide (R19).
+- [ ] **Not yet done:** run against real historical job workbooks. This
+  pass used a synthetic, clearly-fictional fixture
+  (`tools/workbook_import/synthetic_fixture.py`) since none were
+  available — see `docs/phase1-findings.md` for what's needed to close
+  the gap.
 
-**Exit criteria:** 3+ historical, distinct real job workbooks reproduce
-their known-good final numbers (proposal total, margin) within rounding
-tolerance, with every intermediate rollup stage individually verified.
+**Exit criteria (not yet met):** 3+ historical, distinct real job
+workbooks reproduce their known-good final numbers (proposal total,
+margin) within rounding tolerance, with every intermediate rollup stage
+individually verified. The pipeline that will do this is built and
+passing 12/12 tests against synthetic data; it has not yet been proven
+against real business data, which is a different and stronger claim.
 
 ## Phase 2 — CRM and opportunity shell
 

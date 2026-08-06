@@ -53,3 +53,26 @@ def test_workbook_hash_identical_before_and_after_full_scan():
     assert result.returncode == 0, result.stderr
     assert before == after, "scan.py must never modify the source workbook"
     assert "OK — source workbook unchanged" in result.stdout
+
+
+def test_scan_redacts_real_employee_names_from_generated_artifacts():
+    """Regression guard: this repo is public, and artifacts/workbook_inventory.json
+    is generated (not hand-authored), so a one-off manual redaction gets
+    silently overwritten the next time scan.py runs -- exactly what
+    happened once already (see tools/workbook_audit/scan.py's
+    REDACT_NAMES). Runs scan.py fresh, then asserts no real name survives
+    in the file it writes."""
+    from tools.workbook_audit.scan import REDACT_NAMES
+
+    result = subprocess.run(
+        [sys.executable, "-m", "tools.workbook_audit.scan"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+
+    inventory_text = (REPO_ROOT / "artifacts" / "workbook_inventory.json").read_text()
+    for real_name in REDACT_NAMES:
+        assert real_name not in inventory_text, f"unredacted name leaked into artifacts: {real_name!r}"

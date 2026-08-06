@@ -138,40 +138,63 @@ verified.
 
 ---
 
-## Rule 5 — Cost Summary rolls up by *category*, not by component
+## Rule 5 — Cost Summary rolls up TWO parallel bands: category rentals and custom components (not a double-count)
 
-**Location:** `COST SUMMARY`, rows 8+ (one row per category sheet:
-Flooring, Structure, Furniture, …).
+**Location:** `COST SUMMARY`, two structurally identical row bands, each
+with its own header pair labeling `MATERIALS` (col D) / `LABOR HOURS`
+(cols G–V, one per department) / `LABOR $` (col Z) / `OVERHEAD` (col AB) /
+`TOTAL COST` (col AD):
 
-**Formula:**
+- **Band 1 — rows 6–20ish**, header `A6 = 'Price Summary'!B5`: one row per
+  **category sheet** (Flooring=row 8, Structure=row 9, …).
+- **Band 2 — rows 22–70ish**, header `A22 = 'Price Summary'!B27`: one row
+  per **COMPONENT sheet** (`COMPONENT 1`=row 24, `COMPONENT 2`=row 25, …
+  `COMPONENT 36`=row 67, confirmed contiguous through the full 44-sheet
+  family).
+
+**Formula (Band 1, category):**
 ```
 D8 = Flooring!J11                                    (unit direct-material cost)
 E8 = B8*D8                                            (qty × unit = total DM)
 G8 = Flooring!$H$16 * 'COST SUMMARY'!B8               (DE dept. hours × qty)
-H8 = Flooring!$H$17 * 'COST SUMMARY'!B8               (EN dept.)
-... (continues through all department columns)
+AD8 = E8+Z8+AB8                                       (TOTAL = materials + labor$ + overhead)
 ```
 
-**Interpretation:** Despite the workbook's COMPONENT-centric structure
-elsewhere (Rules 1–4), `COST SUMMARY`'s primary rollup is organized by the
-10 **category** sheets (Flooring, Structure, Furniture, Accessories, AV,
-Hanging Sign, 4× Cross Rental), each contributing one row of direct
-material cost and per-department labor hours. A **second block** further
-down `COST SUMMARY` (not fully traced in this pass — see open question)
-is responsible for the 965 formula references into the COMPONENT family
-seen in the dependency map.
+**Formula (Band 2, component):**
+```
+A24 = 'COMPONENT 1'!A5          B24 = 'COMPONENT 1'!B6          D24 = 'COMPONENT 1'!D59
+G24 = 'COMPONENT 1'!G10*B24     ... (hours per dept × qty, all 15 departments)
+Z24 = ((G24*'COMPONENT 1'!$H$10)+(H24*'COMPONENT 1'!$H$11)+ ... )   (hours × master rate, Rule 1)
+AD24 = E24+Z24+AB24
+```
 
-**Downstream outputs:** `Price Summary`, `PRICE OPTIONS` (broken, Rule 7).
+**Resolution of the Phase 0 open question (RESOLVED, no longer open):**
+This is **not** a double-count. Band 1 and Band 2 represent two distinct
+kinds of estimate content — standard **rental/category inventory**
+(Flooring, Structure, Furniture, Accessories, AV, Hanging Sign, Cross
+Rentals) versus **custom-fabricated components** (COMPONENT 1–49) — each
+feeding its own separate subtotal section on `Price Summary`
+(`B5` vs. `B27`, per the two bands' own header formulas). This mirrors the
+same "two blocks" pattern already found on individual category sheets
+(e.g. `Flooring` has both a `RENTAL COMPONENT PRICES` block and a
+`DIRECT MATERIALS PER COMPONENT` block). No evidence of duplication was
+found; the two bands never reference each other's totals.
 
-**Confidence:** Medium — rows 8–9 pattern confirmed directly; the
-COMPONENT-referencing block lower in the sheet was located via the
-dependency graph but not manually traced cell-by-cell in this pass.
+**New finding (not previously in the risk register): `OVERHEAD` is
+silently dead workbook-wide.** The `OVERHEAD` column (`AB`) has **no
+formula at all** in Band 1 (every `AB8:AB13` cell is blank) and in Band 2
+every single row's `AB` formula (e.g. `AB24`) ends in an unconditional
+`*0` — the whole computed expression is multiplied by zero, guaranteeing
+`AB24 = 0` regardless of inputs. `TOTAL COST` (`AD`) therefore never
+includes a real overhead allocation, in either band, despite the column
+being labeled and structurally present. See `docs/risk-register.md` R19.
 
-**Open question:** Reconcile the two rollup mechanisms — does
-`COST SUMMARY` double-count if both the category-row block and the
-component-referencing block ultimately represent the same underlying
-component costs? High priority for Phase 1 (needs a live-Excel
-recalculation to check, since we cannot evaluate formulas here).
+**Downstream outputs:** `Price Summary`, `PRICE OPTIONS` (Rule 7 —
+Band 2's `AD` column is exactly the value `PRICE OPTIONS` was built to
+consume).
+
+**Confidence:** High — both bands traced cell-by-cell across header rows,
+representative sample rows, and the full column set (A/B/D/G–V/Z/AB/AD).
 
 ---
 
@@ -228,10 +251,48 @@ formulas, the large majority on this sheet). Low confidence on business
 intent behind the specific percentage tiers and the `1.075` constant —
 no adjacent label was found identifying it.
 
-**Recommendation:** Do not port this sheet's formulas as-is into ForgeOS's
-estimate engine. Treat it as a **documented but non-authoritative**
-historical rule pending stakeholder confirmation of intent (see
-`docs/risk-register.md`).
+**Phase 1 update — repair path CONFIRMED by live recalculation (High
+confidence):** `COST SUMMARY` today has a live, working `AD` column
+(`TOTAL COST` = `materials + labor$ + overhead`, see Rule 5) for every row
+in both bands, including `AD33 = E33+Z33+AB33` for row 33
+(`COMPONENT 10`) — the exact row `PRICE OPTIONS!D33` divides by its own
+`B33`. Tested directly: in a scratch copy (never touching the source
+file), `PRICE OPTIONS!A33/B33` were re-pointed to
+`'COST SUMMARY'!A33`/`B33` and `D33/F33/G33`'s `#REF!` occurrences to
+`'COST SUMMARY'!AD33`, synthetic material/labor values were entered on
+`COMPONENT 10`, and the workbook was recalculated with LibreOffice
+headless (`soffice --headless --convert-to xlsx`, the same engine
+proposed for Phase 1). Result — every formula resolved to a real number,
+with `F33` (margin %) and `G33` (cost ratio) summing to exactly `1.0`
+(0.6 + 0.4), confirming the restored formula chain is internally
+consistent, not just error-free:
+
+| Cell | Meaning | Recalculated value |
+|---|---|---|
+| `COMPONENT 10!D10` | material total (synthetic: 4 × $25) | 100 |
+| `COMPONENT 10!I10` | DE labor total (synthetic: 8 hrs × $66.15) | 529.2 |
+| `COST SUMMARY!AD33` | total cost, row 33 | 1258.4 |
+| `PRICE OPTIONS!D33` | tier-split unit price | 1573 |
+| `PRICE OPTIONS!E33` | extended sell (D33×qty) | 3146 |
+| `PRICE OPTIONS!F33` | margin % | 0.60 |
+| `PRICE OPTIONS!G33` | cost ratio | 0.40 |
+
+**Still open:** (1) whether `AD`'s zeroed-out `OVERHEAD` component (Rule 5
+finding) was already zero when `PRICE OPTIONS` was built, or whether
+`PRICE OPTIONS` predates that regression — affects whether restoring the
+link reproduces historically-correct numbers or merely a currently-broken
+"total"; (2) the business meaning of the 43/57…65/35 tiers and `×1.075`
+remains undocumented and needs stakeholder confirmation before this
+sheet's logic is trusted as authoritative, even though it is now
+mechanically restorable.
+
+**Recommendation:** The mechanical repair (re-point every
+`'COST SUMMARY'!#REF!` to the matching `A`/`B`/`AD<row>` per the pattern
+above, likely a scripted find-and-replace across all ~1,068 formulas
+given the pattern's consistency) is now de-risked and ready to apply once
+business sign-off on the tier/`1.075` intent is obtained. Do not port
+this sheet into ForgeOS's estimate engine until that sign-off happens —
+see `docs/risk-register.md` R1.
 
 ---
 
