@@ -1,9 +1,10 @@
 # ForgeOS — web
 
-Phases 2–3 (`docs/migration-plan.md`): CRM & opportunity shell, plus a
-native estimate engine. TypeScript full-stack (Next.js 16 App Router +
-Postgres + Prisma 7), single-tenant (no `tenant_id` — see
-`prisma/schema.prisma`'s header comment for why).
+Phases 2–4 (`docs/migration-plan.md`): CRM & opportunity shell, a native
+estimate engine, and the proposal/approval/change-order workflow.
+TypeScript full-stack (Next.js 16 App Router + Postgres + Prisma 7),
+single-tenant (no `tenant_id` — see `prisma/schema.prisma`'s header
+comment for why).
 
 ## Stack notes (read before touching Prisma or app-router code)
 
@@ -80,10 +81,40 @@ DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public"
   history).
 - **`PRICE OPTIONS`** (business-rules.md Rule 7) was **formally dropped**
   this phase, not ported — see `prisma/schema.prisma`'s Phase 3 header
-  comment for why. **`Option`** (alternates) was deferred, not built.
+  comment for why. **`Option`** (alternates) was deferred to Phase 4.
 - Acceptance tests (`estimate-acceptance.test.ts`) reproduce real,
   Phase-1-validated numbers from the Yoku Moku job through the full
   DB-backed service, not just the pure compute functions.
+
+## Scope (Phase 4)
+
+- **Proposal + approval** (`web/src/lib/proposal-service.ts`) —
+  `ProposalTemplate` CRUD at `/catalog/proposal-templates`; an internal
+  approval gate on `EstimateVersion` (`isApproved`/`approvedAt`/
+  `approvedById`, requires the version to already be locked); generating
+  a `Proposal` snapshots the template's branding/layout config so later
+  template edits don't retroactively change an already-generated
+  proposal; send/sign lifecycle at `/proposals/[id]`.
+- **`ChangeOrder`** (`web/src/lib/change-order-service.ts`) — a diff
+  against an approved `EstimateVersion` (the ForgeOS-recommended
+  resolution to `workflow-map.md`'s open question, not the workbook's
+  standalone re-pricing pattern). Reuses `EstimateVersion`'s existing
+  copy/lock machinery rather than a parallel delta model — the diff is
+  computed on read (`computeChangeOrderDiff`) by comparing base vs.
+  result line items. UI at `/change-orders/[id]`.
+- **`Option`** (alternates, moved from Phase 3) — one full
+  `EstimateSection` set per alternate, priced separately from the base
+  estimate via `computeOptionTotal`. Implemented as
+  `EstimateSection.optionId` (nullable) rather than a duplicate model, so
+  it reuses every existing section/line-item function.
+- **Design-intake prototype** (moved from Phase 3, minimal scope by
+  explicit decision) — `Attachment` is a text reference (filename or an
+  external link), not an uploaded file. Draft `LineItem`s
+  (`isDraft`/`attachmentId`) are excluded from cost rollups until
+  `confirmDraftLineItem` marks them reviewed and priced.
+- **Multi-year `Contract` concept** (moved from Phase 3) — **skipped**,
+  same reasoning as `PRICE OPTIONS`: no second real multi-year job exists
+  yet to validate a `Contract` model against.
 
 ## Commands
 
@@ -117,3 +148,17 @@ over correctly (a bug caught and fixed during this verification — see
 `estimate-service.ts`'s `createNewVersionFromLocked`). Catalog CRUD
 (labor rates, materials, rental items) was verified the same way. Full
 detail in `docs/migration-plan.md`'s Phase 3 section.
+
+## Exit criteria (docs/migration-plan.md Phase 4)
+
+"A proposal can be generated, sent, and approved end-to-end in ForgeOS
+with a full audit trail, for a job whose estimate was also built in
+ForgeOS." Verified live in a browser: approved a locked estimate version,
+generated a proposal from a real branded template, sent it, and marked it
+signed — each step timestamped and attributed. Opened a `ChangeOrder`
+against that approved version, edited its result version through the
+normal estimate UI, locked and approved it, and confirmed the diff view
+showed the correct added line item and dollar delta. `Option` (an
+alternate priced separately from the base estimate) and the draft-line-item
+workflow (excluded from totals until confirmed) were each verified the
+same way. Full detail in `docs/migration-plan.md`'s Phase 4 section.

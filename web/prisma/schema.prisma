@@ -48,9 +48,9 @@ enum EstimateStatus {
 }
 
 model User {
-  id         String   @id @default(cuid())
+  id         String  @id @default(cuid())
   name       String
-  email      String   @unique
+  email      String  @unique
   role       String?
   department String?
 
@@ -60,6 +60,9 @@ model User {
 
   contactLinks  Contact[]     @relation("UserContact")
   opportunities Opportunity[] @relation("OpportunityOwner")
+
+  approvedEstimateVersions EstimateVersion[] @relation("EstimateVersionApprover")
+  uploadedAttachments      Attachment[]
 
   @@map("users")
 }
@@ -136,14 +139,14 @@ model Opportunity {
 }
 
 model StageChangeEvent {
-  id            String  @id @default(cuid())
+  id            String      @id @default(cuid())
   opportunityId String
   opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
 
   fromStage OpportunityStage?
   toStage   OpportunityStage
   note      String?
-  changedAt DateTime @default(now())
+  changedAt DateTime          @default(now())
 
   @@map("opportunity_stage_events")
 }
@@ -153,7 +156,7 @@ model StageChangeEvent {
 // structural correction ForgeOS must make relative to the workbook,
 // which has no version concept at all."
 model Estimate {
-  id            String   @id @default(cuid())
+  id            String      @id @default(cuid())
   opportunityId String
   opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
 
@@ -165,7 +168,9 @@ model Estimate {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  versions EstimateVersion[]
+  versions     EstimateVersion[]
+  changeOrders ChangeOrder[]
+  attachments  Attachment[]
 
   @@map("estimates")
 }
@@ -265,17 +270,30 @@ model EstimateVersion {
   estimate   Estimate @relation(fields: [estimateId], references: [id])
 
   versionNumber   Int
-  marginTargetPct Decimal @db.Decimal(5, 2) @default(0)
-  totalCost       Decimal @db.Decimal(12, 2) @default(0)
-  grandTotal      Decimal @db.Decimal(12, 2) @default(0)
-  grossMarginPct  Decimal @db.Decimal(5, 2) @default(0)
+  marginTargetPct Decimal @default(0) @db.Decimal(5, 2)
+  totalCost       Decimal @default(0) @db.Decimal(12, 2)
+  grandTotal      Decimal @default(0) @db.Decimal(12, 2)
+  grossMarginPct  Decimal @default(0) @db.Decimal(5, 2)
   isCurrent       Boolean @default(true)
   isLocked        Boolean @default(false)
+
+  // Phase 4: internal approval gate, replacing the manual/paper
+  // signature process inferred in workflow-map.md. Distinct from
+  // Proposal.sentAt/signedAt below, which is the client-facing side --
+  // only a locked AND approved version can generate a Proposal.
+  isApproved   Boolean   @default(false)
+  approvedAt   DateTime?
+  approvedById String?
+  approvedBy   User?     @relation("EstimateVersionApprover", fields: [approvedById], references: [id])
 
   createdAt DateTime  @default(now())
   lockedAt  DateTime?
 
-  sections EstimateSection[]
+  sections            EstimateSection[]
+  options             Option[]
+  proposals           Proposal[]
+  changeOrdersAsBase  ChangeOrder[]     @relation("ChangeOrderBaseVersion")
+  changeOrderAsResult ChangeOrder?      @relation("ChangeOrderResultVersion")
 
   @@map("estimate_versions")
 }
@@ -288,6 +306,12 @@ model EstimateSection {
   name        String
   sortOrder   Int         @default(0)
   sectionType SectionType
+
+  // Set when this section belongs to an Option (alternate) rather than
+  // the base estimate -- estimateVersionId still points at the same
+  // parent version either way, so locking/rollup queries share one path.
+  optionId String?
+  option   Option? @relation(fields: [optionId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -313,8 +337,156 @@ model LineItem {
   unitCost    Decimal      @db.Decimal(10, 2)
   totalCost   Decimal      @db.Decimal(12, 2)
 
+  // Phase 4 design-intake prototype: a draft line item references the
+  // Attachment (design pull sheet) an estimator drafted it from, and is
+  // excluded from cost rollups until confirmed -- migration-plan.md's
+  // "tagged draft ... human-reviewed and priced before counting."
+  isDraft      Boolean     @default(false)
+  attachmentId String?
+  attachment   Attachment? @relation(fields: [attachmentId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("line_items")
+}
+
+// ---------------------------------------------------------------------
+// Phase 4: proposal & approval workflow (docs/migration-plan.md).
+//
+// Deliberately NOT built this phase: a multi-year Contract concept --
+// surfaced by Poly Coat's real 3-year deal (Phase 1), where Year 1 builds
+// assets and Years 2-3 re-rent them at far higher margin. Same call as
+// PRICE OPTIONS in Phase 3: no second real multi-year job exists yet to
+// validate a Contract model against. Revisit if another one shows up.
+//
+// ChangeOrder references Estimate directly rather than Project --
+// data-model-v0.md's "optionally references the originating Estimate"
+// fallback, since Project doesn't exist yet (Phase 5).
+//
+// Attachment is scoped to Estimate only this phase (not the full
+// Estimate/Project/WorkOrder/ChangeOrder polymorphic association
+// data-model-v0.md describes) -- Project/WorkOrder don't exist yet, and
+// ChangeOrder attachments weren't part of this phase's explicit scope.
+// ---------------------------------------------------------------------
+
+model ProposalTemplate {
+  id             String @id @default(cuid())
+  name           String
+  brandingConfig Json?
+  layoutConfig   Json?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  proposals Proposal[]
+
+  @@map("proposal_templates")
+}
+
+// Immutable once sent (sentAt locks it), mirroring EstimateVersion's
+// isLocked pattern. templateConfigSnapshot freezes the template's
+// branding/layout at send time so a later template edit doesn't
+// retroactively change how an already-sent proposal renders
+// (data-model-v0.md's Proposal versioning note). Only a locked AND
+// approved EstimateVersion can generate a Proposal -- see
+// proposal-service.ts.
+model Proposal {
+  id                String           @id @default(cuid())
+  estimateVersionId String
+  estimateVersion   EstimateVersion  @relation(fields: [estimateVersionId], references: [id])
+  templateId        String
+  template          ProposalTemplate @relation(fields: [templateId], references: [id])
+
+  templateConfigSnapshot Json?
+  sentAt                 DateTime?
+  signedAt               DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("proposals")
+}
+
+// An alternate/upgrade pricing path within one estimate (e.g. "Option 3:
+// upgraded flooring") -- direct port of the OPTION sheet pattern
+// (business-rules.md/data-model-v0.md), structurally identical to a
+// COMPONENT sheet. Reuses EstimateSection/LineItem rather than a
+// parallel model: a section belongs to an Option via
+// EstimateSection.optionId instead of duplicating the section/line-item
+// shape. Immutable once its parent EstimateVersion is locked, same rule
+// as base sections (estimate-service.ts's assertUnlocked).
+model Option {
+  id                String          @id @default(cuid())
+  estimateVersionId String
+  estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
+
+  name      String
+  sortOrder Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sections EstimateSection[]
+
+  @@map("options")
+}
+
+enum ChangeOrderStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+}
+
+// Stored as two full EstimateVersion snapshots (base + result) rather
+// than an explicit delta table -- reuses the versioning/locking machinery
+// already built for EstimateVersion instead of inventing a parallel
+// storage shape. The "diff" data-model-v0.md recommends for reporting
+// clarity is computed on read by comparing baseVersion's line items
+// against resultVersion's (see change-order-service.ts) -- an
+// intentional divergence from the workbook, which authors each change
+// order as an independent from-scratch mini-estimate rather than a diff.
+model ChangeOrder {
+  id         String   @id @default(cuid())
+  estimateId String
+  estimate   Estimate @relation(fields: [estimateId], references: [id])
+
+  baseVersionId   String
+  baseVersion     EstimateVersion @relation("ChangeOrderBaseVersion", fields: [baseVersionId], references: [id])
+  resultVersionId String          @unique
+  resultVersion   EstimateVersion @relation("ChangeOrderResultVersion", fields: [resultVersionId], references: [id])
+
+  description String
+  status      ChangeOrderStatus @default(DRAFT)
+
+  createdAt  DateTime  @default(now())
+  approvedAt DateTime?
+
+  @@map("change_orders")
+}
+
+// business-rules.md/data-model-v0.md's Attachment: fileRef is a text
+// reference (filename, or an external FTP/WeTransfer link), not an
+// uploaded file -- the workbook's own evidence (WORK ORDER!C15) confirms
+// artwork already moves outside the workbook entirely via external file
+// transfer, so this is a pointer, not a storage pipeline. Minimal
+// design-intake prototype only, per explicit decision: no automated
+// pull-sheet table extraction this phase.
+model Attachment {
+  id         String   @id @default(cuid())
+  estimateId String
+  estimate   Estimate @relation(fields: [estimateId], references: [id])
+
+  fileRef      String
+  uploadedById String?
+  uploadedBy   User?   @relation(fields: [uploadedById], references: [id])
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  draftLineItems LineItem[]
+
+  @@map("attachments")
 }

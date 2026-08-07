@@ -2,12 +2,16 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import {
+  addAttachment,
   addLineItem,
+  addOption,
   addSection,
   computeLineItemTotal,
   computeMarginGrossUp,
+  computeOptionTotal,
   computeSectionTotal,
   computeVersionTotals,
+  confirmDraftLineItem,
   createEstimateVersion,
   createNewVersionFromLocked,
   deleteLineItem,
@@ -19,7 +23,9 @@ import {
 
 afterEach(async () => {
   await db.lineItem.deleteMany();
+  await db.attachment.deleteMany();
   await db.estimateSection.deleteMany();
+  await db.option.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.opportunity.deleteMany();
@@ -254,5 +260,118 @@ describe("estimate version lifecycle", () => {
 
     const refreshed = await recomputeVersionTotals(version.id);
     expect(refreshed.totalCost.toNumber()).toBe(0);
+  });
+});
+
+describe("Option (alternates)", () => {
+  it("an Option's sections are priced separately from the base estimate total", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 50);
+    const baseSection = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    await addLineItem(baseSection.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+
+    const option = await addOption(version.id, { name: "Option 1: Upgraded flooring" });
+    const optionSection = await addSection(version.id, {
+      name: "COMPONENT 1 (Option 1)",
+      sectionType: "COMPONENT",
+      optionId: option.id,
+    });
+    await addLineItem(optionSection.id, {
+      lineType: "MATERIAL",
+      description: "Premium flooring",
+      qty: 1,
+      unitCost: 500,
+    });
+
+    // base total unaffected by the Option's line items
+    const refreshed = await recomputeVersionTotals(version.id);
+    expect(refreshed.totalCost.toNumber()).toBe(200);
+
+    const optionSections = await db.estimateSection.findMany({
+      where: { optionId: option.id },
+      include: { lineItems: true },
+    });
+    expect(computeOptionTotal(optionSections).toNumber()).toBe(500);
+  });
+
+  it("rejects adding an Option or its sections to a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    await lockEstimateVersion(version.id);
+
+    await expect(addOption(version.id, { name: "Option 1" })).rejects.toThrow(/locked/);
+  });
+
+  it("copies Options and their sections when creating a new version from a locked one", async () => {
+    const estimate = await makeEstimate();
+    const v1 = await createEstimateVersion(estimate.id, 50);
+    const option = await addOption(v1.id, { name: "Option 1: Upgraded flooring" });
+    const optionSection = await addSection(v1.id, {
+      name: "COMPONENT 1 (Option 1)",
+      sectionType: "COMPONENT",
+      optionId: option.id,
+    });
+    await addLineItem(optionSection.id, {
+      lineType: "MATERIAL",
+      description: "Premium flooring",
+      qty: 1,
+      unitCost: 500,
+    });
+    await lockEstimateVersion(v1.id);
+
+    const v2 = await createNewVersionFromLocked(v1.id);
+
+    const v2Options = await db.option.findMany({
+      where: { estimateVersionId: v2.id },
+      include: { sections: { include: { lineItems: true } } },
+    });
+    expect(v2Options).toHaveLength(1);
+    expect(v2Options[0].name).toBe("Option 1: Upgraded flooring");
+    expect(v2Options[0].sections).toHaveLength(1);
+    expect(v2Options[0].sections[0].lineItems[0].description).toBe("Premium flooring");
+    // copied sections stay linked to the copied estimate version too
+    expect(v2Options[0].sections[0].estimateVersionId).toBe(v2.id);
+  });
+});
+
+describe("design-intake prototype: draft line items + Attachment", () => {
+  it("excludes draft line items from section/version totals until confirmed", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const attachment = await addAttachment(estimate.id, { fileRef: "pull-sheet-v1.pdf" });
+
+    await addLineItem(section.id, { lineType: "MATERIAL", description: "Confirmed line", qty: 1, unitCost: 100 });
+    const draft = await addLineItem(section.id, {
+      lineType: "MATERIAL",
+      description: "Drafted from pull sheet",
+      qty: 1,
+      unitCost: 900,
+      isDraft: true,
+      attachmentId: attachment.id,
+    });
+
+    let refreshed = await recomputeVersionTotals(version.id);
+    expect(refreshed.totalCost.toNumber()).toBe(100); // draft's $900 excluded
+
+    await confirmDraftLineItem(draft.id);
+    refreshed = await recomputeVersionTotals(version.id);
+    expect(refreshed.totalCost.toNumber()).toBe(1000); // now counts
+  });
+
+  it("rejects confirming a draft on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const draft = await addLineItem(section.id, {
+      lineType: "MATERIAL",
+      description: "Drafted",
+      qty: 1,
+      unitCost: 100,
+      isDraft: true,
+    });
+    await lockEstimateVersion(version.id);
+
+    await expect(confirmDraftLineItem(draft.id)).rejects.toThrow(/locked/);
   });
 });

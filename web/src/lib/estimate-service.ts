@@ -20,11 +20,13 @@ export function computeLineItemTotal(qty: DecimalInput, unitCost: DecimalInput):
   return new Prisma.Decimal(qty).times(unitCost);
 }
 
-export function computeSectionTotal(lineItems: { totalCost: DecimalInput }[]): Decimal {
-  return lineItems.reduce(
-    (sum, li) => sum.plus(li.totalCost),
-    new Prisma.Decimal(0),
-  );
+// Draft line items (Phase 4 design-intake prototype) are excluded until
+// confirmed -- migration-plan.md's "tagged draft ... human-reviewed and
+// priced before counting."
+export function computeSectionTotal(lineItems: { totalCost: DecimalInput; isDraft?: boolean }[]): Decimal {
+  return lineItems
+    .filter((li) => !li.isDraft)
+    .reduce((sum, li) => sum.plus(li.totalCost), new Prisma.Decimal(0));
 }
 
 // business-rules.md Rule 6: sell = cost / ((100 - margin%) / 100), a
@@ -68,8 +70,11 @@ export function computeVersionTotals(version: {
   return { totalCost, grandTotal, grossMarginPct };
 }
 
+// Only base-estimate sections (optionId: null) count toward version
+// totals -- an Option's sections are an alternate/upgrade path, priced
+// separately (see computeOptionTotal below), not part of the base cost.
 const VERSION_WITH_TOTALS_INCLUDE = {
-  sections: { include: { lineItems: true } },
+  sections: { where: { optionId: null }, include: { lineItems: true } },
 } satisfies Prisma.EstimateVersionInclude;
 
 async function assertUnlocked(estimateVersionId: string) {
@@ -108,7 +113,7 @@ export async function createEstimateVersion(estimateId: string, marginTargetPct:
 
 export async function addSection(
   estimateVersionId: string,
-  data: { name: string; sectionType: SectionType; sortOrder?: number },
+  data: { name: string; sectionType: SectionType; sortOrder?: number; optionId?: string },
 ) {
   await assertUnlocked(estimateVersionId);
   return db.estimateSection.create({
@@ -117,8 +122,28 @@ export async function addSection(
       name: data.name,
       sectionType: data.sectionType,
       sortOrder: data.sortOrder ?? 0,
+      optionId: data.optionId,
     },
   });
+}
+
+// An alternate/upgrade pricing path within one estimate (business-
+// rules.md/data-model-v0.md's Option, direct port of the OPTION sheet
+// pattern) -- priced separately from the base estimate via
+// computeOptionTotal below, not folded into computeVersionTotals.
+export async function addOption(estimateVersionId: string, data: { name: string; sortOrder?: number }) {
+  await assertUnlocked(estimateVersionId);
+  return db.option.create({
+    data: {
+      estimateVersionId,
+      name: data.name,
+      sortOrder: data.sortOrder ?? 0,
+    },
+  });
+}
+
+export function computeOptionTotal(sections: { lineItems: { totalCost: DecimalInput; isDraft?: boolean }[] }[]): Decimal {
+  return sections.reduce((sum, section) => sum.plus(computeSectionTotal(section.lineItems)), new Prisma.Decimal(0));
 }
 
 export async function addLineItem(
@@ -129,6 +154,11 @@ export async function addLineItem(
     department?: string | null;
     qty: DecimalInput;
     unitCost: DecimalInput;
+    // Phase 4 design-intake prototype: a draft line item references the
+    // Attachment (design pull sheet) it was drafted from and is excluded
+    // from cost rollups until confirmDraftLineItem below.
+    isDraft?: boolean;
+    attachmentId?: string | null;
   },
 ) {
   const section = await db.estimateSection.findUniqueOrThrow({ where: { id: sectionId } });
@@ -143,6 +173,8 @@ export async function addLineItem(
       qty: new Prisma.Decimal(data.qty),
       unitCost: new Prisma.Decimal(data.unitCost),
       totalCost: computeLineItemTotal(data.qty, data.unitCost),
+      isDraft: data.isDraft ?? false,
+      attachmentId: data.attachmentId ?? null,
     },
   });
 }
@@ -180,6 +212,31 @@ export async function deleteLineItem(lineItemId: string) {
   await assertUnlocked(existing.section.estimateVersionId);
   const deleted = await db.lineItem.delete({ where: { id: lineItemId } });
   return { ...deleted, estimateVersionId: existing.section.estimateVersionId };
+}
+
+// Marks a draft line item (Phase 4 design-intake prototype) as
+// human-reviewed and priced -- migration-plan.md's "human-reviewed
+// before pricing" -- so it starts counting toward the version's totals.
+export async function confirmDraftLineItem(lineItemId: string) {
+  const existing = await db.lineItem.findUniqueOrThrow({
+    where: { id: lineItemId },
+    include: { section: true },
+  });
+  await assertUnlocked(existing.section.estimateVersionId);
+  await db.lineItem.update({ where: { id: lineItemId }, data: { isDraft: false } });
+  await recomputeVersionTotals(existing.section.estimateVersionId);
+  return db.lineItem.findUniqueOrThrow({ where: { id: lineItemId } });
+}
+
+// Attachment is a reference (filename, or an external FTP/WeTransfer
+// link), not an uploaded file -- schema.prisma's Attachment comment.
+export async function addAttachment(
+  estimateId: string,
+  data: { fileRef: string; uploadedById?: string | null },
+) {
+  return db.attachment.create({
+    data: { estimateId, fileRef: data.fileRef, uploadedById: data.uploadedById ?? null },
+  });
 }
 
 // Per-row margin target is a user-editable input (business-rules.md Rule
@@ -232,21 +289,51 @@ export async function lockEstimateVersion(estimateVersionId: string) {
   });
 }
 
-// Duplicates a locked version's sections/line items into a fresh unlocked
+function lineItemCreateData(li: {
+  lineType: LineItemType;
+  description: string;
+  department: string | null;
+  qty: Decimal;
+  unitCost: Decimal;
+  totalCost: Decimal;
+}) {
+  return {
+    lineType: li.lineType,
+    description: li.description,
+    department: li.department,
+    qty: li.qty,
+    unitCost: li.unitCost,
+    totalCost: li.totalCost,
+    // isDraft/attachmentId deliberately not copied -- a new version starts
+    // with only confirmed line items, matching lockEstimateVersion's own
+    // totals (which already excluded drafts).
+  };
+}
+
+// Duplicates a locked version's sections/line items -- AND its Options,
+// each with their own sections/line items -- into a fresh unlocked
 // version rather than mutating history -- the "Create new version" flow
-// schema.prisma's EstimateVersion comment describes.
+// schema.prisma's EstimateVersion comment describes. An interactive
+// transaction, not the array form used elsewhere in this file, because
+// each Option's sections need the new version's id AND a newly-created
+// Option's id, both of which only exist after earlier steps in this same
+// transaction complete.
 export async function createNewVersionFromLocked(estimateVersionId: string) {
   const source = await db.estimateVersion.findUniqueOrThrow({
     where: { id: estimateVersionId },
-    include: VERSION_WITH_TOTALS_INCLUDE,
+    include: {
+      sections: { where: { optionId: null }, include: { lineItems: true } },
+      options: { include: { sections: { include: { lineItems: true } } } },
+    },
   });
   if (!source.isLocked) {
     throw new Error(`EstimateVersion ${estimateVersionId} is not locked; only locked versions can be copied.`);
   }
 
-  const [, created] = await db.$transaction([
-    db.estimateVersion.update({ where: { id: source.id }, data: { isCurrent: false } }),
-    db.estimateVersion.create({
+  return db.$transaction(async (tx) => {
+    await tx.estimateVersion.update({ where: { id: source.id }, data: { isCurrent: false } });
+
+    const created = await tx.estimateVersion.create({
       data: {
         estimateId: source.estimateId,
         versionNumber: source.versionNumber + 1,
@@ -264,21 +351,31 @@ export async function createNewVersionFromLocked(estimateVersionId: string) {
             name: section.name,
             sectionType: section.sectionType,
             sortOrder: section.sortOrder,
-            lineItems: {
-              create: section.lineItems.map((li) => ({
-                lineType: li.lineType,
-                description: li.description,
-                department: li.department,
-                qty: li.qty,
-                unitCost: li.unitCost,
-                totalCost: li.totalCost,
-              })),
-            },
+            lineItems: { create: section.lineItems.map(lineItemCreateData) },
           })),
         },
       },
-    }),
-  ]);
+    });
 
-  return created;
+    for (const option of source.options) {
+      await tx.option.create({
+        data: {
+          estimateVersionId: created.id,
+          name: option.name,
+          sortOrder: option.sortOrder,
+          sections: {
+            create: option.sections.map((section) => ({
+              estimateVersionId: created.id,
+              name: section.name,
+              sectionType: section.sectionType,
+              sortOrder: section.sortOrder,
+              lineItems: { create: section.lineItems.map(lineItemCreateData) },
+            })),
+          },
+        },
+      });
+    }
+
+    return created;
+  });
 }

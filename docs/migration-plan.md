@@ -154,40 +154,71 @@ for proposals.
 
 ## Phase 4 — Proposal and approval workflow
 
+**Status: complete.** Built in `web/` on top of Phase 3's estimate
+engine. `Option` and the design-intake prototype (moved in from Phase 3)
+were both built this phase too. The multi-year `Contract` concept was
+formally skipped, same call as `PRICE OPTIONS` in Phase 3 — see below.
+
 **Goal:** `Proposal`, `ProposalTemplate`, approval gate, `ChangeOrder`.
 
 **Scope:**
-- Templated proposal generation replacing the single hardcoded `PROPOSAL`
-  sheet layout (ForgeOS goal #3 — reusable branded templates, a genuine
-  net-new capability).
-- Explicit approval state + timestamp (replacing the manual/paper
-  signature process inferred in `docs/workflow-map.md`) — `is_approved`,
-  `approved_at`, `approved_by` on `EstimateVersion`.
-- `ChangeOrder` authoring: **resolve the open question from
-  `docs/workflow-map.md`** — build it as a diff against the approved
-  EstimateVersion (ForgeOS-recommended) rather than porting the
-  workbook's from-scratch "short form estimate" pattern, unless business
-  stakeholders confirm the standalone re-pricing behavior is intentional
-  and should be preserved as a UX option.
-- **Moved from Phase 3:** `Option` (alternates) — one full
+- [x] Templated proposal generation replacing the single hardcoded
+  `PROPOSAL` sheet layout (ForgeOS goal #3 — reusable branded templates).
+  `ProposalTemplate` (name, brandingConfig, layoutConfig) gets full CRUD
+  at `/catalog/proposal-templates`; `generateProposal` snapshots the
+  template's config onto the `Proposal` row at generation time
+  (`templateConfigSnapshot`) so a later template edit never changes how
+  an already-generated proposal renders.
+- [x] Explicit approval state + timestamp (replacing the manual/paper
+  signature process inferred in `docs/workflow-map.md`) —
+  `isApproved`/`approvedAt`/`approvedById` on `EstimateVersion`, gated on
+  the version already being locked. Distinct from `Proposal`'s own
+  `sentAt`/`signedAt` (the client-facing side, also built — "send" and
+  "mark as signed" actions on `/proposals/[id]`).
+- [x] `ChangeOrder` authoring: resolved the open question from
+  `docs/workflow-map.md` by building it as a diff against the approved
+  EstimateVersion (ForgeOS-recommended), **not** the workbook's
+  from-scratch "short form estimate" pattern — no business-side
+  confirmation ever arrived to justify the standalone-re-pricing
+  alternative, so the recommended default stood. Implemented by reusing
+  `EstimateVersion`'s existing copy/lock machinery rather than a parallel
+  delta-storage model: `ChangeOrder.resultVersionId` is a normal
+  `EstimateVersion`, edited with the same estimate UI already built in
+  Phase 3; the diff (`computeChangeOrderDiff`) is computed on read by
+  comparing `baseVersion` and `resultVersion` line items.
+- [x] **Moved from Phase 3:** `Option` (alternates) — one full
   `EstimateSection` set per alternate, direct port of the OPTION sheet
-  pattern; natural fit alongside `ChangeOrder` since both are
-  diff-against-a-base-estimate mechanisms.
-- **Moved from Phase 3:** design-intake prototype — draft `LineItem`
-  candidates (description, qty, size, supplier) from a design "pull
-  sheet" (Structure/Graphics/Furniture/Floor tables), tagged `draft` and
-  human-reviewed/priced before counting. Evidence-backed opportunity
-  surfaced in Phase 0 (`docs/migration-plan.md`'s Phase 0 packet), not
-  started yet.
-- **Moved from Phase 3:** decide whether ForgeOS needs an explicit
-  multi-year `Contract` concept — surfaced by Poly Coat's real 3-year
-  deal (Phase 1), where Year 1 builds the assets and Years 2–3 re-rent
-  them at far higher margin; `EstimateVersion` alone models revisions of
-  one estimate, not several related ones linked under one contract.
+  pattern. Implemented via `EstimateSection.optionId` (nullable) rather
+  than a duplicate section/line-item model — an Option's sections reuse
+  every existing section/line-item function, priced separately from the
+  base estimate via `computeOptionTotal`.
+- [x] **Moved from Phase 3:** design-intake prototype — minimal scope, by
+  explicit decision: `Attachment` is a text reference (filename or an
+  external FTP/WeTransfer link, matching how the workbook's own artwork
+  already moves outside the file entirely — no upload pipeline built).
+  Draft `LineItem`s (`isDraft`, `attachmentId`) are excluded from cost
+  rollups until `confirmDraftLineItem` marks them human-reviewed and
+  priced. No automated pull-sheet table extraction this phase.
+- [x] **Moved from Phase 3, decided:** multi-year `Contract` concept —
+  **skipped**, by explicit user choice, same reasoning as `PRICE OPTIONS`
+  in Phase 3: no second real multi-year job exists yet to validate a
+  `Contract` model against (Poly Coat, Phase 1, remains the only
+  evidence). Revisit if another multi-year deal shows up.
 
-**Exit criteria:** a proposal can be generated, sent, and approved
-end-to-end in ForgeOS with a full audit trail, for a job whose estimate
-was also built in ForgeOS (Phase 3).
+**Exit criteria — met:** a proposal was generated, sent, and marked
+signed end-to-end in ForgeOS for a job whose estimate was also built in
+ForgeOS (Phase 3), verified live in a browser: approve → generate
+proposal (branded, from a real template) → send → sign, all with a full
+audit trail (`approvedAt`/`approvedById`, `sentAt`, `signedAt`). A
+`ChangeOrder` was opened against a locked+approved version, edited
+through the normal estimate UI, locked, and approved, with its diff view
+showing the correct added line item and dollar delta. `Option` and the
+draft-line-item workflow were each verified live too. 48 automated tests
+cover the compute functions, the DB-backed services, and — new this
+phase — acceptance tests proving the real Yoku Moku total (Phase 3)
+passes through approve/generate/send/sign unchanged, and that a
+change order's diff against it produces a correctly-priced real-dollar
+delta (`estimate-acceptance.test.ts`).
 
 ## Phase 5 — Project, production, and logistics tracking
 
@@ -208,6 +239,10 @@ deadline(s) → balance due → installation.
   with a self-contained ForgeOS record.
 - `Vendor` + purchasing — genuinely new capability (workbook has zero
   vendor/purchasing data model, per `docs/data-model-v0.md`).
+- **Carried from Phase 4:** `ChangeOrder` currently references `Estimate`
+  directly (schema.prisma's comment) since `Project` didn't exist yet.
+  Once `Project` is built, decide whether `ChangeOrder` should move to
+  reference `Project` instead, per data-model-v0.md's original design.
 
 **Exit criteria:** a won project can be tracked from deposit through
 installation entirely in ForgeOS, with task ownership and due dates

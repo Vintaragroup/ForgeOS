@@ -23,14 +23,20 @@ import {
   createEstimateVersion,
   lockEstimateVersion,
 } from "@/lib/estimate-service";
+import { approveEstimateVersion, generateProposal, sendProposal, signProposal } from "@/lib/proposal-service";
+import { computeChangeOrderDiff, createChangeOrder } from "@/lib/change-order-service";
 
 afterEach(async () => {
+  await db.proposal.deleteMany();
+  await db.proposalTemplate.deleteMany();
+  await db.changeOrder.deleteMany();
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
+  await db.user.deleteMany();
 });
 
 afterAll(async () => {
@@ -93,5 +99,81 @@ describe("Yoku Moku acceptance (Phase 1 validated)", () => {
     // pipeline, not just the formula, is wired correctly end to end.
     expect(locked.grandTotal.toNumber()).toBeCloseTo(66044.83, -2);
     expect(locked.isLocked).toBe(true);
+  });
+});
+
+// Phase 4: proposal/approval and ChangeOrder machinery, proven against
+// the same real Yoku Moku total Phase 3 already validated above -- shows
+// the new workflow doesn't corrupt or diverge from an already-verified
+// real number, and that a change order's diff reflects real dollar
+// amounts, not just synthetic ones.
+describe("Yoku Moku through the Phase 4 workflow", () => {
+  async function makeLockedYokuMokuVersion() {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 45.3996887538702);
+    const section = await addSection(version.id, { name: "COST SUMMARY", sectionType: "CATEGORY" });
+    await addLineItem(section.id, {
+      lineType: "FEE",
+      description: "Total job cost (Phase 1 validated)",
+      qty: 1,
+      unitCost: 36060.684,
+    });
+    const locked = await lockEstimateVersion(version.id);
+    return { estimate, version: locked };
+  }
+
+  it("carries the real total unchanged through approve -> generate -> send -> sign", async () => {
+    const { version } = await makeLockedYokuMokuVersion();
+    const user = await db.user.create({ data: { name: "Approver", email: `a-${Date.now()}@example.com` } });
+    const template = await db.proposalTemplate.create({ data: { name: "Standard" } });
+
+    await approveEstimateVersion(version.id, user.id);
+    const proposal = await generateProposal(version.id, template.id);
+    const sent = await sendProposal(proposal.id);
+    const signed = await signProposal(proposal.id);
+
+    expect(signed.signedAt).not.toBeNull();
+    expect(sent.sentAt).not.toBeNull();
+
+    // the proposal's estimateVersion is exactly the one Phase 3 validated
+    // -- generating/sending/signing never touches EstimateVersion's totals
+    const reloadedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(reloadedVersion.grandTotal.toNumber()).toBeCloseTo(66045.2, 2);
+  });
+
+  it("a change order against the real Yoku Moku total produces a correctly-priced real-dollar diff", async () => {
+    const { estimate, version } = await makeLockedYokuMokuVersion();
+    const user = await db.user.create({ data: { name: "Approver", email: `a-${Date.now()}@example.com` } });
+    await approveEstimateVersion(version.id, user.id);
+
+    // Real Booksy-scale add-on: Phase 1's second validated job (Booksy,
+    // $58,311.18) -- used here only as a realistic magnitude for a
+    // "add a second job's worth of scope" change order, not claiming
+    // Booksy was literally a change order against Yoku Moku.
+    const changeOrder = await createChangeOrder(estimate.id, version.id, "Add Booksy-scale second phase");
+    const resultSection = await db.estimateSection.findFirstOrThrow({
+      where: { estimateVersionId: changeOrder.resultVersionId },
+    });
+    await addLineItem(resultSection.id, {
+      lineType: "FEE",
+      description: "Second phase scope",
+      qty: 1,
+      unitCost: 58311.18,
+    });
+    await lockEstimateVersion(changeOrder.resultVersionId);
+
+    const base = await db.estimateSection.findMany({
+      where: { estimateVersionId: version.id },
+      include: { lineItems: true },
+    });
+    const result = await db.estimateSection.findMany({
+      where: { estimateVersionId: changeOrder.resultVersionId },
+      include: { lineItems: true },
+    });
+    const diff = computeChangeOrderDiff(base, result);
+
+    expect(diff).toHaveLength(1);
+    expect(diff[0]).toMatchObject({ kind: "ADDED", description: "Second phase scope" });
+    expect(diff[0].delta.toNumber()).toBeCloseTo(58311.18, 2);
   });
 });

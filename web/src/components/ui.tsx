@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 
 export function PageHeader({
@@ -16,9 +16,17 @@ export function PageHeader({
   );
 }
 
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function Card({
+  children,
+  className = "",
+  style,
+}: {
+  children: ReactNode;
+  className?: string;
+  style?: CSSProperties;
+}) {
   return (
-    <div className={`rounded-lg border border-neutral-200 bg-white ${className}`}>
+    <div className={`rounded-lg border border-neutral-200 bg-white ${className}`} style={style}>
       {children}
     </div>
   );
