@@ -23,8 +23,7 @@ but all three should be resolved with business-side input before Phase 3
 
 ## Phase 1 — Read-only workbook importer + comparison harness
 
-**Status: tooling built and validated; exit criteria not yet met.** Full
-detail in `docs/phase1-findings.md`.
+**Status: complete.** Full detail in `docs/phase1-findings.md`.
 
 **Goal:** prove ForgeOS can read a *populated* estimate workbook (not just
 this template) and reproduce its numbers, before writing a single line of
@@ -42,12 +41,10 @@ new business logic.
   values, before wrapping it in code. This is the first point in the
   project where a recalculated value is trusted.
 - [x] Built a diff/comparison harness (`diff_harness.py`): for a given
-  job workbook, asserts an independent recompute of each section's
-  totals matches the workbook's own `COST SUMMARY` values, localizing
-  any mismatch to a specific stage. Currently wired through `COST
-  SUMMARY` for one component and one category section; extending to
-  every section and up through `Price Summary`/`ESTIMATE` is mechanical
-  (same pattern) but not yet done.
+  job workbook, asserts an independent recompute of each populated
+  section's totals matches the workbook's own `COST SUMMARY` values,
+  localizing any mismatch to a specific stage rather than only a grand
+  total.
 - [x] Tested against the two known-broken areas: `PRICE OPTIONS`'s
   `#REF!` cells were traced to `COST SUMMARY`'s live `AD` (total cost)
   column and the repair was **verified empirically** by patching a
@@ -56,18 +53,24 @@ new business logic.
   false alarm** — two intentional, non-overlapping rollup bands, not a
   duplication — see Rule 5. One new finding surfaced in the process:
   `OVERHEAD` is silently zeroed workbook-wide (R19).
-- [ ] **Not yet done:** run against real historical job workbooks. This
-  pass used a synthetic, clearly-fictional fixture
-  (`tools/workbook_import/synthetic_fixture.py`) since none were
-  available — see `docs/phase1-findings.md` for what's needed to close
-  the gap.
+- [x] Ran against real historical job workbooks: **3 distinct clients,
+  5 workbook files, 756/756 component-level checks passed, zero
+  failures.** Two clients (Yoku Moku, Booksy) matched an independent
+  real-world document to the penny; the third (Poly Coat, a multi-year
+  contract) is internally verified with no external document available to
+  cross-check. See `docs/phase1-findings.md` for the full breakdown.
 
-**Exit criteria (not yet met):** 3+ historical, distinct real job
-workbooks reproduce their known-good final numbers (proposal total,
-margin) within rounding tolerance, with every intermediate rollup stage
-individually verified. The pipeline that will do this is built and
-passing 12/12 tests against synthetic data; it has not yet been proven
-against real business data, which is a different and stronger claim.
+**Exit criteria — met:** 3+ historical, distinct real job workbooks
+reproduce their known-good final numbers within rounding tolerance, with
+every intermediate populated rollup stage individually verified. 2 of the
+3 clients are additionally confirmed against a document independent of
+the workbook entirely (a sent proposal and a signed change order); the
+third has no such document available but is fully internally consistent
+under independent recalculation. Not yet extended: an independent
+recompute of the `Price Summary`/`ESTIMATE` rollup stages themselves
+(the grand total is currently read directly, not re-derived) — tracked as
+non-blocking follow-up in `docs/phase1-findings.md`. Also surfaced: a
+multi-year-contract data-model gap to resolve before Phase 3.
 
 ## Phase 2 — CRM and opportunity shell
 

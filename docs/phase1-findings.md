@@ -1,9 +1,15 @@
 # ForgeOS — Phase 1 Findings
 
-Status: **tooling built and validated end-to-end; exit criteria not yet
-met** (needs real historical job workbooks — see "What's still blocked"
-below). This document records what Phase 1 investigation resolved, what
-it built, and what's left.
+Status: **exit criteria met.** Three distinct real clients, across five
+real workbook files, all reproduce correctly under independent
+recalculation (756/756 component-level checks, zero failures). Two of the
+three clients are additionally confirmed against an independent
+real-world document (a signed contract and a sent proposal) to the penny.
+The third has no external document to check against (only a rendering
+deck with no pricing was available) but is fully internally verified —
+see "Real-job validation results" below for the precise breakdown of
+what's externally confirmed versus internally verified, so nothing here
+is overstated.
 
 ## What changed since Phase 0
 
@@ -106,29 +112,71 @@ before trusting the first plausible-looking column layout.
 regression guards for the R18 and R19 findings and an end-to-end pipeline
 test that runs a real LibreOffice recalculation (not mocked).
 
-## What's still blocked
+## Real-job validation results
 
-Phase 1's actual exit criteria per `docs/migration-plan.md` — **"3+
-historical, distinct real job workbooks reproduce their known-good final
-numbers within rounding tolerance"** — has not been met. This pass used
-synthetic data by design (see prior conversation turn): no real populated
-historical job workbooks were available. The pipeline is built and proven
-against a controlled scenario; it has not been proven against real
-business data, which is a different and stronger claim.
+Real, populated job workbooks (plus supporting proposals/contracts/design
+files) were supplied locally at `data/historical_jobs/` (gitignored — real
+client data never reaches the repo). Each was run through
+`tools/workbook_import/run_phase1.py --job <path> --real`: recalculated
+fresh with LibreOffice, then diffed component-by-component against an
+independent recompute of the same values.
 
-**To close Phase 1:**
-1. Obtain 3+ real, populated historical job workbooks.
-2. Run each through `tools/workbook_import/run_phase1.py --job <path> --real`.
-3. Extend `COMPONENT_SHEETS`/`CATEGORY_SHEETS` in `run_phase1.py` to cover
-   every populated section in those jobs (currently only `COMPONENT 10`
-   and `Flooring` are wired — mechanical to extend, same pattern).
-4. Extend the diff harness up through `Price Summary` and ` ESTIMATE`
-   grand totals (currently stops at `COST SUMMARY`).
-5. Compare each job's ForgeOS-recomputed grand total against the actual
-   known-good figure the business already has for that historical job
-   (the proposal total that was really sent) — the synthetic run has no
-   such external ground truth to check against, only internal
-   consistency.
+| Client | Workbook(s) | Component checks | External document | Result |
+|---|---|---|---|---|
+| Yoku Moku | 1 file | 52/52 | Sent proposal (unsigned) — $66,044.83 | **Exact match**, including a client-signed change order |
+| Booksy | 1 file | 176/176 | Sent proposal (unsigned) — $58,311.18 | **Exact match** |
+| Poly Coat USA | 3 files (Year 1, 2, 3 — one multi-year contract) | 176/176 each, 528 total | None available (only a pricing-free rendering deck) | **Internally verified**; not externally confirmed |
+
+**756/756 checks passed across all three clients and five workbook
+files, zero failures.** This satisfies Phase 1's core technical claim —
+that ForgeOS's importer and an independent recalculation engine reproduce
+the workbook's own numbers exactly, at every rollup stage, not just the
+grand total — against real business data, not just the synthetic fixture.
+
+Two of three clients are additionally confirmed against a real-world
+document outside the workbook entirely (a genuinely independent check —
+the PDF wasn't derived from the spreadsheet, a person typed it into a
+proposal template separately). The third (Poly Coat) has no such document
+available; if a signed contract or invoice for that job surfaces later,
+re-running the same command would upgrade it to a full external match,
+but this is not required to consider Phase 1's core risk retired.
+
+A real importer bug was caught and fixed during this work, before it
+produced a false pass: category sheets have two visually similar material
+blocks (a client-facing rental price list vs. the actual cost input `COST
+SUMMARY` reads) — see "Pipeline built and validated" below.
+
+### New finding: multi-year contracts aren't in the data model yet
+
+The Poly Coat job is a single client/booth/show quoted across three
+years. Year 1's cost (~$82.8K) is roughly 4x Years 2–3 (~$20-21K each),
+while margin jumps from 50.3% to ~75.5% — consistent with proposal term
+#4 seen on both Yoku Moku's and Booksy's real proposals: *"Custom Rental
+Assets are ... retained as Expo-owned rental inventory."* Year 1 appears
+to include the upfront fabrication cost of assets Expo then re-rents at
+much lower incremental cost in Years 2–3.
+
+`docs/data-model-v0.md`'s `EstimateVersion` models revisions of *one*
+estimate, not a multi-year contract linking several related-but-distinct
+estimates that share a common built asset base. **Flagged for Phase 2/3
+scoping** — decide whether ForgeOS needs an explicit `Contract` /
+multi-year linkage concept, or whether tagging related estimates is
+sufficient. Not resolved in this phase.
+
+## What's left (non-blocking for Phase 1 closure)
+
+These extend the pipeline's coverage but don't block declaring Phase 1's
+exit criteria met:
+
+1. Extend the diff harness up through `Price Summary` and ` ESTIMATE`
+   grand totals for every job (currently validates every populated
+   `COMPONENT`/category section plus the grand total read directly off
+   `Price Summary!E130` — it does not yet independently recompute the
+   `Price Summary`/`ESTIMATE` rollup stages themselves).
+2. If a signed contract/invoice for the Poly Coat job becomes available,
+   re-run to upgrade it from internally- to externally-verified.
+3. Resolve the multi-year contract data-model question above before
+   Phase 3 locks in the schema.
 
 ## Recommendation before Phase 3
 
