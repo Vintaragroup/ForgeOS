@@ -9,30 +9,50 @@ this repo is public. Same treatment as `Reference/ORLANDO ESTIMATE.xlsm`.
 
 ## Layout
 
-One folder per job, named however you like (a job number is ideal):
+One folder per job, named however you like (a job number is ideal). Mixed
+file types are expected and fine — drop in whatever you have:
 
 ```
 data/historical_jobs/
   2024-orlando-acme/
-    estimate.xlsm          <- the populated workbook (required)
-    ground_truth.md        <- what was actually invoiced/awarded (see below)
-    supporting/            <- optional: signed proposal, invoice PDFs, etc.
+    estimate.xlsx           <- the populated workbook (required; .xlsm or .xlsx both work)
+    ground_truth.md         <- what was actually invoiced/awarded (see below)
+    supporting/
+      signed_proposal.pdf   <- proposal PDF, signature page, etc.
+      invoice.pdf
+      booth_photo.jpg       <- production/install photos, if you have them
+      quote_email.png       <- a screenshot, scanned doc, whatever exists
   2024-vegas-widgetco/
     estimate.xlsm
     ground_truth.md
+    supporting/
+      ...
   ...
 ```
 
-Only `estimate.xlsm` is required for the pipeline to run. Anything else
-you drop in a job folder (PDFs, notes, screenshots) is fine — the tooling
-only reads `estimate.xlsm` and, optionally, `ground_truth.md`.
+Only the workbook is required for the pipeline itself to run — that's the
+one file `tools/workbook_import/` actually parses and recalculates.
+Everything else (PDFs, images, notes) is for establishing **ground
+truth**: the real-world figure to check the workbook's numbers against.
 
-## `estimate.xlsm`
+## The workbook (`estimate.xlsm` or `estimate.xlsx`)
 
-The populated workbook itself — same format/lineage as
+The populated estimate itself — same format/lineage as
 `ORLANDO ESTIMATE.xlsm` (a filled-in copy of it, or a job built from that
-template). This is what `tools/workbook_import/run_phase1.py` recalculates
-and imports.
+template). **Both `.xlsm` and `.xlsx` work** — confirmed by running a
+macro-free `.xlsx` copy through the full pipeline end-to-end (recalc,
+import, diff harness, all 8 checks passed identically to the `.xlsm`
+case). Name it whatever's natural; just point `--job` at it.
+
+## Supporting documents (PDF / images)
+
+These aren't parsed automatically by the pipeline — I'll read them
+directly (I can open PDFs and images) to pull out the actual awarded
+price, signed terms, or invoiced total, and write that into
+`ground_truth.md` for you. If you'd rather just drop everything in
+`supporting/` and let me extract the numbers myself once files are in
+place, that's the easiest path — you don't need to fill out
+`ground_truth.md` by hand.
 
 ## `ground_truth.md` (recommended, not required)
 
@@ -61,7 +81,7 @@ the client."
 
 ```
 python3 -m tools.workbook_import.run_phase1 \
-  --job data/historical_jobs/2024-orlando-acme/estimate.xlsm \
+  --job data/historical_jobs/2024-orlando-acme/estimate.xlsx \
   --name "2024-orlando-acme" \
   --real
 ```
