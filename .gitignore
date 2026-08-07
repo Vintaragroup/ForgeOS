@@ -24,3 +24,9 @@ __pycache__/
 # staging SQLite DB -- not audit deliverables, unlike artifacts/*.json.
 /artifacts/phase1_runs/
 /artifacts/phase1_staging.db
+
+# Real historical job workbooks -- real client names, rates, and awarded
+# prices. Never goes to the (public) remote. See data/historical_jobs/README.md,
+# which is the one file in this tree that IS tracked (hence the negation below).
+/data/historical_jobs/*
+!/data/historical_jobs/README.md
