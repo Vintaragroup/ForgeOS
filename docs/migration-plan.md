@@ -74,23 +74,44 @@ multi-year-contract data-model gap to resolve before Phase 3.
 
 ## Phase 2 — CRM and opportunity shell
 
+**Status: complete.** Built in `web/` (Next.js 16 + Postgres + Prisma 7,
+see `web/README.md`). Stack and tenancy were decided explicitly before
+schema work began: TypeScript full-stack, single-company internal tool
+(no `tenant_id` anywhere — see `web/prisma/schema.prisma`'s header
+comment). Neither decision had been made anywhere in this project before
+Phase 2 kickoff.
+
 **Goal:** stand up `Company`, `Contact`, `Opportunity`, `User` — the
 entities `docs/data-model-v0.md` flags as having **no workbook
 precedent** — as a genuinely new capability, decoupled from estimating.
 
 **Scope:**
-- Basic CRUD + pipeline view for Opportunity.
-- Manual "convert opportunity → start new estimate" action that
-  pre-fills `Start Page`-equivalent fields (job/show/booth details) from
-  the Opportunity record, closing the gap identified in
+- [x] Basic CRUD + pipeline view for Opportunity, plus Company/Contact/User
+  CRUD. The pipeline view is a stage board (`/opportunities`, grouped
+  New/Contacted/Qualified/Estimating/Won/Lost) rather than a raw list.
+- [x] Opportunity stage changes are logged to a `StageChangeEvent` table
+  (fromStage, toStage, note, timestamp) — satisfies `data-model-v0.md`'s
+  "stage-change history required (sales reporting)" note. The full
+  universal `AuditEvent` entity is explicitly out of scope for this phase.
+- [x] "Convert opportunity → start new estimate" action: creates a stub
+  `Estimate` (identity fields only, no line items) and auto-advances the
+  opportunity to `ESTIMATING`, closing the gap identified in
   `docs/workflow-map.md` (workbook currently starts one stage later than
-  the target lifecycle).
-- No estimate math yet — estimates created here can still be authored in
-  Excel and attached, or stubbed.
+  the target lifecycle). No estimate math yet — that's Phase 3's
+  `EstimateVersion`/`LineItem` work.
 
-**Exit criteria:** a real opportunity can be tracked start-to-qualified
-in ForgeOS with zero Excel involvement; estimate authoring is still
-Excel-based.
+**Exit criteria — met:** a real opportunity can be tracked
+start-to-qualified in ForgeOS with zero Excel involvement. Verified
+manually in a browser: company → contact → opportunity created, walked
+through New → Contacted → Qualified with a note logged at each
+transition, then converted to a draft estimate. Estimate authoring
+itself is still a stub, as scoped — that's Phase 3.
+
+**Found along the way:** Prisma 7 removed the `datasource.url` field from
+`schema.prisma` in favor of a driver-adapter pattern
+(`@prisma/adapter-pg`) — not documented anywhere in this project before
+now; see `web/README.md`'s stack notes so the next phase doesn't
+rediscover it the hard way.
 
 ## Phase 3 — Native estimate engine
 

@@ -1,0 +1,168 @@
+// ForgeOS — Phase 2 schema: CRM & opportunity shell.
+//
+// Scoped to exactly what docs/migration-plan.md Phase 2 needs: Company,
+// Contact, Opportunity, User, and a stub Estimate (identity fields only —
+// real estimate math is Phase 3). See docs/data-model-v0.md for the full
+// entity catalog this is drawn from.
+//
+// Deliberately single-tenant: no tenant_id anywhere. ForgeOS was scoped as
+// an internal tool for one fabrication company, not a multi-tenant SaaS
+// product, so docs/data-model-v0.md's "tenant-scoped" language on each
+// entity does not apply here.
+//
+// AuditEvent (the universal audit log in data-model-v0.md) is out of scope
+// for Phase 2. Only the one audit requirement Phase 2 explicitly calls for
+// -- Opportunity stage-change history, for sales reporting -- is modeled,
+// via StageChangeEvent below.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7: `url` is no longer valid here. The CLI/Migrate connection
+// string lives in prisma.config.ts; the runtime client gets its
+// connection via a driver adapter (@prisma/adapter-pg) constructed in
+// src/lib/db.ts.
+datasource db {
+  provider = "postgresql"
+}
+
+enum ContactRole {
+  CLIENT_CONTACT
+  ACCOUNT_EXECUTIVE
+}
+
+enum OpportunityStage {
+  NEW
+  CONTACTED
+  QUALIFIED
+  ESTIMATING
+  WON
+  LOST
+}
+
+enum EstimateStatus {
+  DRAFT
+  IN_PROGRESS
+}
+
+model User {
+  id         String   @id @default(cuid())
+  name       String
+  email      String   @unique
+  role       String?
+  department String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  contactLinks  Contact[]     @relation("UserContact")
+  opportunities Opportunity[] @relation("OpportunityOwner")
+
+  @@map("users")
+}
+
+model Company {
+  id             String  @id @default(cuid())
+  name           String
+  billingAddress String?
+  industry       String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  contacts      Contact[]
+  opportunities Opportunity[]
+
+  @@map("companies")
+}
+
+// A Contact is either a client_contact (belongs to a Company) or an
+// account_executive (linked back to an internal User) -- see
+// docs/data-model-v0.md's Contact entity. Both cases share this table
+// rather than being split, matching how the workbook treated them (one
+// "contact directory" concept, DATA!B24:F33, regardless of which side of
+// the deal the person is on).
+model Contact {
+  id    String      @id @default(cuid())
+  name  String
+  email String?
+  phone String?
+  role  ContactRole
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+
+  userId String? // set when role = ACCOUNT_EXECUTIVE and linked to an internal User
+  user   User?   @relation("UserContact", fields: [userId], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  opportunitiesAsPrimary Opportunity[] @relation("OpportunityPrimaryContact")
+
+  @@map("contacts")
+}
+
+model Opportunity {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+
+  primaryContactId String?
+  primaryContact   Contact? @relation("OpportunityPrimaryContact", fields: [primaryContactId], references: [id])
+
+  ownerId String?
+  owner   User?   @relation("OpportunityOwner", fields: [ownerId], references: [id])
+
+  showName      String
+  boothNumber   String?
+  targetMoveIn  DateTime?
+  targetMoveOut DateTime?
+  stage         OpportunityStage @default(NEW)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  stageEvents StageChangeEvent[]
+  estimates   Estimate[]
+
+  @@map("opportunities")
+}
+
+model StageChangeEvent {
+  id            String  @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+
+  fromStage OpportunityStage?
+  toStage   OpportunityStage
+  note      String?
+  changedAt DateTime @default(now())
+
+  @@map("opportunity_stage_events")
+}
+
+// Stub only: identity + status fields so "convert opportunity -> estimate"
+// (docs/migration-plan.md Phase 2 scope) has somewhere to land. No line
+// items, no pricing math -- that's Phase 3's EstimateVersion/LineItem work.
+model Estimate {
+  id            String   @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+
+  budget  Decimal?       @db.Decimal(12, 2)
+  taxCity String?
+  status  EstimateStatus @default(DRAFT)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("estimates")
+}
