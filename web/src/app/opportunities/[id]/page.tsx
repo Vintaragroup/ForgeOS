@@ -134,8 +134,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         </h2>
         {opportunity.estimates.length === 0 ? (
           <p className="mb-4 text-sm text-neutral-500">
-            No estimate started yet. Converting pre-fills job details from this opportunity — no
-            pricing math yet, that comes in Phase 3.
+            No estimate started yet. Converting pre-fills job details from this opportunity.
           </p>
         ) : (
           <ul className="mb-4 flex flex-col gap-2 text-sm">
@@ -145,8 +144,8 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                   Estimate {e.id.slice(0, 8)} — {e.status}
                   {e.taxCity ? ` · ${e.taxCity}` : ""}
                 </span>
-                <Link href="#" className="text-neutral-400">
-                  (Phase 3: estimate detail view)
+                <Link href={`/estimates/${e.id}`} className="text-neutral-900 hover:underline">
+                  Open estimate →
                 </Link>
               </li>
             ))}

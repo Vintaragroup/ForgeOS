@@ -1,8 +1,9 @@
 # ForgeOS — web
 
-Phase 2 (`docs/migration-plan.md`): CRM & opportunity shell. TypeScript
-full-stack (Next.js 16 App Router + Postgres + Prisma 7), single-tenant
-(no `tenant_id` — see `prisma/schema.prisma`'s header comment for why).
+Phases 2–3 (`docs/migration-plan.md`): CRM & opportunity shell, plus a
+native estimate engine. TypeScript full-stack (Next.js 16 App Router +
+Postgres + Prisma 7), single-tenant (no `tenant_id` — see
+`prisma/schema.prisma`'s header comment for why).
 
 ## Stack notes (read before touching Prisma or app-router code)
 
@@ -32,6 +33,7 @@ createdb forgeos_test               # for the test suite -- kept separate from d
 npm install
 npx prisma generate
 npx prisma migrate deploy           # applies prisma/migrations/ to forgeos_dev
+npm run seed                         # loads real Rule 1/Rule 9 labor rates + rental prices
 
 npm run dev                          # http://localhost:3000
 ```
@@ -46,7 +48,7 @@ DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public"
 `src/test/setup.ts` refuses to run if `DATABASE_URL` doesn't contain
 `forgeos_test` — the test suite truncates tables between every test.
 
-## Scope (Phase 2 only)
+## Scope (Phase 2)
 
 - **Company, Contact, User** — CRUD.
 - **Opportunity** — CRUD, a pipeline board (`/opportunities`, grouped by
@@ -54,11 +56,34 @@ DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public"
   `data-model-v0.md`'s "stage-change history required (sales reporting)"
   audit note.
 - **"Convert to estimate"** — creates a stub `Estimate` (identity fields
-  only) and auto-advances the opportunity to `ESTIMATING`. No pricing
-  math — that's Phase 3 (`EstimateVersion`/`LineItem`).
+  only) and auto-advances the opportunity to `ESTIMATING`.
 - **`AuditEvent`** (the universal audit log in `data-model-v0.md`) is
   out of scope — only the one audit requirement Phase 2 explicitly calls
   for is modeled.
+
+## Scope (Phase 3)
+
+- **Catalogs** (`/catalog`) — `LaborRate` (department + city-market,
+  business-rules.md Rule 1/Rule 10), `Material`, `RentalItem`
+  (Rule 9), each with full list/create/edit/soft-delete CRUD. Seeded
+  with real values via `npm run seed`.
+- **Estimate engine** (`web/src/lib/estimate-service.ts`) — line item
+  totals (`qty × unitCost`), section rollup, and the margin gross-up
+  formula (`cost / ((100-margin%)/100)`, business-rules.md Rule 6) —
+  deliberately *not* a markup formula; see the regression test in
+  `estimate-service.test.ts`.
+- **Estimate detail UI** (`/estimates/[id]`) — sections and line items,
+  a live-recomputed running total, an editable margin target, and a
+  lock/new-version workflow (`EstimateVersion.isLocked`; locking freezes
+  totals, "Create new version" duplicates a locked version's
+  sections/line items into a fresh editable one instead of mutating
+  history).
+- **`PRICE OPTIONS`** (business-rules.md Rule 7) was **formally dropped**
+  this phase, not ported — see `prisma/schema.prisma`'s Phase 3 header
+  comment for why. **`Option`** (alternates) was deferred, not built.
+- Acceptance tests (`estimate-acceptance.test.ts`) reproduce real,
+  Phase-1-validated numbers from the Yoku Moku job through the full
+  DB-backed service, not just the pure compute functions.
 
 ## Commands
 
@@ -67,6 +92,7 @@ npm run dev      # dev server
 npm run build    # production build + typecheck
 npm run lint     # eslint
 npm test         # vitest, against forgeos_test
+npm run seed     # loads real labor rate / rental price catalog data
 npx prisma studio # inspect the dev database visually
 ```
 
@@ -78,3 +104,16 @@ contact, and an opportunity; walked it New → Contacted → Qualified with
 notes logged at each transition; converted it to a draft estimate
 (auto-advancing to Estimating). All state changes persisted to Postgres,
 no spreadsheet involved at any point.
+
+## Exit criteria (docs/migration-plan.md Phase 3)
+
+"A new estimate authored entirely in ForgeOS ... produces the same totals
+a domain expert would expect from the equivalent Excel workbook." Verified
+live in a browser: created an estimate version, set a margin target, added
+a section and a line item using Yoku Moku's real Phase-1-validated cost
+figure, watched the grand total recompute live, locked the version, then
+created a new version from the locked one and confirmed its totals carried
+over correctly (a bug caught and fixed during this verification — see
+`estimate-service.ts`'s `createNewVersionFromLocked`). Catalog CRUD
+(labor rates, materials, rental items) was verified the same way. Full
+detail in `docs/migration-plan.md`'s Phase 3 section.

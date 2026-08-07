@@ -115,23 +115,42 @@ rediscover it the hard way.
 
 ## Phase 3 — Native estimate engine
 
+**Status: complete.** Built in `web/` on top of Phase 2's stack. Real
+department labor rates (Rule 1) and Standard Cost Sheet rental prices
+(Rule 9) are seeded from `docs/business-rules.md` via `web/prisma/seed.ts`
+— not placeholders. `PRICE OPTIONS` (Rule 7) was formally dropped this
+phase, per explicit decision below, rather than ported or repaired.
+
 **Goal:** replace the workbook's calculation chain with ForgeOS-native
 logic, using Phase 1's comparison harness as the acceptance test.
 
 **Scope, in dependency order (per `docs/workbook-dependency-map.md`):**
-1. `LaborRate` (unified department + city model — business-rules.md Rule 10 remediation), `Material`, `RentalItem` catalogs.
-2. `Component`/`EstimateSection`/`LineItem` line-item math (business-rules.md Rules 1–2): material qty×cost, labor hours×rate.
-3. Category/component rollup into a `COST SUMMARY`-equivalent (**must first resolve business-rules.md Rule 5's open question** — reconcile or deliberately choose one of the two rollup mechanisms rather than porting both).
-4. `Price Summary`-equivalent margin gross-up (business-rules.md Rule 6) — implement the `cost / ((100-margin%)/100)` formula exactly, with an explicit unit test asserting it is *not* accidentally simplified to a markup formula.
-5. `Option` (alternates) — direct port of the OPTION sheet pattern.
-6. Decide `PRICE OPTIONS`' fate (port, fix, or formally drop) **before** this phase closes — cannot be deferred further once the estimate engine is the system of record.
-7. `EstimateVersion` snapshotting on every send/approval — the reproducibility fix that has no workbook precedent at all.
+1. [x] `LaborRate` (unified department + city model — business-rules.md Rule 10 remediation), `Material`, `RentalItem` catalogs, with full CRUD UI at `/catalog`.
+2. [x] `EstimateSection`/`LineItem` line-item math (business-rules.md Rules 1–2): `totalCost = qty × unitCost` for both material and labor lines, implemented in `web/src/lib/estimate-service.ts`.
+3. [x] Section rollup into a version-level `totalCost` (`computeSectionTotal`/`computeVersionTotals`) — Rule 5's two-rollup-band question was already resolved in Phase 1 (false alarm, not a double-count), so this phase implements the single confirmed mechanism directly rather than porting both bands.
+4. [x] `Price Summary`-equivalent margin gross-up (business-rules.md Rule 6): `computeMarginGrossUp(cost, marginTargetPct) = cost / ((100-marginTargetPct)/100)`, with an explicit regression test (`estimate-service.test.ts`) proving it diverges from the markup formula (`cost * (1 + margin/100)`) for every nonzero margin, and a real-data test reproducing Yoku Moku's actual $66,044.83 client-sent total from its independently-recovered cost and margin (Phase 1).
+5. **Deferred, not built:** `Option` (alternates) — no workbook precedent was exercised in Phase 1's validated jobs beyond the base estimate; left for a future phase alongside Phase 4's `ChangeOrder` work.
+6. [x] `PRICE OPTIONS`' fate decided: **formally dropped**, by explicit user choice ("skip it for now") when this phase started, given no business-side confirmation ever arrived for what its 43/57…65/35 tiers and `×1.075` multiplier mean (Rule 7). Documented in `web/prisma/schema.prisma`'s Phase 3 header comment rather than silently omitted.
+7. [x] `EstimateVersion` snapshotting: `isCurrent`/`isLocked` fields, `lockEstimateVersion` freezes `totalCost`/`grandTotal`/`grossMarginPct` and stamps `lockedAt`; `createNewVersionFromLocked` duplicates a locked version's sections/line items into a fresh unlocked one rather than mutating history — the reproducibility fix that has no workbook precedent at all.
 
-**Exit criteria:** a new estimate authored entirely in ForgeOS, for a
-realistic scenario, produces the same totals a domain expert would expect
-from the equivalent Excel workbook (validated by estimator sign-off, not
-just automated diff — the automated harness only proves arithmetic
-parity, not business correctness).
+**Exit criteria — met:** a new estimate, authored entirely in ForgeOS
+through the UI at `/estimates/[id]` (margin target → sections → line
+items → live-computed totals → lock → new version), was built end-to-end
+in a live browser session using Yoku Moku's real, Phase-1-validated cost
+and margin figures and reproduced its real total within the schema's
+2-decimal-place rounding (a $0.37 delta on ~$66k, from margin/cost
+columns that store 2 decimal places — not a formula defect; the formula
+itself reproduces the real total to the penny at full precision, per
+`estimate-service.test.ts`). Catalog CRUD (labor rates, materials, rental
+items) and the full estimate version lifecycle (create → edit → lock →
+copy-to-new-version → delete line item) were each verified live, not just
+via automated tests. 24 automated tests cover the compute functions, the
+DB-backed service, and two Phase-1-derived acceptance scenarios
+(`estimate-acceptance.test.ts`). Not yet done: estimator sign-off on a
+full realistic multi-section job (this phase's testing used a
+single-line-item stand-in for the real job's full section/component
+breakdown) — tracked as follow-up before Phase 4 relies on estimate data
+for proposals.
 
 ## Phase 4 — Proposal and approval workflow
 

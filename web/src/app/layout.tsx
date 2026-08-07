@@ -23,6 +23,7 @@ const NAV_LINKS = [
   { href: "/companies", label: "Companies" },
   { href: "/contacts", label: "Contacts" },
   { href: "/users", label: "Users" },
+  { href: "/catalog", label: "Catalog" },
 ];
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
