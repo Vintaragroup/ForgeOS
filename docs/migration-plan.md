@@ -129,7 +129,7 @@ logic, using Phase 1's comparison harness as the acceptance test.
 2. [x] `EstimateSection`/`LineItem` line-item math (business-rules.md Rules 1–2): `totalCost = qty × unitCost` for both material and labor lines, implemented in `web/src/lib/estimate-service.ts`.
 3. [x] Section rollup into a version-level `totalCost` (`computeSectionTotal`/`computeVersionTotals`) — Rule 5's two-rollup-band question was already resolved in Phase 1 (false alarm, not a double-count), so this phase implements the single confirmed mechanism directly rather than porting both bands.
 4. [x] `Price Summary`-equivalent margin gross-up (business-rules.md Rule 6): `computeMarginGrossUp(cost, marginTargetPct) = cost / ((100-marginTargetPct)/100)`, with an explicit regression test (`estimate-service.test.ts`) proving it diverges from the markup formula (`cost * (1 + margin/100)`) for every nonzero margin, and a real-data test reproducing Yoku Moku's actual $66,044.83 client-sent total from its independently-recovered cost and margin (Phase 1).
-5. **Deferred, not built:** `Option` (alternates) — no workbook precedent was exercised in Phase 1's validated jobs beyond the base estimate; left for a future phase alongside Phase 4's `ChangeOrder` work.
+5. **Moved to Phase 4:** `Option` (alternates) — no workbook precedent was exercised in Phase 1's validated jobs beyond the base estimate; folded into Phase 4's scope alongside `ChangeOrder`, since both are "diff against a base estimate" mechanisms.
 6. [x] `PRICE OPTIONS`' fate decided: **formally dropped**, by explicit user choice ("skip it for now") when this phase started, given no business-side confirmation ever arrived for what its 43/57…65/35 tiers and `×1.075` multiplier mean (Rule 7). Documented in `web/prisma/schema.prisma`'s Phase 3 header comment rather than silently omitted.
 7. [x] `EstimateVersion` snapshotting: `isCurrent`/`isLocked` fields, `lockEstimateVersion` freezes `totalCost`/`grandTotal`/`grossMarginPct` and stamps `lockedAt`; `createNewVersionFromLocked` duplicates a locked version's sections/line items into a fresh unlocked one rather than mutating history — the reproducibility fix that has no workbook precedent at all.
 
@@ -169,6 +169,21 @@ for proposals.
   workbook's from-scratch "short form estimate" pattern, unless business
   stakeholders confirm the standalone re-pricing behavior is intentional
   and should be preserved as a UX option.
+- **Moved from Phase 3:** `Option` (alternates) — one full
+  `EstimateSection` set per alternate, direct port of the OPTION sheet
+  pattern; natural fit alongside `ChangeOrder` since both are
+  diff-against-a-base-estimate mechanisms.
+- **Moved from Phase 3:** design-intake prototype — draft `LineItem`
+  candidates (description, qty, size, supplier) from a design "pull
+  sheet" (Structure/Graphics/Furniture/Floor tables), tagged `draft` and
+  human-reviewed/priced before counting. Evidence-backed opportunity
+  surfaced in Phase 0 (`docs/migration-plan.md`'s Phase 0 packet), not
+  started yet.
+- **Moved from Phase 3:** decide whether ForgeOS needs an explicit
+  multi-year `Contract` concept — surfaced by Poly Coat's real 3-year
+  deal (Phase 1), where Year 1 builds the assets and Years 2–3 re-rent
+  them at far higher margin; `EstimateVersion` alone models revisions of
+  one estimate, not several related ones linked under one contract.
 
 **Exit criteria:** a proposal can be generated, sent, and approved
 end-to-end in ForgeOS with a full audit trail, for a job whose estimate
