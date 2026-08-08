@@ -64,6 +64,7 @@ model User {
   approvedEstimateVersions EstimateVersion[] @relation("EstimateVersionApprover")
   uploadedAttachments      Attachment[]
   assignedTasks            Task[]
+  recordedCostActuals      CostActual[]
 
   @@map("users")
 }
@@ -350,6 +351,8 @@ model LineItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  costActuals CostActual[]
+
   @@map("line_items")
 }
 
@@ -611,6 +614,8 @@ model Task {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  costActuals CostActual[]
+
   @@map("tasks")
 }
 
@@ -658,4 +663,42 @@ model Vendor {
   tasks Task[]
 
   @@map("vendors")
+}
+
+// ---------------------------------------------------------------------
+// Phase 6: actual-cost reporting (docs/migration-plan.md). AI-assisted
+// estimating and risk detection are deliberately NOT built this phase --
+// migration-plan.md's own Phase 6 scope gates them on "sufficient
+// EstimateVersion + CostActual history accumulated in ForgeOS itself,"
+// which doesn't exist yet (ForgeOS has no real production usage history
+// at the time this phase was built). Same reasoning as skipping PRICE
+// OPTIONS/the multi-year Contract concept: no real data to validate
+// against, so building on synthetic data would violate this project's
+// real-data-driven testing philosophy rather than serve it.
+// ---------------------------------------------------------------------
+
+// Formalizes Price Summary!E6/F6's "ESTIMATED COST"/"ACTUAL INCURRED"
+// header pair (data-model-v0.md's CostActual) -- a concept the workbook
+// names but never populates with real structured data. References
+// LineItem and/or Task (at least one, enforced at the service layer, not
+// the DB -- same minimalism as Attachment's owner reference). Append-only
+// by design (data-model-v0.md: "Versioning: append-only") -- no update or
+// delete; a correction is a new entry, not an edit to history.
+model CostActual {
+  id String @id @default(cuid())
+
+  lineItemId String?
+  lineItem   LineItem? @relation(fields: [lineItemId], references: [id])
+
+  taskId String?
+  task   Task?   @relation(fields: [taskId], references: [id])
+
+  actualCost Decimal @db.Decimal(12, 2)
+  source     String?
+
+  recordedById String?
+  recordedBy   User?    @relation(fields: [recordedById], references: [id])
+  recordedAt   DateTime @default(now())
+
+  @@map("cost_actuals")
 }

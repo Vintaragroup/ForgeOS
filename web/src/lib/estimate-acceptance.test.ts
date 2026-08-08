@@ -25,8 +25,10 @@ import {
 } from "@/lib/estimate-service";
 import { approveEstimateVersion, generateProposal, sendProposal, signProposal } from "@/lib/proposal-service";
 import { computeChangeOrderDiff, createChangeOrder } from "@/lib/change-order-service";
+import { computeDepartmentVariance, computeLineItemVariance, recordCostActual } from "@/lib/cost-actual-service";
 
 afterEach(async () => {
+  await db.costActual.deleteMany();
   await db.proposal.deleteMany();
   await db.proposalTemplate.deleteMany();
   await db.changeOrder.deleteMany();
@@ -175,5 +177,46 @@ describe("Yoku Moku through the Phase 4 workflow", () => {
     expect(diff).toHaveLength(1);
     expect(diff[0]).toMatchObject({ kind: "ADDED", description: "Second phase scope" });
     expect(diff[0].delta.toNumber()).toBeCloseTo(58311.18, 2);
+  });
+});
+
+// Phase 6: actual-cost capture and variance reporting, proven against the
+// real Yoku Moku estimated cost Phase 3 already validated. The actual
+// cost itself is a plausible synthetic figure (no real actuals were ever
+// captured for this job, since ForgeOS didn't exist yet) -- schema.prisma's
+// Phase 6 comment already explains why the AI-assisted features stay
+// deferred rather than built against synthetic history; this test only
+// proves the variance *math* is correct against a real baseline, not that
+// the specific actual figure is historically true.
+describe("Yoku Moku through the Phase 6 workflow", () => {
+  it("computes correct variance for a real estimated cost against a recorded actual", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 45.3996887538702);
+    const section = await addSection(version.id, { name: "COST SUMMARY", sectionType: "CATEGORY" });
+    const lineItem = await addLineItem(section.id, {
+      lineType: "FEE",
+      description: "Total job cost (Phase 1 validated)",
+      department: "EF",
+      qty: 1,
+      unitCost: 36060.684,
+    });
+    await lockEstimateVersion(version.id);
+
+    // Synthetic actual: came in $2,000 over the real estimated cost.
+    await recordCostActual({ lineItemId: lineItem.id, actualCost: 38060.68, source: "Acceptance test" });
+
+    const reloaded = await db.lineItem.findUniqueOrThrow({
+      where: { id: lineItem.id },
+      include: { costActuals: true },
+    });
+    const [variance] = computeLineItemVariance([reloaded]);
+
+    expect(variance.estimatedCost.toNumber()).toBeCloseTo(36060.68, 2);
+    expect(variance.actualCost.toNumber()).toBeCloseTo(38060.68, 2);
+    expect(variance.variance.toNumber()).toBeCloseTo(2000, 2); // over budget
+
+    const [byDept] = computeDepartmentVariance([variance]);
+    expect(byDept.department).toBe("EF");
+    expect(byDept.variance.toNumber()).toBeCloseTo(2000, 2);
   });
 });

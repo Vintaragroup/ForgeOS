@@ -277,26 +277,52 @@ confirms every piece of the read-back tree is correct.
 
 ## Phase 6 — Actual-cost reporting and AI assistance
 
+**Status: partially complete — by explicit decision.** `CostActual`
+capture and variance reporting are built. AI-assisted estimating and risk
+detection are **formally deferred**: this phase's own scope already gates
+them on "sufficient `EstimateVersion` + `CostActual` history accumulated
+in ForgeOS itself," and no such history exists yet — ForgeOS had zero
+real production usage at the time this phase was built (Phase 5 shipped
+the same day). Building the AI features against synthetic history would
+have violated the real-data-driven testing philosophy this project has
+held since Phase 1. Same reasoning as skipping `PRICE OPTIONS` in Phase 3
+and the multi-year `Contract` concept in Phase 3/5: no real data, no
+build. Revisit once real jobs accumulate estimate + actual-cost history
+natively in ForgeOS.
+
 **Goal:** ForgeOS goals #7 and #8 — estimated-vs-actual reporting and
 AI-assisted estimating/risk detection.
 
 **Scope:**
-- `CostActual` capture against `LineItem`/`Task` (formalizing the
+- [x] `CostActual` capture against `LineItem` (formalizing the
   `Price Summary!"ESTIMATED COST"/"ACTUAL INCURRED"` header pair that
   exists conceptually in the workbook but was never populated with real
-  structured data in the sample reviewed).
-- Variance reporting (estimated vs. actual, by department/category/job).
-- Only once sufficient `EstimateVersion` + `CostActual` history has
-  accumulated in ForgeOS itself (not retrofitted from the workbook, which
-  has no historical version data to mine): AI-assisted estimating
-  (suggest line items/rates from similar past jobs) and risk detection
-  (flag estimates whose margin or rate assumptions deviate from
-  historical norms).
+  structured data in the sample reviewed). Append-only by design
+  (data-model-v0.md: "Versioning: append-only") — no update or delete; a
+  correction is a new entry, not an edit to history. References
+  `LineItem` and/or `Task`, enforced at the service layer; built against
+  `LineItem` this phase since that's where the workbook's own
+  ESTIMATED/ACTUAL concept lives — `Task`-level actuals (labor/time
+  tracking) were not exercised.
+- [x] Variance reporting (estimated vs. actual, by department/category/job)
+  — a per-line-item variance table and a department rollup on the locked
+  `EstimateVersion` view; "job" is the estimate itself, so the page's
+  existing scope already covers that axis.
+- **Deferred, by explicit decision:** AI-assisted estimating (suggest
+  line items/rates from similar past jobs) and risk detection (flag
+  estimates whose margin or rate assumptions deviate from historical
+  norms) — blocked on real accumulated history, per this phase's own
+  stated gate.
 
-**Exit criteria:** at least one full historical project cycle (estimate →
-approval → production → actuals) completed natively in ForgeOS, providing
-the first trustworthy training/reference dataset for Phase 6's AI
-features.
+**Exit criteria — partially met:** `CostActual` capture and variance
+reporting were verified live in a browser — recorded a real dollar
+amount against a locked line item, confirmed the per-line-item and
+department-rollup variance both matched, and confirmed a real, Phase-1-
+validated estimated cost produces correct variance math via an
+acceptance test. Not met, by design: "at least one full historical
+project cycle (estimate → approval → production → actuals) completed
+natively in ForgeOS" — that requires real usage over time, not something
+buildable in a single work session. AI features remain blocked on it.
 
 ## Cross-phase risks to track
 

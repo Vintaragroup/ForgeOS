@@ -1,10 +1,12 @@
 # ForgeOS — web
 
-Phases 2–5 (`docs/migration-plan.md`): CRM & opportunity shell, a native
-estimate engine, the proposal/approval/change-order workflow, and
-project/production/logistics tracking. TypeScript full-stack (Next.js 16
-App Router + Postgres + Prisma 7), single-tenant (no `tenant_id` — see
-`prisma/schema.prisma`'s header comment for why).
+Phases 2–6 (`docs/migration-plan.md`): CRM & opportunity shell, a native
+estimate engine, the proposal/approval/change-order workflow,
+project/production/logistics tracking, and actual-cost/variance
+reporting (Phase 6's AI features are deliberately deferred — see below).
+TypeScript full-stack (Next.js 16 App Router + Postgres + Prisma 7),
+single-tenant (no `tenant_id` — see `prisma/schema.prisma`'s header
+comment for why).
 
 ## Stack notes (read before touching Prisma or app-router code)
 
@@ -139,6 +141,26 @@ DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public"
   `ChangeOrder` referencing `Estimate` — no functional benefit to moving
   it, since its diff logic only touches `EstimateVersion` data.
 
+## Scope (Phase 6)
+
+- **`CostActual`** (`web/src/lib/cost-actual-service.ts`) — append-only
+  actual-cost capture against a locked `EstimateVersion`'s `LineItem`s;
+  formalizes `Price Summary`'s `"ESTIMATED COST"`/`"ACTUAL INCURRED"`
+  header pair, a concept the workbook names but never populates with real
+  data.
+- **Variance reporting** — a per-line-item estimated-vs-actual table plus
+  a department-level rollup, both shown on the locked `EstimateVersion`
+  view in `/estimates/[id]`.
+- **AI-assisted estimating and risk detection — deliberately deferred.**
+  This phase's own scope gates them on real accumulated
+  `EstimateVersion`/`CostActual` history, which doesn't exist yet (no
+  real production usage of ForgeOS at the time this phase was built).
+  Building them against synthetic history would have broken from this
+  project's real-data-driven testing philosophy rather than served it —
+  same reasoning as skipping `PRICE OPTIONS` and the multi-year
+  `Contract` concept. See `prisma/schema.prisma`'s Phase 6 header
+  comment.
+
 ## Commands
 
 ```bash
@@ -200,3 +222,16 @@ caught and fixed during this verification: the Task/Shipment status
 Action re-render, the same stale-uncontrolled-input bug already fixed
 once for the Opportunity stage select in Phase 2. Full detail in
 `docs/migration-plan.md`'s Phase 5 section.
+
+## Exit criteria (docs/migration-plan.md Phase 6)
+
+Partially met, by explicit decision. Verified live in a browser: recorded
+a real actual cost against a locked estimate's line item, and confirmed
+both the per-line-item variance and the department-rollup variance
+updated correctly and matched. An acceptance test confirms the variance
+math is correct against a real, Phase-1-validated estimated cost. Not
+met, by design: a full historical project cycle (estimate → approval →
+production → actuals) completed natively in ForgeOS, and the AI-assisted
+estimating/risk-detection features that depend on it — both require real
+usage accumulating over time, not something buildable in one session.
+Full detail in `docs/migration-plan.md`'s Phase 6 section.

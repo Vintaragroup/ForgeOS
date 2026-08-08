@@ -15,10 +15,12 @@ import {
   deleteLineItemAction,
   generateProposalAction,
   lockVersionAction,
+  recordCostActualAction,
   updateEstimateDetails,
   updateMarginTargetAction,
 } from "../actions";
 import { computeOptionTotal } from "@/lib/estimate-service";
+import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 
@@ -50,7 +52,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     where: { estimateId: estimate.id },
     orderBy: { versionNumber: "desc" },
     include: {
-      sections: { where: { optionId: null }, orderBy: { sortOrder: "asc" }, include: { lineItems: true } },
+      sections: {
+        where: { optionId: null },
+        orderBy: { sortOrder: "asc" },
+        include: { lineItems: { include: { costActuals: true } } },
+      },
       options: {
         orderBy: { sortOrder: "asc" },
         include: { sections: { orderBy: { sortOrder: "asc" }, include: { lineItems: true } } },
@@ -187,7 +193,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
 
 type VersionWithSections = Prisma.EstimateVersionGetPayload<{
   include: {
-    sections: { include: { lineItems: true } };
+    sections: { include: { lineItems: { include: { costActuals: true } } } };
     options: { include: { sections: { include: { lineItems: true } } } };
     approvedBy: true;
     proposals: true;
@@ -249,6 +255,8 @@ function EstimateVersionCard({
           <div className="text-lg font-semibold">{version.grossMarginPct.toFixed(1)}%</div>
         </div>
       </div>
+
+      {version.isLocked && <VarianceByDepartment sections={version.sections} />}
 
       {version.isLocked ? (
         <>
@@ -379,7 +387,13 @@ function EstimateVersionCard({
                     <th className="pb-1 font-normal">Type</th>
                     <th className="pb-1 text-right font-normal">Qty</th>
                     <th className="pb-1 text-right font-normal">Unit cost</th>
-                    <th className="pb-1 text-right font-normal">Total</th>
+                    <th className="pb-1 text-right font-normal">Est. total</th>
+                    {version.isLocked && (
+                      <>
+                        <th className="pb-1 text-right font-normal">Actual</th>
+                        <th className="pb-1 text-right font-normal">Variance</th>
+                      </>
+                    )}
                     {!version.isLocked && <th></th>}
                   </tr>
                 </thead>
@@ -387,6 +401,8 @@ function EstimateVersionCard({
                   {section.lineItems.map((li) => {
                     const deleteWithIds = deleteLineItemAction.bind(null, estimateId, li.id);
                     const confirmWithIds = confirmDraftLineItemAction.bind(null, estimateId, li.id);
+                    const actualCost = version.isLocked ? computeActualTotal(li.costActuals) : null;
+                    const variance = actualCost !== null ? actualCost.minus(li.totalCost) : null;
                     return (
                       <tr key={li.id} className="border-t border-neutral-100">
                         <td className="py-1.5">
@@ -402,6 +418,17 @@ function EstimateVersionCard({
                         <td className="py-1.5 text-right">{li.qty.toString()}</td>
                         <td className="py-1.5 text-right">{money(li.unitCost)}</td>
                         <td className="py-1.5 text-right">{money(li.totalCost)}</td>
+                        {version.isLocked && actualCost !== null && variance !== null && (
+                          <>
+                            <td className="py-1.5 text-right">{money(actualCost)}</td>
+                            <td
+                              className={`py-1.5 text-right ${variance.isPositive() ? "text-red-600" : variance.isNegative() ? "text-green-600" : ""}`}
+                            >
+                              {variance.isPositive() ? "+" : ""}
+                              {money(variance)}
+                            </td>
+                          </>
+                        )}
                         {!version.isLocked && (
                           <td className="py-1.5 text-right whitespace-nowrap">
                             {li.isDraft && (
@@ -419,6 +446,13 @@ function EstimateVersionCard({
                   })}
                 </tbody>
               </table>
+            )}
+            {version.isLocked && section.lineItems.length > 0 && (
+              <div className="mb-3 flex flex-col gap-2">
+                {section.lineItems.map((li) => (
+                  <RecordActualForm key={li.id} estimateId={estimateId} lineItem={li} users={users} />
+                ))}
+              </div>
             )}
             {!version.isLocked && (
               <AddLineItemForm
@@ -520,6 +554,93 @@ function OptionCard({
         </form>
       )}
     </div>
+  );
+}
+
+// migration-plan.md Phase 6 scope: "variance reporting ... by
+// department/category/job." Department comes from LineItem.department;
+// "job" is this estimate itself, so the whole card already scopes to it.
+function VarianceByDepartment({
+  sections,
+}: {
+  sections: {
+    lineItems: {
+      id: string;
+      description: string;
+      department: string | null;
+      totalCost: Prisma.Decimal;
+      costActuals: { actualCost: Prisma.Decimal }[];
+    }[];
+  }[];
+}) {
+  const rows = computeLineItemVariance(sections.flatMap((s) => s.lineItems));
+  const hasActuals = rows.some((r) => r.actualCost.toNumber() !== 0);
+  if (!hasActuals) return null;
+
+  const byDept = computeDepartmentVariance(rows);
+
+  return (
+    <div className="mb-6 rounded-md border border-neutral-200 p-4">
+      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+        Variance by department
+      </h3>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-neutral-500">
+            <th className="pb-1 font-normal">Department</th>
+            <th className="pb-1 text-right font-normal">Estimated</th>
+            <th className="pb-1 text-right font-normal">Actual</th>
+            <th className="pb-1 text-right font-normal">Variance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {byDept.map((d) => (
+            <tr key={d.department} className="border-t border-neutral-100">
+              <td className="py-1.5">{d.department}</td>
+              <td className="py-1.5 text-right">{money(d.estimatedCost)}</td>
+              <td className="py-1.5 text-right">{money(d.actualCost)}</td>
+              <td
+                className={`py-1.5 text-right ${d.variance.isPositive() ? "text-red-600" : d.variance.isNegative() ? "text-green-600" : ""}`}
+              >
+                {d.variance.isPositive() ? "+" : ""}
+                {money(d.variance)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RecordActualForm({
+  estimateId,
+  lineItem,
+  users,
+}: {
+  estimateId: string;
+  lineItem: { id: string; description: string };
+  users: { id: string; name: string }[];
+}) {
+  const recordActualWithIds = recordCostActualAction.bind(null, estimateId, lineItem.id);
+  return (
+    <form action={recordActualWithIds} className="flex flex-wrap items-end gap-3 rounded-md bg-neutral-50 p-3 text-sm">
+      <span className="pb-2 text-neutral-500">{lineItem.description}:</span>
+      <div className="w-28">
+        <Field label="Actual cost ($)" name="actualCost" type="number" required />
+      </div>
+      <div className="w-40">
+        <Field label="Source" name="source" placeholder="e.g. Vendor invoice #123" />
+      </div>
+      <div className="w-40">
+        <SelectField
+          label="Recorded by"
+          name="recordedById"
+          options={[{ value: "", label: "— unspecified —" }, ...users.map((u) => ({ value: u.id, label: u.name }))]}
+        />
+      </div>
+      <Button variant="secondary">Record actual</Button>
+    </form>
   );
 }
 

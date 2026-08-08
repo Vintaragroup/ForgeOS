@@ -14,6 +14,7 @@ import {
   updateMarginTarget,
 } from "@/lib/estimate-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
+import { recordCostActual } from "@/lib/cost-actual-service";
 import type { LineItemType, SectionType } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
@@ -132,6 +133,16 @@ export async function generateProposalAction(estimateId: string, versionId: stri
   const proposal = await generateProposal(versionId, templateId);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/proposals/${proposal.id}`);
+}
+
+export async function recordCostActualAction(estimateId: string, lineItemId: string, formData: FormData) {
+  const actualCost = Number(formData.get("actualCost"));
+  if (!Number.isFinite(actualCost)) throw new Error("Actual cost must be a number");
+  const source = emptyToNull(formData.get("source"));
+  const recordedById = emptyToNull(formData.get("recordedById"));
+
+  await recordCostActual({ lineItemId, actualCost, source, recordedById });
+  revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function updateEstimateDetails(estimateId: string, formData: FormData) {
