@@ -51,6 +51,49 @@ DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public"
 `src/test/setup.ts` refuses to run if `DATABASE_URL` doesn't contain
 `forgeos_test` — the test suite truncates tables between every test.
 
+## Docker
+
+An alternative to the Homebrew/`npm run dev` setup above — useful for a
+clean environment or production-style packaging. Not required for local
+development; the Setup section above is still the faster inner loop.
+
+```bash
+docker compose build
+docker compose up -d      # starts Postgres (host port 5433) + the web app (port 3000)
+```
+
+Postgres is published on host port **5433**, not 5432 — local Homebrew
+Postgres already owns 5432 on most dev machines, so the compose file
+avoids the collision (see `docker-compose.yml`'s comment).
+
+Migrations and seeding are **not** run automatically on container start
+(consistent with this project's general caution around schema-altering
+operations — see `docs/migration-plan.md`'s Phase 0). Run them from the
+host, pointed at the exposed port, the same tools already used for local
+dev:
+
+```bash
+DATABASE_URL="postgresql://forgeos:forgeos@localhost:5433/forgeos_dev?schema=public" npx prisma migrate deploy
+DATABASE_URL="postgresql://forgeos:forgeos@localhost:5433/forgeos_dev?schema=public" npm run seed
+```
+
+Then visit `http://localhost:3000`. `docker compose down` stops the
+containers but keeps the `forgeos_pgdata` volume; add `-v` to also drop
+the database.
+
+The image is built from `web/Dockerfile` (multi-stage: `deps` → `builder`
+→ `runner`), using Next's `output: "standalone"` mode
+(`next.config.ts`). Two things worth knowing if you touch the Dockerfile:
+
+- Prisma 7's driver-adapter client (`@prisma/adapter-pg`) is engine-less
+  — no native query-engine binary — so the runner stage doesn't need
+  `openssl`/`libssl` the way classic Prisma Docker images do.
+- Next's file tracer for standalone builds doesn't follow the
+  `@/generated/prisma/client` path alias into `src/generated/prisma`
+  (Prisma 7's custom generator output lives outside `node_modules`), so
+  the Dockerfile copies it into the image explicitly rather than relying
+  on the traced output.
+
 ## Scope (Phase 2)
 
 - **Company, Contact, User** — CRUD.

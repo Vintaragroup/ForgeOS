@@ -2,6 +2,9 @@ import { db } from "@/lib/db";
 import { createContact } from "../actions";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 
+// The company dropdown must reflect live data -- see opportunities/page.tsx.
+export const dynamic = "force-dynamic";
+
 export default async function NewContactPage() {
   const companies = await db.company.findMany({
     where: { deletedAt: null },

@@ -2,6 +2,10 @@ import { db } from "@/lib/db";
 import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import Link from "next/link";
 
+// See opportunities/page.tsx's comment: without this, Next freezes this
+// list at build-time DB contents instead of reading live on every request.
+export const dynamic = "force-dynamic";
+
 const ROLE_LABEL: Record<string, string> = {
   CLIENT_CONTACT: "Client contact",
   ACCOUNT_EXECUTIVE: "Account executive",

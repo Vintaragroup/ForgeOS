@@ -1,6 +1,9 @@
 import { db } from "@/lib/db";
 import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
 
+// See opportunities/page.tsx's comment.
+export const dynamic = "force-dynamic";
+
 export default async function UsersPage() {
   const users = await db.user.findMany({
     where: { deletedAt: null },

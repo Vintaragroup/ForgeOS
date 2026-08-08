@@ -2,6 +2,9 @@ import { db } from "@/lib/db";
 import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import Link from "next/link";
 
+// See opportunities/page.tsx's comment.
+export const dynamic = "force-dynamic";
+
 export default async function CompaniesPage() {
   const companies = await db.company.findMany({
     where: { deletedAt: null },

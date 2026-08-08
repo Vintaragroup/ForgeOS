@@ -1,0 +1,45 @@
+# Local/self-hosted stack for ForgeOS. Two services: Postgres (the only
+# database ForgeOS uses -- see prisma/schema.prisma) and the Next.js app
+# itself, built from ./Dockerfile.
+#
+# Migrations are NOT run automatically on container start, on purpose --
+# same reasoning as never auto-running destructive/schema-changing
+# commands: run them explicitly (see the Docker section of README.md)
+# so a `docker compose up` restart never silently alters the schema.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: forgeos_dev
+      POSTGRES_USER: forgeos
+      POSTGRES_PASSWORD: forgeos
+    ports:
+      # Published on 5433, not 5432 -- avoids clashing with a local
+      # (e.g. Homebrew) Postgres already running on the host for
+      # non-Docker development, per README.md's Setup section.
+      - "5433:5432"
+    volumes:
+      - forgeos_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forgeos -d forgeos_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://forgeos:forgeos@db:5432/forgeos_dev?schema=public
+    ports:
+      - "3000:3000"
+
+volumes:
+  forgeos_pgdata:

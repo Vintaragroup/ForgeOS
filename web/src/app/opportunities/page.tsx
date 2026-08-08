@@ -2,6 +2,11 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { LinkButton, PageHeader } from "@/components/ui";
 
+// Reads live from the DB on every request -- without this, Next statically
+// prerenders this route at build time and freezes a snapshot until the
+// next deploy, which is wrong for a pipeline board that changes constantly.
+export const dynamic = "force-dynamic";
+
 const STAGES = [
   { value: "NEW", label: "New" },
   { value: "CONTACTED", label: "Contacted" },

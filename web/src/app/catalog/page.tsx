@@ -2,6 +2,9 @@ import { db } from "@/lib/db";
 import { Card, PageHeader } from "@/components/ui";
 import Link from "next/link";
 
+// Counts must reflect live data -- see opportunities/page.tsx's comment.
+export const dynamic = "force-dynamic";
+
 export default async function CatalogPage() {
   const [laborRateCount, materialCount, rentalItemCount, proposalTemplateCount, vendorCount] = await Promise.all([
     db.laborRate.count({ where: { deletedAt: null } }),

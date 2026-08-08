@@ -3,6 +3,10 @@ import { createOpportunity } from "../actions";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 import { EmptyState, LinkButton } from "@/components/ui";
 
+// The company/user dropdowns must reflect live data, not a build-time
+// snapshot -- see opportunities/page.tsx's comment for the same reasoning.
+export const dynamic = "force-dynamic";
+
 export default async function NewOpportunityPage() {
   const [companies, users] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
