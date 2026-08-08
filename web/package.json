@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "set-password": "tsx scripts/set-password.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

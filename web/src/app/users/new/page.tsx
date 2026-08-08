@@ -11,6 +11,13 @@ export default function NewUserPage() {
           <Field label="Email" name="email" type="email" required />
           <Field label="Role" name="role" placeholder="Estimator, Account Executive, ..." />
           <Field label="Department" name="department" />
+          <Field
+            label="Password"
+            name="password"
+            type="password"
+            required
+            placeholder="At least 8 characters"
+          />
           <div>
             <Button>Create user</Button>
           </div>

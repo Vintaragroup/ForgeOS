@@ -41,15 +41,40 @@ npm run seed                         # loads real Rule 1/Rule 9 labor rates + re
 npm run dev                          # http://localhost:3000
 ```
 
-`.env` (gitignored) needs:
+`.env` (gitignored, see `.env.example`) needs:
 
 ```
 DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public"
+SESSION_SECRET="<random 64-char hex -- node -e "console.log(require('crypto').randomBytes(32).toString('hex'))">"
 ```
 
 `.env.test` (also gitignored) needs the same, pointed at `forgeos_test`.
 `src/test/setup.ts` refuses to run if `DATABASE_URL` doesn't contain
 `forgeos_test` — the test suite truncates tables between every test.
+
+## Auth
+
+Every route requires a logged-in session (`src/proxy.ts`, Next 16's
+renamed `middleware.ts`) except `/login` itself. There is no
+unauthenticated password-set page on purpose — passwords are set from
+the host, the same trust boundary already used for migrations and
+seeding:
+
+```bash
+DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public" npm run set-password -- someone@example.com "a real password"
+```
+
+The user must already exist (`/users/new`, which now requires a
+password at creation time too). Sessions are signed cookies (HMAC-SHA256
+over `SESSION_SECRET`, `src/lib/session.ts`) — no new dependency, same
+philosophy as Prisma 7's engine-less client. Passwords are hashed with
+Node's built-in `scrypt`, not bcrypt, for the same reason.
+
+**Known limitation:** `src/proxy.ts` is the only access-control layer
+right now — there's no per-role permissions (e.g. only admins can edit
+Users), and Server Actions don't independently re-check auth the way
+Next's own docs recommend for defense in depth. Fine for a single-company
+internal tool with one class of user; revisit before that stops being true.
 
 ## Docker
 
@@ -93,6 +118,37 @@ The image is built from `web/Dockerfile` (multi-stage: `deps` → `builder`
   (Prisma 7's custom generator output lives outside `node_modules`), so
   the Dockerfile copies it into the image explicitly rather than relying
   on the traced output.
+
+## Backups
+
+```bash
+DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public" scripts/backup.sh
+DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public" scripts/restore.sh backups/forgeos-<timestamp>.dump
+```
+
+`backup.sh` writes a timestamped `pg_dump --format=custom` file to
+`backups/` (gitignored — never committed). `restore.sh` is destructive
+(`pg_restore --clean`) and requires typing the target database name back
+to confirm before it touches anything. Both need `pg_dump`/`pg_restore`
+on `PATH`, which come with the `brew install postgresql@16` from Setup
+above. Works against either the local Homebrew Postgres or the Docker
+one (point `DATABASE_URL` at `localhost:5433` for the latter).
+
+## CI
+
+`.github/workflows/ci.yml` runs `npm run build` (typecheck), `lint`,
+and `test` against a Postgres service container on every push to `main`
+and every PR — the same commands from Commands below, just automated
+instead of relying on someone remembering to run them by hand.
+
+## Error logging
+
+`src/instrumentation.ts` exports `onRequestError`, Next's own hook for
+this — it fires for Server Component, Route Handler, Server Action, and
+Proxy errors alike, so nothing needs a manual try/catch to be covered.
+Today it writes one structured JSON line to stdout. Wiring in a real APM
+(Sentry or similar) is a one-function change in that file once there's a
+vendor account and DSN to point it at — deliberately not fabricated here.
 
 ## Scope (Phase 2)
 

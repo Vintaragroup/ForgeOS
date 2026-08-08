@@ -38,6 +38,9 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://forgeos:forgeos@db:5432/forgeos_dev?schema=public
+      # Placeholder only -- override with a real secret (see .env.example)
+      # for anything beyond throwaway local use: SESSION_SECRET=... docker compose up -d
+      SESSION_SECRET: ${SESSION_SECRET:-dev-only-insecure-secret-change-me}
     ports:
       - "3000:3000"
 

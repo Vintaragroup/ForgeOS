@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
+import { getCurrentUser } from "@/lib/auth";
+import { logoutAction } from "./logout/actions";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -26,7 +28,9 @@ const NAV_LINKS = [
   { href: "/catalog", label: "Catalog" },
 ];
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const user = await getCurrentUser();
+
   return (
     <html
       lang="en"
@@ -38,7 +42,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/" className="text-lg font-semibold tracking-tight">
               ForgeOS
             </Link>
-            <nav className="flex gap-6 text-sm font-medium text-neutral-600">
+            <nav className="flex flex-1 gap-6 text-sm font-medium text-neutral-600">
               {NAV_LINKS.map((link) => (
                 <Link
                   key={link.href}
@@ -49,6 +53,16 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                 </Link>
               ))}
             </nav>
+            {user && (
+              <div className="flex items-center gap-3 text-sm text-neutral-600">
+                <span>{user.name}</span>
+                <form action={logoutAction}>
+                  <button type="submit" className="font-medium hover:text-neutral-900">
+                    Log out
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
         </header>
         <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">

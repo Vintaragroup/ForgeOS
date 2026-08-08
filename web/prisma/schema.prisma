@@ -53,6 +53,10 @@ model User {
   email      String  @unique
   role       String?
   department String?
+  // scrypt "salt:hash" pair, set via `npm run set-password` -- never through
+  // a web form, so there is no unauthenticated password-set endpoint. Null
+  // until set, meaning the account can't log in yet. See src/lib/auth.ts.
+  passwordHash String?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
