@@ -31,7 +31,7 @@ export default async function ProposalTemplateDetailPage(
             label="Brand color"
             name="brandColor"
             defaultValue={stringField(template.brandingConfig, "color")}
-            placeholder="e.g. #1f5c73"
+            placeholder="e.g. #001B6C (brand navy)"
           />
           <Field
             label="Logo URL"

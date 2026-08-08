@@ -3,6 +3,19 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Expo Convention Contractors brand palette (data/ExpCCI-brandguidelines,
+     "BRAND IDENTITY GUIDE 2025", section 3.4 -- exact hex values, not
+     approximated). Black is the dominant color throughout the guide's own
+     pages; navy/teal/tangerine appear as sparing accents, not backgrounds. */
+  --brand-black: #181713;
+  --brand-navy: #001b6c;
+  --brand-gray: #c2c3c9;
+  --brand-teal: #19baba;
+  --brand-teal-light: #75d6d6;
+  --brand-teal-pale: #d1f1f1;
+  --brand-tangerine: #fbb03b;
+  --brand-tan: #fddfb1;
 }
 
 @theme inline {
@@ -10,6 +23,16 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-bebas-neue);
+
+  --color-brand-black: var(--brand-black);
+  --color-brand-navy: var(--brand-navy);
+  --color-brand-gray: var(--brand-gray);
+  --color-brand-teal: var(--brand-teal);
+  --color-brand-teal-light: var(--brand-teal-light);
+  --color-brand-teal-pale: var(--brand-teal-pale);
+  --color-brand-tangerine: var(--brand-tangerine);
+  --color-brand-tan: var(--brand-tan);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -19,8 +42,15 @@
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* @layer base (not a bare rule) so Tailwind utility classes on <body>,
+   e.g. bg-brand-black or text-white, can still win. Unlayered CSS always
+   beats layered CSS (which is where @import "tailwindcss" puts utilities)
+   regardless of selector specificity, so a bare `body { ... }` rule here
+   would silently block every such class ever put on <body>. */
+@layer base {
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: Arial, Helvetica, sans-serif;
+  }
 }

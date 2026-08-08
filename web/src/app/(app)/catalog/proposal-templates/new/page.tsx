@@ -8,7 +8,7 @@ export default function NewProposalTemplatePage() {
       <Card className="p-6">
         <form action={createProposalTemplate} className="flex flex-col gap-4">
           <Field label="Template name" name="name" required />
-          <Field label="Brand color" name="brandColor" placeholder="e.g. #1f5c73" />
+          <Field label="Brand color" name="brandColor" placeholder="e.g. #001B6C (brand navy)" />
           <Field label="Logo URL" name="logoUrl" placeholder="https://…" />
           <Field label="Layout note" name="layoutNote" placeholder="Freeform notes on layout/branding" />
           <div>

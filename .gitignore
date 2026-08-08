@@ -30,3 +30,12 @@ __pycache__/
 # which is the one file in this tree that IS tracked (hence the negation below).
 /data/historical_jobs/*
 !/data/historical_jobs/README.md
+
+# Real RFP bid documents -- vendor services agreements, financial proposal
+# schedules, site plans for actual client events. Same "never goes to the
+# public remote" reasoning as data/historical_jobs/ above.
+/data/RFP/
+
+# Expo CCI's internal brand identity manual (PDF) -- proprietary company
+# material, not something to publish alongside the open app code.
+/data/ExpCCI-brandguidelines/

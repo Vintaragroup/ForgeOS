@@ -248,7 +248,7 @@ function EstimateVersionCard({
         </div>
         <div>
           <div className="text-neutral-500">Grand total</div>
-          <div className="text-lg font-semibold">{money(version.grandTotal)}</div>
+          <div className="text-lg font-semibold text-brand-navy">{money(version.grandTotal)}</div>
         </div>
         <div>
           <div className="text-neutral-500">Gross margin</div>
@@ -409,7 +409,7 @@ function EstimateVersionCard({
                         <td className="py-1.5">
                           {li.description}
                           {li.isDraft && (
-                            <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+                            <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">
                               draft
                             </span>
                           )}

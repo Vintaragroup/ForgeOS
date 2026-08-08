@@ -23,9 +23,12 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except static assets, image optimization, and favicon --
+    // Everything except static assets, image optimization, favicon, and
+    // public brand assets (logo images the unauthenticated /login page
+    // itself depends on -- without this exclusion the login page's own
+    // <img> request gets redirected back to /login, an infinite loop) --
     // deliberately still covers /_next/data per Next's own guidance, to
     // avoid a protected page whose data route leaks through unprotected.
-    "/((?!_next/static|_next/image|favicon.ico).*)",
+    "/((?!_next/static|_next/image|favicon.ico|brand/).*)",
   ],
 };

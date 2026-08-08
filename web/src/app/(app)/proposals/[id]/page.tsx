@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Image from "next/image";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { sendProposalAction, signProposalAction } from "../actions";
@@ -53,44 +54,62 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
         }
       />
 
-      <Card className="p-6" style={brandColor ? { borderTopWidth: 4, borderTopColor: brandColor } : undefined}>
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            {logoUrl && <img src={logoUrl} alt="" className="mb-2 h-8" />}
-            <div className="text-sm text-neutral-500">{opportunity.company.name}</div>
-            <div className="text-lg font-semibold">{opportunity.showName}</div>
+      <Card className="overflow-hidden p-0">
+        <div
+          className="h-1.5"
+          style={{ backgroundColor: brandColor ?? "var(--brand-navy)" }}
+        />
+        <div className="p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <Image
+              src="/brand/expo-logo-black.png"
+              alt="Expo Convention Contractors"
+              width={94}
+              height={32}
+              className="h-6 w-auto"
+            />
+            <span className="text-xs font-semibold uppercase tracking-widest text-brand-teal">
+              Proposal
+            </span>
           </div>
-          <div className="text-right text-sm">
-            <div className="text-neutral-500">Template</div>
-            <div className="font-medium">{proposal.template.name}</div>
+          <div className="mb-6 flex items-center justify-between border-b border-neutral-200 pb-6">
+            <div>
+              {logoUrl && <img src={logoUrl} alt="" className="mb-2 h-8" />}
+              <div className="text-sm text-neutral-500">Prepared for {opportunity.company.name}</div>
+              <div className="font-display text-2xl tracking-wide">{opportunity.showName}</div>
+            </div>
+            <div className="text-right text-sm">
+              <div className="text-neutral-500">Template</div>
+              <div className="font-medium">{proposal.template.name}</div>
+            </div>
           </div>
-        </div>
 
-        <table className="mb-6 w-full text-sm">
-          <thead>
-            <tr className="text-left text-neutral-500">
-              <th className="pb-1 font-normal">Section</th>
-              <th className="pb-1 font-normal">Description</th>
-              <th className="pb-1 text-right font-normal">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {version.sections.flatMap((section) =>
-              section.lineItems.map((li) => (
-                <tr key={li.id} className="border-t border-neutral-100">
-                  <td className="py-1.5 text-neutral-500">{section.name}</td>
-                  <td className="py-1.5">{li.description}</td>
-                  <td className="py-1.5 text-right">{money(li.totalCost)}</td>
-                </tr>
-              )),
-            )}
-          </tbody>
-        </table>
+          <table className="mb-6 w-full text-sm">
+            <thead>
+              <tr className="text-left text-neutral-500">
+                <th className="pb-1 font-normal">Section</th>
+                <th className="pb-1 font-normal">Description</th>
+                <th className="pb-1 text-right font-normal">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {version.sections.flatMap((section) =>
+                section.lineItems.map((li) => (
+                  <tr key={li.id} className="border-t border-neutral-100">
+                    <td className="py-1.5 text-neutral-500">{section.name}</td>
+                    <td className="py-1.5">{li.description}</td>
+                    <td className="py-1.5 text-right">{money(li.totalCost)}</td>
+                  </tr>
+                )),
+              )}
+            </tbody>
+          </table>
 
-        <div className="flex justify-end border-t border-neutral-200 pt-4">
-          <div className="text-right">
-            <div className="text-sm text-neutral-500">Grand total</div>
-            <div className="text-2xl font-semibold">{money(version.grandTotal)}</div>
+          <div className="flex justify-end border-t border-neutral-200 pt-4">
+            <div className="text-right">
+              <div className="text-sm text-neutral-500">Grand total</div>
+              <div className="text-2xl font-semibold text-brand-navy">{money(version.grandTotal)}</div>
+            </div>
           </div>
         </div>
       </Card>
@@ -124,6 +143,10 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
           </form>
         )}
       </Card>
+
+      <p className="text-center text-[10px] font-medium uppercase tracking-widest text-neutral-400">
+        Powered by ForgeOS
+      </p>
     </div>
   );
 }

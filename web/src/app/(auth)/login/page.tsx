@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { loginAction } from "./actions";
 import { Button, Card, Field } from "@/components/ui";
 
@@ -13,15 +14,26 @@ export default async function LoginPage({
 
   return (
     <div className="w-full max-w-sm">
-      <div className="mb-8 text-center">
-        <h1 className="text-3xl font-semibold tracking-tight">ForgeOS</h1>
-        <p className="mt-2 text-sm text-neutral-500">
+      <div className="mb-8 flex flex-col items-center text-center">
+        <Image
+          src="/brand/expo-logo-white.png"
+          alt="Expo Convention Contractors"
+          width={224}
+          height={76}
+          priority
+          className="h-14 w-auto"
+        />
+        <p className="mt-3 text-sm text-neutral-400">
           Estimating, proposals, and production — in one place.
+        </p>
+        <p className="mt-1 text-[10px] font-medium uppercase tracking-widest text-neutral-500">
+          Powered by ForgeOS
         </p>
       </div>
 
-      <Card className="p-8 shadow-sm">
-        <form action={loginAction} className="flex flex-col gap-4">
+      <Card className="overflow-hidden p-0 shadow-xl">
+        <div className="h-1.5 bg-gradient-to-r from-brand-teal via-brand-navy to-brand-tangerine" />
+        <form action={loginAction} className="flex flex-col gap-4 p-8">
           <input type="hidden" name="next" value={next} />
           <Field label="Email" name="email" type="email" required />
           <Field label="Password" name="password" type="password" required />

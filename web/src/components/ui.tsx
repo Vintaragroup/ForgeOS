@@ -10,7 +10,7 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-6 flex items-center justify-between">
-      <h1 className="flex items-center gap-3 text-2xl font-semibold tracking-tight">{title}</h1>
+      <h1 className="font-display flex items-center gap-3 text-3xl tracking-wide">{title}</h1>
       {action}
     </div>
   );
@@ -113,7 +113,7 @@ export function Button({
   type?: "submit" | "button";
 }) {
   const styles = {
-    primary: "bg-neutral-900 text-white hover:bg-neutral-700",
+    primary: "bg-brand-black text-white hover:bg-brand-navy",
     secondary: "bg-white text-neutral-900 border border-neutral-300 hover:bg-neutral-50",
     danger: "bg-red-600 text-white hover:bg-red-700",
   }[variant];
@@ -137,7 +137,7 @@ export function LinkButton({
   variant?: "primary" | "secondary";
 }) {
   const styles = {
-    primary: "bg-neutral-900 text-white hover:bg-neutral-700",
+    primary: "bg-brand-black text-white hover:bg-brand-navy",
     secondary: "bg-white text-neutral-900 border border-neutral-300 hover:bg-neutral-50",
   }[variant];
   return (
@@ -205,9 +205,9 @@ export function StatusChip({
 }) {
   const styles = {
     neutral: "bg-neutral-100 text-neutral-600",
-    info: "bg-blue-50 text-blue-700",
-    warning: "bg-amber-50 text-amber-800",
-    good: "bg-green-50 text-green-700",
+    info: "bg-brand-navy/10 text-brand-navy",
+    warning: "bg-brand-tan text-amber-900",
+    good: "bg-brand-teal-pale text-teal-800",
     critical: "bg-red-50 text-red-700",
   }[tone];
   return (

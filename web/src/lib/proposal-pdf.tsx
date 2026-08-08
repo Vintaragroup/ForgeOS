@@ -4,24 +4,47 @@
 // headless-browser/Chromium binary), so it doesn't touch the Docker
 // image's footprint the way Puppeteer would have.
 
-import { Document, Page, Text, View, StyleSheet, Font } from "@react-pdf/renderer";
+import path from "node:path";
+import { Document, Page, Text, View, Image as PdfImage, StyleSheet, Font } from "@react-pdf/renderer";
 import type { Prisma } from "@/generated/prisma/client";
+import { BRAND, BRAND_COMPANY_NAME, BRAND_TAGLINE } from "@/lib/brand";
+
+// The extracted primary black logotype (see web/public/brand -- pulled from
+// the brand guide's own "3.1 Logotype" page since we don't have a separate
+// vector asset) -- a real file path, not a URL, so @react-pdf/renderer can
+// read it straight off disk during server-side PDF rendering.
+const LOGO_PATH = path.join(process.cwd(), "public", "brand", "expo-logo-black.png");
 
 Font.registerHyphenationCallback((word) => [word]);
 
+// Brand type is "Bebas Neue Pro SemiExpanded" (data/ExpCCI-brandguidelines) --
+// a licensed font we don't have a font file for, so headlines here fall back
+// to bold Helvetica rather than risk fetching a substitute font over the
+// network at PDF-render time. Color is the primary brand signal in this
+// document; see src/lib/brand.ts for the palette source.
 const styles = StyleSheet.create({
-  page: { padding: 48, fontSize: 10, fontFamily: "Helvetica", color: "#171717" },
-  accentBar: { height: 4, marginBottom: 24 },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 24 },
-  company: { fontSize: 9, color: "#737373" },
-  showName: { fontSize: 16, fontWeight: 700, marginTop: 2 },
+  page: { padding: 48, fontSize: 10, fontFamily: "Helvetica", color: BRAND.black },
+  accentBar: { height: 6, marginBottom: 20 },
+  issuerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 16 },
+  issuerLogo: { height: 20, width: 59 },
+  docType: { fontSize: 8, color: BRAND.teal, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1.5 },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 24,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e5e5",
+  },
+  company: { fontSize: 9, color: BRAND.navy, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 },
+  showName: { fontSize: 18, fontWeight: 700, marginTop: 3 },
   templateLabel: { fontSize: 8, color: "#737373", textAlign: "right" },
   templateName: { fontSize: 10, fontWeight: 700, textAlign: "right", marginTop: 2 },
   table: { marginBottom: 24 },
   tableHeaderRow: {
     flexDirection: "row",
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e5e5",
+    borderBottomWidth: 1.5,
+    borderBottomColor: BRAND.black,
     paddingBottom: 4,
     marginBottom: 4,
   },
@@ -34,7 +57,7 @@ const styles = StyleSheet.create({
   colSection: { width: "25%", color: "#737373" },
   colDescription: { width: "55%" },
   colTotal: { width: "20%", textAlign: "right" },
-  headerCell: { color: "#737373", fontSize: 8, textTransform: "uppercase" },
+  headerCell: { color: BRAND.black, fontSize: 8, textTransform: "uppercase", fontWeight: 700 },
   totalRow: {
     flexDirection: "row",
     justifyContent: "flex-end",
@@ -44,8 +67,18 @@ const styles = StyleSheet.create({
   },
   totalBlock: { alignItems: "flex-end" },
   totalLabel: { fontSize: 8, color: "#737373" },
-  totalValue: { fontSize: 18, fontWeight: 700, marginTop: 2 },
-  footer: { position: "absolute", bottom: 32, left: 48, right: 48, fontSize: 8, color: "#a3a3a3" },
+  totalValue: { fontSize: 20, fontWeight: 700, marginTop: 2, color: BRAND.navy },
+  footer: {
+    position: "absolute",
+    bottom: 32,
+    left: 48,
+    right: 48,
+    fontSize: 8,
+    color: "#a3a3a3",
+    borderTopWidth: 1,
+    borderTopColor: "#e5e5e5",
+    paddingTop: 8,
+  },
 });
 
 function money(d: Prisma.Decimal): string {
@@ -73,10 +106,14 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   return (
     <Document title={`Proposal — ${data.showName}`}>
       <Page size="LETTER" style={styles.page}>
-        <View style={[styles.accentBar, { backgroundColor: data.brandColor ?? "#171717" }]} />
+        <View style={[styles.accentBar, { backgroundColor: data.brandColor ?? BRAND.navy }]} />
+        <View style={styles.issuerRow}>
+          <PdfImage src={LOGO_PATH} style={styles.issuerLogo} />
+          <Text style={styles.docType}>Proposal</Text>
+        </View>
         <View style={styles.headerRow}>
           <View>
-            <Text style={styles.company}>{data.companyName}</Text>
+            <Text style={styles.company}>Prepared for {data.companyName}</Text>
             <Text style={styles.showName}>{data.showName}</Text>
           </View>
           <View>
@@ -115,6 +152,8 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 ? `Sent ${data.sentAt.toISOString().slice(0, 10)}`
                 : "Draft — not yet sent"}
           </Text>
+          <Text style={{ marginTop: 2 }}>{BRAND_COMPANY_NAME} — {BRAND_TAGLINE}</Text>
+          <Text style={{ marginTop: 2 }}>Powered by ForgeOS</Text>
         </View>
       </Page>
     </Document>
