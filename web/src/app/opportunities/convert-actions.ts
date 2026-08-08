@@ -1,6 +1,7 @@
 "use server";
 
 import { convertOpportunityToEstimate } from "@/lib/opportunity-service";
+import { convertOpportunityToProject } from "@/lib/project-service";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -28,4 +29,15 @@ export async function convertToEstimate(opportunityId: string) {
   revalidatePath("/opportunities");
   revalidatePath(`/opportunities/${opportunityId}`);
   redirect(`/opportunities/${opportunityId}`);
+}
+
+// docs/migration-plan.md Phase 5: "Convert to Project" from a WON
+// Opportunity. No stage change here -- WON is already the opportunity's
+// terminal pipeline stage.
+export async function convertToProject(opportunityId: string) {
+  const project = await convertOpportunityToProject(opportunityId);
+
+  revalidatePath("/opportunities");
+  revalidatePath(`/opportunities/${opportunityId}`);
+  redirect(`/projects/${project.id}`);
 }

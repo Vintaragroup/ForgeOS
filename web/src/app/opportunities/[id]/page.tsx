@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { changeStage, deleteOpportunity, updateOpportunity } from "../actions";
-import { convertToEstimate } from "../convert-actions";
+import { convertToEstimate, convertToProject } from "../convert-actions";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 
 const STAGE_OPTIONS = [
@@ -26,6 +26,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     include: {
       company: true,
       estimates: { orderBy: { createdAt: "desc" } },
+      projects: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
       stageEvents: { orderBy: { changedAt: "desc" } },
     },
   });
@@ -44,6 +45,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   const deleteWithId = deleteOpportunity.bind(null, opportunity.id);
   const changeStageWithId = changeStage.bind(null, opportunity.id);
   const convertWithId = convertToEstimate.bind(null, opportunity.id);
+  const convertToProjectWithId = convertToProject.bind(null, opportunity.id);
 
   return (
     <div className="flex flex-col gap-8">
@@ -155,6 +157,37 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           <Button variant="secondary">Convert to estimate</Button>
         </form>
       </Card>
+
+      {opportunity.stage === "WON" && (
+        <Card className="p-6">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Project
+          </h2>
+          {opportunity.projects.length === 0 ? (
+            <>
+              <p className="mb-4 text-sm text-neutral-500">
+                No project started yet. Converting creates the production/logistics record for this won job.
+              </p>
+              <form action={convertToProjectWithId}>
+                <Button variant="secondary">Convert to Project</Button>
+              </form>
+            </>
+          ) : (
+            <ul className="flex flex-col gap-2 text-sm">
+              {opportunity.projects.map((p) => (
+                <li key={p.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
+                  <span>
+                    {p.jobNumber ? `Job ${p.jobNumber}` : `Project ${p.id.slice(0, 8)}`} — {p.status}
+                  </span>
+                  <Link href={`/projects/${p.id}`} className="text-neutral-900 hover:underline">
+                    Open project →
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

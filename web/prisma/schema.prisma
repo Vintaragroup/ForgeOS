@@ -63,6 +63,7 @@ model User {
 
   approvedEstimateVersions EstimateVersion[] @relation("EstimateVersionApprover")
   uploadedAttachments      Attachment[]
+  assignedTasks            Task[]
 
   @@map("users")
 }
@@ -134,6 +135,7 @@ model Opportunity {
 
   stageEvents StageChangeEvent[]
   estimates   Estimate[]
+  projects    Project[]
 
   @@map("opportunities")
 }
@@ -489,4 +491,171 @@ model Attachment {
   draftLineItems LineItem[]
 
   @@map("attachments")
+}
+
+// ---------------------------------------------------------------------
+// Phase 5: project, production & logistics tracking (docs/migration-plan.md).
+//
+// A Project is created via "Convert to Project" from a WON Opportunity --
+// mirrors Phase 2's "Convert to estimate" pattern. Project has no direct
+// FK to Estimate/EstimateVersion (data-model-v0.md's "has one approved
+// Estimate" is already reachable via the shared Opportunity -- both
+// Project and Estimate belong to Opportunity, so adding a second direct
+// link would just be a redundant path to the same data).
+//
+// ChangeOrder deliberately still references Estimate, not Project --
+// explicit decision this phase: moving it would be schema churn with no
+// functional benefit, since ChangeOrder's diff logic only ever touches
+// EstimateVersion data. Revisit if Project ever needs to list its change
+// orders directly.
+//
+// Vendor + purchasing is scoped minimally: a Vendor catalog plus an
+// optional Task.vendorId link for procurement tasks -- data-model-v0.md
+// mentions "WorkOrder purchasing lines" but doesn't concretely define
+// that entity, and the workbook has zero vendor/purchasing precedent to
+// migrate from, so a full PurchaseOrder/PurchaseLine model would be
+// speculative rather than grounded in either source.
+// ---------------------------------------------------------------------
+
+enum ProjectStatus {
+  ACTIVE
+  ON_HOLD
+  COMPLETE
+  CANCELLED
+}
+
+model Project {
+  id            String      @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+
+  jobNumber     String? // workbook source: Start Page!B14 "JOB #"
+  status        ProjectStatus @default(ACTIVE)
+  showStartDate DateTime?
+  showEndDate   DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  workOrders WorkOrder[]
+
+  @@map("projects")
+}
+
+enum WorkOrderStatus {
+  DRAFT
+  IN_PRODUCTION
+  READY_TO_SHIP
+  INSTALLED
+  COMPLETE
+}
+
+// Timeline as trackable dates, not the workbook's static text --
+// docs/workflow-map.md's clearest workflow evidence (explicit timeline
+// labels): deposit -> production meeting -> artwork deadline -> balance
+// due -> installation.
+model WorkOrder {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id])
+
+  status WorkOrderStatus @default(DRAFT)
+
+  depositDueDate        DateTime?
+  productionMeetingDate DateTime?
+  artworkDeadlineDate   DateTime?
+  balanceDueDate        DateTime?
+  installDate           DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  tasks     Task[]
+  shipments Shipment[]
+
+  @@map("work_orders")
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  BLOCKED
+}
+
+// task_type maps to business-rules.md Rule 1's department codes (DE, EF,
+// ...) or Rule 3's five special slots (DESIGN TIME, ENGINEERING,
+// ESTIMATING, PRESET, PACKING) -- free text, same pattern as
+// LineItem.department, rather than a rigid enum, since both code sets
+// already exist as data (LaborRate.departmentCode) or workbook-derived
+// labels, not a fixed ForgeOS-defined list.
+model Task {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  description    String
+  departmentCode String?
+  status         TaskStatus @default(TODO)
+  dueDate        DateTime?
+
+  assignedToId String?
+  assignedTo   User?   @relation(fields: [assignedToId], references: [id])
+
+  vendorId String?
+  vendor   Vendor? @relation(fields: [vendorId], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("tasks")
+}
+
+enum ShipmentStatus {
+  PLANNED
+  SHIPPED
+  DELIVERED
+}
+
+// Self-contained ForgeOS record replacing the workbook's TRUCKING & LOAD
+// LIST sheet, whose own data depends on a broken external link
+// (dependency-map.md Sec.4) -- loadListNote is a free-text reference,
+// same minimalism as Attachment.fileRef, not a structured line-item
+// model the workbook gives no real precedent for.
+model Shipment {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  carrier      String?
+  loadListNote String?
+  shipDate     DateTime?
+  trackingRef  String?
+  status       ShipmentStatus @default(PLANNED)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("shipments")
+}
+
+// Pure net-new capability -- data-model-v0.md: "no vendor/supplier table
+// exists anywhere in the 95 sheets." Not a migration of workbook data.
+model Vendor {
+  id          String  @id @default(cuid())
+  name        String
+  contactInfo String?
+  category    String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  tasks Task[]
+
+  @@map("vendors")
 }

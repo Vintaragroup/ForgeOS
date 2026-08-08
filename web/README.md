@@ -1,10 +1,10 @@
 # ForgeOS — web
 
-Phases 2–4 (`docs/migration-plan.md`): CRM & opportunity shell, a native
-estimate engine, and the proposal/approval/change-order workflow.
-TypeScript full-stack (Next.js 16 App Router + Postgres + Prisma 7),
-single-tenant (no `tenant_id` — see `prisma/schema.prisma`'s header
-comment for why).
+Phases 2–5 (`docs/migration-plan.md`): CRM & opportunity shell, a native
+estimate engine, the proposal/approval/change-order workflow, and
+project/production/logistics tracking. TypeScript full-stack (Next.js 16
+App Router + Postgres + Prisma 7), single-tenant (no `tenant_id` — see
+`prisma/schema.prisma`'s header comment for why).
 
 ## Stack notes (read before touching Prisma or app-router code)
 
@@ -116,6 +116,29 @@ DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public"
   same reasoning as `PRICE OPTIONS`: no second real multi-year job exists
   yet to validate a `Contract` model against.
 
+## Scope (Phase 5)
+
+- **`Project`** (`web/src/lib/project-service.ts`) — created via "Convert
+  to Project" from a WON `Opportunity`, mirroring Phase 2's "Convert to
+  estimate" pattern. No direct FK to `Estimate`: both hang off the same
+  `Opportunity` already, so a second link would be a redundant path to
+  the same data.
+- **`WorkOrder`** — timeline milestones (deposit, production meeting,
+  artwork deadline, balance due, install) as trackable dates, not the
+  workbook's static text.
+- **`Task`** — a real worklist per department code (business-rules.md
+  Rule 1) or special slot (Rule 3), with an assignee, due date, status,
+  and an optional `Vendor` link for procurement tasks.
+- **`Shipment`** — carrier, load-list note, ship date, tracking
+  reference, status; a self-contained record replacing the workbook's
+  broken externally-linked `TRUCKING & LOAD LIST` sheet.
+- **`Vendor`** (`/catalog/vendors`) — genuinely new capability, no
+  workbook precedent. Scoped minimally: a catalog plus `Task.vendorId`,
+  not a full purchase-order model.
+- **`ChangeOrder` → `Project`** (carried from Phase 4): decided to leave
+  `ChangeOrder` referencing `Estimate` — no functional benefit to moving
+  it, since its diff logic only touches `EstimateVersion` data.
+
 ## Commands
 
 ```bash
@@ -162,3 +185,18 @@ showed the correct added line item and dollar delta. `Option` (an
 alternate priced separately from the base estimate) and the draft-line-item
 workflow (excluded from totals until confirmed) were each verified the
 same way. Full detail in `docs/migration-plan.md`'s Phase 4 section.
+
+## Exit criteria (docs/migration-plan.md Phase 5)
+
+"A won project can be tracked from deposit through installation entirely
+in ForgeOS, with task ownership and due dates visible to production
+staff." Verified live in a browser: converted a WON opportunity to a
+Project, set a job number, started a WorkOrder and filled in its
+timeline, added a department-coded Task assigned to a user and linked to
+a Vendor, and added a Shipment with a carrier and tracking reference —
+every step persisted and displayed correctly on reload. A real bug was
+caught and fixed during this verification: the Task/Shipment status
+`<select>` elements needed `key={status}` to force remount on Server
+Action re-render, the same stale-uncontrolled-input bug already fixed
+once for the Opportunity stage select in Phase 2. Full detail in
+`docs/migration-plan.md`'s Phase 5 section.

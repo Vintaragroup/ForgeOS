@@ -3,11 +3,12 @@ import { Card, PageHeader } from "@/components/ui";
 import Link from "next/link";
 
 export default async function CatalogPage() {
-  const [laborRateCount, materialCount, rentalItemCount, proposalTemplateCount] = await Promise.all([
+  const [laborRateCount, materialCount, rentalItemCount, proposalTemplateCount, vendorCount] = await Promise.all([
     db.laborRate.count({ where: { deletedAt: null } }),
     db.material.count({ where: { deletedAt: null } }),
     db.rentalItem.count({ where: { deletedAt: null } }),
     db.proposalTemplate.count({ where: { deletedAt: null } }),
+    db.vendor.count({ where: { deletedAt: null } }),
   ]);
 
   const sections = [
@@ -15,6 +16,7 @@ export default async function CatalogPage() {
     { href: "/catalog/materials", label: "Materials", count: materialCount },
     { href: "/catalog/rental-items", label: "Rental items", count: rentalItemCount },
     { href: "/catalog/proposal-templates", label: "Proposal templates", count: proposalTemplateCount },
+    { href: "/catalog/vendors", label: "Vendors", count: vendorCount },
   ];
 
   return (

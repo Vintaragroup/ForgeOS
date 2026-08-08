@@ -222,31 +222,58 @@ delta (`estimate-acceptance.test.ts`).
 
 ## Phase 5 — Project, production, and logistics tracking
 
+**Status: complete.** Built in `web/` on top of Phase 4. `ChangeOrder`
+stays on `Estimate` (see the carried-from-Phase-4 item below, decided
+this phase) — everything else in scope shipped.
+
 **Goal:** `Project`, `WorkOrder`, `Task`, `Shipment` — operationalize the
 timeline evidence found in the `WORK ORDER` sheet
 (`docs/workflow-map.md`): deposit → production meeting → artwork
 deadline(s) → balance due → installation.
 
 **Scope:**
-- `WorkOrder` timeline as trackable dates/milestones, not static text.
-- `Task` breakdown per department (business-rules.md Rule 1's 15
+- [x] `Project` is created via "Convert to Project" from a WON
+  Opportunity — mirrors Phase 2's "Convert to estimate" pattern, with no
+  stage transition of its own (WON is already the opportunity's terminal
+  stage). No direct `Project` → `Estimate` FK: both already hang off the
+  same `Opportunity`, so a second link would just be a redundant path to
+  the same data.
+- [x] `WorkOrder` timeline as trackable dates/milestones, not static
+  text — deposit/production-meeting/artwork-deadline/balance-due/install,
+  each independently editable.
+- [x] `Task` breakdown per department (business-rules.md Rule 1's 15
   department codes) and per special line type (Rule 3's design
-  time/engineering/estimating/packing slots) — giving production staff an
-  actual worklist, which the workbook never provided (it only prices
-  these activities, never assigns/tracks them).
-- `Shipment`/load-list tracking, replacing the workbook's
+  time/engineering/estimating/packing slots) — free-text `departmentCode`
+  rather than a rigid enum, since both code sets already exist as data or
+  workbook-derived labels, not a fixed ForgeOS list. Gives production
+  staff an actual worklist, which the workbook never provided (it only
+  priced these activities, never assigned/tracked them).
+- [x] `Shipment`/load-list tracking, replacing the workbook's
   externally-linked (and currently broken) `TRUCKING & LOAD LIST` sheet
   with a self-contained ForgeOS record.
-- `Vendor` + purchasing — genuinely new capability (workbook has zero
-  vendor/purchasing data model, per `docs/data-model-v0.md`).
-- **Carried from Phase 4:** `ChangeOrder` currently references `Estimate`
-  directly (schema.prisma's comment) since `Project` didn't exist yet.
-  Once `Project` is built, decide whether `ChangeOrder` should move to
-  reference `Project` instead, per data-model-v0.md's original design.
+- [x] `Vendor` + purchasing — genuinely new capability (workbook has zero
+  vendor/purchasing data model, per `docs/data-model-v0.md`). Scoped
+  minimally: a `Vendor` catalog plus an optional `Task.vendorId` link for
+  procurement tasks, not a full PurchaseOrder/PurchaseLine model
+  data-model-v0.md gestures at but never concretely defines.
+- [x] **Carried from Phase 4, decided:** `ChangeOrder` stays referencing
+  `Estimate` directly rather than moving to `Project` — its diff logic
+  only ever touches `EstimateVersion` data, so the move would be schema
+  churn with no functional benefit. Revisit if `Project` ever needs to
+  list its change orders directly.
 
-**Exit criteria:** a won project can be tracked from deposit through
-installation entirely in ForgeOS, with task ownership and due dates
-visible to production staff (not just costed, as in the workbook).
+**Exit criteria — met:** a won opportunity was converted to a Project,
+given a job number, and tracked through a WorkOrder timeline with a
+department-coded Task (assigned to a user, linked to a Vendor for
+procurement) and a Shipment (carrier, load-list note, tracking reference,
+status), all verified live in a browser. A real bug was caught and fixed
+during verification: the Task/Shipment status `<select>` elements needed
+`key={status}` to force remount on Server Action re-render — the same
+stale-uncontrolled-input class of bug already fixed once for the
+Opportunity stage select in Phase 2. 58 automated tests pass, including
+an acceptance test that walks the full chain (Opportunity → Project →
+WorkOrder → Task → Shipment) through the real DB-backed service and
+confirms every piece of the read-back tree is correct.
 
 ## Phase 6 — Actual-cost reporting and AI assistance
 
