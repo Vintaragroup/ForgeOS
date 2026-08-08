@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "predev": "lsof -ti:3000 | xargs kill -9 2>/dev/null; while lsof -ti:3000 >/dev/null 2>&1; do sleep 0.2; done",
+    "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
