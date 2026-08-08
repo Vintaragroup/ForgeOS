@@ -2,25 +2,11 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { sendProposalAction, signProposalAction } from "../actions";
-import { Button, Card, PageHeader } from "@/components/ui";
+import { extractBranding } from "@/lib/proposal-branding";
+import { Button, Card, Field, PageHeader } from "@/components/ui";
 
 function money(d: { toFixed(n: number): string }): string {
   return `$${d.toFixed(2)}`;
-}
-
-function stringField(value: unknown, key: string): string | null {
-  if (value && typeof value === "object" && key in value) {
-    const v = (value as Record<string, unknown>)[key];
-    return typeof v === "string" && v !== "" ? v : null;
-  }
-  return null;
-}
-
-function objectField(value: unknown, key: string): unknown {
-  if (value && typeof value === "object" && key in value) {
-    return (value as Record<string, unknown>)[key];
-  }
-  return null;
 }
 
 export default async function ProposalDetailPage(props: PageProps<"/proposals/[id]">) {
@@ -46,18 +32,24 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   const sendWithId = sendProposalAction.bind(null, proposal.id);
   const signWithId = signProposalAction.bind(null, proposal.id);
 
-  const brandingConfig = objectField(proposal.templateConfigSnapshot, "brandingConfig");
-  const brandColor = stringField(brandingConfig, "color");
-  const logoUrl = stringField(brandingConfig, "logoUrl");
+  const { brandColor, logoUrl } = extractBranding(proposal.templateConfigSnapshot);
 
   return (
     <div className="flex flex-col gap-8">
       <PageHeader
         title={`Proposal — ${opportunity.showName}`}
         action={
-          <Link href={`/estimates/${version.estimateId}`} className="text-sm text-neutral-500 hover:text-neutral-900">
-            ← Back to estimate
-          </Link>
+          <div className="flex items-center gap-4 text-sm">
+            <a
+              href={`/proposals/${proposal.id}/pdf`}
+              className="text-neutral-500 hover:text-neutral-900"
+            >
+              Download PDF
+            </a>
+            <Link href={`/estimates/${version.estimateId}`} className="text-neutral-500 hover:text-neutral-900">
+              ← Back to estimate
+            </Link>
+          </div>
         }
       />
 
@@ -112,21 +104,25 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
           </div>
           <div>
             <dt className="text-neutral-500">Signed</dt>
-            <dd>{proposal.signedAt ? proposal.signedAt.toISOString().slice(0, 16).replace("T", " ") : "Not signed"}</dd>
+            <dd>
+              {proposal.signedAt
+                ? `${proposal.signedByName ?? "Unknown"}${proposal.signedByTitle ? `, ${proposal.signedByTitle}` : ""} — ${proposal.signedAt.toISOString().slice(0, 16).replace("T", " ")}`
+                : "Not signed"}
+            </dd>
           </div>
         </dl>
-        <div className="flex gap-3">
-          {!proposal.sentAt && (
-            <form action={sendWithId}>
-              <Button>Send proposal</Button>
-            </form>
-          )}
-          {proposal.sentAt && !proposal.signedAt && (
-            <form action={signWithId}>
-              <Button variant="secondary">Mark as signed</Button>
-            </form>
-          )}
-        </div>
+        {!proposal.sentAt && (
+          <form action={sendWithId}>
+            <Button>Send proposal</Button>
+          </form>
+        )}
+        {proposal.sentAt && !proposal.signedAt && (
+          <form action={signWithId} className="flex flex-wrap items-end gap-3">
+            <Field label="Signer name" name="signedByName" required />
+            <Field label="Title (optional)" name="signedByTitle" />
+            <Button variant="secondary">Mark as signed</Button>
+          </form>
+        )}
       </Card>
     </div>
   );

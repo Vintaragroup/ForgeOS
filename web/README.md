@@ -283,6 +283,37 @@ vendor account and DSN to point it at — deliberately not fabricated here.
   `Contract` concept. See `prisma/schema.prisma`'s Phase 6 header
   comment.
 
+## Scope (Backlog batch 2)
+
+Post-Phase-6 work, not itself a phase — see the artifact's "Suggested
+sequencing" section for the full backlog and reasoning.
+
+- **Nav + index pages** for Estimates, Proposals, and Projects
+  (`/estimates`, `/proposals`, `/projects`) — previously only reachable
+  by drilling into a specific Opportunity.
+- **Landing dashboard** (`/`, `src/lib/dashboard.ts`) — pipeline
+  snapshot, upcoming `WorkOrder` deadlines (next 30 days, flagged if
+  overdue), recent proposals. Replaces the old `/` → `/opportunities`
+  redirect.
+- **`StatusChip`** (`src/components/ui.tsx`) — a shared status pill,
+  applied to opportunity stage, estimate/proposal/project status, and
+  deactivated users. Semantic tone (`good`/`warning`/`critical`/etc.),
+  not tied to any one domain's status enum.
+- **PDF export for proposals** (`/proposals/[id]/pdf`,
+  `src/lib/proposal-pdf.tsx`) — `@react-pdf/renderer`, pure JS (no
+  headless-browser/Chromium binary, unlike Puppeteer), so it doesn't
+  affect the Docker image's footprint.
+- **Signature attestation** — `Proposal.signedByName`/`signedByTitle`,
+  captured when marking a proposal signed. A typed-name attestation, not
+  a real e-signature — a DocuSign/HelloSign-class integration needs a
+  vendor account that doesn't exist yet, tracked in the backlog (not
+  attempted here, same reasoning as the deploy-target decision below).
+- **Not built — needs a decision, not just code:** a real deploy target
+  (managed Postgres + hosting provider) and real email/Slack alerting
+  for `WorkOrder` deadlines (needs a mail provider or webhook URL). Both
+  require the business's own choice of vendor/provider, so both stayed
+  backlog items instead of a guess.
+
 ## Commands
 
 ```bash

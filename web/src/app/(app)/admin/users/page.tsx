@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
-import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
+import { Card, EmptyState, LinkButton, PageHeader, StatusChip } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -31,11 +31,9 @@ export default async function AdminUsersPage() {
                   className="flex items-center justify-between px-5 py-4 hover:bg-neutral-50"
                 >
                   <div>
-                    <div className="font-medium">
+                    <div className="flex items-center gap-2 font-medium">
                       {user.name}
-                      {user.deletedAt && (
-                        <span className="ml-2 text-xs font-normal text-red-600">Deactivated</span>
-                      )}
+                      {user.deletedAt && <StatusChip tone="critical">Deactivated</StatusChip>}
                     </div>
                     <div className="text-sm text-neutral-500">{user.email}</div>
                   </div>

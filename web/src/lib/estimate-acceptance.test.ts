@@ -132,7 +132,7 @@ describe("Yoku Moku through the Phase 4 workflow", () => {
     await approveEstimateVersion(version.id, user.id);
     const proposal = await generateProposal(version.id, template.id);
     const sent = await sendProposal(proposal.id);
-    const signed = await signProposal(proposal.id);
+    const signed = await signProposal(proposal.id, "Jane Doe");
 
     expect(signed.signedAt).not.toBeNull();
     expect(sent.sentAt).not.toBeNull();

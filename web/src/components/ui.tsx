@@ -5,12 +5,12 @@ export function PageHeader({
   title,
   action,
 }: {
-  title: string;
+  title: ReactNode;
   action?: ReactNode;
 }) {
   return (
     <div className="mb-6 flex items-center justify-between">
-      <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+      <h1 className="flex items-center gap-3 text-2xl font-semibold tracking-tight">{title}</h1>
       {action}
     </div>
   );
@@ -177,5 +177,44 @@ export function Notice({
         {actionLabel}
       </LinkButton>
     </div>
+  );
+}
+
+// A single-number stat tile -- shared by the admin dashboard and the
+// landing dashboard so both read consistently as "the same kind of page."
+export function Stat({ value, label }: { value: string; label: string }) {
+  return (
+    <Card className="p-5">
+      <div className="text-2xl font-semibold tracking-tight">{value}</div>
+      <div className="mt-1 text-sm text-neutral-500">{label}</div>
+    </Card>
+  );
+}
+
+// A small colored status pill -- for list rows where status was previously
+// plain text (estimate/proposal/project status, opportunity stage). Tone is
+// the semantic slot (what it means), not the literal status string, so
+// callers map their own domain's statuses to a tone rather than this
+// component knowing about every status enum in the app.
+export function StatusChip({
+  tone,
+  children,
+}: {
+  tone: "neutral" | "info" | "warning" | "good" | "critical";
+  children: ReactNode;
+}) {
+  const styles = {
+    neutral: "bg-neutral-100 text-neutral-600",
+    info: "bg-blue-50 text-blue-700",
+    warning: "bg-amber-50 text-amber-800",
+    good: "bg-green-50 text-green-700",
+    critical: "bg-red-50 text-red-700",
+  }[tone];
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${styles}`}
+    >
+      {children}
+    </span>
   );
 }

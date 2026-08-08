@@ -72,10 +72,14 @@ export async function sendProposal(proposalId: string) {
 }
 
 // Records that a client signed outside ForgeOS (wet signature, DocuSign,
-// etc.) -- an e-signature integration is out of scope for this phase, so
-// this is a manual "mark as signed" action, same simplification the
-// existing Estimate/Opportunity flows already make for owner assignment.
-export async function signProposal(proposalId: string) {
+// etc.) -- a real e-signature vendor integration is out of scope (needs an
+// account/API credentials that don't exist yet). This is a typed-name
+// attestation instead of a bare timestamp: captures who marked it signed,
+// not just when, without pretending it's cryptographically binding.
+export async function signProposal(proposalId: string, signedByName: string, signedByTitle?: string | null) {
+  if (!signedByName.trim()) {
+    throw new Error("A signer name is required.");
+  }
   const proposal = await db.proposal.findUniqueOrThrow({ where: { id: proposalId } });
   if (!proposal.sentAt) {
     throw new Error(`Proposal ${proposalId} must be sent before it can be marked signed.`);
@@ -83,5 +87,12 @@ export async function signProposal(proposalId: string) {
   if (proposal.signedAt) {
     throw new Error(`Proposal ${proposalId} was already signed at ${proposal.signedAt.toISOString()}.`);
   }
-  return db.proposal.update({ where: { id: proposalId }, data: { signedAt: new Date() } });
+  return db.proposal.update({
+    where: { id: proposalId },
+    data: {
+      signedAt: new Date(),
+      signedByName: signedByName.trim(),
+      signedByTitle: signedByTitle?.trim() || null,
+    },
+  });
 }

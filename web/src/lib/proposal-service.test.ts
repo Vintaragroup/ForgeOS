@@ -114,8 +114,10 @@ describe("send / sign lifecycle", () => {
     const sent = await sendProposal(proposal.id);
     expect(sent.sentAt).not.toBeNull();
 
-    const signed = await signProposal(proposal.id);
+    const signed = await signProposal(proposal.id, "Jane Doe", "Owner");
     expect(signed.signedAt).not.toBeNull();
+    expect(signed.signedByName).toBe("Jane Doe");
+    expect(signed.signedByTitle).toBe("Owner");
   });
 
   it("rejects signing before sending", async () => {
@@ -124,7 +126,7 @@ describe("send / sign lifecycle", () => {
     const template = await db.proposalTemplate.create({ data: { name: "Standard" } });
     const proposal = await generateProposal(version.id, template.id);
 
-    await expect(signProposal(proposal.id)).rejects.toThrow(/must be sent/);
+    await expect(signProposal(proposal.id, "Jane Doe")).rejects.toThrow(/must be sent/);
   });
 
   it("rejects sending the same proposal twice", async () => {

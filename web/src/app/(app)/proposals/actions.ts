@@ -8,7 +8,9 @@ export async function sendProposalAction(proposalId: string) {
   revalidatePath(`/proposals/${proposalId}`);
 }
 
-export async function signProposalAction(proposalId: string) {
-  await signProposal(proposalId);
+export async function signProposalAction(proposalId: string, formData: FormData) {
+  const signedByName = String(formData.get("signedByName") ?? "");
+  const signedByTitle = String(formData.get("signedByTitle") ?? "");
+  await signProposal(proposalId, signedByName, signedByTitle || null);
   revalidatePath(`/proposals/${proposalId}`);
 }

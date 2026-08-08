@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getAdminAnalytics } from "@/lib/admin-analytics";
-import { Card, LinkButton, PageHeader } from "@/components/ui";
+import { LinkButton, PageHeader, Stat } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -18,15 +18,6 @@ const ROLE_LABELS: Record<string, string> = {
   ADMIN: "Admin",
   EMPLOYEE: "Employee",
 };
-
-function Stat({ value, label }: { value: string; label: string }) {
-  return (
-    <Card className="p-5">
-      <div className="text-2xl font-semibold tracking-tight">{value}</div>
-      <div className="mt-1 text-sm text-neutral-500">{label}</div>
-    </Card>
-  );
-}
 
 function fmtPct(pct: number | null) {
   return pct === null ? "—" : `${pct.toFixed(0)}%`;

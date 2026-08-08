@@ -3,7 +3,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { changeStage, deleteOpportunity, updateOpportunity } from "../actions";
 import { convertToEstimate, convertToProject } from "../convert-actions";
-import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
+import { Button, Card, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
 
 const STAGE_OPTIONS = [
   { value: "NEW", label: "New" },
@@ -13,6 +13,21 @@ const STAGE_OPTIONS = [
   { value: "WON", label: "Won" },
   { value: "LOST", label: "Lost" },
 ];
+
+function StageChip({ stage }: { stage: string }) {
+  switch (stage) {
+    case "WON":
+      return <StatusChip tone="good">Won</StatusChip>;
+    case "LOST":
+      return <StatusChip tone="critical">Lost</StatusChip>;
+    case "ESTIMATING":
+      return <StatusChip tone="info">Estimating</StatusChip>;
+    case "NEW":
+      return <StatusChip tone="neutral">New</StatusChip>;
+    default:
+      return <StatusChip tone="warning">{stage.charAt(0) + stage.slice(1).toLowerCase()}</StatusChip>;
+  }
+}
 
 function fmtDate(d: Date | null): string {
   if (!d) return "";
@@ -49,7 +64,14 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
 
   return (
     <div className="flex flex-col gap-8">
-      <PageHeader title={opportunity.showName} />
+      <PageHeader
+        title={
+          <>
+            {opportunity.showName}
+            <StageChip stage={opportunity.stage} />
+          </>
+        }
+      />
 
       <Card className="p-6">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">

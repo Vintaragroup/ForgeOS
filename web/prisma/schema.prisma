@@ -423,6 +423,12 @@ model Proposal {
   templateConfigSnapshot Json?
   sentAt                 DateTime?
   signedAt               DateTime?
+  // A typed-name attestation, not a real e-signature (DocuSign/HelloSign-
+  // class integration needs a vendor account -- see README's backlog note).
+  // Captured at sign time so "who marked this signed" isn't lost the way
+  // signedAt alone leaves it.
+  signedByName  String?
+  signedByTitle String?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
