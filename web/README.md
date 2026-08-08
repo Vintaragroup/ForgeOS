@@ -55,26 +55,49 @@ SESSION_SECRET="<random 64-char hex -- node -e "console.log(require('crypto').ra
 ## Auth
 
 Every route requires a logged-in session (`src/proxy.ts`, Next 16's
-renamed `middleware.ts`) except `/login` itself. There is no
-unauthenticated password-set page on purpose — passwords are set from
-the host, the same trust boundary already used for migrations and
-seeding:
+renamed `middleware.ts`) except `/login` itself. Sessions are signed
+cookies (HMAC-SHA256 over `SESSION_SECRET`, `src/lib/session.ts`) — no
+new dependency, same philosophy as Prisma 7's engine-less client.
+Passwords are hashed with Node's built-in `scrypt`, not bcrypt, for the
+same reason.
+
+Resetting an existing user's password is host-run, not a web form:
 
 ```bash
 DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public" npm run set-password -- someone@example.com "a real password"
 ```
 
-The user must already exist (`/users/new`, which now requires a
-password at creation time too). Sessions are signed cookies (HMAC-SHA256
-over `SESSION_SECRET`, `src/lib/session.ts`) — no new dependency, same
-philosophy as Prisma 7's engine-less client. Passwords are hashed with
-Node's built-in `scrypt`, not bcrypt, for the same reason.
+## Admin
 
-**Known limitation:** `src/proxy.ts` is the only access-control layer
-right now — there's no per-role permissions (e.g. only admins can edit
-Users), and Server Actions don't independently re-check auth the way
-Next's own docs recommend for defense in depth. Fine for a single-company
-internal tool with one class of user; revisit before that stops being true.
+Access control has three levels (`SystemRole` on `User`, distinct from
+the free-text job-title `role` field): `EMPLOYEE` (default), `ADMIN`,
+`SUPER_ADMIN`. Everything under `/admin` (dashboard + user management)
+requires `ADMIN` or `SUPER_ADMIN` — enforced twice: once in
+`src/app/admin/layout.tsx` (a Server Component, checked fresh on every
+request) and again inside each Server Action via `requireAdmin()` /
+`requireSuperAdmin()` (`src/lib/auth.ts`), since Next's own proxy docs
+warn a route reorganized later could silently drop layout-only coverage
+for a Server Action.
+
+- **`/admin`** — pipeline stage counts, win rate, estimate/proposal
+  counts and sign rate, cost variance, and user counts by role. All
+  read from existing Phase 2–6 data, nothing new to seed.
+- **`/admin/users`** — create/list/edit users and change access level.
+  `SUPER_ADMIN` can grant `ADMIN` or `SUPER_ADMIN`; an `ADMIN` caller
+  creating a user is silently capped at `EMPLOYEE` server-side, not just
+  hidden in the UI. Deactivate reuses the existing `deletedAt` soft-delete
+  (a user can't deactivate themselves, and the last remaining
+  `SUPER_ADMIN` can't be demoted or deactivated, to avoid a full lockout).
+
+Bootstrapping the first super admin has the same chicken-and-egg problem
+`set-password` solves for passwords — the admin UI needs an admin to
+create a user, so the first one comes from the host:
+
+```bash
+DATABASE_URL="postgresql://<you>@localhost:5432/forgeos_dev?schema=public" npm run create-admin -- "Full Name" someone@example.com "a real password"
+```
+
+Safe to re-run — upserts by email.
 
 ## Docker
 

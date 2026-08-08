@@ -270,7 +270,7 @@ function EstimateVersionCard({
               users.length === 0 ? (
                 <Notice
                   message="Approving a version needs an approver on file, and there are no users yet."
-                  actionHref="/users/new"
+                  actionHref="/admin/users/new"
                   actionLabel="Add a user"
                 />
               ) : (

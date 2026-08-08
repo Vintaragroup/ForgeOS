@@ -31,6 +31,26 @@ export async function getCurrentUser() {
   if (!session) return null;
   return db.user.findFirst({
     where: { id: session.userId, deletedAt: null },
-    select: { id: true, name: true, email: true },
+    select: { id: true, name: true, email: true, systemRole: true },
   });
+}
+
+// Server Actions under /admin re-check this themselves rather than trusting
+// the admin layout alone -- Next's own proxy docs warn a route reorganized
+// later could silently drop layout coverage for a Server Action, so this is
+// the actual enforcement point, not a UI nicety.
+export async function requireAdmin() {
+  const user = await getCurrentUser();
+  if (!user || (user.systemRole !== "ADMIN" && user.systemRole !== "SUPER_ADMIN")) {
+    throw new Error("Admin access required");
+  }
+  return user;
+}
+
+export async function requireSuperAdmin() {
+  const user = await getCurrentUser();
+  if (!user || user.systemRole !== "SUPER_ADMIN") {
+    throw new Error("Super admin access required");
+  }
+  return user;
 }

@@ -30,6 +30,8 @@ const NAV_LINKS = [
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const user = await getCurrentUser();
+  const isAdmin = user?.systemRole === "ADMIN" || user?.systemRole === "SUPER_ADMIN";
+  const navLinks = isAdmin ? [...NAV_LINKS, { href: "/admin", label: "Admin" }] : NAV_LINKS;
 
   return (
     <html
@@ -43,7 +45,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
               ForgeOS
             </Link>
             <nav className="flex flex-1 gap-6 text-sm font-medium text-neutral-600">
-              {NAV_LINKS.map((link) => (
+              {navLinks.map((link) => (
                 <Link
                   key={link.href}
                   href={link.href}

@@ -1,18 +1,26 @@
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
 import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
 
 // See opportunities/page.tsx's comment.
 export const dynamic = "force-dynamic";
 
 export default async function UsersPage() {
-  const users = await db.user.findMany({
-    where: { deletedAt: null },
-    orderBy: { name: "asc" },
-  });
+  const [users, requester] = await Promise.all([
+    db.user.findMany({
+      where: { deletedAt: null },
+      orderBy: { name: "asc" },
+    }),
+    getCurrentUser(),
+  ]);
+  const isAdmin = requester?.systemRole === "ADMIN" || requester?.systemRole === "SUPER_ADMIN";
 
   return (
     <div>
-      <PageHeader title="Users" action={<LinkButton href="/users/new">New user</LinkButton>} />
+      <PageHeader
+        title="Users"
+        action={isAdmin ? <LinkButton href="/admin/users/new">New user</LinkButton> : undefined}
+      />
       {users.length === 0 ? (
         <EmptyState message="No internal users yet. Add estimators, account executives, or production staff." />
       ) : (

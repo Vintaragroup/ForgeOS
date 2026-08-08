@@ -47,12 +47,24 @@ enum EstimateStatus {
   IN_PROGRESS
 }
 
+// Access control, distinct from the free-text `role` field below (which is
+// a job title like "Senior Estimator", not a permission level). SUPER_ADMIN
+// can create ADMIN or EMPLOYEE users; ADMIN can only create EMPLOYEE --
+// enforced server-side in src/app/admin/users/actions.ts, not just hidden
+// in the UI. See README's Admin section.
+enum SystemRole {
+  SUPER_ADMIN
+  ADMIN
+  EMPLOYEE
+}
+
 model User {
-  id         String  @id @default(cuid())
+  id         String     @id @default(cuid())
   name       String
-  email      String  @unique
-  role       String?
+  email      String     @unique
+  role       String? // job title, e.g. "Estimator" -- not access control
   department String?
+  systemRole SystemRole @default(EMPLOYEE)
   // scrypt "salt:hash" pair, set via `npm run set-password` -- never through
   // a web form, so there is no unauthenticated password-set endpoint. Null
   // until set, meaning the account can't log in yet. See src/lib/auth.ts.
