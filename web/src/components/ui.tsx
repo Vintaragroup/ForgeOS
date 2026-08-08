@@ -157,3 +157,25 @@ export function EmptyState({ message }: { message: string }) {
     </div>
   );
 }
+
+// A blocker notice with a direct fix action -- for stopping points in a workflow
+// (e.g. "approving needs a user, none exist yet") where a plain sentence leaves
+// the user to figure out where to go on their own.
+export function Notice({
+  message,
+  actionHref,
+  actionLabel,
+}: {
+  message: string;
+  actionHref: string;
+  actionLabel: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
+      <p className="text-sm text-amber-900">{message}</p>
+      <LinkButton href={actionHref} variant="secondary">
+        {actionLabel}
+      </LinkButton>
+    </div>
+  );
+}

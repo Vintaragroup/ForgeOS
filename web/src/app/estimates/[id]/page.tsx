@@ -22,7 +22,7 @@ import {
 import { computeOptionTotal } from "@/lib/estimate-service";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { createChangeOrderAction } from "../../change-orders/actions";
-import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
+import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
 
 const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
@@ -268,10 +268,11 @@ function EstimateVersionCard({
           <div className="mb-6 rounded-md border border-neutral-200 p-4">
             {!version.isApproved ? (
               users.length === 0 ? (
-                <p className="text-sm text-neutral-500">
-                  No users yet — add one on the <Link href="/users" className="underline">Users</Link> page
-                  before approving.
-                </p>
+                <Notice
+                  message="Approving a version needs an approver on file, and there are no users yet."
+                  actionHref="/users/new"
+                  actionLabel="Add a user"
+                />
               ) : (
                 <form action={approveVersionWithIds} className="flex items-end gap-3">
                   <div className="w-56">
@@ -294,11 +295,11 @@ function EstimateVersionCard({
                     : ""}
                 </p>
                 {proposalTemplates.length === 0 ? (
-                  <p className="text-sm text-neutral-500">
-                    No proposal templates yet — add one in the{" "}
-                    <Link href="/catalog/proposal-templates/new" className="underline">Catalog</Link> before
-                    generating a proposal.
-                  </p>
+                  <Notice
+                    message="Generating a proposal needs a branded template, and there are no templates yet."
+                    actionHref="/catalog/proposal-templates/new"
+                    actionLabel="Add a template"
+                  />
                 ) : (
                   <form action={generateProposalWithIds} className="flex items-end gap-3">
                     <div className="w-56">
