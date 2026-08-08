@@ -31,6 +31,12 @@ export default async function MaterialDetailPage(props: PageProps<"/catalog/mate
             defaultValue={material.currentUnitCost.toString()}
             required
           />
+          <Field
+            label="Source note"
+            name="sourceNote"
+            defaultValue={material.sourceNote ?? ""}
+            placeholder="Where this price came from -- a real job, a supplier quote, an estimate"
+          />
           <div className="flex gap-3">
             <Button>Save changes</Button>
           </div>

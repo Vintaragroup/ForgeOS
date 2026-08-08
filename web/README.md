@@ -36,7 +36,7 @@ createdb forgeos_test               # for the test suite -- kept separate from d
 npm install
 npx prisma generate
 npx prisma migrate deploy           # applies prisma/migrations/ to forgeos_dev
-npm run seed                         # loads real Rule 1/Rule 9 labor rates + rental prices
+npm run seed                         # loads real labor rates, rental prices, and a materials catalog
 
 npm run dev                          # http://localhost:3000
 ```
@@ -283,6 +283,29 @@ vendor account and DSN to point it at — deliberately not fabricated here.
   `Contract` concept. See `prisma/schema.prisma`'s Phase 6 header
   comment.
 
+## Materials catalog
+
+The workbook never had a materials price-list catalog to extract (Rule 2:
+material lines were always open, per-job, per-component free entry).
+`prisma/seed.ts`'s 39-item starter catalog is built two ways, and every
+row's `sourceNote` says which:
+
+- **Real, evidenced entries** — extracted directly from the raw
+  MATERIAL/QTY/UNIT COST columns across all 8 real historical job
+  workbooks in `data/historical_jobs/xlsx/` (gitignored, local only).
+  SEG Fabric Graphic ($5.75/sq ft) is the best-evidenced number in the
+  catalog — identical across 18 line items spanning 7 different real
+  jobs. It's also BeMatrix's standard silicone-edge-graphic panel infill
+  product — several real jobs reference "BEMATRIX" directly (e.g.
+  "CUSTOM HALFWALL - BEMATRIX W/ SEG FABRIC"), the modular aluminum
+  exhibit-frame system a handful of the catalog's `BeMatrix System`
+  category entries are built around.
+- **Industry-reference entries** — standard exhibit-shop materials (wood
+  sheet goods, aluminum extrusion, hardware) with no real-job evidence.
+  Starting estimates only, every one's `sourceNote` says so explicitly —
+  confirm against your real current supplier pricing before using one in
+  a client-facing estimate.
+
 ## Scope (Backlog batch 2)
 
 Post-Phase-6 work, not itself a phase — see the artifact's "Suggested
@@ -321,7 +344,7 @@ npm run dev      # dev server
 npm run build    # production build + typecheck
 npm run lint     # eslint
 npm test         # vitest, against forgeos_test
-npm run seed     # loads real labor rate / rental price catalog data
+npm run seed     # loads labor rate, rental price, and materials catalog data
 npx prisma studio # inspect the dev database visually
 ```
 

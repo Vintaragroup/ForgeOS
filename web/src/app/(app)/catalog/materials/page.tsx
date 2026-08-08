@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function MaterialsPage() {
   const materials = await db.material.findMany({
     where: { deletedAt: null },
-    orderBy: { name: "asc" },
+    orderBy: [{ category: "asc" }, { name: "asc" }],
   });
 
   return (

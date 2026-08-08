@@ -240,6 +240,11 @@ model Material {
   unit            String?
   currentUnitCost Decimal @db.Decimal(10, 2)
   category        String?
+  // Same pattern as RentalItem.priceDerivationNote below -- where a price
+  // came from a real job (which one(s), how many times observed) vs. a
+  // researched industry-reference starting point pending the shop's real
+  // supplier costs. Keeps that distinction from getting silently lost.
+  sourceNote String?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

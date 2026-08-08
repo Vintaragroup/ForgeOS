@@ -14,6 +14,7 @@ export async function createMaterial(formData: FormData) {
       unit: emptyToNull(formData.get("unit")),
       category: emptyToNull(formData.get("category")),
       currentUnitCost: parseCost(formData.get("currentUnitCost")),
+      sourceNote: emptyToNull(formData.get("sourceNote")),
     },
   });
 
@@ -32,6 +33,7 @@ export async function updateMaterial(id: string, formData: FormData) {
       unit: emptyToNull(formData.get("unit")),
       category: emptyToNull(formData.get("category")),
       currentUnitCost: parseCost(formData.get("currentUnitCost")),
+      sourceNote: emptyToNull(formData.get("sourceNote")),
     },
   });
 

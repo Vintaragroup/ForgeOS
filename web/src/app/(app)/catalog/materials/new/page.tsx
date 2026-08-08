@@ -11,6 +11,11 @@ export default function NewMaterialPage() {
           <Field label="Unit" name="unit" placeholder="e.g. sq ft, sheet, ea" />
           <Field label="Category" name="category" placeholder="e.g. Lumber, Hardware" />
           <Field label="Current unit cost ($)" name="currentUnitCost" type="number" required />
+          <Field
+            label="Source note"
+            name="sourceNote"
+            placeholder="Where this price came from -- a real job, a supplier quote, an estimate"
+          />
           <div>
             <Button>Create material</Button>
           </div>
