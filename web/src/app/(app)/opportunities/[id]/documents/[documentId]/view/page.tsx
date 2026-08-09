@@ -4,6 +4,7 @@ import { getDocument, getDocumentBytes } from "@/lib/document-service";
 import { renderDocx, renderSpreadsheet, highlightQuote } from "@/lib/document-view-service";
 import { DOCX_MIME, PDF_MIME } from "@/lib/ai/text-extraction";
 import { getThreadMessages } from "@/lib/chat-service";
+import { linkifyDocumentMentions } from "@/lib/citation";
 import { Card, LinkButton, PageHeader } from "@/components/ui";
 import { ChatWidget } from "@/components/chat-widget";
 
@@ -28,9 +29,10 @@ export default async function DocumentViewPage(
   }
   if (document.opportunityId !== id) notFound();
 
-  const [opportunity, chatMessages] = await Promise.all([
+  const [opportunity, chatMessages, allDocuments] = await Promise.all([
     db.opportunity.findFirst({ where: { id }, select: { showName: true } }),
     getThreadMessages(id),
+    db.document.findMany({ where: { opportunityId: id, deletedAt: null }, select: { id: true, filename: true } }),
   ]);
 
   const rawUrl = `/opportunities/${id}/documents/${documentId}`;
@@ -68,7 +70,15 @@ export default async function DocumentViewPage(
       )}
 
       {opportunity && (
-        <ChatWidget opportunityId={id} opportunityName={opportunity.showName} initialMessages={chatMessages} />
+        <ChatWidget
+          opportunityId={id}
+          opportunityName={opportunity.showName}
+          initialMessages={chatMessages.map((m) => ({
+            id: m.id,
+            role: m.role,
+            segments: linkifyDocumentMentions(m.content, id, allDocuments),
+          }))}
+        />
       )}
     </div>
   );

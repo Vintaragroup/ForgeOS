@@ -96,9 +96,9 @@ export default async function DashboardPage() {
           <Card>
             <ul className="divide-y divide-neutral-200">
               {upcomingDeadlines.map((deadline) => (
-                <li key={`${deadline.workOrderId}-${deadline.kind}`}>
+                <li key={deadline.key}>
                   <Link
-                    href={`/projects/${deadline.projectId}`}
+                    href={deadline.href}
                     className="flex items-center justify-between px-5 py-3 hover:bg-neutral-50"
                   >
                     <div>

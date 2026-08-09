@@ -1,6 +1,6 @@
 "use server";
 
-import { convertOpportunityToEstimate } from "@/lib/opportunity-service";
+import { convertOpportunityToEstimate, getOrCreateEstimateForOpportunity } from "@/lib/opportunity-service";
 import { convertOpportunityToProject } from "@/lib/project-service";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -29,6 +29,17 @@ export async function convertToEstimate(opportunityId: string) {
   revalidatePath("/opportunities");
   revalidatePath(`/opportunities/${opportunityId}`);
   redirect(`/opportunities/${opportunityId}`);
+}
+
+// The guided path from an uploaded pricing-schedule document straight to
+// the import preview -- see getOrCreateEstimateForOpportunity's own
+// comment for why this doesn't just always create a fresh Estimate.
+export async function buildEstimateFromDocumentsAction(opportunityId: string, documentId: string) {
+  const { estimateId } = await getOrCreateEstimateForOpportunity(opportunityId);
+
+  revalidatePath("/opportunities");
+  revalidatePath(`/opportunities/${opportunityId}`);
+  redirect(`/estimates/${estimateId}?importDocumentId=${documentId}`);
 }
 
 // docs/migration-plan.md Phase 5: "Convert to Project" from a WON

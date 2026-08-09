@@ -1,12 +1,34 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { sendWidgetMessageAction } from "@/app/(app)/opportunities/[id]/chat/actions";
+import type { TextSegment } from "@/lib/citation";
 
 interface ChatMessageData {
   id: string;
   role: string;
-  content: string;
+  segments: TextSegment[];
+}
+
+// A filename the model mentioned, turned into a link by
+// linkifyDocumentMentions (citation.ts) server-side before this ever
+// reaches the client -- rendered plain vs. linked per segment rather than
+// dumping raw HTML, so this stays as safe as any other React text content.
+function MessageContent({ segments }: { segments: TextSegment[] }) {
+  return (
+    <>
+      {segments.map((seg, i) =>
+        seg.href ? (
+          <Link key={i} href={seg.href} className="underline decoration-dotted underline-offset-2 hover:decoration-solid">
+            {seg.text}
+          </Link>
+        ) : (
+          <span key={i}>{seg.text}</span>
+        ),
+      )}
+    </>
+  );
 }
 
 // The third client component in this app (after app-nav.tsx and
@@ -42,7 +64,7 @@ export function ChatWidget({
     const content = input.trim();
     if (!content || isPending) return;
     setError(null);
-    setMessages((prev) => [...prev, { id: `pending-${Date.now()}`, role: "user", content }]);
+    setMessages((prev) => [...prev, { id: `pending-${Date.now()}`, role: "user", segments: [{ text: content, href: null }] }]);
     setInput("");
     startTransition(async () => {
       try {
@@ -126,7 +148,7 @@ export function ChatWidget({
                   m.role === "user" ? "ml-auto bg-brand-black text-white" : "bg-neutral-100 text-neutral-900"
                 }`}
               >
-                {m.content}
+                <MessageContent segments={m.segments} />
               </li>
             ))}
           </ul>

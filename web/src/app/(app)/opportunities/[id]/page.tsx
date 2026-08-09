@@ -2,14 +2,16 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { changeStage, deleteOpportunity, updateOpportunity } from "../actions";
-import { convertToEstimate, convertToProject } from "../convert-actions";
+import { buildEstimateFromDocumentsAction, convertToEstimate, convertToProject } from "../convert-actions";
 import { analyzeDocumentAction, deleteDocumentAction, uploadDocumentAction } from "./documents/actions";
 import { listDocuments } from "@/lib/document-service";
 import { getThreadMessages } from "@/lib/chat-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
+import { citationHref, linkifyDocumentMentions } from "@/lib/citation";
 import { Button, Card, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
+import { DocumentUploadForm } from "@/components/document-upload-form";
 
 const DOCUMENT_TYPE_OPTIONS = [
   { value: "RFP", label: "RFP" },
@@ -50,25 +52,6 @@ function fmtBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// A citation's href: a PDF jumps the viewer to the page the quote was
-// found on (native #page=N support, no PDF.js needed); a DOCX highlights
-// the quote in place via a #hl anchor the viewer injects at render time
-// (see document-view-service.ts's highlightQuote). No link at all when
-// neither locator is available -- an older document analyzed before this
-// feature shipped, or a quote the locate pass couldn't find.
-function citationHref(
-  opportunityId: string,
-  doc: { id: string; mimeType: string },
-  fact: { sourceQuote: string; pageNumber: number | null },
-): string | null {
-  const base = `/opportunities/${opportunityId}/documents/${doc.id}/view`;
-  if (doc.mimeType === "application/pdf" && fact.pageNumber) return `${base}?page=${fact.pageNumber}`;
-  if (doc.mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" && fact.sourceQuote) {
-    return `${base}?q=${encodeURIComponent(fact.sourceQuote)}#hl`;
-  }
-  return null;
 }
 
 function CitationLink({
@@ -265,6 +248,10 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   const convertWithId = convertToEstimate.bind(null, opportunity.id);
   const convertToProjectWithId = convertToProject.bind(null, opportunity.id);
   const uploadDocumentWithId = uploadDocumentAction.bind(null, opportunity.id);
+  const pricingScheduleDoc = documents.find((d) => d.documentType === "PRICING_SCHEDULE");
+  const buildEstimateWithIds = pricingScheduleDoc
+    ? buildEstimateFromDocumentsAction.bind(null, opportunity.id, pricingScheduleDoc.id)
+    : null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -385,9 +372,16 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             ))}
           </ul>
         )}
-        <form action={convertWithId}>
-          <Button variant="secondary">Convert to estimate</Button>
-        </form>
+        <div className="flex flex-wrap gap-3">
+          <form action={convertWithId}>
+            <Button variant="secondary">Convert to estimate</Button>
+          </form>
+          {buildEstimateWithIds && (
+            <form action={buildEstimateWithIds}>
+              <Button>Build estimate from &quot;{pricingScheduleDoc!.filename}&quot;</Button>
+            </form>
+          )}
+        </div>
       </Card>
 
       <Card className="p-6">
@@ -442,23 +436,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             ))}
           </ul>
         )}
-        <form action={uploadDocumentWithId} className="flex flex-wrap items-end gap-3 border-t border-neutral-200 pt-4">
-          <div className="flex flex-col gap-1">
-            <label htmlFor="file" className="text-sm font-medium text-neutral-700">
-              File <span className="text-red-500">*</span>
-            </label>
-            <input
-              id="file"
-              name="file"
-              type="file"
-              required
-              accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
-              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm outline-none file:mr-3 file:rounded file:border-0 file:bg-neutral-100 file:px-2 file:py-1 file:text-sm"
-            />
-          </div>
-          <SelectField label="Type" name="documentType" defaultValue="OTHER" options={DOCUMENT_TYPE_OPTIONS} />
-          <Button>Upload</Button>
-        </form>
+        <DocumentUploadForm action={uploadDocumentWithId} documentTypeOptions={DOCUMENT_TYPE_OPTIONS} />
       </Card>
 
       <ProjectBriefCard opportunityId={opportunity.id} documents={documents} />
@@ -494,7 +472,15 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         </Card>
       )}
 
-      <ChatWidget opportunityId={opportunity.id} opportunityName={opportunity.showName} initialMessages={chatMessages} />
+      <ChatWidget
+        opportunityId={opportunity.id}
+        opportunityName={opportunity.showName}
+        initialMessages={chatMessages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          segments: linkifyDocumentMentions(m.content, opportunity.id, documents),
+        }))}
+      />
     </div>
   );
 }

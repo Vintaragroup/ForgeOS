@@ -2,7 +2,9 @@
 
 import { getCurrentUser } from "@/lib/auth";
 import { sendMessage } from "@/lib/chat-service";
+import { db } from "@/lib/db";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
+import { linkifyDocumentMentions } from "@/lib/citation";
 
 // Called directly from the floating ChatWidget client component (not via
 // a <form action>) -- Server Actions can be imported and awaited from
@@ -19,11 +21,14 @@ export async function sendWidgetMessageAction(opportunityId: string, content: st
 
   try {
     const { assistantMessage } = await sendMessage(opportunityId, user.id, trimmed);
+    const documents = await db.document.findMany({
+      where: { opportunityId, deletedAt: null },
+      select: { id: true, filename: true },
+    });
     return {
       id: assistantMessage.id,
       role: assistantMessage.role,
-      content: assistantMessage.content,
-      createdAt: assistantMessage.createdAt,
+      segments: linkifyDocumentMentions(assistantMessage.content, opportunityId, documents),
     };
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {

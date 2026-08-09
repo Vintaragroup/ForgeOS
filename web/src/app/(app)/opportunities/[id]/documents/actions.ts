@@ -7,16 +7,23 @@ import { summarizeDocument } from "@/lib/ai/document-summary-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import type { DocumentType } from "@/generated/prisma/enums";
 
+// Accepts one or many files under the same "file" field (the drag-and-drop
+// dropzone sets a real multi-file FileList on the input) -- uploaded one
+// at a time, not Promise.all, so a large batch doesn't try to write every
+// file to disk concurrently and a mid-batch failure leaves the earlier
+// files already saved rather than all-or-nothing.
 export async function uploadDocumentAction(opportunityId: string, formData: FormData) {
   const user = await getCurrentUser();
-  const file = formData.get("file");
+  const files = formData.getAll("file").filter((f): f is File => f instanceof File && f.size > 0);
   const documentType = String(formData.get("documentType") ?? "OTHER") as DocumentType;
 
-  if (!(file instanceof File) || file.size === 0) {
-    throw new Error("Choose a file to upload.");
+  if (files.length === 0) {
+    throw new Error("Choose at least one file to upload.");
   }
 
-  await uploadDocument(opportunityId, { file, documentType, uploadedById: user?.id ?? null });
+  for (const file of files) {
+    await uploadDocument(opportunityId, { file, documentType, uploadedById: user?.id ?? null });
+  }
 
   revalidatePath(`/opportunities/${opportunityId}`);
 }
