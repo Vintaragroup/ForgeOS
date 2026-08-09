@@ -27,13 +27,37 @@ type DeadlineKind =
   | "RFP deadline"
   | "RFP milestone";
 
+export type DeadlineActionStatus = "SCHEDULED" | "SUBMITTED" | "PAID";
+
+// Lightweight per-kind action, not a real reminders engine -- see
+// DeadlineAction's own schema comment. Kinds not listed here (Install,
+// which is usually auto-filled off the WorkOrder's own dates) get no
+// action button at all.
+const DEADLINE_ACTIONS: Partial<Record<DeadlineKind, { label: string; status: DeadlineActionStatus }>> = {
+  "Production meeting": { label: "Schedule", status: "SCHEDULED" },
+  "RFP milestone": { label: "Schedule", status: "SCHEDULED" },
+  "RFP deadline": { label: "Mark submitted", status: "SUBMITTED" },
+  "Artwork deadline": { label: "Mark submitted", status: "SUBMITTED" },
+  "Deposit due": { label: "Mark paid", status: "PAID" },
+  "Balance due": { label: "Mark paid", status: "PAID" },
+};
+
 export interface UpcomingDeadline {
   key: string;
+  // Scoped to this deadline within its own opportunity -- matches
+  // DeadlineAction.dedupeKey, which is unique per [opportunityId, dedupeKey]
+  // rather than globally, so it doesn't need opportunityId baked in. `key`
+  // above is the globally-unique one (React list key / persisted-action
+  // identity together with opportunityId).
+  dedupeKey: string;
   href: string;
   label: string;
   kind: DeadlineKind;
   date: Date;
   overdue: boolean;
+  opportunityId: string;
+  opportunityName: string;
+  action: { label: string; status: DeadlineActionStatus } | null;
 }
 
 export async function getDashboardData(user: { id: string; systemRole: SystemRole }) {
@@ -43,7 +67,7 @@ export async function getDashboardData(user: { id: string; systemRole: SystemRol
   const windowEnd = new Date(now.getTime() + DEADLINE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const windowStart = new Date(now.getTime() - PAST_DEADLINE_GRACE_DAYS * 24 * 60 * 60 * 1000);
 
-  const [stageGroups, workOrders, rfpDocuments, recentProposals] = await Promise.all([
+  const [stageGroups, workOrders, rfpDocuments, recentProposals, deadlineActions] = await Promise.all([
     db.opportunity.groupBy({ by: ["stage"], where: { deletedAt: null, ...accessWhere }, _count: { _all: true } }),
     db.workOrder.findMany({
       where: {
@@ -80,7 +104,15 @@ export async function getDashboardData(user: { id: string; systemRole: SystemRol
         estimateVersion: { include: { estimate: { include: { opportunity: { include: { company: true } } } } } },
       },
     }),
+    // Deadlines the user has already scheduled/submitted/paid drop off the
+    // list entirely -- see DeadlineAction's schema comment.
+    db.deadlineAction.findMany({
+      where: { opportunity: accessWhere },
+      select: { opportunityId: true, dedupeKey: true },
+    }),
   ]);
+
+  const actedKeys = new Set(deadlineActions.map((a) => `${a.opportunityId}::${a.dedupeKey}`));
 
   const stageCounts = Object.fromEntries(
     stageGroups.map((g) => [g.stage, g._count._all]),
@@ -99,13 +131,23 @@ export async function getDashboardData(user: { id: string; systemRole: SystemRol
     for (const { field, kind } of deadlineFields) {
       const date = wo[field] as Date | null;
       if (!date || date > windowEnd || date < windowStart) continue;
+      const opportunityId = wo.project.opportunityId;
+      const dedupeKey = `wo-${wo.id}-${kind}`;
+      if (actedKeys.has(`${opportunityId}::${dedupeKey}`)) continue;
       upcoming.push({
-        key: `wo-${wo.id}-${kind}`,
+        key: dedupeKey,
+        dedupeKey,
         href: `/projects/${wo.projectId}`,
-        label: wo.project.jobNumber ? `Job ${wo.project.jobNumber}` : wo.project.opportunity.showName,
+        // The opportunity name itself is now shown once as this deadline's
+        // group header on the Dashboard -- see groupDeadlinesByOpportunity
+        // -- so this only needs to add the job number, if any.
+        label: wo.project.jobNumber ? `Job ${wo.project.jobNumber}` : "",
         kind,
         date,
         overdue: date < now,
+        opportunityId,
+        opportunityName: wo.project.opportunity.showName,
+        action: DEADLINE_ACTIONS[kind] ?? null,
       });
     }
   }
@@ -134,18 +176,30 @@ export async function getDashboardData(user: { id: string; systemRole: SystemRol
       const date = parseFreeTextDate(kd.date);
       if (!date || date > windowEnd || date < windowStart) continue;
 
-      const dedupeKey = `${doc.opportunityId}::${kd.label.trim().toLowerCase()}::${date.toISOString().slice(0, 10)}`;
-      if (seenKeyDates.has(dedupeKey)) continue;
-      seenKeyDates.add(dedupeKey);
+      // factKey (this opportunity's DeadlineAction.dedupeKey) is stable
+      // across which document happens to restate the fact, unlike a
+      // doc.id-based key. seenDedupeKey is scoped by opportunity too, so
+      // two different opportunities that coincidentally share a label+date
+      // don't get deduped against each other.
+      const factKey = `${kd.label.trim().toLowerCase()}::${date.toISOString().slice(0, 10)}`;
+      const seenDedupeKey = `${doc.opportunityId}::${factKey}`;
+      if (seenKeyDates.has(seenDedupeKey)) continue;
+      seenKeyDates.add(seenDedupeKey);
+      if (actedKeys.has(seenDedupeKey)) continue;
 
       const href = citationHref(doc.opportunityId, doc, kd) ?? `/opportunities/${doc.opportunityId}`;
+      const kind: DeadlineKind = dateType === "DEADLINE" ? "RFP deadline" : "RFP milestone";
       upcoming.push({
-        key: `doc-${doc.id}-${kd.label}`,
+        key: seenDedupeKey,
+        dedupeKey: factKey,
         href,
-        label: `${kd.label} — ${doc.opportunity.showName}`,
-        kind: dateType === "DEADLINE" ? "RFP deadline" : "RFP milestone",
+        label: kd.label,
+        kind,
         date,
         overdue: dateType === "DEADLINE" && date < now,
+        opportunityId: doc.opportunityId,
+        opportunityName: doc.opportunity.showName,
+        action: DEADLINE_ACTIONS[kind] ?? null,
       });
     }
   }

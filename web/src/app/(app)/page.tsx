@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getDashboardData } from "@/lib/dashboard";
+import { getDashboardData, type UpcomingDeadline } from "@/lib/dashboard";
 import { getAdminAnalytics } from "@/lib/admin-analytics";
 import { getCurrentUser } from "@/lib/auth";
-import { Card, LinkButton, Notice, PageHeader, Stat, StatusChip } from "@/components/ui";
+import { recordDeadlineActionAction } from "./dashboard-actions";
+import { Button, Card, LinkButton, Notice, PageHeader, Stat, StatusChip } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,26 @@ function ProposalStatusChip({ sentAt, signedAt }: { sentAt: Date | null; signedA
   if (signedAt) return <StatusChip tone="good">Signed</StatusChip>;
   if (sentAt) return <StatusChip tone="info">Sent</StatusChip>;
   return <StatusChip tone="neutral">Draft</StatusChip>;
+}
+
+// Deadlines arrive sorted by date -- grouping preserves that order, so the
+// opportunity with the soonest deadline still lists first, but everything
+// belonging to one job now reads together instead of interleaving by date.
+function groupDeadlinesByOpportunity(deadlines: UpcomingDeadline[]) {
+  const groups = new Map<string, { opportunityId: string; opportunityName: string; deadlines: UpcomingDeadline[] }>();
+  for (const deadline of deadlines) {
+    const group = groups.get(deadline.opportunityId);
+    if (group) {
+      group.deadlines.push(deadline);
+    } else {
+      groups.set(deadline.opportunityId, {
+        opportunityId: deadline.opportunityId,
+        opportunityName: deadline.opportunityName,
+        deadlines: [deadline],
+      });
+    }
+  }
+  return [...groups.values()];
 }
 
 // One dashboard for everyone, not two -- the old /admin page duplicated
@@ -94,32 +115,51 @@ export default async function DashboardPage() {
             actionLabel="View opportunities"
           />
         ) : (
-          <Card>
-            <ul className="divide-y divide-neutral-200">
-              {upcomingDeadlines.map((deadline) => (
-                <li key={deadline.key}>
-                  <Link
-                    href={deadline.href}
-                    className="flex items-center justify-between px-5 py-3 hover:bg-neutral-50"
-                  >
-                    <div>
-                      <div className="font-medium">{deadline.kind}</div>
-                      <div className="text-sm text-neutral-500">{deadline.label}</div>
-                    </div>
-                    <div className="text-sm">
-                      {deadline.overdue ? (
-                        <StatusChip tone="critical">Overdue — {fmtDate(deadline.date)}</StatusChip>
-                      ) : deadline.kind === "RFP milestone" && deadline.date < new Date() ? (
-                        <StatusChip tone="neutral">Passed — {fmtDate(deadline.date)}</StatusChip>
-                      ) : (
-                        <span className="text-neutral-500">{fmtDate(deadline.date)}</span>
-                      )}
-                    </div>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </Card>
+          <div className="flex flex-col gap-4">
+            {groupDeadlinesByOpportunity(upcomingDeadlines).map((group) => (
+              <Card key={group.opportunityId}>
+                <Link
+                  href={`/opportunities/${group.opportunityId}`}
+                  className="block border-b border-neutral-200 px-5 py-2.5 text-sm font-semibold hover:bg-neutral-50"
+                >
+                  {group.opportunityName}
+                </Link>
+                <ul className="divide-y divide-neutral-200">
+                  {group.deadlines.map((deadline) => (
+                    <li key={deadline.key} className="flex items-center justify-between gap-4 px-5 py-3">
+                      <Link href={deadline.href} className="min-w-0 flex-1 hover:underline">
+                        <div className="font-medium">{deadline.kind}</div>
+                        {deadline.label && (
+                          <div className="truncate text-sm text-neutral-500">{deadline.label}</div>
+                        )}
+                      </Link>
+                      <div className="flex flex-none items-center gap-3 text-sm">
+                        {deadline.overdue ? (
+                          <StatusChip tone="critical">Overdue — {fmtDate(deadline.date)}</StatusChip>
+                        ) : deadline.kind === "RFP milestone" && deadline.date < new Date() ? (
+                          <StatusChip tone="neutral">Passed — {fmtDate(deadline.date)}</StatusChip>
+                        ) : (
+                          <span className="text-neutral-500">{fmtDate(deadline.date)}</span>
+                        )}
+                        {deadline.action && (
+                          <form
+                            action={recordDeadlineActionAction.bind(
+                              null,
+                              group.opportunityId,
+                              deadline.dedupeKey,
+                              deadline.action.status,
+                            )}
+                          >
+                            <Button variant="secondary">{deadline.action.label}</Button>
+                          </form>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            ))}
+          </div>
         )}
       </div>
 

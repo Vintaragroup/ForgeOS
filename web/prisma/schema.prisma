@@ -85,6 +85,7 @@ model User {
   adminAuditLogsActed      AdminAuditLog[]   @relation("AdminAuditLogActor")
   adminAuditLogsTargeted   AdminAuditLog[]   @relation("AdminAuditLogTarget")
   uploadedDocuments        Document[]
+  deadlineActionsTaken     DeadlineAction[]
 
   @@map("users")
 }
@@ -166,6 +167,8 @@ model Opportunity {
   // regardless of ownership/collaboration.
   collaborators OpportunityCollaborator[]
 
+  deadlineActions DeadlineAction[]
+
   @@map("opportunities")
 }
 
@@ -180,6 +183,33 @@ model OpportunityCollaborator {
 
   @@unique([opportunityId, userId])
   @@map("opportunity_collaborators")
+}
+
+enum DeadlineActionStatus {
+  SCHEDULED
+  SUBMITTED
+  PAID
+}
+
+// A lightweight acknowledgment against one Dashboard "upcoming deadline" --
+// not a real reminders/notifications engine (that's still gated on the B6
+// email/Slack provider decision). dedupeKey matches the same fact-identity
+// string dashboard.ts already computes to dedupe a restated RFP date or
+// identify a WorkOrder date field, so one acknowledgment covers a deadline
+// no matter how many source documents restate it.
+model DeadlineAction {
+  id            String               @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity          @relation(fields: [opportunityId], references: [id])
+  dedupeKey     String
+  status        DeadlineActionStatus
+  actedById     String?
+  actedBy       User?                @relation(fields: [actedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([opportunityId, dedupeKey])
+  @@map("deadline_actions")
 }
 
 // ---------------------------------------------------------------------
