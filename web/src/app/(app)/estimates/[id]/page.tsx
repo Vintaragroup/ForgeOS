@@ -19,9 +19,17 @@ import {
   updateEstimateDetails,
   updateMarginTargetAction,
 } from "../actions";
-import { commitImportAction, previewImportAction, updateLineItemUnitCostAction } from "./import-actions";
+import {
+  commitImportAction,
+  commitScopeItemsAction,
+  previewImportAction,
+  proposeScopeItemsAction,
+  updateLineItemUnitCostAction,
+} from "./import-actions";
 import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
+import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
+import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
@@ -44,8 +52,10 @@ function money(d: { toFixed(n: number): string }): string {
 
 export default async function EstimateDetailPage(props: PageProps<"/estimates/[id]">) {
   const { id } = await props.params;
-  const { importDocumentId: importDocumentIdParam } = await props.searchParams;
+  const { importDocumentId: importDocumentIdParam, proposeDocumentId: proposeDocumentIdParam } =
+    await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
+  const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
   const estimate = await db.estimate.findFirst({
     where: { id, deletedAt: null },
     include: { opportunity: { include: { company: true } } },
@@ -74,7 +84,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const currentVersion = versions.find((v) => v.isCurrent) ?? versions[0];
   const olderVersions = versions.filter((v) => v.id !== currentVersion?.id);
 
-  const [users, proposalTemplates, attachments, pricingScheduleDocuments] = await Promise.all([
+  const [users, proposalTemplates, attachments, pricingScheduleDocuments, scopeDocuments] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.proposalTemplate.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.attachment.findMany({
@@ -86,16 +96,38 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       where: { opportunityId: estimate.opportunityId, documentType: "PRICING_SCHEDULE", deletedAt: null },
       orderBy: { createdAt: "desc" },
     }),
+    // Any analyzed document EXCEPT a pricing schedule (which already has
+    // real qty/unit rows -- an AI guess would be strictly worse) or a
+    // drawing (never text-extracted) is a candidate to propose scope-based
+    // line items from.
+    db.document.findMany({
+      where: {
+        opportunityId: estimate.opportunityId,
+        deletedAt: null,
+        extractionStatus: "COMPLETE",
+        documentType: { notIn: ["PRICING_SCHEDULE", "DRAWING"] },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
   ]);
 
   const addAttachmentWithId = addAttachmentAction.bind(null, estimate.id);
   const updateEstimateDetailsWithId = updateEstimateDetails.bind(null, estimate.id);
   const createFirstVersionWithId = createFirstVersion.bind(null, estimate.id);
   const previewImportWithId = previewImportAction.bind(null, estimate.id);
+  const proposeScopeItemsWithId = proposeScopeItemsAction.bind(null, estimate.id);
 
   const canImport = !!currentVersion && !currentVersion.isLocked;
   const importPreview =
     canImport && importDocumentId ? await previewPricingImport(importDocumentId).catch((err: Error) => err) : null;
+
+  // proposedLineItems is computed once (see the "Propose items" button,
+  // scope-line-item-service.ts) and cached on the Document -- reading it
+  // here is free, no repeat OpenAI call on every page load/reload.
+  const proposeDocument =
+    canImport && proposeDocumentId ? scopeDocuments.find((d) => d.id === proposeDocumentId) : null;
+  const proposedItems = (proposeDocument?.proposedLineItems as unknown as ProposedLineItem[] | null) ?? null;
+  const proposeCatalog = proposedItems && proposedItems.length > 0 ? await loadCatalogForMatching() : [];
 
   return (
     <div className="flex flex-col gap-8">
@@ -245,6 +277,105 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                 <Button>
                   Commit {importPreview.rows.length} draft line items
                 </Button>
+              </form>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {canImport && (
+        <Card className="p-6">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Propose line items from Scope of Work
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            For an RFP with no pre-built pricing schedule -- reads an analyzed document&apos;s scope text and
+            proposes draft line items. Unlike a real pricing schedule, quantities here are often AI-inferred, not
+            read from the source: rows marked <span className="italic">(qty estimated — verify)</span> had no
+            explicit quantity in the document at all. Verify every row against the source before relying on it.
+          </p>
+          {scopeDocuments.length === 0 ? (
+            <Notice
+              message="No analyzed documents yet -- click Analyze on a document from the Opportunity page first."
+              actionHref={`/opportunities/${estimate.opportunity.id}`}
+              actionLabel="Go to Opportunity"
+            />
+          ) : (
+            <form action={proposeScopeItemsWithId} className="flex items-end gap-3">
+              <div className="flex-1">
+                <SelectField
+                  label="Document"
+                  name="documentId"
+                  defaultValue={proposeDocumentId ?? ""}
+                  options={scopeDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+                />
+              </div>
+              <Button variant="secondary">Propose items</Button>
+            </form>
+          )}
+
+          {proposeDocument && proposedItems && proposedItems.length === 0 && (
+            <p className="mt-4 text-sm text-neutral-500">
+              No concrete scope items found in &quot;{proposeDocument.filename}&quot;.
+            </p>
+          )}
+
+          {proposeDocument && proposedItems && proposedItems.length > 0 && (
+            <div className="mt-4 border-t border-neutral-200 pt-4">
+              <p className="mb-3 text-sm text-neutral-700">
+                <span className="font-medium">{proposedItems.length}</span> proposed line items in{" "}
+                <span className="font-medium">{proposeDocument.filename}</span> — AI-drafted, verify before
+                committing.
+              </p>
+              <div className="mb-4 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-neutral-50">
+                    <tr className="text-left text-neutral-500">
+                      <th className="px-2 py-1.5 font-normal">Category</th>
+                      <th className="px-2 py-1.5 font-normal">Description</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Unit</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {proposedItems.map((item, i) => {
+                      const catalogMatch = matchDescription(item.description, proposeCatalog);
+                      return (
+                        <tr key={i} className="border-t border-neutral-100">
+                          <td className="px-2 py-1 text-neutral-500">{item.category}</td>
+                          <td className="max-w-[24rem] truncate px-2 py-1" title={item.sourceQuote}>
+                            {item.description}
+                          </td>
+                          <td className="px-2 py-1 text-right">{item.unit}</td>
+                          <td className="px-2 py-1 text-right">
+                            {item.qty}
+                            {!item.qtyIsExplicit && (
+                              <span className="ml-1 text-amber-600" title="Not stated in the source -- a placeholder, not a real quantity.">
+                                *
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1 text-right">
+                            {catalogMatch ? (
+                              <span
+                                className="text-brand-navy"
+                                title={`Matched to ${catalogMatch.source} catalog: "${catalogMatch.name}" -- verify before relying on it.`}
+                              >
+                                ${catalogMatch.unitCost.toFixed(2)}
+                              </span>
+                            ) : (
+                              <span className="text-neutral-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <form action={commitScopeItemsAction.bind(null, estimate.id, currentVersion!.id, proposeDocument.id)}>
+                <Button>Commit {proposedItems.length} draft line items</Button>
               </form>
             </div>
           )}

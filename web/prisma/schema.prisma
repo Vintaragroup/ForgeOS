@@ -208,6 +208,13 @@ model Document {
   extractionStatus ExtractionStatus @default(PENDING)
   extractedText    String?          @db.Text
   extractedSummary Json?
+  // AI-proposed, unpriced draft line items read from this document's
+  // Scope of Work text -- separate from extractedSummary because it's a
+  // distinct, explicitly-triggered operation (see scope-line-item-service.ts),
+  // not part of the automatic Project Brief analysis every document goes
+  // through. Cached here so re-opening the Estimate's proposal preview
+  // doesn't re-run the OpenAI call on every page load.
+  proposedLineItems Json?
 
   uploadedById String?
   uploadedBy   User?   @relation(fields: [uploadedById], references: [id])

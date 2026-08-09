@@ -3,6 +3,8 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { commitPricingImport } from "@/lib/pricing-import-service";
+import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
+import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import { recomputeVersionTotals, updateLineItem } from "@/lib/estimate-service";
 
 export async function previewImportAction(estimateId: string, formData: FormData) {
@@ -17,6 +19,32 @@ export async function commitImportAction(
   documentId: string,
 ) {
   await commitPricingImport(versionId, documentId);
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}`);
+}
+
+export async function proposeScopeItemsAction(estimateId: string, formData: FormData) {
+  const documentId = String(formData.get("documentId") ?? "").trim();
+  if (!documentId) throw new Error("Choose a document to propose items from");
+
+  try {
+    await proposeLineItemsFromScope(documentId);
+  } catch (err) {
+    if (err instanceof AiNotConfiguredError) {
+      throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable this.");
+    }
+    throw err;
+  }
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}?proposeDocumentId=${documentId}`);
+}
+
+export async function commitScopeItemsAction(
+  estimateId: string,
+  versionId: string,
+  documentId: string,
+) {
+  await commitScopeLineItems(versionId, documentId);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}`);
 }
