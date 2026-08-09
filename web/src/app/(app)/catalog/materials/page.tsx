@@ -1,20 +1,37 @@
 import { db } from "@/lib/db";
-import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
+import { Card, EmptyState, LinkButton, Pagination, PageHeader } from "@/components/ui";
 import Link from "next/link";
 
 // See opportunities/page.tsx's comment.
 export const dynamic = "force-dynamic";
 
-export default async function MaterialsPage() {
-  const materials = await db.material.findMany({
-    where: { deletedAt: null },
-    orderBy: [{ category: "asc" }, { name: "asc" }],
-  });
+const PAGE_SIZE = 25;
+
+export default async function MaterialsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const { page: pageParam } = await searchParams;
+  const page = Math.max(1, Number(pageParam) || 1);
+  const where = { deletedAt: null };
+  const [materials, total] = await Promise.all([
+    db.material.findMany({
+      where,
+      orderBy: [{ category: "asc" }, { name: "asc" }],
+      skip: (page - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
+    }),
+    db.material.count({ where }),
+  ]);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div>
       <PageHeader
         title="Materials"
+        backHref="/catalog"
+        backLabel="Catalog"
         action={<LinkButton href="/catalog/materials/new">New material</LinkButton>}
       />
       {materials.length === 0 ? (
@@ -44,6 +61,7 @@ export default async function MaterialsPage() {
           </ul>
         </Card>
       )}
+      <Pagination page={page} totalPages={totalPages} basePath="/catalog/materials" />
     </div>
   );
 }

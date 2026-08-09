@@ -41,8 +41,15 @@ services:
       # Placeholder only -- override with a real secret (see .env.example)
       # for anything beyond throwaway local use: SESSION_SECRET=... docker compose up -d
       SESSION_SECRET: ${SESSION_SECRET:-dev-only-insecure-secret-change-me}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     ports:
       - "3000:3000"
+    volumes:
+      # Uploaded document bytes (src/lib/storage.ts) -- named volume so a
+      # rebuild/restart doesn't silently wipe them, same reasoning as
+      # forgeos_pgdata below.
+      - forgeos_uploads:/app/uploads
 
 volumes:
   forgeos_pgdata:
+  forgeos_uploads:

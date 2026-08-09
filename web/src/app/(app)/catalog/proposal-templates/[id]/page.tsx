@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { deleteProposalTemplate, updateProposalTemplate } from "../actions";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
+import { ConfirmForm } from "@/components/confirm-form";
 
 function stringField(value: unknown, key: string): string {
   if (value && typeof value === "object" && key in value) {
@@ -23,7 +24,7 @@ export default async function ProposalTemplateDetailPage(
 
   return (
     <div>
-      <PageHeader title={template.name} />
+      <PageHeader title={template.name} backHref="/catalog/proposal-templates" backLabel="Proposal templates" />
       <Card className="p-6">
         <form action={updateWithId} className="flex flex-col gap-4">
           <Field label="Template name" name="name" defaultValue={template.name} required />
@@ -49,9 +50,13 @@ export default async function ProposalTemplateDetailPage(
             <Button>Save changes</Button>
           </div>
         </form>
-        <form action={deleteWithId} className="mt-4 border-t border-neutral-200 pt-4">
+        <ConfirmForm
+          action={deleteWithId}
+          confirmMessage="Delete this proposal template? This can't be undone."
+          className="mt-4 border-t border-neutral-200 pt-4"
+        >
           <Button variant="danger">Delete template</Button>
-        </form>
+        </ConfirmForm>
       </Card>
     </div>
   );

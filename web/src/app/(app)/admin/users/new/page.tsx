@@ -10,7 +10,7 @@ export default async function NewAdminUserPage() {
 
   return (
     <div>
-      <PageHeader title="New user" />
+      <PageHeader title="New user" backHref="/admin/users" backLabel="Users" />
       <Card className="p-6">
         <form action={createAdminUser} className="flex flex-col gap-4">
           <Field label="Name" name="name" required />

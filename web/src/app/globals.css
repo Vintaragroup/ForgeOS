@@ -53,4 +53,22 @@
     color: var(--foreground);
     font-family: Arial, Helvetica, sans-serif;
   }
+
+  /* B19: native date inputs render at a slightly different height than
+     text inputs on some OS/browser combos (the calendar-icon button
+     inflates Chrome's own box model differently from Safari/Firefox),
+     which reads as misaligned in a form full of otherwise-identical
+     fields. Pinning the height and normalizing the icon's affordance is
+     the fixable part of this -- a fully custom calendar widget is out of
+     scope for the inconsistency this item actually describes. */
+  input[type="date"] {
+    min-height: 2.375rem;
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.6;
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+  }
 }

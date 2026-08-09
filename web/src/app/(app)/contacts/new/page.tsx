@@ -13,7 +13,7 @@ export default async function NewContactPage() {
 
   return (
     <div>
-      <PageHeader title="New contact" />
+      <PageHeader title="New contact" backHref="/contacts" backLabel="Contacts" />
       <Card className="p-6">
         <form action={createContact} className="flex flex-col gap-4">
           <Field label="Name" name="name" required />

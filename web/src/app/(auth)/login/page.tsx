@@ -39,7 +39,9 @@ export default async function LoginPage({
           <Field label="Password" name="password" type="password" required />
           {params.error && (
             <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              Incorrect email or password.
+              {params.error === "2"
+                ? "Too many attempts for this email. Please wait a few minutes and try again."
+                : "Incorrect email or password."}
             </p>
           )}
           <div className="mt-2">

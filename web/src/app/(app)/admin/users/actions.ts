@@ -33,7 +33,7 @@ export async function createAdminUser(formData: FormData) {
       ? requestedSystemRole
       : ASSIGNABLE_BY_ADMIN;
 
-  await db.user.create({
+  const created = await db.user.create({
     data: {
       name,
       email,
@@ -42,6 +42,13 @@ export async function createAdminUser(formData: FormData) {
       systemRole,
       passwordHash: await hashPassword(password),
     },
+  });
+
+  await logAdminAction({
+    action: "user.create",
+    detail: `Created ${email} with role ${systemRole}`,
+    actorId: requester.id,
+    targetUserId: created.id,
   });
 
   revalidatePath("/admin/users");
@@ -93,7 +100,17 @@ export async function updateUserSystemRole(id: string, formData: FormData) {
     }
   }
 
+  const previous = await db.user.findFirst({ where: { id }, select: { systemRole: true } });
+
   await db.user.update({ where: { id }, data: { systemRole: newRole } });
+
+  await logAdminAction({
+    action: "user.role_change",
+    detail: `Role changed from ${previous?.systemRole ?? "unknown"} to ${newRole}`,
+    actorId: requester.id,
+    targetUserId: id,
+  });
+
   revalidatePath(`/admin/users/${id}`);
   revalidatePath("/admin/users");
 }
@@ -113,14 +130,32 @@ export async function deactivateUser(id: string) {
   }
 
   await db.user.update({ where: { id }, data: { deletedAt: new Date() } });
+
+  await logAdminAction({
+    action: "user.deactivate",
+    detail: target ? `Deactivated ${target.email}` : null,
+    actorId: requester.id,
+    targetUserId: id,
+  });
+
   revalidatePath(`/admin/users/${id}`);
   revalidatePath("/admin/users");
   revalidatePath("/users");
 }
 
 export async function reactivateUser(id: string) {
-  await requireAdmin();
+  const requester = await requireAdmin();
+  const target = await db.user.findFirst({ where: { id } });
+
   await db.user.update({ where: { id }, data: { deletedAt: null } });
+
+  await logAdminAction({
+    action: "user.reactivate",
+    detail: target ? `Reactivated ${target.email}` : null,
+    actorId: requester.id,
+    targetUserId: id,
+  });
+
   revalidatePath(`/admin/users/${id}`);
   revalidatePath("/admin/users");
   revalidatePath("/users");
@@ -129,6 +164,17 @@ export async function reactivateUser(id: string) {
 function emptyToNull(value: FormDataEntryValue | null): string | null {
   const str = String(value ?? "").trim();
   return str === "" ? null : str;
+}
+
+// B23: append-only trail for the actions above that change who can access
+// ForgeOS or what they can do in it. See AdminAuditLog in schema.prisma.
+function logAdminAction(entry: {
+  action: string;
+  detail: string | null;
+  actorId: string;
+  targetUserId: string;
+}) {
+  return db.adminAuditLog.create({ data: entry });
 }
 
 export async function getRequesterRole() {

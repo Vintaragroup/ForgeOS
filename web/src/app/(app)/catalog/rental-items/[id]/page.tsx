@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { deleteRentalItem, updateRentalItem } from "../actions";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
+import { ConfirmForm } from "@/components/confirm-form";
 
 export default async function RentalItemDetailPage(props: PageProps<"/catalog/rental-items/[id]">) {
   const { id } = await props.params;
@@ -13,7 +14,7 @@ export default async function RentalItemDetailPage(props: PageProps<"/catalog/re
 
   return (
     <div>
-      <PageHeader title={item.name} />
+      <PageHeader title={item.name} backHref="/catalog/rental-items" backLabel="Rental items" />
       <Card className="p-6">
         <form action={updateRentalItemWithId} className="flex flex-col gap-4">
           <Field label="Item name" name="name" defaultValue={item.name} required />
@@ -34,9 +35,13 @@ export default async function RentalItemDetailPage(props: PageProps<"/catalog/re
             <Button>Save changes</Button>
           </div>
         </form>
-        <form action={deleteRentalItemWithId} className="mt-4 border-t border-neutral-200 pt-4">
+        <ConfirmForm
+          action={deleteRentalItemWithId}
+          confirmMessage="Delete this rental item? This can't be undone."
+          className="mt-4 border-t border-neutral-200 pt-4"
+        >
           <Button variant="danger">Delete rental item</Button>
-        </form>
+        </ConfirmForm>
       </Card>
     </div>
   );

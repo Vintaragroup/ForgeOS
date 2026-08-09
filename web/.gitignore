@@ -37,6 +37,10 @@ yarn-error.log*
 # database dumps from scripts/backup.sh
 /backups
 
+# uploaded document bytes (src/lib/storage.ts) -- local-disk stand-in
+# until B7's real S3 credentials land
+/uploads
+
 # vercel
 .vercel
 

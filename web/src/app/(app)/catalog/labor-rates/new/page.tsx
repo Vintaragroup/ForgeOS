@@ -4,7 +4,7 @@ import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 export default function NewLaborRatePage() {
   return (
     <div>
-      <PageHeader title="New labor rate" />
+      <PageHeader title="New labor rate" backHref="/catalog/labor-rates" backLabel="Labor rates" />
       <Card className="p-6">
         <form action={createLaborRate} className="flex flex-col gap-4">
           <SelectField

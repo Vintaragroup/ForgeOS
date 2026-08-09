@@ -17,7 +17,14 @@ export default async function AdminUsersPage() {
     <div>
       <PageHeader
         title="Users"
-        action={<LinkButton href="/admin/users/new">New user</LinkButton>}
+        action={
+          <div className="flex items-center gap-2">
+            <LinkButton href="/admin/audit-log" variant="secondary">
+              Audit log
+            </LinkButton>
+            <LinkButton href="/admin/users/new">New user</LinkButton>
+          </div>
+        }
       />
       {users.length === 0 ? (
         <EmptyState message="No users yet." />

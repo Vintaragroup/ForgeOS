@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Dumps the database DATABASE_URL points at to backups/ using pg_dump's
-# custom format (compressed, restorable with restore.sh / pg_restore).
+# custom format (compressed, restorable with restore.sh / pg_restore),
+# plus a tarball of uploads/ (Phase 7 document bytes, src/lib/storage.ts)
+# since those live on local disk, not in Postgres, and pg_dump alone
+# would silently leave them uncovered.
 # Requires pg_dump on PATH -- comes with `brew install postgresql@16`,
 # already a Setup-section prerequisite in README.md.
 set -euo pipefail
@@ -25,3 +28,11 @@ out="backups/forgeos-${timestamp}.dump"
 pg_dump --format=custom --file="$out" "$DATABASE_URL"
 
 echo "Wrote $out ($(du -h "$out" | cut -f1))"
+
+if [ -d uploads ] && [ -n "$(ls -A uploads 2>/dev/null)" ]; then
+  uploads_out="backups/forgeos-uploads-${timestamp}.tar.gz"
+  tar -czf "$uploads_out" uploads
+  echo "Wrote $uploads_out ($(du -h "$uploads_out" | cut -f1))"
+else
+  echo "uploads/ is empty or missing -- skipping uploads backup."
+fi

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { deleteCompany, updateCompany } from "../actions";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
+import { ConfirmForm } from "@/components/confirm-form";
 
 export default async function CompanyDetailPage(props: PageProps<"/companies/[id]">) {
   const { id } = await props.params;
@@ -20,7 +21,7 @@ export default async function CompanyDetailPage(props: PageProps<"/companies/[id
 
   return (
     <div className="flex flex-col gap-8">
-      <PageHeader title={company.name} />
+      <PageHeader title={company.name} backHref="/companies" backLabel="Companies" />
 
       <Card className="p-6">
         <form action={updateCompanyWithId} className="flex flex-col gap-4">
@@ -35,9 +36,13 @@ export default async function CompanyDetailPage(props: PageProps<"/companies/[id
             <Button>Save changes</Button>
           </div>
         </form>
-        <form action={deleteCompanyWithId} className="mt-4 border-t border-neutral-200 pt-4">
+        <ConfirmForm
+          action={deleteCompanyWithId}
+          confirmMessage="Delete this company? This can't be undone."
+          className="mt-4 border-t border-neutral-200 pt-4"
+        >
           <Button variant="danger">Delete company</Button>
-        </form>
+        </ConfirmForm>
       </Card>
 
       <div>

@@ -8,6 +8,7 @@ import {
   updateUserSystemRole,
 } from "../actions";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
+import { ConfirmForm } from "@/components/confirm-form";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +36,7 @@ export default async function AdminUserDetailPage(props: PageProps<"/admin/users
 
   return (
     <div className="flex flex-col gap-8">
-      <PageHeader title={user.name} />
+      <PageHeader title={user.name} backHref="/admin/users" backLabel="Users" />
 
       <Card className="p-6">
         <form action={updateProfileWithId} className="flex flex-col gap-4">
@@ -101,9 +102,9 @@ export default async function AdminUserDetailPage(props: PageProps<"/admin/users
         ) : isSelf ? (
           <p className="text-sm text-neutral-500">You can&apos;t deactivate your own account.</p>
         ) : (
-          <form action={deactivateWithId}>
+          <ConfirmForm action={deactivateWithId} confirmMessage="Deactivate this user? They won't be able to log in.">
             <Button variant="danger">Deactivate</Button>
-          </form>
+          </ConfirmForm>
         )}
       </Card>
     </div>

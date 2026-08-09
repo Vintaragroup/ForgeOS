@@ -179,6 +179,49 @@ export async function addLineItem(
   });
 }
 
+// Phase 7.1: bulk insert for document-sourced imports (a real pricing
+// schedule runs ~185 rows -- see data/RFP/superbowl). One $transaction +
+// one recomputeVersionTotals call at the end, rather than looping
+// addLineItem's single-row create + implicit per-row totals recompute
+// callers do today (see addLineItemAction). Every row is unconditionally
+// isDraft: true -- this path never exposes a way to skip human review.
+export async function addLineItemsBulk(
+  estimateVersionId: string,
+  sectionId: string,
+  items: {
+    lineType: LineItemType;
+    description: string;
+    department?: string | null;
+    qty: DecimalInput;
+    unitCost: DecimalInput;
+    documentId: string;
+  }[],
+) {
+  await assertUnlocked(estimateVersionId);
+  if (items.length === 0) return [];
+
+  await db.$transaction(
+    items.map((item) =>
+      db.lineItem.create({
+        data: {
+          sectionId,
+          lineType: item.lineType,
+          description: item.description,
+          department: item.department ?? null,
+          qty: new Prisma.Decimal(item.qty),
+          unitCost: new Prisma.Decimal(item.unitCost),
+          totalCost: computeLineItemTotal(item.qty, item.unitCost),
+          isDraft: true,
+          documentId: item.documentId,
+        },
+      }),
+    ),
+  );
+
+  await recomputeVersionTotals(estimateVersionId);
+  return db.lineItem.findMany({ where: { sectionId, documentId: items[0].documentId } });
+}
+
 export async function updateLineItem(
   lineItemId: string,
   data: { description?: string; department?: string | null; qty?: DecimalInput; unitCost?: DecimalInput },

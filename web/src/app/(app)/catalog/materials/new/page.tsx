@@ -4,7 +4,7 @@ import { Button, Card, Field, PageHeader } from "@/components/ui";
 export default function NewMaterialPage() {
   return (
     <div>
-      <PageHeader title="New material" />
+      <PageHeader title="New material" backHref="/catalog/materials" backLabel="Materials" />
       <Card className="p-6">
         <form action={createMaterial} className="flex flex-col gap-4">
           <Field label="Material name" name="name" required />

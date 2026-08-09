@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { deleteVendor, updateVendor } from "../actions";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
+import { ConfirmForm } from "@/components/confirm-form";
 
 export default async function VendorDetailPage(props: PageProps<"/catalog/vendors/[id]">) {
   const { id } = await props.params;
@@ -13,7 +14,7 @@ export default async function VendorDetailPage(props: PageProps<"/catalog/vendor
 
   return (
     <div>
-      <PageHeader title={vendor.name} />
+      <PageHeader title={vendor.name} backHref="/catalog/vendors" backLabel="Vendors" />
       <Card className="p-6">
         <form action={updateWithId} className="flex flex-col gap-4">
           <Field label="Vendor name" name="name" defaultValue={vendor.name} required />
@@ -33,9 +34,13 @@ export default async function VendorDetailPage(props: PageProps<"/catalog/vendor
             <Button>Save changes</Button>
           </div>
         </form>
-        <form action={deleteWithId} className="mt-4 border-t border-neutral-200 pt-4">
+        <ConfirmForm
+          action={deleteWithId}
+          confirmMessage="Delete this vendor? This can't be undone."
+          className="mt-4 border-t border-neutral-200 pt-4"
+        >
           <Button variant="danger">Delete vendor</Button>
-        </form>
+        </ConfirmForm>
       </Card>
     </div>
   );

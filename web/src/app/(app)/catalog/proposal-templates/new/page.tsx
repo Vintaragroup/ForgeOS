@@ -4,7 +4,7 @@ import { Button, Card, Field, PageHeader } from "@/components/ui";
 export default function NewProposalTemplatePage() {
   return (
     <div>
-      <PageHeader title="New proposal template" />
+      <PageHeader title="New proposal template" backHref="/catalog/proposal-templates" backLabel="Proposal templates" />
       <Card className="p-6">
         <form action={createProposalTemplate} className="flex flex-col gap-4">
           <Field label="Template name" name="name" required />

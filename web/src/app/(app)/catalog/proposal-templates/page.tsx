@@ -1,21 +1,38 @@
 import { db } from "@/lib/db";
-import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
+import { Card, EmptyState, LinkButton, Pagination, PageHeader } from "@/components/ui";
 import Link from "next/link";
 
 // See opportunities/page.tsx's comment.
 export const dynamic = "force-dynamic";
 
-export default async function ProposalTemplatesPage() {
-  const templates = await db.proposalTemplate.findMany({
-    where: { deletedAt: null },
-    orderBy: { name: "asc" },
-    include: { _count: { select: { proposals: true } } },
-  });
+const PAGE_SIZE = 25;
+
+export default async function ProposalTemplatesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const { page: pageParam } = await searchParams;
+  const page = Math.max(1, Number(pageParam) || 1);
+  const where = { deletedAt: null };
+  const [templates, total] = await Promise.all([
+    db.proposalTemplate.findMany({
+      where,
+      orderBy: { name: "asc" },
+      include: { _count: { select: { proposals: true } } },
+      skip: (page - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
+    }),
+    db.proposalTemplate.count({ where }),
+  ]);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div>
       <PageHeader
         title="Proposal templates"
+        backHref="/catalog"
+        backLabel="Catalog"
         action={<LinkButton href="/catalog/proposal-templates/new">New template</LinkButton>}
       />
       {templates.length === 0 ? (
@@ -39,6 +56,7 @@ export default async function ProposalTemplatesPage() {
           </ul>
         </Card>
       )}
+      <Pagination page={page} totalPages={totalPages} basePath="/catalog/proposal-templates" />
     </div>
   );
 }

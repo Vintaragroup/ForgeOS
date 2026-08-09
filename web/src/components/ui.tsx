@@ -1,17 +1,61 @@
 import { type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 
+// Every page gets a breadcrumb back to Dashboard by default -- before this,
+// the only way back from any page was clicking the logo. backHref/backLabel
+// add a second crumb for the page's immediate parent list (e.g. "Dashboard
+// / Materials"), so a detail page offers both "up one level" and "home" in
+// one place. Pass noBack only on the dashboard page itself.
 export function PageHeader({
   title,
   action,
+  backHref,
+  backLabel,
+  noBack = false,
 }: {
   title: ReactNode;
   action?: ReactNode;
+  backHref?: string;
+  backLabel?: string;
+  noBack?: boolean;
 }) {
+  const crumbs = noBack
+    ? []
+    : [
+        { href: "/", label: "Dashboard" },
+        ...(backHref && backHref !== "/" ? [{ href: backHref, label: backLabel ?? "Back" }] : []),
+      ];
+
   return (
-    <div className="mb-6 flex items-center justify-between">
-      <h1 className="font-display flex items-center gap-3 text-3xl tracking-wide">{title}</h1>
-      {action}
+    <div className="mb-6">
+      {crumbs.length > 0 && (
+        <nav className="mb-3 flex items-center gap-2">
+          {crumbs.map((crumb, i) => (
+            <Link
+              key={crumb.href}
+              href={crumb.href}
+              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 shadow-sm transition-colors hover:bg-neutral-50 hover:text-neutral-900"
+            >
+              {i === 0 && (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M3 10.5 12 3l9 7.5M5.5 9.5V20a1 1 0 0 0 1 1H9.5v-6h5v6H17.5a1 1 0 0 0 1-1V9.5"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+              {crumb.label}
+            </Link>
+          ))}
+        </nav>
+      )}
+      <div className="flex items-center justify-between">
+        <h1 className="font-display flex items-center gap-3 text-3xl tracking-wide">{title}</h1>
+        {action}
+      </div>
     </div>
   );
 }
@@ -158,6 +202,43 @@ export function EmptyState({ message }: { message: string }) {
   );
 }
 
+// B21: catalog list pages loaded every row unbounded -- fine at seed-data
+// scale, not once a category has hundreds of rows. Renders nothing when
+// everything fits on one page, so it's invisible today and only kicks in
+// once a list actually grows past PAGE_SIZE.
+export function Pagination({
+  page,
+  totalPages,
+  basePath,
+}: {
+  page: number;
+  totalPages: number;
+  basePath: string;
+}) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="mt-4 flex items-center justify-between text-sm">
+      {page > 1 ? (
+        <Link href={`${basePath}?page=${page - 1}`} className="font-medium text-neutral-600 hover:text-neutral-900">
+          ← Previous
+        </Link>
+      ) : (
+        <span />
+      )}
+      <span className="text-neutral-400">
+        Page {page} of {totalPages}
+      </span>
+      {page < totalPages ? (
+        <Link href={`${basePath}?page=${page + 1}`} className="font-medium text-neutral-600 hover:text-neutral-900">
+          Next →
+        </Link>
+      ) : (
+        <span />
+      )}
+    </div>
+  );
+}
+
 // A blocker notice with a direct fix action -- for stopping points in a workflow
 // (e.g. "approving needs a user, none exist yet") where a plain sentence leaves
 // the user to figure out where to go on their own.
@@ -180,11 +261,12 @@ export function Notice({
   );
 }
 
-// A single-number stat tile -- shared by the admin dashboard and the
-// landing dashboard so both read consistently as "the same kind of page."
-export function Stat({ value, label }: { value: string; label: string }) {
+// A single-number stat tile, used throughout the dashboard so every metric
+// reads consistently. className lets callers add hover/link affordances
+// (see the dashboard's Pipeline tiles, which link into a filtered list).
+export function Stat({ value, label, className = "" }: { value: string; label: string; className?: string }) {
   return (
-    <Card className="p-5">
+    <Card className={`p-5 ${className}`}>
       <div className="text-2xl font-semibold tracking-tight">{value}</div>
       <div className="mt-1 text-sm text-neutral-500">{label}</div>
     </Card>

@@ -4,7 +4,7 @@ import { Button, Card, Field, PageHeader } from "@/components/ui";
 export default function NewRentalItemPage() {
   return (
     <div>
-      <PageHeader title="New rental item" />
+      <PageHeader title="New rental item" backHref="/catalog/rental-items" backLabel="Rental items" />
       <Card className="p-6">
         <form action={createRentalItem} className="flex flex-col gap-4">
           <Field label="Item name" name="name" required />

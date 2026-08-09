@@ -44,6 +44,12 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/src/generated/prisma ./src/generated/prisma
 COPY --from=builder /app/prisma ./prisma
 
+# Uploaded document bytes (src/lib/storage.ts) land here -- created and
+# owned by nextjs up front so Docker's first-mount volume init (which
+# copies this directory's existing contents/permissions into the named
+# volume) doesn't leave it root-owned and unwritable by the app user.
+RUN mkdir -p /app/uploads && chown nextjs:nodejs /app/uploads
+
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000

@@ -4,7 +4,7 @@ import { Button, Card, Field, PageHeader } from "@/components/ui";
 export default function NewVendorPage() {
   return (
     <div>
-      <PageHeader title="New vendor" />
+      <PageHeader title="New vendor" backHref="/catalog/vendors" backLabel="Vendors" />
       <Card className="p-6">
         <form action={createVendor} className="flex flex-col gap-4">
           <Field label="Vendor name" name="name" required />

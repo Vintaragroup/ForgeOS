@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { deleteContact, updateContact } from "../actions";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
+import { ConfirmForm } from "@/components/confirm-form";
 
 export default async function ContactDetailPage(props: PageProps<"/contacts/[id]">) {
   const { id } = await props.params;
@@ -16,7 +17,7 @@ export default async function ContactDetailPage(props: PageProps<"/contacts/[id]
 
   return (
     <div>
-      <PageHeader title={contact.name} />
+      <PageHeader title={contact.name} backHref="/contacts" backLabel="Contacts" />
       <Card className="p-6">
         <form action={updateContactWithId} className="flex flex-col gap-4">
           <Field label="Name" name="name" defaultValue={contact.name} required />
@@ -45,9 +46,13 @@ export default async function ContactDetailPage(props: PageProps<"/contacts/[id]
             <Button>Save changes</Button>
           </div>
         </form>
-        <form action={deleteContactWithId} className="mt-4 border-t border-neutral-200 pt-4">
+        <ConfirmForm
+          action={deleteContactWithId}
+          confirmMessage="Delete this contact? This can't be undone."
+          className="mt-4 border-t border-neutral-200 pt-4"
+        >
           <Button variant="danger">Delete contact</Button>
-        </form>
+        </ConfirmForm>
       </Card>
     </div>
   );

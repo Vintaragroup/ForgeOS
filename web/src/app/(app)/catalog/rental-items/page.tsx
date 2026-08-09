@@ -1,20 +1,37 @@
 import { db } from "@/lib/db";
-import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
+import { Card, EmptyState, LinkButton, Pagination, PageHeader } from "@/components/ui";
 import Link from "next/link";
 
 // See opportunities/page.tsx's comment.
 export const dynamic = "force-dynamic";
 
-export default async function RentalItemsPage() {
-  const items = await db.rentalItem.findMany({
-    where: { deletedAt: null },
-    orderBy: { name: "asc" },
-  });
+const PAGE_SIZE = 25;
+
+export default async function RentalItemsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const { page: pageParam } = await searchParams;
+  const page = Math.max(1, Number(pageParam) || 1);
+  const where = { deletedAt: null };
+  const [items, total] = await Promise.all([
+    db.rentalItem.findMany({
+      where,
+      orderBy: { name: "asc" },
+      skip: (page - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
+    }),
+    db.rentalItem.count({ where }),
+  ]);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div>
       <PageHeader
         title="Rental items"
+        backHref="/catalog"
+        backLabel="Catalog"
         action={<LinkButton href="/catalog/rental-items/new">New rental item</LinkButton>}
       />
       {items.length === 0 ? (
@@ -38,6 +55,7 @@ export default async function RentalItemsPage() {
           </ul>
         </Card>
       )}
+      <Pagination page={page} totalPages={totalPages} basePath="/catalog/rental-items" />
     </div>
   );
 }

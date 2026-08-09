@@ -81,6 +81,9 @@ model User {
   uploadedAttachments      Attachment[]
   assignedTasks            Task[]
   recordedCostActuals      CostActual[]
+  adminAuditLogsActed      AdminAuditLog[]   @relation("AdminAuditLogActor")
+  adminAuditLogsTargeted   AdminAuditLog[]   @relation("AdminAuditLogTarget")
+  uploadedDocuments        Document[]
 
   @@map("users")
 }
@@ -153,8 +156,71 @@ model Opportunity {
   stageEvents StageChangeEvent[]
   estimates   Estimate[]
   projects    Project[]
+  documents   Document[]
+  chatThread  ChatThread?
 
   @@map("opportunities")
+}
+
+// ---------------------------------------------------------------------
+// Phase 7: document ingestion & AI project understanding
+// (data/RFP/superbowl's two real RFP packages are this feature's roadmap).
+//
+// Opportunity-scoped, not Estimate-scoped like Attachment -- RFP/client
+// documents exist BEFORE an Estimate does (that's the whole premise of
+// "start an estimate from the documents"), so Document can't be
+// represented as an Attachment (Attachment.estimateId is a required FK).
+// Attachment's own comment already named this exact gap: "no automated
+// pull-sheet table extraction this phase." This model is that phase.
+// ---------------------------------------------------------------------
+
+enum DocumentType {
+  RFP
+  SCOPE_OF_WORK
+  PRICING_SCHEDULE
+  DRAWING
+  CONTRACT
+  SCHEDULE
+  OTHER
+}
+
+// UNSUPPORTED is a real, expected outcome (e.g. a CAD-exported drawing
+// PDF with no extractable text), not an error -- see document-service.ts.
+enum ExtractionStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
+  UNSUPPORTED
+}
+
+model Document {
+  id            String       @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity  @relation(fields: [opportunityId], references: [id])
+
+  filename     String
+  mimeType     String
+  sizeBytes    Int
+  storageKey   String
+  documentType DocumentType
+
+  extractionStatus ExtractionStatus @default(PENDING)
+  extractedText    String?          @db.Text
+  extractedSummary Json?
+
+  uploadedById String?
+  uploadedBy   User?   @relation(fields: [uploadedById], references: [id])
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  // Sibling to LineItem.attachmentId's existing isDraft/confirm flow --
+  // a document-sourced draft line item reviews through the exact same
+  // mechanism, not a new one.
+  lineItems LineItem[]
+
+  @@map("documents")
 }
 
 model StageChangeEvent {
@@ -368,6 +434,12 @@ model LineItem {
   isDraft      Boolean     @default(false)
   attachmentId String?
   attachment   Attachment? @relation(fields: [attachmentId], references: [id])
+
+  // Phase 7: same isDraft gate as attachmentId above, but for a line item
+  // sourced from a real ingested Document (pricing-schedule import or AI
+  // extraction) rather than a manually-drafted pull sheet reference.
+  documentId String?
+  document   Document? @relation(fields: [documentId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -728,4 +800,57 @@ model CostActual {
   recordedAt   DateTime @default(now())
 
   @@map("cost_actuals")
+}
+
+// B23: append-only record of the admin/user-management actions in
+// admin/users/actions.ts that change who can access ForgeOS or what they
+// can do in it (create, role change, deactivate, reactivate) -- the kind
+// of thing that needs a "who did this and when" trail even though nobody
+// is disputing an estimate. Same append-only reasoning as CostActual: a
+// correction is a new row, not an edit to history.
+model AdminAuditLog {
+  id String @id @default(cuid())
+
+  action String // e.g. "user.create", "user.role_change", "user.deactivate", "user.reactivate"
+  detail String? // human-readable summary, e.g. "role changed from EMPLOYEE to ADMIN"
+
+  actorId String
+  actor   User   @relation("AdminAuditLogActor", fields: [actorId], references: [id])
+
+  targetUserId String?
+  targetUser   User?   @relation("AdminAuditLogTarget", fields: [targetUserId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("admin_audit_logs")
+}
+
+// Phase 7.3: one thread per Opportunity (not Project) -- documents and
+// the AI's context are Opportunity-scoped throughout Phase 7, since RFP
+// ingestion happens pre-estimate, before a Project can exist. "Chat with
+// a project" in casual usage means this thread, not literal Project
+// model data (WorkOrder/Task/Shipment aren't in its context).
+model ChatThread {
+  id            String      @id @default(cuid())
+  opportunityId String      @unique
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  messages ChatMessage[]
+
+  @@map("chat_threads")
+}
+
+model ChatMessage {
+  id       String     @id @default(cuid())
+  threadId String
+  thread   ChatThread @relation(fields: [threadId], references: [id])
+
+  role    String // "user" | "assistant"
+  content String @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@map("chat_messages")
 }

@@ -10,6 +10,11 @@ export default defineConfig({
     // races their afterEach cleanups against each other's fixtures --
     // force sequential execution instead.
     fileParallelism: false,
+    // Vitest's default exclude list doesn't cover .next -- output:
+    // "standalone" (next.config.ts) copies the whole src/ tree into
+    // .next/standalone, so without this every *.test.ts runs twice, once
+    // from a build artifact whose relative fixture paths don't resolve.
+    exclude: ["**/node_modules/**", "**/.next/**"],
   },
   resolve: {
     alias: {

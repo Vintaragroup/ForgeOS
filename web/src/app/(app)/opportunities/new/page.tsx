@@ -16,7 +16,7 @@ export default async function NewOpportunityPage() {
   if (companies.length === 0) {
     return (
       <div>
-        <PageHeader title="New opportunity" />
+        <PageHeader title="New opportunity" backHref="/opportunities" backLabel="Opportunities" />
         <EmptyState message="You need at least one company before creating an opportunity." />
         <div className="mt-4">
           <LinkButton href="/companies/new">Add a company</LinkButton>
@@ -27,7 +27,7 @@ export default async function NewOpportunityPage() {
 
   return (
     <div>
-      <PageHeader title="New opportunity" />
+      <PageHeader title="New opportunity" backHref="/opportunities" backLabel="Opportunities" />
       <Card className="p-6">
         <form action={createOpportunity} className="flex flex-col gap-4">
           <SelectField

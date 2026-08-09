@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { deleteMaterial, updateMaterial } from "../actions";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
+import { ConfirmForm } from "@/components/confirm-form";
 
 export default async function MaterialDetailPage(props: PageProps<"/catalog/materials/[id]">) {
   const { id } = await props.params;
@@ -13,7 +14,7 @@ export default async function MaterialDetailPage(props: PageProps<"/catalog/mate
 
   return (
     <div>
-      <PageHeader title={material.name} />
+      <PageHeader title={material.name} backHref="/catalog/materials" backLabel="Materials" />
       <Card className="p-6">
         <form action={updateMaterialWithId} className="flex flex-col gap-4">
           <Field label="Material name" name="name" defaultValue={material.name} required />
@@ -41,9 +42,13 @@ export default async function MaterialDetailPage(props: PageProps<"/catalog/mate
             <Button>Save changes</Button>
           </div>
         </form>
-        <form action={deleteMaterialWithId} className="mt-4 border-t border-neutral-200 pt-4">
+        <ConfirmForm
+          action={deleteMaterialWithId}
+          confirmMessage="Delete this material? This can't be undone."
+          className="mt-4 border-t border-neutral-200 pt-4"
+        >
           <Button variant="danger">Delete material</Button>
-        </form>
+        </ConfirmForm>
       </Card>
     </div>
   );
