@@ -16,7 +16,8 @@ type DeadlineKind =
   | "Artwork deadline"
   | "Balance due"
   | "Install"
-  | "RFP deadline";
+  | "RFP deadline"
+  | "RFP milestone";
 
 export interface UpcomingDeadline {
   key: string;
@@ -102,6 +103,17 @@ export async function getDashboardData() {
     if (!doc.extractedSummary) continue;
     const summary = doc.extractedSummary as unknown as DocumentSummary;
     for (const kd of summary.keyDates) {
+      // INFORMATIONAL dates are facts about something the CLIENT already
+      // did ("RFP Sent", "Answers to Bidders' Questions Sent") -- not an
+      // action item for us, so they don't belong in a deadlines list at
+      // all. Older analyses predate this classification (dateType is
+      // undefined on their stored JSON) -- default those to MILESTONE
+      // rather than DEADLINE so a stale record can't falsely alarm as
+      // "Overdue"; re-running Analyze on the document picks up the real
+      // classification.
+      const dateType = kd.dateType ?? "MILESTONE";
+      if (dateType === "INFORMATIONAL") continue;
+
       const date = parseFreeTextDate(kd.date);
       if (!date || date > windowEnd) continue;
       const href = citationHref(doc.opportunityId, doc, kd) ?? `/opportunities/${doc.opportunityId}`;
@@ -109,9 +121,9 @@ export async function getDashboardData() {
         key: `doc-${doc.id}-${kd.label}`,
         href,
         label: `${kd.label} — ${doc.opportunity.showName}`,
-        kind: "RFP deadline",
+        kind: dateType === "DEADLINE" ? "RFP deadline" : "RFP milestone",
         date,
-        overdue: date < now,
+        overdue: dateType === "DEADLINE" && date < now,
       });
     }
   }

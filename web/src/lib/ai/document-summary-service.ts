@@ -17,9 +17,20 @@ import { DEFAULT_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 // locateQuotePage below), so it's trustworthy in a way an LLM-reported
 // page number wouldn't be. null for DOCX (no page concept) or when the
 // quote couldn't be located.
+//
+// dateType IS asked of the model -- distinguishing "we must act by this
+// date" from "this is just when the event happens" from "this already
+// happened, it's a fact" isn't something a page-search can compute, only
+// reading comprehension can. Without it, a Dashboard/deadlines view has no
+// way to tell "Bidder Questions Due" (a real deadline) apart from "RFP
+// Sent" (a fact about something the client already did) -- both are just
+// dates otherwise.
+export type KeyDateType = "DEADLINE" | "MILESTONE" | "INFORMATIONAL";
+
 export interface KeyDateFact {
   label: string;
   date: string;
+  dateType: KeyDateType;
   sourceQuote: string;
   pageNumber: number | null;
 }
@@ -44,7 +55,7 @@ type DocumentSummaryFromAI = {
   eventOrProjectName: string | null;
   venue: string | null;
   submissionDeadline: string | null;
-  keyDates: { label: string; date: string; sourceQuote: string }[];
+  keyDates: { label: string; date: string; dateType: KeyDateType; sourceQuote: string }[];
   scopeSummary: { text: string; sourceQuote: string }[];
   riskFlags: { text: string; sourceQuote: string }[];
 };
@@ -70,9 +81,18 @@ const SUMMARY_SCHEMA = {
           properties: {
             label: { type: "string" },
             date: { type: "string" },
+            dateType: {
+              type: "string",
+              enum: ["DEADLINE", "MILESTONE", "INFORMATIONAL"],
+              description:
+                "From the READER's point of view (the contractor/bidder, not the client who wrote this document). " +
+                "DEADLINE: the reader must submit, respond, or deliver something by this date -- a hard cutoff for outbound action (e.g. 'Bidder Questions Due', 'Tender Submission Due', 'Dismantle Complete'). " +
+                "MILESTONE: a fixed date or window in the event itself, worth tracking for planning, but the reader isn't required to act or submit anything by it (e.g. 'Potential Site Visit', 'Opening Night', 'Game Day', an install date). " +
+                "INFORMATIONAL: states something the CLIENT already did or will do -- not an action item for the reader at all (e.g. 'RFP Sent', 'Answers to Bidders' Questions Sent', an award notification date).",
+            },
             sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
           },
-          required: ["label", "date", "sourceQuote"],
+          required: ["label", "date", "dateType", "sourceQuote"],
         },
       },
       scopeSummary: {
@@ -104,7 +124,9 @@ const SUMMARY_SCHEMA = {
   },
 } as const;
 
-const SYSTEM_PROMPT = `You analyze RFP and client-supplied project documents for an event/exhibit contractor. Extract only facts stated in the document -- never infer or guess a date, name, or figure that isn't written there. If something isn't present, use null or an empty array. Keep scopeSummary and riskFlags as short, specific bullet points, not paragraphs. For every key date, scope item, and risk flag, include sourceQuote: a short verbatim quote copied exactly from the document showing where that fact came from -- this is used to jump a reader straight to it, so it must be an exact substring of the source text, not a paraphrase.`;
+const SYSTEM_PROMPT = `You analyze RFP and client-supplied project documents for an event/exhibit contractor. Extract only facts stated in the document -- never infer or guess a date, name, or figure that isn't written there. If something isn't present, use null or an empty array. Keep scopeSummary and riskFlags as short, specific bullet points, not paragraphs. For every key date, scope item, and risk flag, include sourceQuote: a short verbatim quote copied exactly from the document showing where that fact came from -- this is used to jump a reader straight to it, so it must be an exact substring of the source text, not a paraphrase.
+
+For every key date, also classify dateType from the READER's point of view, not the document author's: a date is only a DEADLINE if the reader (the bidder/contractor) must submit, respond, or deliver something by it. "RFP Sent" or "Answers to Bidders' Questions Sent" are INFORMATIONAL -- they're facts about what the client already did, not something the reader owes anyone. "Potential Site Visit" or "Opening Night" are MILESTONE -- fixed points in the event worth planning around, but nothing is due from the reader that day. "Bidder Questions Due" or "Tender Submission Due" are DEADLINE -- the reader must act by then. Get this classification right; a Dashboard view uses it to decide what actually belongs in a deadlines list versus a timeline.`;
 
 // Truncated, not chunked -- this app has no RAG/embedding infra (see
 // chat-context-service.ts's same budget approach), and a single document's

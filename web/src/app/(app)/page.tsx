@@ -108,6 +108,8 @@ export default async function DashboardPage() {
                     <div className="text-sm">
                       {deadline.overdue ? (
                         <StatusChip tone="critical">Overdue — {fmtDate(deadline.date)}</StatusChip>
+                      ) : deadline.kind === "RFP milestone" && deadline.date < new Date() ? (
+                        <StatusChip tone="neutral">Passed — {fmtDate(deadline.date)}</StatusChip>
                       ) : (
                         <span className="text-neutral-500">{fmtDate(deadline.date)}</span>
                       )}

@@ -54,6 +54,21 @@ function fmtBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// dateType distinguishes "we must act by this date" (DEADLINE) from "this
+// is just when the event happens" (MILESTONE) from "this already happened,
+// it's a fact about the client's own process" (INFORMATIONAL) -- without
+// it, a fact like "RFP Sent" reads exactly like a deadline. Older analyses
+// predate this classification and have no dateType on their stored JSON;
+// default those to MILESTONE (neutral) rather than DEADLINE so a stale
+// record can't misread as something urgent -- re-running Analyze picks up
+// the real classification.
+function DateTypeChip({ dateType }: { dateType: "DEADLINE" | "MILESTONE" | "INFORMATIONAL" | undefined }) {
+  const resolved = dateType ?? "MILESTONE";
+  if (resolved === "DEADLINE") return <StatusChip tone="warning">Deadline</StatusChip>;
+  if (resolved === "INFORMATIONAL") return <StatusChip tone="neutral">FYI</StatusChip>;
+  return <StatusChip tone="info">Milestone</StatusChip>;
+}
+
 function CitationLink({
   href,
   source,
@@ -128,7 +143,8 @@ function ProjectBriefCard({
           <ul className="flex flex-col gap-1 text-sm">
             {keyDates.map((kd, i) => (
               <li key={i} className="flex items-center justify-between gap-3">
-                <span>
+                <span className="flex items-center gap-2">
+                  <DateTypeChip dateType={kd.dateType} />
                   {kd.label} <span className="text-neutral-500">— {kd.date}</span>
                 </span>
                 <CitationLink
@@ -420,6 +436,19 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                       <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
                         <button type="submit" className="text-xs text-neutral-500 hover:underline">
                           Analyze
+                        </button>
+                      </form>
+                    )}
+                  {doc.documentType !== "PRICING_SCHEDULE" &&
+                    doc.documentType !== "DRAWING" &&
+                    doc.extractionStatus === "COMPLETE" && (
+                      <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
+                        <button
+                          type="submit"
+                          className="text-xs text-neutral-400 hover:underline"
+                          title="Re-run analysis -- picks up any improvements since this document was last analyzed"
+                        >
+                          Re-analyze
                         </button>
                       </form>
                     )}
