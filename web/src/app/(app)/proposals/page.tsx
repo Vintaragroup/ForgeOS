@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { Card, EmptyState, PageHeader, StatusChip } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -11,8 +14,11 @@ function ProposalStatusChip({ sentAt, signedAt }: { sentAt: Date | null; signedA
 }
 
 export default async function ProposalsPage() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const proposals = await db.proposal.findMany({
-    where: { deletedAt: null },
+    where: { deletedAt: null, estimateVersion: { estimate: { opportunity: opportunityAccessWhere(user) } } },
     orderBy: { createdAt: "desc" },
     include: {
       template: true,

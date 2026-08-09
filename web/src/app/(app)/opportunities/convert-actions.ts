@@ -2,6 +2,7 @@
 
 import { convertOpportunityToEstimate, getOrCreateEstimateForOpportunity } from "@/lib/opportunity-service";
 import { convertOpportunityToProject } from "@/lib/project-service";
+import { requireOpportunityAccess } from "@/lib/opportunity-access";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -24,6 +25,7 @@ import { redirect } from "next/navigation";
  * testable without fighting Server Action-only APIs like redirect().
  */
 export async function convertToEstimate(opportunityId: string) {
+  await requireOpportunityAccess(opportunityId);
   await convertOpportunityToEstimate(opportunityId);
 
   revalidatePath("/opportunities");
@@ -35,6 +37,7 @@ export async function convertToEstimate(opportunityId: string) {
 // the import preview -- see getOrCreateEstimateForOpportunity's own
 // comment for why this doesn't just always create a fresh Estimate.
 export async function buildEstimateFromDocumentsAction(opportunityId: string, documentId: string) {
+  await requireOpportunityAccess(opportunityId);
   const { estimateId } = await getOrCreateEstimateForOpportunity(opportunityId);
 
   revalidatePath("/opportunities");
@@ -46,6 +49,7 @@ export async function buildEstimateFromDocumentsAction(opportunityId: string, do
 // Opportunity. No stage change here -- WON is already the opportunity's
 // terminal pipeline stage.
 export async function convertToProject(opportunityId: string) {
+  await requireOpportunityAccess(opportunityId);
   const project = await convertOpportunityToProject(opportunityId);
 
   revalidatePath("/opportunities");

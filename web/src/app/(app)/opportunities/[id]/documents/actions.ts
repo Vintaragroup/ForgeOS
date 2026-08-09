@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
+import { requireOpportunityAccess } from "@/lib/opportunity-access";
 import { deleteDocument, uploadDocument } from "@/lib/document-service";
 import { summarizeDocument } from "@/lib/ai/document-summary-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
@@ -13,6 +14,7 @@ import type { DocumentType } from "@/generated/prisma/enums";
 // file to disk concurrently and a mid-batch failure leaves the earlier
 // files already saved rather than all-or-nothing.
 export async function uploadDocumentAction(opportunityId: string, formData: FormData) {
+  await requireOpportunityAccess(opportunityId);
   const user = await getCurrentUser();
   const files = formData.getAll("file").filter((f): f is File => f instanceof File && f.size > 0);
   const documentType = String(formData.get("documentType") ?? "OTHER") as DocumentType;
@@ -29,11 +31,13 @@ export async function uploadDocumentAction(opportunityId: string, formData: Form
 }
 
 export async function deleteDocumentAction(opportunityId: string, documentId: string) {
+  await requireOpportunityAccess(opportunityId);
   await deleteDocument(documentId);
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 
 export async function analyzeDocumentAction(opportunityId: string, documentId: string) {
+  await requireOpportunityAccess(opportunityId);
   try {
     await summarizeDocument(documentId);
   } catch (err) {

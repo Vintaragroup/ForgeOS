@@ -1,6 +1,8 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { canAccessOpportunity } from "@/lib/opportunity-access";
 import type { Prisma } from "@/generated/prisma/client";
 import {
   addShipmentAction,
@@ -50,6 +52,9 @@ function fmtDate(d: Date | null): string {
 
 export default async function ProjectDetailPage(props: PageProps<"/projects/[id]">) {
   const { id } = await props.params;
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const project = await db.project.findFirst({
     where: { id, deletedAt: null },
     include: {
@@ -69,6 +74,7 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
     },
   });
   if (!project) notFound();
+  if (!(await canAccessOpportunity(user, project.opportunityId))) notFound();
 
   const workOrder = project.workOrders[0];
   const [users, vendors] = await Promise.all([

@@ -1,6 +1,8 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { canAccessOpportunity } from "@/lib/opportunity-access";
 import type { Prisma } from "@/generated/prisma/client";
 import {
   addAttachmentAction,
@@ -9,6 +11,7 @@ import {
   addOptionSectionAction,
   addSectionAction,
   approveVersionAction,
+  archiveEstimateAction,
   confirmDraftLineItemAction,
   createFirstVersion,
   createNewVersionAction,
@@ -34,6 +37,7 @@ import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref } from "@/lib/citation";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { createChangeOrderAction } from "../../change-orders/actions";
+import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
 
 const SECTION_TYPE_OPTIONS = [
@@ -58,11 +62,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
+
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const estimate = await db.estimate.findFirst({
     where: { id, deletedAt: null },
     include: { opportunity: { include: { company: true } } },
   });
   if (!estimate) notFound();
+  if (!(await canAccessOpportunity(user, estimate.opportunityId))) notFound();
 
   const versions = await db.estimateVersion.findMany({
     where: { estimateId: estimate.id },
@@ -122,6 +131,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const createFirstVersionWithId = createFirstVersion.bind(null, estimate.id);
   const previewImportWithId = previewImportAction.bind(null, estimate.id);
   const proposeScopeItemsWithId = proposeScopeItemsAction.bind(null, estimate.id);
+  const archiveEstimateWithIds = archiveEstimateAction.bind(null, estimate.id, estimate.opportunityId);
 
   const canImport = !!currentVersion && !currentVersion.isLocked;
   const importPreview =
@@ -174,6 +184,13 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             <Button>Save details</Button>
           </div>
         </form>
+        <ConfirmForm
+          action={archiveEstimateWithIds}
+          confirmMessage="Archive this estimate? This can't be undone."
+          className="mt-4 border-t border-neutral-200 pt-4"
+        >
+          <Button variant="danger">Archive estimate</Button>
+        </ConfirmForm>
       </Card>
 
       <Card className="p-6">

@@ -1,5 +1,7 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { getDocument, getDocumentBytes } from "@/lib/document-service";
 import { renderDocx, renderSpreadsheet, highlightQuote, findSpreadsheetMatch } from "@/lib/document-view-service";
 import { DOCX_MIME, PDF_MIME, XLSX_MIME } from "@/lib/ai/text-extraction";
@@ -20,6 +22,9 @@ export default async function DocumentViewPage(
   const pageParam = Array.isArray(page) ? page[0] : page;
   const quoteParam = Array.isArray(q) ? q[0] : q;
 
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   let document;
   try {
     document = await getDocument(documentId);
@@ -27,6 +32,7 @@ export default async function DocumentViewPage(
     notFound();
   }
   if (document.opportunityId !== id) notFound();
+  if (!(await canAccessOpportunity(user, id))) notFound();
 
   const [opportunity, chatMessages, allDocuments] = await Promise.all([
     db.opportunity.findFirst({ where: { id }, select: { showName: true } }),

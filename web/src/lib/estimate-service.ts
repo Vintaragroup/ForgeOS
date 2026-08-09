@@ -259,6 +259,10 @@ export async function updateLineItem(
   });
 }
 
+export async function archiveEstimate(id: string) {
+  return db.estimate.update({ where: { id }, data: { deletedAt: new Date() } });
+}
+
 export async function deleteLineItem(lineItemId: string) {
   const existing = await db.lineItem.findUniqueOrThrow({
     where: { id: lineItemId },

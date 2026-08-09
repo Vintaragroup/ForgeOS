@@ -1,11 +1,16 @@
 import { notFound } from "next/navigation";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { extractBranding } from "@/lib/proposal-branding";
 import { ProposalPdfDocument } from "@/lib/proposal-pdf";
 
 export async function GET(_request: Request, { params }: RouteContext<"/proposals/[id]/pdf">) {
   const { id } = await params;
+  const user = await getCurrentUser();
+  if (!user) notFound();
+
   const proposal = await db.proposal.findFirst({
     where: { id, deletedAt: null },
     include: {
@@ -19,6 +24,7 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
     },
   });
   if (!proposal) notFound();
+  if (!(await canAccessOpportunity(user, proposal.estimateVersion.estimate.opportunityId))) notFound();
 
   const version = proposal.estimateVersion;
   const opportunity = version.estimate.opportunity;

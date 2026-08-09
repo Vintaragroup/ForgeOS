@@ -50,6 +50,30 @@ export default async function NewOpportunityPage() {
               ...users.map((u) => ({ value: u.id, label: u.name })),
             ]}
           />
+          {users.length > 0 && (
+            <div>
+              <span className="mb-1.5 block text-sm font-medium text-neutral-700">
+                Share with teammates
+              </span>
+              <p className="mb-2 text-xs text-neutral-500">
+                Checked teammates can see and work on this opportunity, in addition to its owner.
+              </p>
+              <ul className="flex flex-col gap-2 text-sm">
+                {users.map((u) => (
+                  <li key={u.id} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`collaborator-${u.id}`}
+                      name="collaboratorIds"
+                      value={u.id}
+                      className="h-4 w-4 rounded border-neutral-300"
+                    />
+                    <label htmlFor={`collaborator-${u.id}`}>{u.name}</label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div>
             <Button>Create opportunity</Button>
           </div>

@@ -13,8 +13,14 @@ import {
 } from "@/lib/project-service";
 import type { ProjectStatus, ShipmentStatus, TaskStatus, WorkOrderStatus } from "@/generated/prisma/enums";
 import { revalidatePath } from "next/cache";
+import { requireProjectAccess } from "@/lib/opportunity-access";
+
+// Every action below takes projectId as its first parameter --
+// requireProjectAccess is called first in every one, same self-checking
+// convention as estimates/actions.ts (see that file's own comment).
 
 export async function updateProjectDetailsAction(projectId: string, formData: FormData) {
+  await requireProjectAccess(projectId);
   const jobNumber = emptyToNull(formData.get("jobNumber"));
   const status = String(formData.get("status")) as ProjectStatus;
   const showStartDate = emptyToDate(formData.get("showStartDate"));
@@ -25,11 +31,13 @@ export async function updateProjectDetailsAction(projectId: string, formData: Fo
 }
 
 export async function startWorkOrderAction(projectId: string) {
+  await requireProjectAccess(projectId);
   await startWorkOrder(projectId);
   revalidatePath(`/projects/${projectId}`);
 }
 
 export async function updateWorkOrderAction(projectId: string, workOrderId: string, formData: FormData) {
+  await requireProjectAccess(projectId);
   const status = String(formData.get("status")) as WorkOrderStatus;
   const depositDueDate = emptyToDate(formData.get("depositDueDate"));
   const productionMeetingDate = emptyToDate(formData.get("productionMeetingDate"));
@@ -49,6 +57,7 @@ export async function updateWorkOrderAction(projectId: string, workOrderId: stri
 }
 
 export async function addTaskAction(projectId: string, workOrderId: string, formData: FormData) {
+  await requireProjectAccess(projectId);
   const description = String(formData.get("description") ?? "").trim();
   if (!description) throw new Error("Task description is required");
   const departmentCode = emptyToNull(formData.get("departmentCode"));
@@ -61,17 +70,20 @@ export async function addTaskAction(projectId: string, workOrderId: string, form
 }
 
 export async function updateTaskStatusAction(projectId: string, taskId: string, formData: FormData) {
+  await requireProjectAccess(projectId);
   const status = String(formData.get("status")) as TaskStatus;
   await updateTaskStatus(taskId, status);
   revalidatePath(`/projects/${projectId}`);
 }
 
 export async function deleteTaskAction(projectId: string, taskId: string) {
+  await requireProjectAccess(projectId);
   await deleteTask(taskId);
   revalidatePath(`/projects/${projectId}`);
 }
 
 export async function addShipmentAction(projectId: string, workOrderId: string, formData: FormData) {
+  await requireProjectAccess(projectId);
   const carrier = emptyToNull(formData.get("carrier"));
   const loadListNote = emptyToNull(formData.get("loadListNote"));
   const shipDate = emptyToDate(formData.get("shipDate"));
@@ -81,6 +93,7 @@ export async function addShipmentAction(projectId: string, workOrderId: string, 
 }
 
 export async function updateShipmentAction(projectId: string, shipmentId: string, formData: FormData) {
+  await requireProjectAccess(projectId);
   const status = String(formData.get("status")) as ShipmentStatus;
   const trackingRef = emptyToNull(formData.get("trackingRef"));
 
@@ -89,6 +102,7 @@ export async function updateShipmentAction(projectId: string, shipmentId: string
 }
 
 export async function deleteShipmentAction(projectId: string, shipmentId: string) {
+  await requireProjectAccess(projectId);
   await deleteShipment(shipmentId);
   revalidatePath(`/projects/${projectId}`);
 }

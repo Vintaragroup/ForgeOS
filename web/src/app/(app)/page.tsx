@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getDashboardData } from "@/lib/dashboard";
 import { getAdminAnalytics } from "@/lib/admin-analytics";
 import { getCurrentUser } from "@/lib/auth";
@@ -44,11 +45,11 @@ function ProposalStatusChip({ sentAt, signedAt }: { sentAt: Date | null; signedA
 // users don't have. Admin-only sections render inline below instead, and
 // only get fetched when the viewer is actually an admin.
 export default async function DashboardPage() {
-  const [{ pipeline, upcomingDeadlines, recentProposals }, user] = await Promise.all([
-    getDashboardData(),
-    getCurrentUser(),
-  ]);
-  const isAdmin = user?.systemRole === "ADMIN" || user?.systemRole === "SUPER_ADMIN";
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const { pipeline, upcomingDeadlines, recentProposals } = await getDashboardData(user);
+  const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
   const adminStats = isAdmin ? await getAdminAnalytics() : null;
 
   return (

@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { LinkButton, PageHeader, StatusChip } from "@/components/ui";
 
 // Reads live from the DB on every request -- without this, Next statically
@@ -46,8 +49,11 @@ export default async function OpportunitiesPage({
   const { stage: highlightStage } = await searchParams;
   const now = new Date();
 
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const opportunities = await db.opportunity.findMany({
-    where: { deletedAt: null },
+    where: { deletedAt: null, ...opportunityAccessWhere(user) },
     orderBy: { updatedAt: "desc" },
     include: {
       company: true,

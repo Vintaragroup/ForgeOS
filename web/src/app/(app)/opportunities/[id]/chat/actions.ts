@@ -1,6 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "@/lib/auth";
+import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { sendMessage } from "@/lib/chat-service";
 import { db } from "@/lib/db";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
@@ -15,6 +16,13 @@ import { linkifyDocumentMentions } from "@/lib/citation";
 export async function sendWidgetMessageAction(opportunityId: string, content: string) {
   const user = await getCurrentUser();
   if (!user) throw new Error("Your session expired -- reload the page and sign in again.");
+  // The widget is reachable from the document viewer and the opportunity
+  // page alike; both already gate access before rendering, but this
+  // action is independently callable, so it self-checks too -- same
+  // reasoning as every other action touching opportunity-scoped data.
+  if (!(await canAccessOpportunity(user, opportunityId))) {
+    throw new Error("You don't have access to this opportunity.");
+  }
 
   const trimmed = content.trim();
   if (!trimmed) throw new Error("Message can't be empty.");

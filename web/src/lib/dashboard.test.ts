@@ -3,6 +3,11 @@ import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { getDashboardData } from "@/lib/dashboard";
 
+// Admin bypasses opportunity-scoping entirely (see opportunity-access.ts) --
+// these tests exercise the key-dates/dedup logic, not access control, so an
+// admin viewer keeps every fixture opportunity visible.
+const ADMIN_USER = { id: "test-admin", systemRole: "ADMIN" } as const;
+
 afterEach(async () => {
   await db.document.deleteMany();
   await db.workOrder.deleteMany();
@@ -62,7 +67,7 @@ describe("getDashboardData -- RFP key dates", () => {
     await makeAnalyzedDocument(opportunity.id, "RFP.pdf", [keyDate]);
     await makeAnalyzedDocument(opportunity.id, "Appendix A.pdf", [keyDate]);
 
-    const { upcomingDeadlines } = await getDashboardData();
+    const { upcomingDeadlines } = await getDashboardData(ADMIN_USER);
     const matches = upcomingDeadlines.filter((d) => d.label.startsWith("Bidder Questions Due"));
     expect(matches).toHaveLength(1);
   });
@@ -74,7 +79,7 @@ describe("getDashboardData -- RFP key dates", () => {
       { label: "Tender Submission Due", date: isoDaysFromNow(20), dateType: "DEADLINE", sourceQuote: "x", pageNumber: null },
     ]);
 
-    const { upcomingDeadlines } = await getDashboardData();
+    const { upcomingDeadlines } = await getDashboardData(ADMIN_USER);
     expect(upcomingDeadlines).toHaveLength(2);
   });
 
@@ -90,7 +95,7 @@ describe("getDashboardData -- RFP key dates", () => {
       },
     ]);
 
-    const { upcomingDeadlines } = await getDashboardData();
+    const { upcomingDeadlines } = await getDashboardData(ADMIN_USER);
     expect(upcomingDeadlines).toHaveLength(0);
   });
 
@@ -100,7 +105,7 @@ describe("getDashboardData -- RFP key dates", () => {
       { label: "Bidder Questions Due", date: isoDaysFromNow(-5), dateType: "DEADLINE", sourceQuote: "x", pageNumber: null },
     ]);
 
-    const { upcomingDeadlines } = await getDashboardData();
+    const { upcomingDeadlines } = await getDashboardData(ADMIN_USER);
     expect(upcomingDeadlines).toHaveLength(1);
     expect(upcomingDeadlines[0].overdue).toBe(true);
   });
@@ -117,7 +122,7 @@ describe("getDashboardData -- RFP key dates", () => {
     await makeAnalyzedDocument(opportunity.id, "RFP.pdf", [keyDate]);
     await makeAnalyzedDocument(opportunity.id, "Appendix A.pdf", [keyDate]);
 
-    const { upcomingDeadlines } = await getDashboardData();
+    const { upcomingDeadlines } = await getDashboardData(ADMIN_USER);
     expect(upcomingDeadlines).toHaveLength(0);
   });
 });

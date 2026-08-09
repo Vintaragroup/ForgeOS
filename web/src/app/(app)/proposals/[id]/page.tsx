@@ -1,7 +1,9 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { sendProposalAction, signProposalAction } from "../actions";
 import { extractBranding } from "@/lib/proposal-branding";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
@@ -12,6 +14,9 @@ function money(d: { toFixed(n: number): string }): string {
 
 export default async function ProposalDetailPage(props: PageProps<"/proposals/[id]">) {
   const { id } = await props.params;
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const proposal = await db.proposal.findFirst({
     where: { id, deletedAt: null },
     include: {
@@ -27,6 +32,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
     },
   });
   if (!proposal) notFound();
+  if (!(await canAccessOpportunity(user, proposal.estimateVersion.estimate.opportunityId))) notFound();
 
   const version = proposal.estimateVersion;
   const opportunity = version.estimate.opportunity;

@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { Card, EmptyState, PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -29,8 +32,12 @@ export default async function SearchPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const { q } = await searchParams;
   const term = (q ?? "").trim();
+  const accessWhere = opportunityAccessWhere(user);
 
   const [companies, opportunities, estimates, documents] = term
     ? await Promise.all([
@@ -40,7 +47,7 @@ export default async function SearchPage({
           take: RESULT_LIMIT,
         }),
         db.opportunity.findMany({
-          where: { deletedAt: null, showName: { contains: term, mode: "insensitive" } },
+          where: { deletedAt: null, showName: { contains: term, mode: "insensitive" }, ...accessWhere },
           orderBy: { updatedAt: "desc" },
           take: RESULT_LIMIT,
           include: { company: { select: { name: true } } },
@@ -53,6 +60,7 @@ export default async function SearchPage({
                 { showName: { contains: term, mode: "insensitive" } },
                 { company: { name: { contains: term, mode: "insensitive" } } },
               ],
+              ...accessWhere,
             },
           },
           orderBy: { updatedAt: "desc" },
@@ -68,6 +76,7 @@ export default async function SearchPage({
               { filename: { contains: term, mode: "insensitive" } },
               { extractedText: { contains: term, mode: "insensitive" } },
             ],
+            opportunity: accessWhere,
           },
           orderBy: { createdAt: "desc" },
           take: RESULT_LIMIT,

@@ -5,25 +5,29 @@
 // stage counts), which shows convert best, and whether margins are
 // drifting over time.
 
+import type { SystemRole } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
+import { opportunityAccessWhere } from "@/lib/opportunity-access";
 
 const FUNNEL_STAGES = ["NEW", "CONTACTED", "QUALIFIED", "ESTIMATING", "WON"] as const;
 
-export async function getReportsData() {
+export async function getReportsData(user: { id: string; systemRole: SystemRole }) {
+  const accessWhere = opportunityAccessWhere(user);
+
   const [stageEvents, closedOpportunities, currentVersions] = await Promise.all([
     // Every opportunity logs a toStage=NEW event at creation (see
     // opportunity-service.ts), so "reached NEW" is the same as "ever
     // created" -- this is a cohort funnel, not today's stage snapshot.
     db.stageChangeEvent.findMany({
-      where: { toStage: { in: [...FUNNEL_STAGES] } },
+      where: { toStage: { in: [...FUNNEL_STAGES] }, opportunity: accessWhere },
       select: { opportunityId: true, toStage: true },
     }),
     db.opportunity.findMany({
-      where: { deletedAt: null, stage: { in: ["WON", "LOST"] } },
+      where: { deletedAt: null, stage: { in: ["WON", "LOST"] }, ...accessWhere },
       select: { showName: true, stage: true },
     }),
     db.estimateVersion.findMany({
-      where: { isCurrent: true },
+      where: { isCurrent: true, estimate: { opportunity: accessWhere } },
       select: { createdAt: true, grossMarginPct: true },
       orderBy: { createdAt: "asc" },
     }),

@@ -1,7 +1,9 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
-import { changeStage, deleteOpportunity, updateOpportunity } from "../actions";
+import { getCurrentUser } from "@/lib/auth";
+import { canAccessOpportunity } from "@/lib/opportunity-access";
+import { changeStage, deleteOpportunity, updateCollaborators, updateOpportunity } from "../actions";
 import { buildEstimateFromDocumentsAction, convertToEstimate, convertToProject } from "../convert-actions";
 import { analyzeDocumentAction, deleteDocumentAction, uploadDocumentAction } from "./documents/actions";
 import { listDocuments } from "@/lib/document-service";
@@ -236,6 +238,9 @@ function fmtDate(d: Date | null): string {
 
 export default async function OpportunityDetailPage(props: PageProps<"/opportunities/[id]">) {
   const { id } = await props.params;
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const opportunity = await db.opportunity.findFirst({
     where: { id, deletedAt: null },
     include: {
@@ -243,9 +248,14 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       estimates: { orderBy: { createdAt: "desc" } },
       projects: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
       stageEvents: { orderBy: { changedAt: "desc" } },
+      collaborators: { select: { userId: true } },
     },
   });
   if (!opportunity) notFound();
+  // Same failure mode as "doesn't exist" -- 404, not a distinguishable
+  // 403, so an unauthorized request can't tell the difference between
+  // "no such opportunity" and "exists but you can't see it."
+  if (!(await canAccessOpportunity(user, opportunity.id))) notFound();
 
   const [companies, users, contacts, documents, chatMessages] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -261,6 +271,8 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   const updateWithId = updateOpportunity.bind(null, opportunity.id);
   const deleteWithId = deleteOpportunity.bind(null, opportunity.id);
   const changeStageWithId = changeStage.bind(null, opportunity.id);
+  const updateCollaboratorsWithId = updateCollaborators.bind(null, opportunity.id);
+  const collaboratorIds = new Set(opportunity.collaborators.map((c) => c.userId));
   const convertWithId = convertToEstimate.bind(null, opportunity.id);
   const convertToProjectWithId = convertToProject.bind(null, opportunity.id);
   const uploadDocumentWithId = uploadDocumentAction.bind(null, opportunity.id);
@@ -363,6 +375,46 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         >
           <Button variant="danger">Delete opportunity</Button>
         </ConfirmForm>
+      </Card>
+
+      <Card className="p-6">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          Collaborators
+        </h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Registered teammates checked below can see and work on this opportunity, in addition to its
+          owner. Admins can already see every opportunity regardless of this list.
+        </p>
+        <form action={updateCollaboratorsWithId} className="flex flex-col gap-3">
+          {users.length === 0 ? (
+            <p className="text-sm text-neutral-400">No other registered users yet.</p>
+          ) : (
+            <ul className="flex flex-col gap-2 text-sm">
+              {users.map((u) => (
+                <li key={u.id} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id={`collaborator-${u.id}`}
+                    name="collaboratorIds"
+                    value={u.id}
+                    defaultChecked={collaboratorIds.has(u.id)}
+                    disabled={u.id === opportunity.ownerId}
+                    className="h-4 w-4 rounded border-neutral-300"
+                  />
+                  <label htmlFor={`collaborator-${u.id}`}>
+                    {u.name}
+                    {u.id === opportunity.ownerId && (
+                      <span className="ml-1.5 text-xs text-neutral-400">(owner — always has access)</span>
+                    )}
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div>
+            <Button variant="secondary">Save collaborators</Button>
+          </div>
+        </form>
       </Card>
 
       <Card className="p-6">

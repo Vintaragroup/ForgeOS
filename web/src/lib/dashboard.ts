@@ -2,9 +2,11 @@
 // attention" for any logged-in user, distinct from admin-analytics.ts's
 // richer BI-style metrics (which stay admin-only).
 
+import type { SystemRole } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref, parseFreeTextDate } from "@/lib/citation";
+import { opportunityAccessWhere } from "@/lib/opportunity-access";
 
 const DEADLINE_WINDOW_DAYS = 30;
 // Symmetric with the forward window -- without a lower bound, a deadline
@@ -34,17 +36,19 @@ export interface UpcomingDeadline {
   overdue: boolean;
 }
 
-export async function getDashboardData() {
+export async function getDashboardData(user: { id: string; systemRole: SystemRole }) {
+  const accessWhere = opportunityAccessWhere(user);
+
   const now = new Date();
   const windowEnd = new Date(now.getTime() + DEADLINE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const windowStart = new Date(now.getTime() - PAST_DEADLINE_GRACE_DAYS * 24 * 60 * 60 * 1000);
 
   const [stageGroups, workOrders, rfpDocuments, recentProposals] = await Promise.all([
-    db.opportunity.groupBy({ by: ["stage"], where: { deletedAt: null }, _count: { _all: true } }),
+    db.opportunity.groupBy({ by: ["stage"], where: { deletedAt: null, ...accessWhere }, _count: { _all: true } }),
     db.workOrder.findMany({
       where: {
         deletedAt: null,
-        project: { deletedAt: null, status: "ACTIVE" },
+        project: { deletedAt: null, status: "ACTIVE", opportunity: accessWhere },
         OR: [
           { depositDueDate: { lte: windowEnd, gte: windowStart } },
           { productionMeetingDate: { lte: windowEnd, gte: windowStart } },
@@ -59,7 +63,7 @@ export async function getDashboardData() {
     // extracted submission deadline is otherwise invisible unless
     // someone remembers to re-open the PDF it came from.
     db.document.findMany({
-      where: { deletedAt: null, extractionStatus: "COMPLETE", opportunity: { deletedAt: null } },
+      where: { deletedAt: null, extractionStatus: "COMPLETE", opportunity: { deletedAt: null, ...accessWhere } },
       select: {
         id: true,
         mimeType: true,
@@ -69,7 +73,7 @@ export async function getDashboardData() {
       },
     }),
     db.proposal.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, estimateVersion: { estimate: { opportunity: accessWhere } } },
       orderBy: { createdAt: "desc" },
       take: RECENT_PROPOSALS_LIMIT,
       include: {

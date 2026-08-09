@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { Card, EmptyState, PageHeader, StatusChip } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +21,11 @@ function ProjectStatusChip({ status }: { status: string }) {
 }
 
 export default async function ProjectsPage() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const projects = await db.project.findMany({
-    where: { deletedAt: null },
+    where: { deletedAt: null, opportunity: opportunityAccessWhere(user) },
     orderBy: { createdAt: "desc" },
     include: { opportunity: { include: { company: true } } },
   });

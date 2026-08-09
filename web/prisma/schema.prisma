@@ -76,6 +76,7 @@ model User {
 
   contactLinks  Contact[]     @relation("UserContact")
   opportunities Opportunity[] @relation("OpportunityOwner")
+  collaboratingOn OpportunityCollaborator[] @relation("OpportunityCollaborator")
 
   approvedEstimateVersions EstimateVersion[] @relation("EstimateVersionApprover")
   uploadedAttachments      Attachment[]
@@ -159,7 +160,26 @@ model Opportunity {
   documents   Document[]
   chatThread  ChatThread?
 
+  // Access control: an owner always has access; a collaborator is anyone
+  // else explicitly granted access (see src/lib/opportunity-access.ts).
+  // ADMIN/SUPER_ADMIN bypass this entirely and see every Opportunity
+  // regardless of ownership/collaboration.
+  collaborators OpportunityCollaborator[]
+
   @@map("opportunities")
+}
+
+model OpportunityCollaborator {
+  id            String      @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  userId        String
+  user          User        @relation("OpportunityCollaborator", fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([opportunityId, userId])
+  @@map("opportunity_collaborators")
 }
 
 // ---------------------------------------------------------------------

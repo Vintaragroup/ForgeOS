@@ -1,4 +1,6 @@
+import { redirect } from "next/navigation";
 import { getReportsData } from "@/lib/reports";
+import { getCurrentUser } from "@/lib/auth";
 import { Card, EmptyState, PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +29,10 @@ function fmtMonth(month: string) {
 // inline width/height percentages against each section's own max, same
 // spirit as the dashboard's Stat tiles rather than an embedded chart widget.
 export default async function ReportsPage() {
-  const { funnel, winRateByShow, marginTrend } = await getReportsData();
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const { funnel, winRateByShow, marginTrend } = await getReportsData(user);
 
   const funnelMax = funnel[0]?.reached || 1;
   const marginValues = marginTrend.map((m) => m.avgMarginPct);

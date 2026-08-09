@@ -1,7 +1,9 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
+import { getCurrentUser } from "@/lib/auth";
+import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { computeChangeOrderDiff } from "@/lib/change-order-service";
 import { approveChangeOrderAction, rejectChangeOrderAction } from "../actions";
 import { Button, Card, PageHeader } from "@/components/ui";
@@ -12,6 +14,9 @@ function money(d: { toFixed(n: number): string }): string {
 
 export default async function ChangeOrderDetailPage(props: PageProps<"/change-orders/[id]">) {
   const { id } = await props.params;
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const changeOrder = await db.changeOrder.findFirst({
     where: { id },
     include: {
@@ -21,6 +26,7 @@ export default async function ChangeOrderDetailPage(props: PageProps<"/change-or
     },
   });
   if (!changeOrder) notFound();
+  if (!(await canAccessOpportunity(user, changeOrder.estimate.opportunityId))) notFound();
 
   const diff = computeChangeOrderDiff(changeOrder.baseVersion.sections, changeOrder.resultVersion.sections);
   const netDelta = diff.reduce((sum, row) => sum.plus(row.delta), new Prisma.Decimal(0));
