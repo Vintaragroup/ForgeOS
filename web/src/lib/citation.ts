@@ -1,10 +1,12 @@
 // Shared by the Project Brief (opportunities/[id]/page.tsx) and the
 // Dashboard's upcoming-deadlines list (dashboard.ts) -- both link an
-// AI-extracted fact back to where it came from, using the same two
-// mechanisms document-view-service.ts's viewer understands: a PDF page
-// jump (?page=N, native browser #page=N support) or a DOCX text-search
-// highlight (?q=<quote>#hl).
-
+// AI-extracted fact back to where it came from, using the two mechanisms
+// document-view-service.ts's viewer understands: a PDF page jump +
+// in-viewer highlight (?page=N&q=<quote>, using Chromium's built-in PDF
+// viewer's #page=N&search=<text> open-parameters -- the same viewer
+// PDFium/Adobe Reader use to highlight every match in yellow and jump to
+// the first one, no PDF.js or custom text layer needed) or a DOCX
+// text-search highlight (?q=<quote>#hl).
 import { DOCX_MIME, PDF_MIME } from "@/lib/ai/text-extraction";
 
 export function citationHref(
@@ -13,7 +15,10 @@ export function citationHref(
   fact: { sourceQuote: string; pageNumber: number | null },
 ): string | null {
   const base = `/opportunities/${opportunityId}/documents/${doc.id}/view`;
-  if (doc.mimeType === PDF_MIME && fact.pageNumber) return `${base}?page=${fact.pageNumber}`;
+  if (doc.mimeType === PDF_MIME && fact.pageNumber) {
+    const q = fact.sourceQuote ? `&q=${encodeURIComponent(fact.sourceQuote)}` : "";
+    return `${base}?page=${fact.pageNumber}${q}`;
+  }
   if (doc.mimeType === DOCX_MIME && fact.sourceQuote) {
     return `${base}?q=${encodeURIComponent(fact.sourceQuote)}#hl`;
   }

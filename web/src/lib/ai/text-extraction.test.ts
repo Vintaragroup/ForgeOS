@@ -1,7 +1,12 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractDocumentText, extractPdfPageTexts, locateQuotePage } from "@/lib/ai/text-extraction";
+import {
+  extractDocumentText,
+  extractPdfPageTexts,
+  locateQuotePage,
+  resolveHighlightableQuote,
+} from "@/lib/ai/text-extraction";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
 
@@ -81,5 +86,27 @@ describe("extractPdfPageTexts / locateQuotePage", () => {
   it("returns null for an empty or too-short quote rather than false-matching everything", () => {
     expect(locateQuotePage(["some page text"], "")).toBeNull();
     expect(locateQuotePage(["some page text"], "  ")).toBeNull();
+  });
+});
+
+describe("resolveHighlightableQuote", () => {
+  const source = "Daily rate of Liquidated Damages: One-half percent (0.5%) of the Fee. Some unrelated clause about insurance sits in between. The amount payable shall be capped at ten percent (10%) of the Fee.";
+
+  it("returns the quote unchanged when it's already a real contiguous substring", () => {
+    const quote = "One-half percent (0.5%) of the Fee";
+    expect(resolveHighlightableQuote(source, quote)).toBe(quote);
+  });
+
+  it("falls back to a matchable prefix for a quote stitched together from two separate clauses -- the real shape an AI risk-flag quote took in production", () => {
+    const stitchedQuote =
+      "Daily rate of Liquidated Damages: One-half percent (0.5%) of the Fee\nThe amount payable shall be capped at ten percent (10%) of the Fee.";
+    const resolved = resolveHighlightableQuote(source, stitchedQuote);
+    expect(source.toLowerCase()).toContain(resolved.toLowerCase());
+    expect(resolved.length).toBeLessThan(stitchedQuote.length);
+  });
+
+  it("returns the original quote unchanged when not even a short prefix is genuinely contiguous", () => {
+    const quote = "this text never appears in the source document at all";
+    expect(resolveHighlightableQuote(source, quote)).toBe(quote);
   });
 });

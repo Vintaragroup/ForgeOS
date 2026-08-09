@@ -33,11 +33,20 @@ describe("parseFreeTextDate", () => {
 describe("citationHref", () => {
   const opportunityId = "opp1";
 
-  it("links a PDF fact to its located page", () => {
+  it("links a PDF fact to its located page and carries the quote for in-viewer highlighting", () => {
     const href = citationHref(
       opportunityId,
       { id: "doc1", mimeType: "application/pdf" },
       { sourceQuote: "some quote", pageNumber: 6 },
+    );
+    expect(href).toBe("/opportunities/opp1/documents/doc1/view?page=6&q=some%20quote");
+  });
+
+  it("links a PDF fact to its page alone when there's no quote to highlight", () => {
+    const href = citationHref(
+      opportunityId,
+      { id: "doc1", mimeType: "application/pdf" },
+      { sourceQuote: "", pageNumber: 6 },
     );
     expect(href).toBe("/opportunities/opp1/documents/doc1/view?page=6");
   });

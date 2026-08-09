@@ -90,3 +90,29 @@ export function locateQuotePage(pageTexts: string[], quote: string): number | nu
   const prefixMatch = normalizedPages.findIndex((p) => p.includes(prefix));
   return prefixMatch === -1 ? null : prefixMatch + 1;
 }
+
+// A quote that doesn't appear as one unbroken run in the source can't be
+// highlighted by anything downstream -- DOCX's regex-based <mark> wrap
+// (document-view-service.ts) and Chromium's PDF viewer #search=<text>
+// open parameter (the view page's iframe src) both need a genuinely
+// contiguous match, or they silently do nothing. Most often this happens
+// when a risk flag stitches together a rate and its cap from two separate
+// clauses ("Daily rate is 0.5%" ... several sentences later ... "capped
+// at 10%") into one "quote" that was never actually adjacent text. Rather
+// than let every downstream highlight attempt fail the same way, this
+// resolves the quote ONCE against the full extracted document text: the
+// quote as-is if it's a real substring, else its first 40 characters
+// (same threshold locateQuotePage falls back to) if THAT much is real,
+// else the original quote unchanged -- nothing further to be done if even
+// a short prefix isn't genuinely contiguous.
+export function resolveHighlightableQuote(sourceText: string, quote: string): string {
+  const trimmed = quote.trim();
+  if (!trimmed) return quote;
+  const normalizedSource = normalizeForMatch(sourceText);
+  if (normalizedSource.includes(normalizeForMatch(trimmed))) return trimmed;
+
+  const prefix = trimmed.slice(0, 40);
+  if (prefix.length >= 15 && normalizedSource.includes(normalizeForMatch(prefix))) return prefix;
+
+  return trimmed;
+}

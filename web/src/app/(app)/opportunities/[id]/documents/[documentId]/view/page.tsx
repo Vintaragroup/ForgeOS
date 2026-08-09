@@ -36,10 +36,16 @@ export default async function DocumentViewPage(
   ]);
 
   const rawUrl = `/opportunities/${id}/documents/${documentId}`;
-  // A Project Brief citation (Phase 7.4) links here with ?page=N for a PDF
-  // -- native browser PDF viewers honor a #page=N fragment on the src URL,
-  // no PDF.js integration needed for this.
-  const inlineUrl = `${rawUrl}?inline=1${pageParam ? `#page=${pageParam}` : ""}`;
+  // A Project Brief citation links here with ?page=N&q=<quote> for a PDF --
+  // Chromium's built-in PDF viewer (PDFium) honors #page=N&search=<text> on
+  // the src URL directly, highlighting every match in yellow and jumping to
+  // the first one -- the same "open parameters" mechanism Adobe Reader
+  // uses, no PDF.js/custom text layer needed. If search isn't honored by a
+  // given viewer, this degrades to a plain page jump, not a broken link.
+  const fragmentParts = [pageParam && `page=${pageParam}`, quoteParam && `search=${encodeURIComponent(quoteParam)}`]
+    .filter(Boolean)
+    .join("&");
+  const inlineUrl = `${rawUrl}?inline=1${fragmentParts ? `#${fragmentParts}` : ""}`;
 
   return (
     <div className="flex flex-col gap-6">

@@ -9,7 +9,13 @@
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
-import { extractDocumentText, extractPdfPageTexts, locateQuotePage, PDF_MIME } from "@/lib/ai/text-extraction";
+import {
+  extractDocumentText,
+  extractPdfPageTexts,
+  locateQuotePage,
+  resolveHighlightableQuote,
+  PDF_MIME,
+} from "@/lib/ai/text-extraction";
 import { DEFAULT_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 
 // pageNumber is never asked of the model -- it's computed afterward by
@@ -181,8 +187,16 @@ export async function summarizeDocument(documentId: string) {
     // concept; those facts stay pageNumber: null and get a text-search
     // highlight in the viewer instead (document-view-service.ts).
     const pageTexts = document.mimeType === PDF_MIME ? await extractPdfPageTexts(bytes) : null;
+    // sourceQuote is resolved against the full extracted text BEFORE page
+    // lookup, not after -- a quote that isn't a genuine contiguous
+    // substring can't be highlighted by the viewer no matter what page
+    // it's on, so both page lookup and the in-viewer highlight use the
+    // same corrected quote (see resolveHighlightableQuote).
     const withPage = <T extends { sourceQuote: string }>(items: T[]): (T & { pageNumber: number | null })[] =>
-      items.map((item) => ({ ...item, pageNumber: pageTexts ? locateQuotePage(pageTexts, item.sourceQuote) : null }));
+      items.map((item) => {
+        const sourceQuote = resolveHighlightableQuote(extraction.text, item.sourceQuote);
+        return { ...item, sourceQuote, pageNumber: pageTexts ? locateQuotePage(pageTexts, sourceQuote) : null };
+      });
 
     const summary: DocumentSummary = {
       eventOrProjectName: parsed.eventOrProjectName,
