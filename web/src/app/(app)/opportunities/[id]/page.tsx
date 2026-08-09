@@ -9,7 +9,7 @@ import { analyzeDocumentAction, deleteDocumentAction, uploadDocumentAction } fro
 import { listDocuments } from "@/lib/document-service";
 import { getThreadMessages } from "@/lib/chat-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
-import { citationHref, linkifyDocumentMentions } from "@/lib/citation";
+import { citationHref, linkifyDocumentMentions, parseFreeTextDate } from "@/lib/citation";
 import { Button, CollapsibleSection, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
@@ -56,21 +56,6 @@ function fmtBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// dateType distinguishes "we must act by this date" (DEADLINE) from "this
-// is just when the event happens" (MILESTONE) from "this already happened,
-// it's a fact about the client's own process" (INFORMATIONAL) -- without
-// it, a fact like "RFP Sent" reads exactly like a deadline. Older analyses
-// predate this classification and have no dateType on their stored JSON;
-// default those to MILESTONE (neutral) rather than DEADLINE so a stale
-// record can't misread as something urgent -- re-running Analyze picks up
-// the real classification.
-function DateTypeChip({ dateType }: { dateType: "DEADLINE" | "MILESTONE" | "INFORMATIONAL" | undefined }) {
-  const resolved = dateType ?? "MILESTONE";
-  if (resolved === "DEADLINE") return <StatusChip tone="warning">Deadline</StatusChip>;
-  if (resolved === "INFORMATIONAL") return <StatusChip tone="neutral">FYI</StatusChip>;
-  return <StatusChip tone="info">Milestone</StatusChip>;
-}
-
 function CitationLink({
   href,
   source,
@@ -91,6 +76,21 @@ function CitationLink({
   );
 }
 
+// Documents analyzed before scope/risk items carried their own citation
+// (sourceQuote/pageNumber) stored these as plain strings -- normalize old
+// and new shapes together rather than forcing a re-analysis of every
+// historical document just to read it without a blank line.
+function normalizeCitedText(item: unknown): { text: string; sourceQuote: string; pageNumber: number | null } {
+  if (typeof item === "string") return { text: item, sourceQuote: "", pageNumber: null };
+  return item as { text: string; sourceQuote: string; pageNumber: number | null };
+}
+
+const KEY_DATE_GROUPS: { dateType: "DEADLINE" | "MILESTONE" | "INFORMATIONAL"; label: string; className: string }[] = [
+  { dateType: "DEADLINE", label: "Deadlines", className: "text-amber-900" },
+  { dateType: "MILESTONE", label: "Milestones", className: "text-brand-navy" },
+  { dateType: "INFORMATIONAL", label: "FYI", className: "text-neutral-400" },
+];
+
 // Merged at read time from every analyzed document, not stored as its own
 // aggregate -- consistent with the rest of this app computing rollups
 // live (e.g. admin-analytics.ts) rather than caching a stale summary.
@@ -110,9 +110,41 @@ function ProjectBriefCard({
   const eventOrProjectName = analyzed.map((d) => d.extractedSummary.eventOrProjectName).find(Boolean);
   const venue = analyzed.map((d) => d.extractedSummary.venue).find(Boolean);
   const submissionDeadline = analyzed.map((d) => d.extractedSummary.submissionDeadline).find(Boolean);
-  const keyDates = analyzed.flatMap((d) => d.extractedSummary.keyDates.map((kd) => ({ ...kd, doc: d })));
-  const scopeSummary = analyzed.flatMap((d) => d.extractedSummary.scopeSummary.map((s) => ({ ...s, doc: d })));
-  const riskFlags = analyzed.flatMap((d) => d.extractedSummary.riskFlags.map((r) => ({ ...r, doc: d })));
+
+  // Two documents from the same RFP package routinely restate the same
+  // fact -- same problem the Dashboard already solves (dashboard.ts),
+  // deduped here the same way: by label + parsed date, first occurrence
+  // wins. Sorted chronologically after, since documents rarely list their
+  // own dates in date order, let alone two documents combined.
+  const seenKeyDates = new Set<string>();
+  const keyDates = analyzed
+    .flatMap((d) => d.extractedSummary.keyDates.map((kd) => ({ ...kd, doc: d })))
+    .filter((kd) => {
+      const parsed = parseFreeTextDate(kd.date);
+      const dedupeKey = `${kd.label.trim().toLowerCase()}::${parsed ? parsed.toISOString().slice(0, 10) : kd.date}`;
+      if (seenKeyDates.has(dedupeKey)) return false;
+      seenKeyDates.add(dedupeKey);
+      return true;
+    })
+    .sort((a, b) => {
+      const dateA = parseFreeTextDate(a.date);
+      const dateB = parseFreeTextDate(b.date);
+      if (!dateA && !dateB) return 0;
+      if (!dateA) return 1;
+      if (!dateB) return -1;
+      return dateA.getTime() - dateB.getTime();
+    });
+  const keyDateGroups = KEY_DATE_GROUPS.map((group) => ({
+    ...group,
+    items: keyDates.filter((kd) => (kd.dateType ?? "MILESTONE") === group.dateType),
+  })).filter((group) => group.items.length > 0);
+
+  const scopeSummary = analyzed.flatMap((d) =>
+    d.extractedSummary.scopeSummary.map((s) => ({ ...normalizeCitedText(s), doc: d })),
+  );
+  const riskFlags = analyzed.flatMap((d) =>
+    d.extractedSummary.riskFlags.map((r) => ({ ...normalizeCitedText(r), doc: d })),
+  );
 
   return (
     <CollapsibleSection title="Project brief">
@@ -136,24 +168,32 @@ function ProjectBriefCard({
         </div>
       </div>
 
-      {keyDates.length > 0 && (
+      {keyDateGroups.length > 0 && (
         <div className="mb-4">
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Key dates</h3>
-          <ul className="flex flex-col gap-1 text-sm">
-            {keyDates.map((kd, i) => (
-              <li key={i} className="flex items-center justify-between gap-3">
-                <span className="flex items-center gap-2">
-                  <DateTypeChip dateType={kd.dateType} />
-                  {kd.label} <span className="text-neutral-500">— {kd.date}</span>
-                </span>
-                <CitationLink
-                  href={citationHref(opportunityId, kd.doc, kd)}
-                  source={kd.doc.filename}
-                  page={kd.pageNumber}
-                />
-              </li>
+          <div className="flex flex-col gap-3">
+            {keyDateGroups.map((group) => (
+              <div key={group.dateType}>
+                <div className={`mb-1 text-xs font-semibold ${group.className}`}>
+                  {group.label} <span className="font-normal text-neutral-400">({group.items.length})</span>
+                </div>
+                <ul className="flex flex-col gap-1 text-sm">
+                  {group.items.map((kd, i) => (
+                    <li key={i} className="flex items-center justify-between gap-3">
+                      <span>
+                        {kd.label} <span className="text-neutral-500">— {kd.date}</span>
+                      </span>
+                      <CitationLink
+                        href={citationHref(opportunityId, kd.doc, kd)}
+                        source={kd.doc.filename}
+                        page={kd.pageNumber}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       )}
 
