@@ -7,6 +7,12 @@ import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref, parseFreeTextDate } from "@/lib/citation";
 
 const DEADLINE_WINDOW_DAYS = 30;
+// Symmetric with the forward window -- without a lower bound, a deadline
+// that's overdue by any amount, even years, would show up here forever.
+// "Upcoming deadlines (next 30 days)" implies a recent-past grace window
+// too (something 3 days overdue still needs attention), not an
+// unbounded backlog.
+const PAST_DEADLINE_GRACE_DAYS = 30;
 const UPCOMING_LIMIT = 8;
 const RECENT_PROPOSALS_LIMIT = 5;
 
@@ -31,6 +37,7 @@ export interface UpcomingDeadline {
 export async function getDashboardData() {
   const now = new Date();
   const windowEnd = new Date(now.getTime() + DEADLINE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const windowStart = new Date(now.getTime() - PAST_DEADLINE_GRACE_DAYS * 24 * 60 * 60 * 1000);
 
   const [stageGroups, workOrders, rfpDocuments, recentProposals] = await Promise.all([
     db.opportunity.groupBy({ by: ["stage"], where: { deletedAt: null }, _count: { _all: true } }),
@@ -39,11 +46,11 @@ export async function getDashboardData() {
         deletedAt: null,
         project: { deletedAt: null, status: "ACTIVE" },
         OR: [
-          { depositDueDate: { lte: windowEnd } },
-          { productionMeetingDate: { lte: windowEnd } },
-          { artworkDeadlineDate: { lte: windowEnd } },
-          { balanceDueDate: { lte: windowEnd } },
-          { installDate: { lte: windowEnd } },
+          { depositDueDate: { lte: windowEnd, gte: windowStart } },
+          { productionMeetingDate: { lte: windowEnd, gte: windowStart } },
+          { artworkDeadlineDate: { lte: windowEnd, gte: windowStart } },
+          { balanceDueDate: { lte: windowEnd, gte: windowStart } },
+          { installDate: { lte: windowEnd, gte: windowStart } },
         ],
       },
       include: { project: { include: { opportunity: true } } },
@@ -87,7 +94,7 @@ export async function getDashboardData() {
   for (const wo of workOrders) {
     for (const { field, kind } of deadlineFields) {
       const date = wo[field] as Date | null;
-      if (!date || date > windowEnd) continue;
+      if (!date || date > windowEnd || date < windowStart) continue;
       upcoming.push({
         key: `wo-${wo.id}-${kind}`,
         href: `/projects/${wo.projectId}`,
@@ -99,6 +106,12 @@ export async function getDashboardData() {
     }
   }
 
+  // Two documents from the same RFP package routinely restate the same
+  // fact -- the narrative RFP PDF and its own Appendix both say "Bidder
+  // Questions Due," for instance. That's two independent citations for
+  // one real deadline, not two deadlines; without deduping, every
+  // multi-document opportunity shows each of its dates twice.
+  const seenKeyDates = new Set<string>();
   for (const doc of rfpDocuments) {
     if (!doc.extractedSummary) continue;
     const summary = doc.extractedSummary as unknown as DocumentSummary;
@@ -115,7 +128,12 @@ export async function getDashboardData() {
       if (dateType === "INFORMATIONAL") continue;
 
       const date = parseFreeTextDate(kd.date);
-      if (!date || date > windowEnd) continue;
+      if (!date || date > windowEnd || date < windowStart) continue;
+
+      const dedupeKey = `${doc.opportunityId}::${kd.label.trim().toLowerCase()}::${date.toISOString().slice(0, 10)}`;
+      if (seenKeyDates.has(dedupeKey)) continue;
+      seenKeyDates.add(dedupeKey);
+
       const href = citationHref(doc.opportunityId, doc, kd) ?? `/opportunities/${doc.opportunityId}`;
       upcoming.push({
         key: `doc-${doc.id}-${kd.label}`,
