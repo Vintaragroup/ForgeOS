@@ -164,4 +164,21 @@ describe("commitPricingImport", () => {
     // Still isDraft -- a seeded rate doesn't bypass the confirm-before-it-counts gate.
     expect(doorItems.every((li) => li.isDraft)).toBe(true);
   });
+
+  it("refuses a second import of the same document into the same version, rather than duplicating every section and item", async () => {
+    const { opportunity, document } = await makeDocument();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitPricingImport(version.id, document.id);
+    await expect(commitPricingImport(version.id, document.id)).rejects.toThrow(/already been imported/);
+
+    // The real bug this guards against: a real Super Bowl 2026 estimate
+    // had this exact document imported twice before this check existed,
+    // doubling all 149 rows to 298.
+    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
+    expect(sections).toHaveLength(5);
+    const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
+    expect(lineItemCount).toBe(149);
+  });
 });

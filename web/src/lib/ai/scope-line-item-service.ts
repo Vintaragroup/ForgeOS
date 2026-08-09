@@ -141,6 +141,20 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
     throw new Error(`No proposed line items for "${document.filename}" -- click Propose items first.`);
   }
 
+  // Same reasoning as commitPricingImport's identical check -- a second
+  // click created a full second set of sections/items for a real job,
+  // with different (AI-regenerated) category names each time, before this
+  // check existed. A re-commit must go through deleting the old rows
+  // first, not by re-clicking Commit.
+  const alreadyImported = await db.lineItem.findFirst({
+    where: { documentId, section: { estimateVersionId, optionId: null } },
+  });
+  if (alreadyImported) {
+    throw new Error(
+      `"${document.filename}"'s proposed items have already been committed to this estimate. Delete the existing line items first if you want to re-commit.`,
+    );
+  }
+
   const catalog = await loadCatalogForMatching();
   const categories = [...new Set(items.map((i) => i.category))];
 

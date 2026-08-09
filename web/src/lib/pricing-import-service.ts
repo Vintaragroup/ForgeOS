@@ -164,6 +164,21 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
     throw new Error(`No line items found in "${preview.filename}".`);
   }
 
+  // Not just a nicety -- this ran twice on the exact same document for a
+  // real job before this check existed, silently doubling every section
+  // and line item (and the dollar total, once confirmed). Nothing here
+  // reconciles an existing import against a changed source file; a
+  // re-import must go through deleting the old rows first, deliberately,
+  // not by re-clicking the same button.
+  const alreadyImported = await db.lineItem.findFirst({
+    where: { documentId, section: { estimateVersionId, optionId: null } },
+  });
+  if (alreadyImported) {
+    throw new Error(
+      `"${preview.filename}" has already been imported into this estimate. Delete its existing line items first if you want to re-import.`,
+    );
+  }
+
   const existingSectionCount = await db.estimateSection.count({
     where: { estimateVersionId, optionId: null },
   });

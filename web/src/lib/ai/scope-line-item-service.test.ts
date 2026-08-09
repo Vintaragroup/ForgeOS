@@ -67,6 +67,41 @@ describe("commitScopeLineItems", () => {
     await expect(commitScopeLineItems(version.id, document.id)).rejects.toThrow(/Propose items first/);
   });
 
+  it("refuses a second commit of the same document into the same version, rather than duplicating every section and item", async () => {
+    const document = await makeAnalyzedDocument("some scope text");
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "Booth walls",
+        qty: 1,
+        qtyIsExplicit: false,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure",
+        sourceQuote: "some scope text",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitScopeLineItems(version.id, document.id);
+    await expect(commitScopeLineItems(version.id, document.id)).rejects.toThrow(/already been committed/);
+
+    // The real bug this guards against: a real Super Bowl 2026 estimate
+    // had this same document's proposed items committed twice before this
+    // check existed -- and worse, the AI regenerated different category
+    // names on the second run, so the duplicate sections didn't even line
+    // up under the same names as the first commit.
+    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
+    expect(sections).toHaveLength(1);
+    const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
+    expect(lineItemCount).toBe(1);
+  });
+
   it("groups proposed items into sections by category, seeds a catalog-matched rate, and flags an inferred quantity in the description", async () => {
     await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
     const document = await makeAnalyzedDocument("some scope text");
