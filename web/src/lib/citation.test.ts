@@ -80,10 +80,28 @@ describe("citationHref", () => {
     expect(href).toBe("/opportunities/opp1/documents/doc3/view?q=Complete%20Booth%20Build#hl");
   });
 
-  it("returns null for a genuinely unsupported mime type", () => {
+  it("links a raw-image drawing fact to the document itself, no page/quote concept", () => {
     const href = citationHref(
       opportunityId,
       { id: "doc4", mimeType: "image/png" },
+      { sourceQuote: "", pageNumber: 1 },
+    );
+    expect(href).toBe("/opportunities/opp1/documents/doc4/view");
+  });
+
+  it("returns null for an image fact with no page number", () => {
+    const href = citationHref(
+      opportunityId,
+      { id: "doc4", mimeType: "image/png" },
+      { sourceQuote: "", pageNumber: null },
+    );
+    expect(href).toBeNull();
+  });
+
+  it("returns null for a genuinely unsupported mime type", () => {
+    const href = citationHref(
+      opportunityId,
+      { id: "doc5", mimeType: "application/octet-stream" },
       { sourceQuote: "some quote", pageNumber: 2 },
     );
     expect(href).toBeNull();

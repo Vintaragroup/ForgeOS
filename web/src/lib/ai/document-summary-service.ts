@@ -16,7 +16,8 @@ import {
   resolveHighlightableQuote,
   PDF_MIME,
 } from "@/lib/ai/text-extraction";
-import { DEFAULT_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 
 // pageNumber is never asked of the model -- it's computed afterward by
 // searching the PDF's own per-page text for sourceQuote (see
@@ -140,7 +141,7 @@ For every key date, also classify dateType from the READER's point of view, not 
 // data/RFP/superbowl.
 const MAX_INPUT_CHARS = 60_000;
 
-export async function summarizeDocument(documentId: string) {
+export async function summarizeDocument(documentId: string, userId: string | null = null) {
   const { document, bytes } = await getDocumentBytes(documentId);
 
   // Type-based UNSUPPORTED cases (PRICING_SCHEDULE, DRAWING) never call
@@ -169,12 +170,21 @@ export async function summarizeDocument(documentId: string) {
 
   try {
     const completion = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model: BASIC_MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: `Document: ${document.filename}\n\n${extraction.text.slice(0, MAX_INPUT_CHARS)}` },
       ],
       response_format: { type: "json_schema", json_schema: SUMMARY_SCHEMA },
+    });
+
+    await recordAiUsage({
+      userId,
+      feature: "DOCUMENT_SUMMARY",
+      model: BASIC_MODEL,
+      usage: completion.usage,
+      documentId,
+      opportunityId: document.opportunityId,
     });
 
     const content = completion.choices[0]?.message?.content;

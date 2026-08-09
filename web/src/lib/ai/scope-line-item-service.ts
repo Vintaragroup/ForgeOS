@@ -14,7 +14,8 @@
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MIME } from "@/lib/ai/text-extraction";
-import { DEFAULT_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { addLineItemsBulk, addSection } from "@/lib/estimate-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { getDocumentBytes } from "@/lib/document-service";
@@ -78,7 +79,7 @@ Only propose items that describe actual work or goods to be provided -- skip adm
 
 const MAX_INPUT_CHARS = 60_000;
 
-export async function proposeLineItemsFromScope(documentId: string) {
+export async function proposeLineItemsFromScope(documentId: string, userId: string | null = null) {
   const document = await db.document.findUniqueOrThrow({ where: { id: documentId } });
   if (!document.extractedText) {
     throw new Error(`"${document.filename}" hasn't been analyzed yet -- click Analyze on it first.`);
@@ -90,12 +91,21 @@ export async function proposeLineItemsFromScope(documentId: string) {
   const client = getOpenAiClient();
 
   const completion = await client.chat.completions.create({
-    model: DEFAULT_MODEL,
+    model: BASIC_MODEL,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: `Document: ${document.filename}\n\n${document.extractedText.slice(0, MAX_INPUT_CHARS)}` },
     ],
     response_format: { type: "json_schema", json_schema: PROPOSAL_SCHEMA },
+  });
+
+  await recordAiUsage({
+    userId,
+    feature: "SCOPE_LINE_ITEMS",
+    model: BASIC_MODEL,
+    usage: completion.usage,
+    documentId,
+    opportunityId: document.opportunityId,
   });
 
   const content = completion.choices[0]?.message?.content;

@@ -27,12 +27,12 @@ export async function commitImportAction(
 }
 
 export async function proposeScopeItemsAction(estimateId: string, formData: FormData) {
-  await requireEstimateAccess(estimateId);
+  const user = await requireEstimateAccess(estimateId);
   const documentId = String(formData.get("documentId") ?? "").trim();
   if (!documentId) throw new Error("Choose a document to propose items from");
 
   try {
-    await proposeLineItemsFromScope(documentId);
+    await proposeLineItemsFromScope(documentId, user.id);
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {
       throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable this.");

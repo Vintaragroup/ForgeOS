@@ -86,6 +86,7 @@ model User {
   adminAuditLogsTargeted   AdminAuditLog[]   @relation("AdminAuditLogTarget")
   uploadedDocuments        Document[]
   deadlineActionsTaken     DeadlineAction[]
+  aiUsageEvents            AiUsageEvent[]
 
   @@map("users")
 }
@@ -168,6 +169,7 @@ model Opportunity {
   collaborators OpportunityCollaborator[]
 
   deadlineActions DeadlineAction[]
+  aiUsageEvents   AiUsageEvent[]
 
   @@map("opportunities")
 }
@@ -210,6 +212,48 @@ model DeadlineAction {
 
   @@unique([opportunityId, dedupeKey])
   @@map("deadline_actions")
+}
+
+enum AiFeature {
+  DOCUMENT_SUMMARY
+  DRAWING_SUMMARY
+  SCOPE_LINE_ITEMS
+  CHAT
+}
+
+// One row per OpenAI call, for case-based model routing's cost/token
+// tracking (see src/lib/ai/ai-usage-service.ts and openai-client.ts's
+// BASIC_MODEL/ADVANCED_MODEL split). All foreign keys nullable, mirroring
+// Document.uploadedById -- a usage row should never fail to record just
+// because one piece of context (a deleted user, a call outside any
+// opportunity) is missing.
+model AiUsageEvent {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  feature AiFeature
+  model   String // the literal model string sent to OpenAI, e.g. "gpt-4o-mini"
+
+  promptTokens     Int
+  completionTokens Int
+  totalTokens      Int
+  // Decimal, not Float, same reasoning as every money field in this
+  // schema. 6 places, not the usual 2/4 -- a sub-cent gpt-4o-mini call
+  // would round to 0.0000 at 4 places, making per-call rows useless for
+  // auditing even though rollup sums would still be accurate either way.
+  estimatedCostUsd Decimal @db.Decimal(10, 6)
+
+  documentId    String?
+  document      Document?    @relation(fields: [documentId], references: [id])
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("ai_usage_events")
 }
 
 // ---------------------------------------------------------------------
@@ -276,6 +320,7 @@ model Document {
   // a document-sourced draft line item reviews through the exact same
   // mechanism, not a new one.
   lineItems LineItem[]
+  aiUsageEvents AiUsageEvent[]
 
   @@map("documents")
 }

@@ -35,6 +35,13 @@ function fmtUsd(n: number) {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
+// AI usage costs are often sub-dollar (a single document analysis can be
+// a few cents) -- fmtUsd's whole-dollar rounding would show "$0" for
+// almost every real call, defeating a cost-awareness feature.
+function fmtAiCost(n: number) {
+  return `~$${n.toFixed(n < 1 ? 4 : 2)}`;
+}
+
 function ProposalStatusChip({ sentAt, signedAt }: { sentAt: Date | null; signedAt: Date | null }) {
   if (signedAt) return <StatusChip tone="good">Signed</StatusChip>;
   if (sentAt) return <StatusChip tone="info">Sent</StatusChip>;
@@ -232,6 +239,18 @@ export default async function DashboardPage() {
                 value={`${adminStats.costVariance.variance >= 0 ? "+" : ""}${fmtUsd(adminStats.costVariance.variance)}`}
                 label="Variance (actual − estimated)"
               />
+            </div>
+          </div>
+
+          <div>
+            <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+              AI usage
+            </h3>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat value={String(adminStats.aiUsage.calls)} label="Calls" />
+              <Stat value={adminStats.aiUsage.tokens.toLocaleString()} label="Tokens" />
+              <Stat value={fmtAiCost(adminStats.aiUsage.estimatedCostUsd)} label="Est. cost" />
+              <Stat value={String(adminStats.aiUsage.drawingAnalyses)} label="Drawing analyses" />
             </div>
           </div>
 

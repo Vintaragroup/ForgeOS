@@ -5,6 +5,7 @@
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { computeLineItemVariance } from "@/lib/cost-actual-service";
+import { getOrgAiUsageSummary } from "@/lib/ai/ai-usage-service";
 
 export async function getAdminAnalytics() {
   const [
@@ -17,6 +18,7 @@ export async function getAdminAnalytics() {
     proposalsSigned,
     roleGroups,
     lineItemsWithActuals,
+    aiUsage,
   ] = await Promise.all([
     db.opportunity.groupBy({ by: ["stage"], where: { deletedAt: null }, _count: { _all: true } }),
     db.estimateVersion.count({ where: { isCurrent: true } }),
@@ -36,6 +38,7 @@ export async function getAdminAnalytics() {
         costActuals: { select: { actualCost: true } },
       },
     }),
+    getOrgAiUsageSummary(),
   ]);
 
   const stageCounts = Object.fromEntries(
@@ -79,6 +82,12 @@ export async function getAdminAnalytics() {
     users: {
       total: (roleCounts.SUPER_ADMIN ?? 0) + (roleCounts.ADMIN ?? 0) + (roleCounts.EMPLOYEE ?? 0),
       byRole: roleCounts,
+    },
+    aiUsage: {
+      calls: aiUsage.totals._count._all,
+      tokens: aiUsage.totals._sum.totalTokens ?? 0,
+      estimatedCostUsd: aiUsage.totals._sum.estimatedCostUsd?.toNumber() ?? 0,
+      drawingAnalyses: aiUsage.byFeature.find((f) => f.feature === "DRAWING_SUMMARY")?._count._all ?? 0,
     },
   };
 }

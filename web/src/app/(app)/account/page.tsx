@@ -1,9 +1,21 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
+import { getUserAiUsageSummary } from "@/lib/ai/ai-usage-service";
 import { changePasswordAction } from "./actions";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+
+const FEATURE_LABELS: Record<string, string> = {
+  DOCUMENT_SUMMARY: "Document analysis",
+  DRAWING_SUMMARY: "Drawing analysis",
+  SCOPE_LINE_ITEMS: "Scope line-item proposals",
+  CHAT: "Chat",
+};
+
+function fmtUsd(n: number): string {
+  return `$${n.toFixed(n < 1 ? 4 : 2)}`;
+}
 
 export default async function AccountPage({
   searchParams,
@@ -13,9 +25,13 @@ export default async function AccountPage({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const params = await searchParams;
+  const { totals, byFeature } = await getUserAiUsageSummary(user.id);
+  const totalCalls = totals._count._all;
+  const totalTokens = totals._sum.totalTokens ?? 0;
+  const totalCostUsd = totals._sum.estimatedCostUsd?.toNumber() ?? 0;
 
   return (
-    <div>
+    <div className="flex flex-col gap-8">
       <PageHeader title="Account" />
       <Card className="max-w-md p-6">
         <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
@@ -42,6 +58,31 @@ export default async function AccountPage({
             <Button>Update password</Button>
           </div>
         </form>
+      </Card>
+
+      <Card className="max-w-md p-6">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          Your AI usage
+        </h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          {totalCalls} call{totalCalls === 1 ? "" : "s"} · {totalTokens.toLocaleString()} tokens · ~
+          {fmtUsd(totalCostUsd)} estimated
+        </p>
+        {byFeature.length === 0 ? (
+          <p className="text-sm text-neutral-400">No AI features used yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-1.5 text-sm">
+            {byFeature.map((f) => (
+              <li key={f.feature} className="flex items-center justify-between">
+                <span className="text-neutral-600">{FEATURE_LABELS[f.feature] ?? f.feature}</span>
+                <span className="text-neutral-500">
+                  {f._count._all} call{f._count._all === 1 ? "" : "s"} · ~
+                  {fmtUsd(f._sum.estimatedCostUsd?.toNumber() ?? 0)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
     </div>
   );

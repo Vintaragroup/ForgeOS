@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
 import { deleteDocument, uploadDocument } from "@/lib/document-service";
-import { summarizeDocument } from "@/lib/ai/document-summary-service";
+import { analyzeDocument } from "@/lib/ai/analyze-document";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import type { DocumentType } from "@/generated/prisma/enums";
 
@@ -37,9 +37,9 @@ export async function deleteDocumentAction(opportunityId: string, documentId: st
 }
 
 export async function analyzeDocumentAction(opportunityId: string, documentId: string) {
-  await requireOpportunityAccess(opportunityId);
+  const user = await requireOpportunityAccess(opportunityId);
   try {
-    await summarizeDocument(documentId);
+    await analyzeDocument(documentId, user.id);
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {
       throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable document analysis.");

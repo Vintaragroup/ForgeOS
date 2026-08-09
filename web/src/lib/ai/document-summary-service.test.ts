@@ -44,7 +44,12 @@ describe("summarizeDocument", () => {
     expect(refreshed.extractedText).toBeNull();
   });
 
-  it("marks a DRAWING document UNSUPPORTED without ever needing an API key", async () => {
+  // analyze-document.ts's dispatcher now routes DRAWING documents to
+  // drawing-summary-service.ts's vision-based summarizeDrawing() instead
+  // -- this only guards the defensive fallback if summarizeDocument (the
+  // text path) is ever called on one directly by mistake; it should
+  // still refuse rather than burn a token budget on unextractable text.
+  it("marks a DRAWING document UNSUPPORTED if called directly, without ever needing an API key", async () => {
     const document = await makeDocument("DRAWING");
 
     const result = await summarizeDocument(document.id);

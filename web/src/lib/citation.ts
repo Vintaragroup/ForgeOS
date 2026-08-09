@@ -23,6 +23,11 @@ export function citationHref(
   if ((doc.mimeType === DOCX_MIME || doc.mimeType === XLSX_MIME) && fact.sourceQuote) {
     return `${base}?q=${encodeURIComponent(fact.sourceQuote)}#hl`;
   }
+  // A raw-image drawing upload (see drawing-summary-service.ts) has no
+  // page/quote concept -- just jump to the document itself.
+  if (doc.mimeType.startsWith("image/") && fact.pageNumber) {
+    return base;
+  }
   return null;
 }
 

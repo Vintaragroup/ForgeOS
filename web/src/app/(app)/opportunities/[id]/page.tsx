@@ -25,16 +25,16 @@ const DOCUMENT_TYPE_OPTIONS = [
   { value: "OTHER", label: "Other" },
 ];
 
-// PRICING_SCHEDULE and DRAWING never go through the AI summarizer (see
-// text-extraction.ts) -- shown as their own fixed, non-alarming labels
+// PRICING_SCHEDULE never goes through the AI summarizer at all (see
+// text-extraction.ts) -- shown as its own fixed, non-alarming label
 // rather than routing through PENDING/UNSUPPORTED, so a document that
-// was never going to be "analyzed" doesn't read like one that failed to be.
+// was never going to be "analyzed" doesn't read like one that failed to
+// be. DRAWING used to be the same case but now goes through the vision
+// summarizer (analyze-document.ts / drawing-summary-service.ts), so it
+// falls through to the normal status switch below like any other type.
 function ExtractionStatusChip({ status, documentType }: { status: string; documentType: string }) {
   if (documentType === "PRICING_SCHEDULE") {
     return <StatusChip tone="info">Priced via import</StatusChip>;
-  }
-  if (documentType === "DRAWING") {
-    return <StatusChip tone="neutral">View only</StatusChip>;
   }
   switch (status) {
     case "COMPLETE":
@@ -468,7 +468,6 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                 <div className="flex shrink-0 items-center gap-2">
                   <ExtractionStatusChip status={doc.extractionStatus} documentType={doc.documentType} />
                   {doc.documentType !== "PRICING_SCHEDULE" &&
-                    doc.documentType !== "DRAWING" &&
                     (doc.extractionStatus === "PENDING" || doc.extractionStatus === "FAILED") && (
                       <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
                         <button type="submit" className="text-xs text-neutral-500 hover:underline">
@@ -477,7 +476,6 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                       </form>
                     )}
                   {doc.documentType !== "PRICING_SCHEDULE" &&
-                    doc.documentType !== "DRAWING" &&
                     doc.extractionStatus === "COMPLETE" && (
                       <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
                         <button

@@ -6,7 +6,8 @@
 
 import { db } from "@/lib/db";
 import { buildChatContext, getRecentMessages } from "@/lib/ai/chat-context-service";
-import { DEFAULT_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const CHAT_MESSAGE_LIMIT = 20;
@@ -34,11 +35,19 @@ export async function sendMessage(opportunityId: string, userId: string, content
   ]);
 
   const completion = await client.chat.completions.create({
-    model: DEFAULT_MODEL,
+    model: BASIC_MODEL,
     messages: [
       { role: "system", content: systemPrompt },
       ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
     ],
+  });
+
+  await recordAiUsage({
+    userId,
+    feature: "CHAT",
+    model: BASIC_MODEL,
+    usage: completion.usage,
+    opportunityId,
   });
 
   const reply = completion.choices[0]?.message?.content?.trim() || "(no response)";

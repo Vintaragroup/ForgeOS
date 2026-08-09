@@ -15,7 +15,18 @@ export class AiNotConfiguredError extends Error {
   }
 }
 
-export const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-4o";
+// Case-based model tiering: BASIC_MODEL handles every text-based call
+// (document summary, scope proposals, chat) -- cheap, and plenty capable
+// for extracting facts from already-extracted plain text. ADVANCED_MODEL
+// is reserved for genuinely harder cases -- today, drawing/CAD vision
+// analysis (drawing-summary-service.ts), which needs multimodal image
+// understanding a cheap text model can't do at all, not just does worse.
+export const BASIC_MODEL = process.env.OPENAI_MODEL_BASIC || "gpt-4o-mini";
+export const ADVANCED_MODEL = process.env.OPENAI_MODEL_ADVANCED || "gpt-4o";
+
+// Back-compat: an already-configured OPENAI_MODEL still wins for the basic
+// tier, so an existing deployment doesn't silently change model on upgrade.
+export const DEFAULT_MODEL = process.env.OPENAI_MODEL || BASIC_MODEL;
 
 let client: OpenAI | null = null;
 
