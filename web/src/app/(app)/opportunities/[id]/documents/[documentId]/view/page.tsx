@@ -37,15 +37,14 @@ export default async function DocumentViewPage(
 
   const rawUrl = `/opportunities/${id}/documents/${documentId}`;
   // A Project Brief citation links here with ?page=N&q=<quote> for a PDF --
-  // Chromium's built-in PDF viewer (PDFium) honors #page=N&search=<text> on
-  // the src URL directly, highlighting every match in yellow and jumping to
-  // the first one -- the same "open parameters" mechanism Adobe Reader
-  // uses, no PDF.js/custom text layer needed. If search isn't honored by a
-  // given viewer, this degrades to a plain page jump, not a broken link.
-  const fragmentParts = [pageParam && `page=${pageParam}`, quoteParam && `search=${encodeURIComponent(quoteParam)}`]
-    .filter(Boolean)
-    .join("&");
-  const inlineUrl = `${rawUrl}?inline=1${fragmentParts ? `#${fragmentParts}` : ""}`;
+  // #page=N is genuine, well-supported native browser PDF viewer behavior.
+  // #search=<text> was an attempt to also highlight the quote inside the
+  // embedded PDF itself using Chromium's PDF viewer open parameters; that
+  // didn't hold up in practice (unverifiable from this environment, and
+  // confirmed not working), so it's dropped rather than left in as a
+  // silent no-op. The ReferencedExcerpt callout below is what actually
+  // shows the highlighted text now, for every file type uniformly.
+  const inlineUrl = `${rawUrl}?inline=1${pageParam ? `#page=${pageParam}` : ""}`;
 
   return (
     <div className="flex flex-col gap-6">
@@ -55,6 +54,8 @@ export default async function DocumentViewPage(
         title={document.filename}
         action={<LinkButton href={rawUrl} variant="secondary">Download</LinkButton>}
       />
+
+      {quoteParam && <ReferencedExcerpt quote={quoteParam} />}
 
       {document.mimeType === PDF_MIME ? (
         <Card className="overflow-hidden">
@@ -87,6 +88,24 @@ export default async function DocumentViewPage(
         />
       )}
     </div>
+  );
+}
+
+// The one piece of this citation flow that doesn't depend on any
+// particular viewer's behavior: whatever quote the citation carries is
+// shown here, marked exactly like a yellow highlighter, regardless of
+// whether the PDF/DOCX viewer below it manages to scroll/highlight
+// in-place on its own. Plain server-rendered HTML -- always renders the
+// same way, unlike relying on an embedded PDF viewer's undocumented
+// support for a search parameter.
+function ReferencedExcerpt({ quote }: { quote: string }) {
+  return (
+    <Card className="border-l-4 border-amber-400 bg-amber-50 p-4">
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-amber-700">Referenced text</p>
+      <p className="text-sm text-neutral-800">
+        <mark style={{ background: "#fddfb1" }}>{quote}</mark>
+      </p>
+    </Card>
   );
 }
 
