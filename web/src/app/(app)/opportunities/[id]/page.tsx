@@ -19,7 +19,17 @@ const DOCUMENT_TYPE_OPTIONS = [
   { value: "OTHER", label: "Other" },
 ];
 
-function ExtractionStatusChip({ status }: { status: string }) {
+// PRICING_SCHEDULE and DRAWING never go through the AI summarizer (see
+// text-extraction.ts) -- shown as their own fixed, non-alarming labels
+// rather than routing through PENDING/UNSUPPORTED, so a document that
+// was never going to be "analyzed" doesn't read like one that failed to be.
+function ExtractionStatusChip({ status, documentType }: { status: string; documentType: string }) {
+  if (documentType === "PRICING_SCHEDULE") {
+    return <StatusChip tone="info">Priced via import</StatusChip>;
+  }
+  if (documentType === "DRAWING") {
+    return <StatusChip tone="neutral">View only</StatusChip>;
+  }
   switch (status) {
     case "COMPLETE":
       return <StatusChip tone="good">Analyzed</StatusChip>;
@@ -28,7 +38,7 @@ function ExtractionStatusChip({ status }: { status: string }) {
     case "FAILED":
       return <StatusChip tone="critical">Analysis failed</StatusChip>;
     case "UNSUPPORTED":
-      return <StatusChip tone="warning">Not analyzable</StatusChip>;
+      return <StatusChip tone="neutral">Not analyzable</StatusChip>;
     default:
       return <StatusChip tone="neutral">Not analyzed</StatusChip>;
   }
@@ -342,7 +352,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
               >
                 <div className="flex min-w-0 items-center gap-2">
                   <a
-                    href={`/opportunities/${opportunity.id}/documents/${doc.id}`}
+                    href={`/opportunities/${opportunity.id}/documents/${doc.id}/view`}
                     className="truncate font-medium text-neutral-900 hover:underline"
                   >
                     {doc.filename}
@@ -352,14 +362,16 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                   </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <ExtractionStatusChip status={doc.extractionStatus} />
-                  {(doc.extractionStatus === "PENDING" || doc.extractionStatus === "FAILED") && (
-                    <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
-                      <button type="submit" className="text-xs text-neutral-500 hover:underline">
-                        Analyze
-                      </button>
-                    </form>
-                  )}
+                  <ExtractionStatusChip status={doc.extractionStatus} documentType={doc.documentType} />
+                  {doc.documentType !== "PRICING_SCHEDULE" &&
+                    doc.documentType !== "DRAWING" &&
+                    (doc.extractionStatus === "PENDING" || doc.extractionStatus === "FAILED") && (
+                      <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
+                        <button type="submit" className="text-xs text-neutral-500 hover:underline">
+                          Analyze
+                        </button>
+                      </form>
+                    )}
                   <ConfirmForm
                     action={deleteDocumentAction.bind(null, opportunity.id, doc.id)}
                     confirmMessage={`Delete "${doc.filename}"? This can't be undone.`}

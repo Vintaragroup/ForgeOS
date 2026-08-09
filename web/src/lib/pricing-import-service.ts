@@ -16,6 +16,7 @@ import ExcelJS from "exceljs";
 import { getDocumentBytes } from "@/lib/document-service";
 import { addLineItemsBulk, addSection } from "@/lib/estimate-service";
 import { db } from "@/lib/db";
+import { cellText } from "@/lib/xlsx-utils";
 
 const HEADER_SCAN_ROWS = 20; // header always appears near the top, after a title/merge block
 
@@ -38,14 +39,6 @@ export interface PricingImportPreview {
 
 function normalizeHeader(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-function cellText(value: unknown): string {
-  if (value == null) return "";
-  if (typeof value === "object" && "richText" in (value as object)) {
-    return (value as { richText: { text: string }[] }).richText.map((r) => r.text).join("");
-  }
-  return String(value).trim();
 }
 
 interface ColumnMap {

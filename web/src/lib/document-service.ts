@@ -58,6 +58,14 @@ export async function listDocuments(opportunityId: string) {
   });
 }
 
+// Row only, no storage read -- for callers (the /view page's PDF branch)
+// that only need filename/mimeType and hand the byte-serving off to the
+// raw-bytes route instead of loading a possibly-large file into memory
+// just to discard it.
+export async function getDocument(documentId: string) {
+  return db.document.findFirstOrThrow({ where: { id: documentId, deletedAt: null } });
+}
+
 export async function getDocumentBytes(documentId: string) {
   const document = await db.document.findFirstOrThrow({ where: { id: documentId, deletedAt: null } });
   const bytes = await getObject(document.storageKey);

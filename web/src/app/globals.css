@@ -71,4 +71,35 @@
   input[type="date"]::-webkit-calendar-picker-indicator:hover {
     opacity: 1;
   }
+
+  /* Minimal styling for mammoth's raw DOCX->HTML output (document
+     view page) -- no @tailwindcss/typography dependency for one view,
+     just enough that headings/tables/lists read as a document instead
+     of an unstyled wall of text. */
+  .docx-view h1, .docx-view h2, .docx-view h3 {
+    font-family: var(--font-display);
+    letter-spacing: 0.02em;
+    margin-top: 1.25em;
+    margin-bottom: 0.5em;
+  }
+  .docx-view h1 { font-size: 1.5rem; }
+  .docx-view h2 { font-size: 1.25rem; }
+  .docx-view h3 { font-size: 1.1rem; }
+  .docx-view p {
+    margin-bottom: 0.75em;
+    line-height: 1.6;
+  }
+  .docx-view ul, .docx-view ol {
+    margin: 0.5em 0 0.75em 1.5em;
+  }
+  .docx-view table {
+    border-collapse: collapse;
+    margin: 0.75em 0;
+    width: 100%;
+  }
+  .docx-view td, .docx-view th {
+    border: 1px solid var(--brand-gray);
+    padding: 0.375rem 0.5rem;
+    vertical-align: top;
+  }
 }
