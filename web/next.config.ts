@@ -13,6 +13,15 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: "20mb",
     },
+    // A SEPARATE 10MB default from the one above: every route passes
+    // through src/proxy.ts (Next 16's renamed middleware), which buffers
+    // the request body independently before it ever reaches the Server
+    // Action. Missing this, uploads over ~10MB got silently truncated at
+    // the proxy layer, then failed with a confusing "Unexpected end of
+    // form" from the now-malformed multipart body -- not a body-size
+    // error, so it didn't point at the real cause. Matches
+    // serverActions.bodySizeLimit above so both layers agree.
+    proxyClientMaxBodySize: "20mb",
   },
 };
 
