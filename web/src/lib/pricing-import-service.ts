@@ -187,6 +187,14 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
         qty: row.qty,
         unitCost: row.catalogMatch?.unitCost ?? 0,
         documentId,
+        // The Description cell's own text, verbatim -- exactly what the
+        // spreadsheet viewer renders in that cell, so the "Source" link's
+        // highlight (document-view-service.ts's highlightSpreadsheetCell)
+        // always finds a real, exact match. Not the "item — description"
+        // display string above: item and description are separate cells,
+        // so that concatenation never appears as one contiguous run in
+        // the rendered table.
+        sourceQuote: row.description,
       })),
     );
     created.push({ section, count: lineItems.length });

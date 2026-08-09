@@ -1,13 +1,14 @@
-// Shared by the Project Brief (opportunities/[id]/page.tsx) and the
-// Dashboard's upcoming-deadlines list (dashboard.ts) -- both link an
-// AI-extracted fact back to where it came from, using the two mechanisms
-// document-view-service.ts's viewer understands: a PDF page jump +
-// in-viewer highlight (?page=N&q=<quote>, using Chromium's built-in PDF
-// viewer's #page=N&search=<text> open-parameters -- the same viewer
-// PDFium/Adobe Reader use to highlight every match in yellow and jump to
-// the first one, no PDF.js or custom text layer needed) or a DOCX
-// text-search highlight (?q=<quote>#hl).
-import { DOCX_MIME, PDF_MIME } from "@/lib/ai/text-extraction";
+// Shared by the Project Brief (opportunities/[id]/page.tsx), the Estimate
+// line item list (estimates/[id]/page.tsx), and the Dashboard's
+// upcoming-deadlines list (dashboard.ts) -- all link an extracted/parsed
+// fact back to where it came from, using the mechanisms
+// document-view-service.ts's viewer understands: a PDF page jump + the
+// "Referenced text" highlight callout (?page=N&q=<quote> --
+// view/page.tsx renders the quote as a real, always-visible highlighted
+// excerpt rather than depending on any particular PDF plugin's own
+// search behavior), a DOCX text-search highlight (?q=<quote>#hl), or an
+// XLSX cell highlight (?q=<quote>#hl, same fragment convention as DOCX).
+import { DOCX_MIME, PDF_MIME, XLSX_MIME } from "@/lib/ai/text-extraction";
 
 export function citationHref(
   opportunityId: string,
@@ -19,7 +20,7 @@ export function citationHref(
     const q = fact.sourceQuote ? `&q=${encodeURIComponent(fact.sourceQuote)}` : "";
     return `${base}?page=${fact.pageNumber}${q}`;
   }
-  if (doc.mimeType === DOCX_MIME && fact.sourceQuote) {
+  if ((doc.mimeType === DOCX_MIME || doc.mimeType === XLSX_MIME) && fact.sourceQuote) {
     return `${base}?q=${encodeURIComponent(fact.sourceQuote)}#hl`;
   }
   return null;

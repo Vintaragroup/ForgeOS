@@ -448,6 +448,17 @@ model LineItem {
   documentId String?
   document   Document? @relation(fields: [documentId], references: [id])
 
+  // Phase 7.5: the exact text this line item was pulled from -- a
+  // pricing-schedule row's own cell text (verbatim, deterministic parse,
+  // not AI) or an AI-proposed item's verified quote (resolved against the
+  // real extracted text at commit time, same discipline as
+  // Document.extractedSummary's citations). Lets a reviewer click through
+  // from the line item straight to the highlighted source and check it
+  // against hard data, not just trust the number. Null for a manually
+  // added line item -- there's no document to check it against.
+  sourceQuote      String?
+  sourcePageNumber Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

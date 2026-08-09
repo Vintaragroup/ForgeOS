@@ -4,6 +4,8 @@
 
 import { db } from "@/lib/db";
 import type { ProjectStatus, ShipmentStatus, TaskStatus, WorkOrderStatus } from "@/generated/prisma/enums";
+import type { DocumentSummary } from "@/lib/ai/document-summary-service";
+import { parseFreeTextDate } from "@/lib/citation";
 
 // docs/migration-plan.md Phase 5: "Convert to Project" from a WON
 // Opportunity -- mirrors Phase 2's "Convert to estimate." No stage
@@ -23,9 +25,43 @@ export async function updateProjectDetails(
 // A WorkOrder's timeline milestones (deposit -> production meeting ->
 // artwork deadline -> balance due -> install) start as trackable dates,
 // not the workbook's static text -- docs/workflow-map.md's clearest
-// workflow evidence.
+// workflow evidence. installDate alone gets a best-effort prefill from
+// the RFP's own extracted key dates (see findInstallDateFromDocuments) --
+// deposit/production-meeting/artwork/balance dates are the shop's own
+// internal production schedule, not something an RFP states, so there's
+// no honest source to prefill those from.
 export async function startWorkOrder(projectId: string) {
-  return db.workOrder.create({ data: { projectId } });
+  const project = await db.project.findUniqueOrThrow({ where: { id: projectId } });
+  const installDate = await findInstallDateFromDocuments(project.opportunityId);
+  return db.workOrder.create({ data: { projectId, installDate } });
+}
+
+// Looks for a key date whose label is about installation STARTING, not a
+// sub-wave or the completion milestone -- "Start of Installation" should
+// win over "Wave 1 Installation" or "Installation Complete" when a
+// document has all three, since the earliest one is what a production
+// schedule actually needs. Read-only regex match on the label text (no
+// AI call here), taking the earliest of any documents that qualify.
+async function findInstallDateFromDocuments(opportunityId: string): Promise<Date | null> {
+  const documents = await db.document.findMany({
+    where: { opportunityId, deletedAt: null, extractionStatus: "COMPLETE" },
+    select: { extractedSummary: true },
+  });
+
+  const candidates: Date[] = [];
+  for (const document of documents) {
+    if (!document.extractedSummary) continue;
+    const summary = document.extractedSummary as unknown as DocumentSummary;
+    for (const keyDate of summary.keyDates) {
+      if (!/\binstall/i.test(keyDate.label) || /complete|wave/i.test(keyDate.label)) continue;
+      const date = parseFreeTextDate(keyDate.date);
+      if (date) candidates.push(date);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.getTime() - b.getTime());
+  return candidates[0];
 }
 
 export async function updateWorkOrder(

@@ -18,6 +18,7 @@ afterEach(async () => {
   await db.shipment.deleteMany();
   await db.workOrder.deleteMany();
   await db.project.deleteMany();
+  await db.document.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
   await db.user.deleteMany();
@@ -84,6 +85,47 @@ describe("startWorkOrder / updateWorkOrder", () => {
     expect(updated.status).toBe("IN_PRODUCTION");
     expect(updated.depositDueDate?.toISOString().slice(0, 10)).toBe("2026-08-15");
     expect(updated.installDate?.toISOString().slice(0, 10)).toBe("2026-09-01");
+  });
+});
+
+describe("startWorkOrder auto-fills installDate from an analyzed document's key dates", () => {
+  it("prefers 'Start of Installation' over a wave sub-milestone or the completion date", async () => {
+    const opportunity = await makeWonOpportunity();
+    const project = await convertOpportunityToProject(opportunity.id);
+    await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "Appendix A.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+        storageKey: "test-key",
+        documentType: "RFP",
+        extractionStatus: "COMPLETE",
+        extractedSummary: {
+          eventOrProjectName: null,
+          venue: null,
+          submissionDeadline: null,
+          keyDates: [
+            { label: "Wave 1 Installation", date: "January 5, 2027", dateType: "MILESTONE", sourceQuote: "x", pageNumber: null },
+            { label: "Start of Installation", date: "January 1, 2027", dateType: "MILESTONE", sourceQuote: "x", pageNumber: null },
+            { label: "Installation Complete", date: "January 20, 2027", dateType: "MILESTONE", sourceQuote: "x", pageNumber: null },
+          ],
+          scopeSummary: [],
+          riskFlags: [],
+        },
+      },
+    });
+
+    const workOrder = await startWorkOrder(project.id);
+    expect(workOrder.installDate?.toISOString().slice(0, 10)).toBe("2027-01-01");
+  });
+
+  it("leaves installDate null when no analyzed document has an install-start key date", async () => {
+    const opportunity = await makeWonOpportunity();
+    const project = await convertOpportunityToProject(opportunity.id);
+
+    const workOrder = await startWorkOrder(project.id);
+    expect(workOrder.installDate).toBeNull();
   });
 });
 

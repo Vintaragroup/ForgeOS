@@ -21,14 +21,19 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
-async function makeAnalyzedDocument(extractedText: string | null) {
+// mimeType defaults to DOCX, not PDF -- commitScopeLineItems fetches real
+// bytes off disk to compute a page number for a PDF source (see
+// text-extraction.ts's extractPdfPageTexts), which this fixture's fake
+// storageKey doesn't have. DOCX has no page concept, so it exercises the
+// "no page lookup" path cleanly without needing a real file on disk.
+async function makeAnalyzedDocument(extractedText: string | null, mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
   const company = await db.company.create({ data: { name: "Test Co" } });
   const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
   return db.document.create({
     data: {
       opportunityId: opportunity.id,
-      filename: "Scope of Work.pdf",
-      mimeType: "application/pdf",
+      filename: "Scope of Work.docx",
+      mimeType,
       sizeBytes: 100,
       storageKey: "test-key",
       documentType: "SCOPE_OF_WORK",
@@ -114,5 +119,66 @@ describe("commitScopeLineItems", () => {
     const laborItem = allLineItems.find((li) => li.description.includes("Installation labor"));
     expect(laborItem?.unitCost.toNumber()).toBe(0); // no catalog match
     expect(laborItem?.description).toContain("(qty estimated -- verify)");
+
+    // The check-and-balance: every committed row carries the exact quote
+    // it came from, so a reviewer can click through and verify it -- for
+    // a DOCX source there's no page concept, so sourcePageNumber stays
+    // null and the viewer falls back to a text-search highlight instead.
+    expect(allLineItems.every((li) => li.sourceQuote === "some scope text")).toBe(true);
+    expect(allLineItems.every((li) => li.sourcePageNumber === null)).toBe(true);
+  });
+
+  it("computes a real page number for a PDF source, from the PDF's own per-page text", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const { uploadDocument } = await import("@/lib/document-service");
+    const { extractPdfPageTexts } = await import("@/lib/ai/text-extraction");
+
+    const rfpDir = path.resolve(
+      import.meta.dirname,
+      "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build",
+    );
+    const bytes = await readFile(path.join(rfpDir, "1. SBLXI - Temporary Booth Build RFP Final.pdf"));
+
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const file = new File([bytes], "RFP.pdf", { type: "application/pdf" });
+    const document = await uploadDocument(opportunity.id, { file, documentType: "SCOPE_OF_WORK" });
+
+    // A real, known substring pulled from a specific real page -- proves
+    // the lookup finds the ACTUAL page, not just any non-null number.
+    const pages = await extractPdfPageTexts(bytes);
+    const targetPageIndex = 3;
+    const realQuote = pages[targetPageIndex].slice(40, 90).trim();
+    expect(realQuote.length).toBeGreaterThan(20);
+
+    await db.document.update({
+      where: { id: document.id },
+      data: { extractionStatus: "COMPLETE", extractedText: pages.join("\n") },
+    });
+
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "Real scope item",
+        qty: 1,
+        qtyIsExplicit: false,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Test Category",
+        sourceQuote: realQuote,
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+    await commitScopeLineItems(version.id, document.id);
+
+    const lineItem = await db.lineItem.findFirstOrThrow({ where: { documentId: document.id } });
+    expect(lineItem.sourcePageNumber).toBe(targetPageIndex + 1);
+    expect(lineItem.sourceQuote).toBe(realQuote);
   });
 });

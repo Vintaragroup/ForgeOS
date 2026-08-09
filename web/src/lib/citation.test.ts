@@ -71,10 +71,19 @@ describe("citationHref", () => {
     );
   });
 
-  it("returns null for an unsupported mime type", () => {
+  it("links an XLSX fact to a cell-search highlight, same fragment convention as DOCX", () => {
     const href = citationHref(
       opportunityId,
       { id: "doc3", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+      { sourceQuote: "Complete Booth Build", pageNumber: null },
+    );
+    expect(href).toBe("/opportunities/opp1/documents/doc3/view?q=Complete%20Booth%20Build#hl");
+  });
+
+  it("returns null for a genuinely unsupported mime type", () => {
+    const href = citationHref(
+      opportunityId,
+      { id: "doc4", mimeType: "image/png" },
       { sourceQuote: "some quote", pageNumber: 2 },
     );
     expect(href).toBeNull();

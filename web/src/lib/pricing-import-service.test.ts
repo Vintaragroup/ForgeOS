@@ -133,6 +133,15 @@ describe("commitPricingImport", () => {
     // the attachmentId-sourced draft flow.
     const refreshedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
     expect(refreshedVersion.totalCost.toNumber()).toBe(0);
+
+    // The check-and-balance: every row's sourceQuote is its own real
+    // Description cell text, verbatim -- not something derived or
+    // guessed, so it's guaranteed to be findable again in the rendered
+    // spreadsheet viewer (see document-view-service.ts's findSpreadsheetMatch).
+    const complete = allLineItems.find((li) => li.description.includes("Complete Booth Build"));
+    expect(complete?.sourceQuote).toContain("Complete Booth Build");
+    expect(allLineItems.every((li) => li.sourceQuote && li.sourceQuote.length > 0)).toBe(true);
+    expect(allLineItems.every((li) => li.sourcePageNumber === null)).toBe(true); // XLSX has no page concept
   });
 
   it("seeds unitCost from a confident catalog match instead of leaving it at $0", async () => {

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { highlightQuote, renderDocx, renderSpreadsheet } from "@/lib/document-view-service";
+import { findSpreadsheetMatch, highlightQuote, renderDocx, renderSpreadsheet } from "@/lib/document-view-service";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
 
@@ -21,6 +21,43 @@ describe("renderSpreadsheet", () => {
     const headerRow = pricingSheet.rows.find((r) => r.includes("Category"));
     expect(headerRow).toBeDefined();
     expect(headerRow).toContain("Description");
+  });
+});
+
+describe("findSpreadsheetMatch", () => {
+  it("finds the real cell a pricing-schedule row's own Description text came from", async () => {
+    const bytes = await readFile(
+      path.join(RFP_DIR, "Exhibit 1 - SBLXI - Financial Proposal Schedule Temporary Booth Build.xlsx"),
+    );
+    const sheets = await renderSpreadsheet(bytes);
+
+    // A real cell's own full text, pulled from the rendered sheet itself
+    // (not a guessed/truncated string) -- proves the round trip: whatever
+    // pricing-import-service.ts would store as sourceQuote, this function
+    // can find again in the same rendered table.
+    const pricingSheet = sheets.find((s) => s.name === "2. Pricing Schedule")!;
+    const realCell = pricingSheet.rows.flat().find((cell) => cell.includes("Complete Booth Build"))!;
+    expect(realCell).toBeTruthy();
+
+    const match = findSpreadsheetMatch(sheets, realCell);
+    expect(match).not.toBeNull();
+    expect(sheets[match!.sheetIndex].rows[match!.rowIndex][match!.cellIndex]).toBe(realCell);
+  });
+
+  it("tolerates whitespace/case differences between the stored quote and the cell", async () => {
+    const sheets = [{ name: "Sheet1", rows: [["Category", "Description"], ["A", "  Complete   Booth Build  "]] }];
+    const match = findSpreadsheetMatch(sheets, "complete booth build");
+    expect(match).toEqual({ sheetIndex: 0, rowIndex: 1, cellIndex: 1 });
+  });
+
+  it("returns null for a quote that isn't in any sheet", () => {
+    const sheets = [{ name: "Sheet1", rows: [["A", "B"]] }];
+    expect(findSpreadsheetMatch(sheets, "nothing like this exists")).toBeNull();
+  });
+
+  it("returns null for an empty quote", () => {
+    const sheets = [{ name: "Sheet1", rows: [["A", "B"]] }];
+    expect(findSpreadsheetMatch(sheets, "")).toBeNull();
   });
 });
 

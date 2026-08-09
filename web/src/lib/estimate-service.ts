@@ -195,6 +195,16 @@ export async function addLineItemsBulk(
     qty: DecimalInput;
     unitCost: DecimalInput;
     documentId: string;
+    // The exact source text this row came from -- a pricing-schedule
+    // row's own verbatim cell text, or an AI-proposed item's quote
+    // (already verified against the real extracted text by the caller).
+    // Powers the "Source" link in the estimate line item list
+    // (document-view page.tsx's citation/highlight mechanism) so a
+    // reviewer can check every priced row against hard data, not just
+    // trust it. Undefined for a manually added row -- there's no
+    // document to check it against.
+    sourceQuote?: string | null;
+    sourcePageNumber?: number | null;
   }[],
 ) {
   await assertUnlocked(estimateVersionId);
@@ -213,6 +223,8 @@ export async function addLineItemsBulk(
           totalCost: computeLineItemTotal(item.qty, item.unitCost),
           isDraft: true,
           documentId: item.documentId,
+          sourceQuote: item.sourceQuote ?? null,
+          sourcePageNumber: item.sourcePageNumber ?? null,
         },
       }),
     ),

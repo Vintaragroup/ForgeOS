@@ -13,10 +13,11 @@
 
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
-import { resolveHighlightableQuote } from "@/lib/ai/text-extraction";
+import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MIME } from "@/lib/ai/text-extraction";
 import { DEFAULT_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { addLineItemsBulk, addSection } from "@/lib/estimate-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
+import { getDocumentBytes } from "@/lib/document-service";
 
 export interface ProposedLineItem {
   description: string;
@@ -133,6 +134,18 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
   const catalog = await loadCatalogForMatching();
   const categories = [...new Set(items.map((i) => i.category))];
 
+  // pageNumber is computed here, not stored at propose time -- same
+  // reasoning as document-summary-service.ts: searching the PDF's own
+  // per-page text for each already-verified sourceQuote is trustworthy in
+  // a way an LLM-reported page number wouldn't be. DOCX has no page
+  // concept; those items get a text-search highlight in the viewer
+  // instead (sourcePageNumber stays null, sourceQuote still links there).
+  let pageTexts: string[] | null = null;
+  if (document.mimeType === PDF_MIME) {
+    const { bytes } = await getDocumentBytes(documentId);
+    pageTexts = await extractPdfPageTexts(bytes);
+  }
+
   const existingSectionCount = await db.estimateSection.count({ where: { estimateVersionId, optionId: null } });
   let nextSortOrder = existingSectionCount;
   const created = [];
@@ -153,6 +166,8 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
         qty: item.qty,
         unitCost: matchDescription(item.description, catalog)?.unitCost ?? 0,
         documentId,
+        sourceQuote: item.sourceQuote,
+        sourcePageNumber: pageTexts ? locateQuotePage(pageTexts, item.sourceQuote) : null,
       })),
     );
     created.push({ section, count: lineItems.length });

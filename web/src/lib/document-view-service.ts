@@ -14,6 +14,35 @@ export interface SpreadsheetSheet {
   rows: string[][];
 }
 
+export interface SpreadsheetMatch {
+  sheetIndex: number;
+  rowIndex: number;
+  cellIndex: number;
+}
+
+// Finds the exact cell a citation's sourceQuote came from. Unlike
+// highlightQuote's regex search over free-form document text, this is a
+// straight equality check: pricing-import-service.ts stores a row's own
+// Description cell text, verbatim, as sourceQuote -- so the real match
+// either exists exactly (normalized for whitespace/case) or the sheet
+// changed since the line item was imported.
+function normalizeCell(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+export function findSpreadsheetMatch(sheets: SpreadsheetSheet[], quote: string): SpreadsheetMatch | null {
+  const normalized = normalizeCell(quote);
+  if (!normalized) return null;
+  for (let sheetIndex = 0; sheetIndex < sheets.length; sheetIndex++) {
+    const rows = sheets[sheetIndex].rows;
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      const cellIndex = rows[rowIndex].findIndex((cell) => normalizeCell(cell) === normalized);
+      if (cellIndex !== -1) return { sheetIndex, rowIndex, cellIndex };
+    }
+  }
+  return null;
+}
+
 const MAX_ROWS_PER_SHEET = 500; // a viewer, not an export -- generous enough for every real sheet seen so far
 
 export async function renderSpreadsheet(bytes: Buffer): Promise<SpreadsheetSheet[]> {

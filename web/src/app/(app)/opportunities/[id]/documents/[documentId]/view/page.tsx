@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { getDocument, getDocumentBytes } from "@/lib/document-service";
-import { renderDocx, renderSpreadsheet, highlightQuote } from "@/lib/document-view-service";
-import { DOCX_MIME, PDF_MIME } from "@/lib/ai/text-extraction";
+import { renderDocx, renderSpreadsheet, highlightQuote, findSpreadsheetMatch } from "@/lib/document-view-service";
+import { DOCX_MIME, PDF_MIME, XLSX_MIME } from "@/lib/ai/text-extraction";
 import { getThreadMessages } from "@/lib/chat-service";
 import { linkifyDocumentMentions } from "@/lib/citation";
 import { Card, LinkButton, PageHeader } from "@/components/ui";
@@ -10,7 +10,6 @@ import { ChatWidget } from "@/components/chat-widget";
 
 export const dynamic = "force-dynamic";
 
-const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const IMAGE_MIMES = ["image/png", "image/jpeg", "image/jpg"];
 
 export default async function DocumentViewPage(
@@ -67,7 +66,7 @@ export default async function DocumentViewPage(
           <img src={`${rawUrl}?inline=1`} alt={document.filename} className="max-w-full" />
         </Card>
       ) : document.mimeType === XLSX_MIME ? (
-        <SpreadsheetView documentId={documentId} />
+        <SpreadsheetView documentId={documentId} quote={quoteParam} />
       ) : document.mimeType === DOCX_MIME ? (
         <DocxView documentId={documentId} quote={quoteParam} />
       ) : (
@@ -109,13 +108,19 @@ function ReferencedExcerpt({ quote }: { quote: string }) {
   );
 }
 
-async function SpreadsheetView({ documentId }: { documentId: string }) {
+async function SpreadsheetView({ documentId, quote }: { documentId: string; quote?: string }) {
   const { bytes } = await getDocumentBytes(documentId);
   const sheets = await renderSpreadsheet(bytes);
+  // An estimate line item's "Source" link carries the exact cell text it
+  // was imported from (pricing-import-service.ts) -- an equality match
+  // against the same rendered rows, not a fuzzy search. The browser
+  // natively scrolls to id="hl" on load via the URL's own #hl fragment,
+  // same mechanism DocxView uses, no client JS needed.
+  const match = quote ? findSpreadsheetMatch(sheets, quote) : null;
 
   return (
     <div className="flex flex-col gap-6">
-      {sheets.map((sheet) => (
+      {sheets.map((sheet, sheetIndex) => (
         <Card key={sheet.name} className="p-4">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
             {sheet.name}
@@ -126,15 +131,25 @@ async function SpreadsheetView({ documentId }: { documentId: string }) {
             <div className="overflow-x-auto rounded-md border border-neutral-200">
               <table className="w-full text-xs">
                 <tbody>
-                  {sheet.rows.map((row, i) => (
-                    <tr key={i} className="border-t border-neutral-100 first:border-t-0">
-                      {row.map((cell, j) => (
-                        <td key={j} className="whitespace-nowrap px-2 py-1">
-                          {cell}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
+                  {sheet.rows.map((row, i) => {
+                    const isMatchRow = match && match.sheetIndex === sheetIndex && match.rowIndex === i;
+                    return (
+                      <tr
+                        key={i}
+                        id={isMatchRow ? "hl" : undefined}
+                        className={`border-t border-neutral-100 first:border-t-0 ${isMatchRow ? "bg-amber-100" : ""}`}
+                      >
+                        {row.map((cell, j) => (
+                          <td
+                            key={j}
+                            className={`whitespace-nowrap px-2 py-1 ${isMatchRow && match.cellIndex === j ? "font-semibold text-amber-900" : ""}`}
+                          >
+                            {cell}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

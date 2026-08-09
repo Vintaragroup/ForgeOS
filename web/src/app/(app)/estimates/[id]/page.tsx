@@ -30,6 +30,8 @@ import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
+import type { DocumentSummary } from "@/lib/ai/document-summary-service";
+import { citationHref } from "@/lib/citation";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
@@ -69,7 +71,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       sections: {
         where: { optionId: null },
         orderBy: { sortOrder: "asc" },
-        include: { lineItems: { include: { costActuals: true } } },
+        include: {
+          lineItems: {
+            include: { costActuals: true, document: { select: { id: true, mimeType: true, filename: true } } },
+          },
+        },
       },
       options: {
         orderBy: { sortOrder: "asc" },
@@ -128,6 +134,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     canImport && proposeDocumentId ? scopeDocuments.find((d) => d.id === proposeDocumentId) : null;
   const proposedItems = (proposeDocument?.proposedLineItems as unknown as ProposedLineItem[] | null) ?? null;
   const proposeCatalog = proposedItems && proposedItems.length > 0 ? await loadCatalogForMatching() : [];
+
+  // Same data the Project Brief already shows on the Opportunity page,
+  // surfaced here too -- whoever's pricing and signing off on THIS
+  // estimate shouldn't have to go find the Opportunity tab to see that a
+  // liquidated-damages clause or an insurance minimum applies.
+  const riskFlags = scopeDocuments.flatMap((d) => {
+    const summary = d.extractedSummary as unknown as DocumentSummary | null;
+    if (!summary) return [];
+    return summary.riskFlags.map((r) => ({ ...r, doc: d }));
+  });
 
   return (
     <div className="flex flex-col gap-8">
@@ -192,6 +208,38 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           <Button variant="secondary">Add attachment</Button>
         </form>
       </Card>
+
+      {riskFlags.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Risk &amp; compliance flags
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Extracted from this job&apos;s analyzed documents — verify against the source before pricing or
+            signing off around these terms.
+          </p>
+          <ul className="flex flex-col gap-2 text-sm">
+            {riskFlags.map((flag, i) => {
+              const href = citationHref(estimate.opportunityId, flag.doc, flag);
+              return (
+                <li key={i} className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2">
+                  <span className="flex items-start gap-2 text-amber-900">
+                    <span aria-hidden>⚠</span>
+                    {flag.text}
+                  </span>
+                  {href ? (
+                    <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
+                      {flag.doc.filename} →
+                    </Link>
+                  ) : (
+                    <span className="shrink-0 text-xs text-neutral-400">{flag.doc.filename}</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
 
       {canImport && (
         <Card className="p-6">
@@ -397,6 +445,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       ) : (
         <EstimateVersionCard
           estimateId={estimate.id}
+          opportunityId={estimate.opportunityId}
           version={currentVersion}
           users={users}
           proposalTemplates={proposalTemplates}
@@ -427,7 +476,13 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
 
 type VersionWithSections = Prisma.EstimateVersionGetPayload<{
   include: {
-    sections: { include: { lineItems: { include: { costActuals: true } } } };
+    sections: {
+      include: {
+        lineItems: {
+          include: { costActuals: true; document: { select: { id: true; mimeType: true; filename: true } } };
+        };
+      };
+    };
     options: { include: { sections: { include: { lineItems: true } } } };
     approvedBy: true;
     proposals: true;
@@ -437,12 +492,14 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
 
 function EstimateVersionCard({
   estimateId,
+  opportunityId,
   version,
   users,
   proposalTemplates,
   attachments,
 }: {
   estimateId: string;
+  opportunityId: string;
   version: VersionWithSections;
   users: { id: string; name: string }[];
   proposalTemplates: { id: string; name: string }[];
@@ -645,6 +702,21 @@ function EstimateVersionCard({
                     );
                     const actualCost = version.isLocked ? computeActualTotal(li.costActuals) : null;
                     const variance = actualCost !== null ? actualCost.minus(li.totalCost) : null;
+                    // The check-and-balance: only real when sourceQuote is
+                    // present (a pricing-schedule row's own cell text, or
+                    // an AI-proposed item's verified quote -- never asked
+                    // of the model as a page number, always computed by
+                    // actually finding the quote in the source, see
+                    // pricing-import-service.ts / scope-line-item-service.ts).
+                    // Absent for a manually added row or one imported
+                    // before this existed -- no silent/fake link either way.
+                    const sourceHref =
+                      li.document && li.sourceQuote
+                        ? citationHref(opportunityId, li.document, {
+                            sourceQuote: li.sourceQuote,
+                            pageNumber: li.sourcePageNumber,
+                          })
+                        : null;
                     return (
                       <tr key={li.id} className="border-t border-neutral-100">
                         <td className="py-1.5">
@@ -653,6 +725,15 @@ function EstimateVersionCard({
                             <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">
                               draft
                             </span>
+                          )}
+                          {sourceHref && (
+                            <Link
+                              href={sourceHref}
+                              className="ml-2 text-xs text-brand-navy hover:underline"
+                              title={`Verify against ${li.document!.filename}`}
+                            >
+                              source →
+                            </Link>
                           )}
                         </td>
                         <td className="py-1.5">{li.department ?? ""}</td>
