@@ -10,7 +10,7 @@ import { listDocuments } from "@/lib/document-service";
 import { getThreadMessages } from "@/lib/chat-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref, linkifyDocumentMentions } from "@/lib/citation";
-import { Button, Card, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
+import { Button, CollapsibleSection, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
 import { DocumentUploadForm } from "@/components/document-upload-form";
@@ -115,10 +115,7 @@ function ProjectBriefCard({
   const riskFlags = analyzed.flatMap((d) => d.extractedSummary.riskFlags.map((r) => ({ ...r, doc: d })));
 
   return (
-    <Card className="p-6">
-      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-        Project brief
-      </h2>
+    <CollapsibleSection title="Project brief">
       <p className="mb-4 text-sm text-neutral-500">
         Extracted from {analyzed.length} analyzed document{analyzed.length === 1 ? "" : "s"} — click a citation
         to jump to where it came from; verify against the source before relying on it.
@@ -203,7 +200,7 @@ function ProjectBriefCard({
           </ul>
         </div>
       )}
-    </Card>
+    </CollapsibleSection>
   );
 }
 
@@ -294,10 +291,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         }
       />
 
-      <Card className="p-6">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Stage
-        </h2>
+      <CollapsibleSection title="Stage">
         <form action={changeStageWithId} className="flex flex-wrap items-end gap-3">
           <SelectField
             // Forces React to remount this uncontrolled select whenever the
@@ -326,12 +320,9 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             ))}
           </ul>
         )}
-      </Card>
+      </CollapsibleSection>
 
-      <Card className="p-6">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Details
-        </h2>
+      <CollapsibleSection title="Details">
         <form action={updateWithId} className="flex flex-col gap-4">
           <SelectField
             label="Company"
@@ -375,52 +366,9 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         >
           <Button variant="danger">Delete opportunity</Button>
         </ConfirmForm>
-      </Card>
+      </CollapsibleSection>
 
-      <Card className="p-6">
-        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Collaborators
-        </h2>
-        <p className="mb-4 text-sm text-neutral-500">
-          Registered teammates checked below can see and work on this opportunity, in addition to its
-          owner. Admins can already see every opportunity regardless of this list.
-        </p>
-        <form action={updateCollaboratorsWithId} className="flex flex-col gap-3">
-          {users.length === 0 ? (
-            <p className="text-sm text-neutral-400">No other registered users yet.</p>
-          ) : (
-            <ul className="flex flex-col gap-2 text-sm">
-              {users.map((u) => (
-                <li key={u.id} className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id={`collaborator-${u.id}`}
-                    name="collaboratorIds"
-                    value={u.id}
-                    defaultChecked={collaboratorIds.has(u.id)}
-                    disabled={u.id === opportunity.ownerId}
-                    className="h-4 w-4 rounded border-neutral-300"
-                  />
-                  <label htmlFor={`collaborator-${u.id}`}>
-                    {u.name}
-                    {u.id === opportunity.ownerId && (
-                      <span className="ml-1.5 text-xs text-neutral-400">(owner — always has access)</span>
-                    )}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-          <div>
-            <Button variant="secondary">Save collaborators</Button>
-          </div>
-        </form>
-      </Card>
-
-      <Card className="p-6">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Estimates
-        </h2>
+      <CollapsibleSection title="Estimates">
         {opportunity.estimates.length === 0 ? (
           <p className="mb-4 text-sm text-neutral-500">
             No estimate started yet. Converting pre-fills job details from this opportunity.
@@ -450,12 +398,9 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             </form>
           )}
         </div>
-      </Card>
+      </CollapsibleSection>
 
-      <Card className="p-6">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Documents
-        </h2>
+      <CollapsibleSection title="Documents">
         <p className="mb-4 text-sm text-neutral-500">
           RFP packages, scope of work, drawings, contracts — anything client-supplied. Uploaded
           documents can seed draft estimate line items and answer questions in chat.
@@ -518,15 +463,12 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           </ul>
         )}
         <DocumentUploadForm action={uploadDocumentWithId} documentTypeOptions={DOCUMENT_TYPE_OPTIONS} />
-      </Card>
+      </CollapsibleSection>
 
       <ProjectBriefCard opportunityId={opportunity.id} documents={documents} />
 
       {opportunity.stage === "WON" && (
-        <Card className="p-6">
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Project
-          </h2>
+        <CollapsibleSection title="Project">
           {opportunity.projects.length === 0 ? (
             <>
               <p className="mb-4 text-sm text-neutral-500">
@@ -550,8 +492,45 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
               ))}
             </ul>
           )}
-        </Card>
+        </CollapsibleSection>
       )}
+
+      <CollapsibleSection title="Collaborators" defaultOpen={false}>
+        <p className="mb-4 text-sm text-neutral-500">
+          Registered teammates checked below can see and work on this opportunity, in addition to its
+          owner. Admins can already see every opportunity regardless of this list.
+        </p>
+        <form action={updateCollaboratorsWithId} className="flex flex-col gap-3">
+          {users.length === 0 ? (
+            <p className="text-sm text-neutral-400">No other registered users yet.</p>
+          ) : (
+            <ul className="flex flex-col gap-2 text-sm">
+              {users.map((u) => (
+                <li key={u.id} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id={`collaborator-${u.id}`}
+                    name="collaboratorIds"
+                    value={u.id}
+                    defaultChecked={collaboratorIds.has(u.id)}
+                    disabled={u.id === opportunity.ownerId}
+                    className="h-4 w-4 rounded border-neutral-300"
+                  />
+                  <label htmlFor={`collaborator-${u.id}`}>
+                    {u.name}
+                    {u.id === opportunity.ownerId && (
+                      <span className="ml-1.5 text-xs text-neutral-400">(owner — always has access)</span>
+                    )}
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div>
+            <Button variant="secondary">Save collaborators</Button>
+          </div>
+        </form>
+      </CollapsibleSection>
 
       <ChatWidget
         opportunityId={opportunity.id}

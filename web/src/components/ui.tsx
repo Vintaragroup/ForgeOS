@@ -76,6 +76,46 @@ export function Card({
   );
 }
 
+// Zero-JS accordion for the long detail pages (Opportunity, Estimate) --
+// native <details>/<summary> rather than a client component with useState,
+// consistent with how little client JS the rest of this app reaches for
+// (ConfirmForm is one of the only other client components). Server-rendered
+// `open` is uncontrolled from then on, same as defaultChecked on a
+// checkbox -- the browser's own disclosure toggle needs no React round trip.
+export function CollapsibleSection({
+  title,
+  defaultOpen = true,
+  children,
+  className = "",
+}: {
+  title: ReactNode;
+  defaultOpen?: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <details
+      open={defaultOpen}
+      className={`group rounded-lg border border-neutral-200 bg-white ${className}`}
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 marker:content-none [&::-webkit-details-marker]:hidden">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">{title}</h2>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+          className="shrink-0 text-neutral-400 transition-transform group-open:rotate-90"
+        >
+          <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </summary>
+      <div className="px-6 pb-6">{children}</div>
+    </details>
+  );
+}
+
 export function Field({
   label,
   name,
