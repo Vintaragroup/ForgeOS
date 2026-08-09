@@ -17,6 +17,7 @@ import { getDocumentBytes } from "@/lib/document-service";
 import { addLineItemsBulk, addSection } from "@/lib/estimate-service";
 import { db } from "@/lib/db";
 import { cellText } from "@/lib/xlsx-utils";
+import { loadCatalogForMatching, matchDescription, type CatalogMatch } from "@/lib/catalog-match-service";
 
 const HEADER_SCAN_ROWS = 20; // header always appears near the top, after a title/merge block
 
@@ -27,6 +28,7 @@ export interface ParsedPricingRow {
   description: string;
   unit: string;
   qty: number;
+  catalogMatch: CatalogMatch | null;
 }
 
 export interface PricingImportPreview {
@@ -102,6 +104,11 @@ export async function previewPricingImport(documentId: string): Promise<PricingI
   }
   const { sheet, headerRowNumber, columns } = found;
 
+  // Loaded once, outside the row loop -- matching is a pure in-memory
+  // scoring pass against a handful of catalog rows (see
+  // catalog-match-service.ts), not worth a query per row.
+  const catalog = await loadCatalogForMatching();
+
   const rows: ParsedPricingRow[] = [];
   let lastCategory = "";
   for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber++) {
@@ -117,14 +124,16 @@ export async function previewPricingImport(documentId: string): Promise<PricingI
 
     const category = cellText(row.getCell(columns.category).value) || lastCategory;
     lastCategory = category;
+    const item = columns.item ? cellText(row.getCell(columns.item).value) || null : null;
 
     rows.push({
       rowNumber,
       category,
-      item: columns.item ? cellText(row.getCell(columns.item).value) || null : null,
+      item,
       description,
       unit: cellText(row.getCell(columns.unit).value),
       qty,
+      catalogMatch: matchDescription(item ? `${item} ${description}` : description, catalog),
     });
   }
 
@@ -142,9 +151,13 @@ export async function previewPricingImport(documentId: string): Promise<PricingI
 // TemporaryBooth_BUILD/CAMERA_PLATFORM/BOOTH_PLATFORM) and bulk-inserts
 // every row as an isDraft LineItem pointing back at the source Document --
 // the same review-before-it-counts gate as attachmentId-sourced drafts.
-// unitCost starts at 0: the Pricing Schedule's own Unit Rate column is
-// blank by design (that's the bidder's job to fill in), not something to
-// guess at.
+// The Pricing Schedule's own Unit Rate column is blank by design (that's
+// the bidder's job to fill in), not something to guess at wholesale -- but
+// where a row's description confidently matches a real catalog entry
+// (see catalog-match-service.ts, shown to the reviewer in the preview
+// table before they ever click Commit), that rate seeds unitCost instead
+// of leaving every single row at $0. Still isDraft, still requires the
+// existing confirm-before-it-counts step either way.
 export async function commitPricingImport(estimateVersionId: string, documentId: string) {
   const preview = await previewPricingImport(documentId);
   if (preview.rows.length === 0) {
@@ -172,7 +185,7 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
         lineType: "MATERIAL" as const,
         description: row.item ? `${row.item} — ${row.description}` : row.description,
         qty: row.qty,
-        unitCost: 0,
+        unitCost: row.catalogMatch?.unitCost ?? 0,
         documentId,
       })),
     );

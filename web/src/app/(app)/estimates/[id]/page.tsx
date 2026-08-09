@@ -168,7 +168,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           </h2>
           <p className="mb-4 text-sm text-neutral-500">
             Parses a Pricing Schedule spreadsheet (uploaded on the Opportunity&apos;s Documents card) straight
-            into draft line items with qty/unit already filled in — Unit Rate starts at $0, pending review.
+            into draft line items with qty/unit already filled in. A row seeds its Unit Rate from a confident
+            catalog match when one exists (shown below) — otherwise it starts at $0, pending review either way.
           </p>
           {pricingScheduleDocuments.length === 0 ? (
             <Notice
@@ -211,6 +212,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                       <th className="px-2 py-1.5 font-normal">Description</th>
                       <th className="px-2 py-1.5 text-right font-normal">Unit</th>
                       <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -222,6 +224,18 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                         </td>
                         <td className="px-2 py-1 text-right">{row.unit}</td>
                         <td className="px-2 py-1 text-right">{row.qty}</td>
+                        <td className="px-2 py-1 text-right">
+                          {row.catalogMatch ? (
+                            <span
+                              className="text-brand-navy"
+                              title={`Matched to ${row.catalogMatch.source} catalog: "${row.catalogMatch.name}" -- verify before relying on it.`}
+                            >
+                              ${row.catalogMatch.unitCost.toFixed(2)}
+                            </span>
+                          ) : (
+                            <span className="text-neutral-400">—</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

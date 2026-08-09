@@ -24,6 +24,8 @@ afterEach(async () => {
   await db.document.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
+  await db.rentalItem.deleteMany();
+  await db.material.deleteMany();
 });
 
 afterAll(async () => {
@@ -70,6 +72,27 @@ describe("previewPricingImport", () => {
     expect(first.qty).toBe(1);
   });
 
+  it("suggests a catalog rate when a row's description confidently matches a real catalog entry", async () => {
+    await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
+    const { document } = await makeDocument();
+
+    const preview = await previewPricingImport(document.id);
+    const doorRow = preview.rows.find((r) => r.description.toLowerCase().includes("compliant door"));
+
+    expect(doorRow).toBeDefined();
+    expect(doorRow?.catalogMatch).toEqual({ source: "Rental", name: "Doors", unitCost: 150 });
+  });
+
+  it("leaves catalogMatch null for a turnkey line description with no real catalog vocabulary overlap", async () => {
+    await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
+    const { document } = await makeDocument();
+
+    const preview = await previewPricingImport(document.id);
+    const boothBuildRow = preview.rows.find((r) => r.description.includes("Complete Booth Build"));
+
+    expect(boothBuildRow?.catalogMatch).toBeNull();
+  });
+
   it("rejects a document with no recognizable Pricing Schedule sheet", async () => {
     const company = await db.company.create({ data: { name: "Test Co" } });
     const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
@@ -101,11 +124,35 @@ describe("commitPricingImport", () => {
     expect(allLineItems).toHaveLength(149);
     expect(allLineItems.every((li) => li.isDraft)).toBe(true);
     expect(allLineItems.every((li) => li.documentId === document.id)).toBe(true);
+    // No catalog rows exist in this test's DB state, so every match is
+    // null and every unitCost stays at the $0 fallback -- see the
+    // dedicated catalog-match test below for the non-empty-catalog case.
     expect(allLineItems.every((li) => li.unitCost.toNumber() === 0)).toBe(true);
 
     // Drafts are excluded from totals until confirmed -- same gate as
     // the attachmentId-sourced draft flow.
     const refreshedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
     expect(refreshedVersion.totalCost.toNumber()).toBe(0);
+  });
+
+  it("seeds unitCost from a confident catalog match instead of leaving it at $0", async () => {
+    await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
+    const { opportunity, document } = await makeDocument();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitPricingImport(version.id, document.id);
+
+    const sections = await db.estimateSection.findMany({
+      where: { estimateVersionId: version.id },
+      include: { lineItems: true },
+    });
+    const allLineItems = sections.flatMap((s) => s.lineItems);
+    const doorItems = allLineItems.filter((li) => li.description.toLowerCase().includes("compliant door"));
+
+    expect(doorItems.length).toBeGreaterThan(0);
+    expect(doorItems.every((li) => li.unitCost.toNumber() === 150)).toBe(true);
+    // Still isDraft -- a seeded rate doesn't bypass the confirm-before-it-counts gate.
+    expect(doorItems.every((li) => li.isDraft)).toBe(true);
   });
 });
