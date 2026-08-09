@@ -1,26 +1,34 @@
 "use server";
 
-import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
 import { sendMessage } from "@/lib/chat-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 
-export async function sendMessageAction(opportunityId: string, formData: FormData) {
+// Called directly from the floating ChatWidget client component (not via
+// a <form action>) -- Server Actions can be imported and awaited from
+// client code same as any async function, which is what lets the widget
+// stay a single small overlay instead of a full page navigation. Returns
+// plain data (or throws a client-friendly message) rather than
+// redirecting/revalidating a route, since there's no page to redirect to.
+export async function sendWidgetMessageAction(opportunityId: string, content: string) {
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  if (!user) throw new Error("Your session expired -- reload the page and sign in again.");
 
-  const content = String(formData.get("content") ?? "").trim();
-  if (!content) throw new Error("Message can't be empty.");
+  const trimmed = content.trim();
+  if (!trimmed) throw new Error("Message can't be empty.");
 
   try {
-    await sendMessage(opportunityId, user.id, content);
+    const { assistantMessage } = await sendMessage(opportunityId, user.id, trimmed);
+    return {
+      id: assistantMessage.id,
+      role: assistantMessage.role,
+      content: assistantMessage.content,
+      createdAt: assistantMessage.createdAt,
+    };
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {
       throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable chat.");
     }
     throw err; // RateLimitError's own message is already clear
   }
-
-  revalidatePath(`/opportunities/${opportunityId}/chat`);
 }

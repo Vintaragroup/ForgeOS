@@ -49,3 +49,25 @@ export async function renderDocx(bytes: Buffer): Promise<string> {
   const result = await mammoth.convertToHtml({ buffer: bytes });
   return stripDangerousHtml(result.value);
 }
+
+// Wraps the first occurrence of `quote` (a Project Brief citation --
+// see document-summary-service.ts's sourceQuote) in a <mark id="hl">,
+// so a Link with an #hl fragment auto-scrolls the browser straight to
+// it with zero client JS. DOCX has no page concept the way a PDF viewer
+// does, so a text-search highlight is the equivalent "jump to it" for
+// this file type. A regex over the raw HTML string, not a proper DOM
+// text search -- if the quote spans a formatting boundary (e.g. part of
+// it is bolded), the match silently fails and the page just doesn't
+// scroll, rather than erroring.
+export function highlightQuote(html: string, quote: string): string {
+  const trimmed = quote.trim();
+  if (!trimmed) return html;
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  const match = html.match(new RegExp(escaped, "i"));
+  if (!match || match.index === undefined) return html;
+  return (
+    html.slice(0, match.index) +
+    `<mark id="hl" style="background:#fddfb1;">${match[0]}</mark>` +
+    html.slice(match.index + match[0].length)
+  );
+}

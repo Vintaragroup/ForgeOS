@@ -9,17 +9,48 @@
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
-import { extractDocumentText } from "@/lib/ai/text-extraction";
+import { extractDocumentText, extractPdfPageTexts, locateQuotePage, PDF_MIME } from "@/lib/ai/text-extraction";
 import { DEFAULT_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+
+// pageNumber is never asked of the model -- it's computed afterward by
+// searching the PDF's own per-page text for sourceQuote (see
+// locateQuotePage below), so it's trustworthy in a way an LLM-reported
+// page number wouldn't be. null for DOCX (no page concept) or when the
+// quote couldn't be located.
+export interface KeyDateFact {
+  label: string;
+  date: string;
+  sourceQuote: string;
+  pageNumber: number | null;
+}
+export interface CitedText {
+  text: string;
+  sourceQuote: string;
+  pageNumber: number | null;
+}
 
 export interface DocumentSummary {
   eventOrProjectName: string | null;
   venue: string | null;
   submissionDeadline: string | null;
-  keyDates: { label: string; date: string }[];
-  scopeSummary: string[];
-  riskFlags: string[];
+  keyDates: KeyDateFact[];
+  scopeSummary: CitedText[];
+  riskFlags: CitedText[];
 }
+
+// What OpenAI actually returns -- pageNumber added in a pass afterward,
+// so it's absent from both the schema and this intermediate type.
+type DocumentSummaryFromAI = {
+  eventOrProjectName: string | null;
+  venue: string | null;
+  submissionDeadline: string | null;
+  keyDates: { label: string; date: string; sourceQuote: string }[];
+  scopeSummary: { text: string; sourceQuote: string }[];
+  riskFlags: { text: string; sourceQuote: string }[];
+};
+
+const SOURCE_QUOTE_DESCRIPTION =
+  "A short (under 150 characters) quote copied EXACTLY, character-for-character, from the document text above, showing where this fact is stated. Never paraphrase or summarize the quote itself.";
 
 const SUMMARY_SCHEMA = {
   name: "document_summary",
@@ -36,22 +67,44 @@ const SUMMARY_SCHEMA = {
         items: {
           type: "object",
           additionalProperties: false,
-          properties: { label: { type: "string" }, date: { type: "string" } },
-          required: ["label", "date"],
+          properties: {
+            label: { type: "string" },
+            date: { type: "string" },
+            sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+          },
+          required: ["label", "date", "sourceQuote"],
         },
       },
-      scopeSummary: { type: "array", items: { type: "string" } },
+      scopeSummary: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string" },
+            sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+          },
+          required: ["text", "sourceQuote"],
+        },
+      },
       riskFlags: {
         type: "array",
-        items: { type: "string" },
-        description: "Contract/compliance risks worth a human's attention -- liquidated damages, insurance minimums, credentialing deadlines, etc.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string", description: "Contract/compliance risk worth a human's attention -- liquidated damages, insurance minimums, credentialing deadlines, etc." },
+            sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+          },
+          required: ["text", "sourceQuote"],
+        },
       },
     },
     required: ["eventOrProjectName", "venue", "submissionDeadline", "keyDates", "scopeSummary", "riskFlags"],
   },
 } as const;
 
-const SYSTEM_PROMPT = `You analyze RFP and client-supplied project documents for an event/exhibit contractor. Extract only facts stated in the document -- never infer or guess a date, name, or figure that isn't written there. If something isn't present, use null or an empty array. Keep scopeSummary and riskFlags as short, specific bullet points, not paragraphs.`;
+const SYSTEM_PROMPT = `You analyze RFP and client-supplied project documents for an event/exhibit contractor. Extract only facts stated in the document -- never infer or guess a date, name, or figure that isn't written there. If something isn't present, use null or an empty array. Keep scopeSummary and riskFlags as short, specific bullet points, not paragraphs. For every key date, scope item, and risk flag, include sourceQuote: a short verbatim quote copied exactly from the document showing where that fact came from -- this is used to jump a reader straight to it, so it must be an exact substring of the source text, not a paraphrase.`;
 
 // Truncated, not chunked -- this app has no RAG/embedding infra (see
 // chat-context-service.ts's same budget approach), and a single document's
@@ -98,7 +151,25 @@ export async function summarizeDocument(documentId: string) {
 
     const content = completion.choices[0]?.message?.content;
     if (!content) throw new Error("OpenAI returned an empty response.");
-    const summary = JSON.parse(content) as DocumentSummary;
+    const parsed = JSON.parse(content) as DocumentSummaryFromAI;
+
+    // Page numbers are computed here, not asked of the model -- searching
+    // the PDF's own per-page text for each sourceQuote is trustworthy in a
+    // way an LLM-reported page number wouldn't be. DOCX has no page
+    // concept; those facts stay pageNumber: null and get a text-search
+    // highlight in the viewer instead (document-view-service.ts).
+    const pageTexts = document.mimeType === PDF_MIME ? await extractPdfPageTexts(bytes) : null;
+    const withPage = <T extends { sourceQuote: string }>(items: T[]): (T & { pageNumber: number | null })[] =>
+      items.map((item) => ({ ...item, pageNumber: pageTexts ? locateQuotePage(pageTexts, item.sourceQuote) : null }));
+
+    const summary: DocumentSummary = {
+      eventOrProjectName: parsed.eventOrProjectName,
+      venue: parsed.venue,
+      submissionDeadline: parsed.submissionDeadline,
+      keyDates: withPage(parsed.keyDates),
+      scopeSummary: withPage(parsed.scopeSummary),
+      riskFlags: withPage(parsed.riskFlags),
+    };
 
     return db.document.update({
       where: { id: documentId },

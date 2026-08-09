@@ -10,8 +10,8 @@ export type ExtractionResult =
   | { status: "COMPLETE"; text: string }
   | { status: "UNSUPPORTED"; reason: string };
 
-const PDF_MIME = "application/pdf";
-const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+export const PDF_MIME = "application/pdf";
+export const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 export async function extractDocumentText(
   documentType: DocumentType,
@@ -53,4 +53,40 @@ export async function extractDocumentText(
   }
 
   return { status: "UNSUPPORTED", reason: `Unsupported file type for text extraction: ${mimeType}` };
+}
+
+// Per-page text, used only to locate which page a cited fact's sourceQuote
+// came from (see document-summary-service.ts) -- extractDocumentText above
+// merges pages because the summarizer/chat only need one blob of text; page
+// boundaries only matter for jumping the PDF viewer to the right spot.
+export async function extractPdfPageTexts(bytes: Buffer): Promise<string[]> {
+  const pdf = await getDocumentProxy(new Uint8Array(bytes));
+  const { text } = await extractText(pdf, { mergePages: false });
+  return text;
+}
+
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// Finds the first page whose text contains the quote (whitespace/case
+// normalized, since minor formatting drift between the model's quote and
+// the raw extracted text is expected). Falls back to the quote's first 40
+// characters if the full quote doesn't match anywhere -- the model
+// occasionally quotes a few extra trailing words that cross a page or
+// line-wrap boundary unpdf renders differently. Returns 1-indexed page
+// number, or null if nothing close enough is found.
+export function locateQuotePage(pageTexts: string[], quote: string): number | null {
+  const trimmed = quote.trim();
+  if (!trimmed) return null;
+  const normalizedQuote = normalizeForMatch(trimmed);
+  const normalizedPages = pageTexts.map(normalizeForMatch);
+
+  const fullMatch = normalizedPages.findIndex((p) => p.includes(normalizedQuote));
+  if (fullMatch !== -1) return fullMatch + 1;
+
+  const prefix = normalizedQuote.slice(0, 40);
+  if (prefix.length < 15) return null; // too short to trust a partial match
+  const prefixMatch = normalizedPages.findIndex((p) => p.includes(prefix));
+  return prefixMatch === -1 ? null : prefixMatch + 1;
 }

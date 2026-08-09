@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { renderDocx, renderSpreadsheet } from "@/lib/document-view-service";
+import { highlightQuote, renderDocx, renderSpreadsheet } from "@/lib/document-view-service";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
 
@@ -39,5 +39,36 @@ describe("renderDocx", () => {
     const bytes = await readFile(path.join(RFP_DIR, "Exhibit 2 - SBLXI - Vendor Services Agreement.docx"));
     const html = await renderDocx(bytes);
     expect(html).not.toContain("<script");
+  });
+});
+
+describe("highlightQuote", () => {
+  it("wraps a real quote found in the real Vendor Services Agreement HTML with an id='hl' mark", async () => {
+    const bytes = await readFile(path.join(RFP_DIR, "Exhibit 2 - SBLXI - Vendor Services Agreement.docx"));
+    const html = await renderDocx(bytes);
+
+    const highlighted = highlightQuote(html, "Liquidated Damages");
+
+    expect(highlighted).toContain('<mark id="hl"');
+    expect(highlighted).toContain("Liquidated Damages</mark>");
+    // Nothing else in the document changed.
+    expect(highlighted.length).toBeGreaterThan(html.length);
+    expect(highlighted.replace(/<mark id="hl"[^>]*>|<\/mark>/g, "")).toBe(html);
+  });
+
+  it("tolerates whitespace differences between the quote and the rendered HTML", async () => {
+    const html = "<p>The quick brown fox jumps over the lazy dog.</p>";
+    const highlighted = highlightQuote(html, "quick   brown\nfox");
+    expect(highlighted).toContain('<mark id="hl"');
+  });
+
+  it("returns the HTML unchanged when the quote isn't found", () => {
+    const html = "<p>Nothing relevant here.</p>";
+    expect(highlightQuote(html, "a quote that does not exist")).toBe(html);
+  });
+
+  it("returns the HTML unchanged for an empty quote", () => {
+    const html = "<p>Some content.</p>";
+    expect(highlightQuote(html, "")).toBe(html);
   });
 });

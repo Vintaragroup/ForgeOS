@@ -1,19 +1,24 @@
 import { notFound } from "next/navigation";
+import { db } from "@/lib/db";
 import { getDocument, getDocumentBytes } from "@/lib/document-service";
-import { renderDocx, renderSpreadsheet } from "@/lib/document-view-service";
+import { renderDocx, renderSpreadsheet, highlightQuote } from "@/lib/document-view-service";
+import { DOCX_MIME, PDF_MIME } from "@/lib/ai/text-extraction";
+import { getThreadMessages } from "@/lib/chat-service";
 import { Card, LinkButton, PageHeader } from "@/components/ui";
+import { ChatWidget } from "@/components/chat-widget";
 
 export const dynamic = "force-dynamic";
 
-const PDF_MIME = "application/pdf";
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const IMAGE_MIMES = ["image/png", "image/jpeg", "image/jpg"];
 
 export default async function DocumentViewPage(
   props: PageProps<"/opportunities/[id]/documents/[documentId]/view">,
 ) {
   const { id, documentId } = await props.params;
+  const { page, q } = await props.searchParams;
+  const pageParam = Array.isArray(page) ? page[0] : page;
+  const quoteParam = Array.isArray(q) ? q[0] : q;
 
   let document;
   try {
@@ -23,8 +28,16 @@ export default async function DocumentViewPage(
   }
   if (document.opportunityId !== id) notFound();
 
+  const [opportunity, chatMessages] = await Promise.all([
+    db.opportunity.findFirst({ where: { id }, select: { showName: true } }),
+    getThreadMessages(id),
+  ]);
+
   const rawUrl = `/opportunities/${id}/documents/${documentId}`;
-  const inlineUrl = `${rawUrl}?inline=1`;
+  // A Project Brief citation (Phase 7.4) links here with ?page=N for a PDF
+  // -- native browser PDF viewers honor a #page=N fragment on the src URL,
+  // no PDF.js integration needed for this.
+  const inlineUrl = `${rawUrl}?inline=1${pageParam ? `#page=${pageParam}` : ""}`;
 
   return (
     <div className="flex flex-col gap-6">
@@ -42,16 +55,20 @@ export default async function DocumentViewPage(
       ) : IMAGE_MIMES.includes(document.mimeType) ? (
         <Card className="flex justify-center p-6">
           {/* eslint-disable-next-line @next/next/no-img-element -- user-uploaded content from private storage, not an optimizable static asset */}
-          <img src={inlineUrl} alt={document.filename} className="max-w-full" />
+          <img src={`${rawUrl}?inline=1`} alt={document.filename} className="max-w-full" />
         </Card>
       ) : document.mimeType === XLSX_MIME ? (
         <SpreadsheetView documentId={documentId} />
       ) : document.mimeType === DOCX_MIME ? (
-        <DocxView documentId={documentId} />
+        <DocxView documentId={documentId} quote={quoteParam} />
       ) : (
         <Card className="p-10 text-center text-sm text-neutral-500">
           This file type can&apos;t be previewed in-app. Download it to view it locally.
         </Card>
+      )}
+
+      {opportunity && (
+        <ChatWidget opportunityId={id} opportunityName={opportunity.showName} initialMessages={chatMessages} />
       )}
     </div>
   );
@@ -93,13 +110,17 @@ async function SpreadsheetView({ documentId }: { documentId: string }) {
   );
 }
 
-async function DocxView({ documentId }: { documentId: string }) {
+async function DocxView({ documentId, quote }: { documentId: string; quote?: string }) {
   const { bytes } = await getDocumentBytes(documentId);
   const html = await renderDocx(bytes);
+  const highlighted = quote ? highlightQuote(html, quote) : html;
 
+  // The browser natively scrolls to <mark id="hl"> on load when the URL's
+  // own fragment is #hl (see the Project Brief's citation links) -- no
+  // client JS needed here, just making sure the id exists when it should.
   return (
     <Card className="p-8">
-      <div className="docx-view text-sm" dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="docx-view text-sm" dangerouslySetInnerHTML={{ __html: highlighted }} />
     </Card>
   );
 }

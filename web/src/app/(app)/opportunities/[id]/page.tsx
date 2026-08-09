@@ -5,9 +5,11 @@ import { changeStage, deleteOpportunity, updateOpportunity } from "../actions";
 import { convertToEstimate, convertToProject } from "../convert-actions";
 import { analyzeDocumentAction, deleteDocumentAction, uploadDocumentAction } from "./documents/actions";
 import { listDocuments } from "@/lib/document-service";
+import { getThreadMessages } from "@/lib/chat-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
-import { Button, Card, Field, LinkButton, PageHeader, SelectField, StatusChip } from "@/components/ui";
+import { Button, Card, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
+import { ChatWidget } from "@/components/chat-widget";
 
 const DOCUMENT_TYPE_OPTIONS = [
   { value: "RFP", label: "RFP" },
@@ -50,32 +52,67 @@ function fmtBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// A citation's href: a PDF jumps the viewer to the page the quote was
+// found on (native #page=N support, no PDF.js needed); a DOCX highlights
+// the quote in place via a #hl anchor the viewer injects at render time
+// (see document-view-service.ts's highlightQuote). No link at all when
+// neither locator is available -- an older document analyzed before this
+// feature shipped, or a quote the locate pass couldn't find.
+function citationHref(
+  opportunityId: string,
+  doc: { id: string; mimeType: string },
+  fact: { sourceQuote: string; pageNumber: number | null },
+): string | null {
+  const base = `/opportunities/${opportunityId}/documents/${doc.id}/view`;
+  if (doc.mimeType === "application/pdf" && fact.pageNumber) return `${base}?page=${fact.pageNumber}`;
+  if (doc.mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" && fact.sourceQuote) {
+    return `${base}?q=${encodeURIComponent(fact.sourceQuote)}#hl`;
+  }
+  return null;
+}
+
+function CitationLink({
+  href,
+  source,
+  page,
+}: {
+  href: string | null;
+  source: string;
+  page: number | null;
+}) {
+  const label = page ? `${source}, p.${page}` : source;
+  if (!href) {
+    return <span className="shrink-0 text-xs text-neutral-400">{source}</span>;
+  }
+  return (
+    <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
+      {label} →
+    </Link>
+  );
+}
+
 // Merged at read time from every analyzed document, not stored as its own
 // aggregate -- consistent with the rest of this app computing rollups
 // live (e.g. admin-analytics.ts) rather than caching a stale summary.
 function ProjectBriefCard({
+  opportunityId,
   documents,
 }: {
-  documents: { id: string; filename: string; extractionStatus: string; extractedSummary: unknown }[];
+  opportunityId: string;
+  documents: { id: string; filename: string; mimeType: string; extractionStatus: string; extractedSummary: unknown }[];
 }) {
   const analyzed = documents.filter(
     (d) => d.extractionStatus === "COMPLETE" && d.extractedSummary,
-  ) as { id: string; filename: string; extractionStatus: string; extractedSummary: DocumentSummary }[];
+  ) as { id: string; filename: string; mimeType: string; extractionStatus: string; extractedSummary: DocumentSummary }[];
 
   if (analyzed.length === 0) return null;
 
   const eventOrProjectName = analyzed.map((d) => d.extractedSummary.eventOrProjectName).find(Boolean);
   const venue = analyzed.map((d) => d.extractedSummary.venue).find(Boolean);
   const submissionDeadline = analyzed.map((d) => d.extractedSummary.submissionDeadline).find(Boolean);
-  const keyDates = analyzed.flatMap((d) =>
-    d.extractedSummary.keyDates.map((kd) => ({ ...kd, source: d.filename })),
-  );
-  const scopeSummary = analyzed.flatMap((d) =>
-    d.extractedSummary.scopeSummary.map((s) => ({ text: s, source: d.filename })),
-  );
-  const riskFlags = analyzed.flatMap((d) =>
-    d.extractedSummary.riskFlags.map((r) => ({ text: r, source: d.filename })),
-  );
+  const keyDates = analyzed.flatMap((d) => d.extractedSummary.keyDates.map((kd) => ({ ...kd, doc: d })));
+  const scopeSummary = analyzed.flatMap((d) => d.extractedSummary.scopeSummary.map((s) => ({ ...s, doc: d })));
+  const riskFlags = analyzed.flatMap((d) => d.extractedSummary.riskFlags.map((r) => ({ ...r, doc: d })));
 
   return (
     <Card className="p-6">
@@ -83,8 +120,8 @@ function ProjectBriefCard({
         Project brief
       </h2>
       <p className="mb-4 text-sm text-neutral-500">
-        Extracted from {analyzed.length} analyzed document{analyzed.length === 1 ? "" : "s"} — verify against
-        the source before relying on it.
+        Extracted from {analyzed.length} analyzed document{analyzed.length === 1 ? "" : "s"} — click a citation
+        to jump to where it came from; verify against the source before relying on it.
       </p>
 
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -107,9 +144,15 @@ function ProjectBriefCard({
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Key dates</h3>
           <ul className="flex flex-col gap-1 text-sm">
             {keyDates.map((kd, i) => (
-              <li key={i} className="flex items-center justify-between">
-                <span>{kd.label}</span>
-                <span className="text-neutral-500">{kd.date}</span>
+              <li key={i} className="flex items-center justify-between gap-3">
+                <span>
+                  {kd.label} <span className="text-neutral-500">— {kd.date}</span>
+                </span>
+                <CitationLink
+                  href={citationHref(opportunityId, kd.doc, kd)}
+                  source={kd.doc.filename}
+                  page={kd.pageNumber}
+                />
               </li>
             ))}
           </ul>
@@ -119,11 +162,18 @@ function ProjectBriefCard({
       {scopeSummary.length > 0 && (
         <div className="mb-4">
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Scope</h3>
-          <ul className="flex flex-col gap-1 text-sm">
+          <ul className="flex flex-col gap-1.5 text-sm">
             {scopeSummary.map((s, i) => (
-              <li key={i} className="flex gap-2">
-                <span className="text-neutral-300">•</span>
-                <span>{s.text}</span>
+              <li key={i} className="flex items-start justify-between gap-3">
+                <span className="flex gap-2">
+                  <span className="text-neutral-300">•</span>
+                  <span>{s.text}</span>
+                </span>
+                <CitationLink
+                  href={citationHref(opportunityId, s.doc, s)}
+                  source={s.doc.filename}
+                  page={s.pageNumber}
+                />
               </li>
             ))}
           </ul>
@@ -135,11 +185,18 @@ function ProjectBriefCard({
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">
             Risk &amp; compliance flags
           </h3>
-          <ul className="flex flex-col gap-1 text-sm">
+          <ul className="flex flex-col gap-1.5 text-sm">
             {riskFlags.map((r, i) => (
-              <li key={i} className="flex gap-2 text-amber-900">
-                <span>⚠</span>
-                <span>{r.text}</span>
+              <li key={i} className="flex items-start justify-between gap-3 text-amber-900">
+                <span className="flex gap-2">
+                  <span>⚠</span>
+                  <span>{r.text}</span>
+                </span>
+                <CitationLink
+                  href={citationHref(opportunityId, r.doc, r)}
+                  source={r.doc.filename}
+                  page={r.pageNumber}
+                />
               </li>
             ))}
           </ul>
@@ -191,7 +248,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   });
   if (!opportunity) notFound();
 
-  const [companies, users, contacts, documents] = await Promise.all([
+  const [companies, users, contacts, documents, chatMessages] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.contact.findMany({
@@ -199,6 +256,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       orderBy: { name: "asc" },
     }),
     listDocuments(opportunity.id),
+    getThreadMessages(opportunity.id),
   ]);
 
   const updateWithId = updateOpportunity.bind(null, opportunity.id);
@@ -219,7 +277,6 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             <StageChip stage={opportunity.stage} />
           </>
         }
-        action={<LinkButton href={`/opportunities/${opportunity.id}/chat`} variant="secondary">Chat</LinkButton>}
       />
 
       <Card className="p-6">
@@ -404,7 +461,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         </form>
       </Card>
 
-      <ProjectBriefCard documents={documents} />
+      <ProjectBriefCard opportunityId={opportunity.id} documents={documents} />
 
       {opportunity.stage === "WON" && (
         <Card className="p-6">
@@ -436,6 +493,8 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           )}
         </Card>
       )}
+
+      <ChatWidget opportunityId={opportunity.id} opportunityName={opportunity.showName} initialMessages={chatMessages} />
     </div>
   );
 }

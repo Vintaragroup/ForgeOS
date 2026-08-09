@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractDocumentText } from "@/lib/ai/text-extraction";
+import { extractDocumentText, extractPdfPageTexts, locateQuotePage } from "@/lib/ai/text-extraction";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
 
@@ -45,5 +45,41 @@ describe("extractDocumentText", () => {
     const bytes = await readFile(path.join(RFP_DIR, "Appendix B - SBLXI - Bid Sets_Booths.pdf"));
     const result = await extractDocumentText("DRAWING", "application/pdf", bytes);
     expect(result.status).toBe("UNSUPPORTED");
+  });
+});
+
+describe("extractPdfPageTexts / locateQuotePage", () => {
+  it("finds the real page a real quote appears on, in the real RFP PDF", async () => {
+    const bytes = await readFile(path.join(RFP_DIR, "1. SBLXI - Temporary Booth Build RFP Final.pdf"));
+    const pages = await extractPdfPageTexts(bytes);
+    expect(pages.length).toBeGreaterThan(5);
+
+    // A real substring pulled from a known page, round-tripped through the
+    // same normalization locateQuotePage itself applies -- proves the
+    // search actually works against this PDF's real per-page text, not a
+    // synthetic fixture.
+    const targetPageIndex = 3;
+    const realSnippet = pages[targetPageIndex].slice(40, 90).trim();
+    expect(realSnippet.length).toBeGreaterThan(20);
+
+    expect(locateQuotePage(pages, realSnippet)).toBe(targetPageIndex + 1);
+  });
+
+  it("tolerates whitespace differences between the quote and the source text", async () => {
+    const bytes = await readFile(path.join(RFP_DIR, "1. SBLXI - Temporary Booth Build RFP Final.pdf"));
+    const pages = await extractPdfPageTexts(bytes);
+    const realSnippet = pages[3].slice(40, 90).trim();
+    const withExtraWhitespace = realSnippet.replace(/ /g, "   ").toUpperCase();
+
+    expect(locateQuotePage(pages, withExtraWhitespace)).toBe(4);
+  });
+
+  it("returns null for a quote that isn't in the document", () => {
+    expect(locateQuotePage(["some page text"], "this text does not appear anywhere in this document")).toBeNull();
+  });
+
+  it("returns null for an empty or too-short quote rather than false-matching everything", () => {
+    expect(locateQuotePage(["some page text"], "")).toBeNull();
+    expect(locateQuotePage(["some page text"], "  ")).toBeNull();
   });
 });
