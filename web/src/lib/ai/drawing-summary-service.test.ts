@@ -48,18 +48,22 @@ describe("summarizeDrawing", () => {
 });
 
 describe("pageImages", () => {
-  it("rasterizes a real multi-page CAD PDF into one data URL per page, capped at MAX_DRAWING_PAGES", async () => {
-    const bytes = await readFile(REAL_CAD_PDF);
-    const images = await pageImages(PDF_MIME, bytes);
+  it(
+    "rasterizes a real multi-page CAD PDF into one data URL per page, capped at MAX_DRAWING_PAGES",
+    async () => {
+      const bytes = await readFile(REAL_CAD_PDF);
+      const images = await pageImages(PDF_MIME, bytes);
 
-    // MAX_DRAWING_PAGES defaults to 5 -- this fixture has 11 real pages,
-    // so this also proves the cap is actually enforced, not just present.
-    expect(images.length).toBeGreaterThan(0);
-    expect(images.length).toBeLessThanOrEqual(5);
-    for (const image of images) {
-      expect(image).toMatch(/^data:image\/png;base64,/);
-    }
-  });
+      // MAX_DRAWING_PAGES defaults to 10 -- this fixture has 11 real pages,
+      // so this also proves the cap is actually enforced, not just present.
+      expect(images.length).toBeGreaterThan(0);
+      expect(images.length).toBeLessThanOrEqual(10);
+      for (const image of images) {
+        expect(image).toMatch(/^data:image\/png;base64,/);
+      }
+    },
+    30_000, // rasterizing 10 pages at scale 2 is real, non-trivial canvas work -- default 5s timeout isn't enough
+  );
 
   it("passes a raw image straight through as one page, no rasterization", async () => {
     const bytes = await readFile(REAL_PNG);

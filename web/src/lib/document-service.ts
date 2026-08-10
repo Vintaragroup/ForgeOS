@@ -5,6 +5,7 @@
 // feature's roadmap.
 
 import { db } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import type { DocumentType } from "@/generated/prisma/enums";
 import { buildStorageKey, deleteObject, getObject, putObject } from "@/lib/storage";
 
@@ -82,4 +83,25 @@ export async function deleteDocument(documentId: string) {
   });
   await deleteObject(document.storageKey);
   return document;
+}
+
+// A wrong documentType silently sends a file down the wrong pipeline --
+// e.g. a Pricing Schedule .xlsx tagged RFP goes through the text
+// summarizer instead of the deterministic XLSX parser and comes back
+// UNSUPPORTED (see opportunities/[id]/page.tsx's mistagged-spreadsheet
+// warning). Whatever was already extracted under the old (wrong)
+// assumption is reset back to PENDING rather than left stale, so the
+// document reads as "needs analysis again," not as already analyzed
+// under the type it's about to stop being.
+export async function updateDocumentType(documentId: string, documentType: DocumentType) {
+  return db.document.update({
+    where: { id: documentId },
+    data: {
+      documentType,
+      extractionStatus: "PENDING",
+      extractedText: null,
+      extractedSummary: Prisma.DbNull,
+      proposedLineItems: Prisma.DbNull,
+    },
+  });
 }

@@ -3,7 +3,9 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { deleteDocument, getDocumentBytes, listDocuments, uploadDocument } from "@/lib/document-service";
+import type { Prisma } from "@/generated/prisma/client";
+import { XLSX_MIME } from "@/lib/ai/text-extraction";
+import { deleteDocument, getDocumentBytes, listDocuments, updateDocumentType, uploadDocument } from "@/lib/document-service";
 
 // Real fixture from Phase 7's roadmap RFP package -- see data/RFP/superbowl.
 // Small (~170KB), so it's fast to round-trip in a test.
@@ -83,5 +85,33 @@ describe("uploadDocument / getDocumentBytes / deleteDocument", () => {
     await expect(uploadDocument(opportunity.id, { file, documentType: "OTHER" })).rejects.toThrow(
       /exceeds the 20MB upload limit/,
     );
+  });
+});
+
+describe("updateDocumentType", () => {
+  it("retags a document and resets stale analysis results from the old (wrong) type", async () => {
+    const opportunity = await makeOpportunity();
+    const file = await makeFile(FIXTURE_PATH, "Financial Proposal Schedule.xlsx", XLSX_MIME);
+    const document = await uploadDocument(opportunity.id, { file, documentType: "RFP" });
+
+    // Simulate a real prior (wrong-pipeline) analysis result -- a
+    // spreadsheet tagged RFP goes through the text summarizer and comes
+    // back UNSUPPORTED, with stale AI fields that shouldn't survive a retag.
+    await db.document.update({
+      where: { id: document.id },
+      data: {
+        extractionStatus: "UNSUPPORTED",
+        extractedSummary: { eventOrProjectName: null } as unknown as Prisma.InputJsonObject,
+        proposedLineItems: [{ description: "stale" }] as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    const updated = await updateDocumentType(document.id, "PRICING_SCHEDULE");
+
+    expect(updated.documentType).toBe("PRICING_SCHEDULE");
+    expect(updated.extractionStatus).toBe("PENDING");
+    expect(updated.extractedText).toBeNull();
+    expect(updated.extractedSummary).toBeNull();
+    expect(updated.proposedLineItems).toBeNull();
   });
 });

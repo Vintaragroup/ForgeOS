@@ -23,12 +23,14 @@ import {
   updateMarginTargetAction,
 } from "../actions";
 import {
+  buildFullEstimateFromDocumentsAction,
   commitImportAction,
   commitScopeItemsAction,
   previewImportAction,
   proposeScopeItemsAction,
   updateLineItemUnitCostAction,
 } from "./import-actions";
+import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
@@ -58,10 +60,22 @@ function money(d: { toFixed(n: number): string }): string {
 
 export default async function EstimateDetailPage(props: PageProps<"/estimates/[id]">) {
   const { id } = await props.params;
-  const { importDocumentId: importDocumentIdParam, proposeDocumentId: proposeDocumentIdParam } =
-    await props.searchParams;
+  const {
+    importDocumentId: importDocumentIdParam,
+    proposeDocumentId: proposeDocumentIdParam,
+    buildResult: buildResultParam,
+  } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
+  const buildResultRaw = Array.isArray(buildResultParam) ? buildResultParam[0] : buildResultParam;
+  let buildResult: BuildEstimateResult | null = null;
+  if (buildResultRaw) {
+    try {
+      buildResult = JSON.parse(buildResultRaw) as BuildEstimateResult;
+    } catch {
+      buildResult = null; // malformed/tampered query param -- ignore rather than crash the page
+    }
+  }
 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -132,6 +146,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const previewImportWithId = previewImportAction.bind(null, estimate.id);
   const proposeScopeItemsWithId = proposeScopeItemsAction.bind(null, estimate.id);
   const archiveEstimateWithIds = archiveEstimateAction.bind(null, estimate.id, estimate.opportunityId);
+  const buildEstimateWithIds = currentVersion
+    ? buildFullEstimateFromDocumentsAction.bind(null, estimate.id, currentVersion.id, estimate.opportunityId)
+    : null;
 
   const canImport = !!currentVersion && !currentVersion.isLocked;
   const importPreview =
@@ -255,6 +272,53 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
               );
             })}
           </ul>
+        </Card>
+      )}
+
+      {canImport && buildEstimateWithIds && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Build estimate from all documents
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Runs the Pricing Schedule import and Scope of Work proposal below across every analyzed document for
+            this Opportunity in one pass, instead of picking one at a time -- skips anything already imported, not
+            yet analyzed, or that turns up nothing to propose.
+          </p>
+          {buildResult && (
+            <div className="mb-4 flex flex-col gap-2 text-sm">
+              {buildResult.imported.length > 0 && (
+                <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2">
+                  <p className="mb-1 font-medium text-green-900">Imported {buildResult.imported.length} document(s):</p>
+                  <ul className="flex flex-col gap-0.5 text-green-800">
+                    {buildResult.imported.map((r, i) => (
+                      <li key={i}>
+                        {r.filename} — {r.rowsImported} {r.kind === "pricing" ? "pricing rows" : "proposed items"}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {buildResult.skipped.length > 0 && (
+                <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2">
+                  <p className="mb-1 font-medium text-neutral-700">Skipped {buildResult.skipped.length} document(s):</p>
+                  <ul className="flex flex-col gap-0.5 text-neutral-600">
+                    {buildResult.skipped.map((r, i) => (
+                      <li key={i}>
+                        {r.filename} — {r.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {buildResult.imported.length === 0 && buildResult.skipped.length === 0 && (
+                <p className="text-neutral-500">No documents found for this Opportunity yet.</p>
+              )}
+            </div>
+          )}
+          <form action={buildEstimateWithIds}>
+            <Button>Build from all analyzed documents</Button>
+          </form>
         </Card>
       )}
 
@@ -507,6 +571,182 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
   };
 }>;
 
+// Real XLSX pricing-schedule imports can list one row per physical booth
+// instance (113 rows for one section, on the real Super Bowl 2026 job) --
+// unscannable as a flat table. Above this row count, group rows under
+// collapsible per-booth sub-tables and show a rollup of the materials
+// that repeat most, without touching any LineItem data, citations, or
+// confirm state.
+const BOOTH_GROUP_ROW_THRESHOLD = 20;
+const BOOTH_START_PATTERN = /complete booth build/i;
+
+type SectionLineItem = VersionWithSections["sections"][number]["lineItems"][number];
+
+// Splits a section's rows into booth-instance groups wherever a row's
+// description marks the start of a new booth ("Complete Booth Build...").
+// Returns null when no such marker is present -- the caller then falls
+// back to today's flat table, so a booth-split miss never hides or
+// reorders real data.
+function groupLineItemsByBoothInstance(
+  lineItems: SectionLineItem[],
+): { label: string; items: SectionLineItem[] }[] | null {
+  if (!lineItems.some((li) => BOOTH_START_PATTERN.test(li.description))) return null;
+
+  const groups: { label: string; items: SectionLineItem[] }[] = [];
+  for (const li of lineItems) {
+    if (BOOTH_START_PATTERN.test(li.description)) {
+      groups.push({ label: li.description, items: [li] });
+    } else if (groups.length === 0) {
+      groups.push({ label: "Other items", items: [li] });
+    } else {
+      groups[groups.length - 1].items.push(li);
+    }
+  }
+  return groups;
+}
+
+// Read-only scanning aid: which descriptions repeat most across a dense
+// section, and their combined quantity -- computed at render time from
+// data already on the page, never persisted or used for pricing.
+function summarizeRepeatedDescriptions(lineItems: SectionLineItem[]) {
+  const byDescription = new Map<string, { count: number; qtyTotal: Prisma.Decimal }>();
+  for (const li of lineItems) {
+    const existing = byDescription.get(li.description);
+    if (existing) {
+      existing.count += 1;
+      existing.qtyTotal = existing.qtyTotal.plus(li.qty);
+    } else {
+      byDescription.set(li.description, { count: 1, qtyTotal: li.qty });
+    }
+  }
+  return [...byDescription.entries()]
+    .filter(([, v]) => v.count >= 2)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 6)
+    .map(([description, v]) => ({ description, count: v.count, qtyTotal: v.qtyTotal.toString() }));
+}
+
+function LineItemsTable({
+  lineItems,
+  version,
+  estimateId,
+  opportunityId,
+}: {
+  lineItems: SectionLineItem[];
+  version: VersionWithSections;
+  estimateId: string;
+  opportunityId: string;
+}) {
+  return (
+    <table className="w-full min-w-[38rem] text-sm">
+      <thead>
+        <tr className="text-left text-neutral-500">
+          <th className="pb-1 font-normal">Description</th>
+          <th className="pb-1 font-normal">Dept</th>
+          <th className="pb-1 font-normal">Type</th>
+          <th className="pb-1 text-right font-normal">Qty</th>
+          <th className="pb-1 text-right font-normal">Unit cost</th>
+          <th className="pb-1 text-right font-normal">Est. total</th>
+          {version.isLocked && (
+            <>
+              <th className="pb-1 text-right font-normal">Actual</th>
+              <th className="pb-1 text-right font-normal">Variance</th>
+            </>
+          )}
+          {!version.isLocked && <th></th>}
+        </tr>
+      </thead>
+      <tbody>
+        {lineItems.map((li) => {
+          const deleteWithIds = deleteLineItemAction.bind(null, estimateId, li.id);
+          const confirmWithIds = confirmDraftLineItemAction.bind(null, estimateId, li.id);
+          const updateUnitCostWithIds = updateLineItemUnitCostAction.bind(null, estimateId, version.id, li.id);
+          const actualCost = version.isLocked ? computeActualTotal(li.costActuals) : null;
+          const variance = actualCost !== null ? actualCost.minus(li.totalCost) : null;
+          // The check-and-balance: only real when sourceQuote is present
+          // (a pricing-schedule row's own cell text, or an AI-proposed
+          // item's verified quote -- never asked of the model as a page
+          // number, always computed by actually finding the quote in the
+          // source, see pricing-import-service.ts / scope-line-item-service.ts).
+          // Absent for a manually added row or one imported before this
+          // existed -- no silent/fake link either way.
+          const sourceHref =
+            li.document && li.sourceQuote
+              ? citationHref(opportunityId, li.document, {
+                  sourceQuote: li.sourceQuote,
+                  pageNumber: li.sourcePageNumber,
+                })
+              : null;
+          return (
+            <tr key={li.id} className="border-t border-neutral-100">
+              <td className="py-1.5">
+                {li.description}
+                {li.isDraft && (
+                  <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">
+                    draft
+                  </span>
+                )}
+                {sourceHref && (
+                  <Link
+                    href={sourceHref}
+                    className="ml-2 text-xs text-brand-navy hover:underline"
+                    title={`Verify against ${li.document!.filename}`}
+                  >
+                    source →
+                  </Link>
+                )}
+              </td>
+              <td className="py-1.5">{li.department ?? ""}</td>
+              <td className="py-1.5">{li.lineType}</td>
+              <td className="py-1.5 text-right">{li.qty.toString()}</td>
+              <td className="py-1.5 text-right">
+                {!version.isLocked && li.isDraft ? (
+                  <form action={updateUnitCostWithIds} className="flex items-center justify-end gap-1">
+                    <input
+                      type="number"
+                      name="unitCost"
+                      step="any"
+                      defaultValue={li.unitCost.toString()}
+                      className="w-20 rounded border border-neutral-300 px-1.5 py-0.5 text-right text-sm outline-none focus:border-neutral-500"
+                    />
+                    <button className="text-xs text-neutral-500 hover:underline">save</button>
+                  </form>
+                ) : (
+                  money(li.unitCost)
+                )}
+              </td>
+              <td className="py-1.5 text-right">{money(li.totalCost)}</td>
+              {version.isLocked && actualCost !== null && variance !== null && (
+                <>
+                  <td className="py-1.5 text-right">{money(actualCost)}</td>
+                  <td
+                    className={`py-1.5 text-right ${variance.isPositive() ? "text-red-600" : variance.isNegative() ? "text-green-600" : ""}`}
+                  >
+                    {variance.isPositive() ? "+" : ""}
+                    {money(variance)}
+                  </td>
+                </>
+              )}
+              {!version.isLocked && (
+                <td className="py-1.5 text-right whitespace-nowrap">
+                  {li.isDraft && (
+                    <form action={confirmWithIds} className="inline">
+                      <button className="mr-2 text-xs text-neutral-700 hover:underline">confirm</button>
+                    </form>
+                  )}
+                  <form action={deleteWithIds} className="inline">
+                    <button className="text-xs text-red-500 hover:underline">remove</button>
+                  </form>
+                </td>
+              )}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 function EstimateVersionCard({
   estimateId,
   opportunityId,
@@ -687,122 +927,64 @@ function EstimateVersionCard({
                 {section.sectionType}
               </span>
             </h3>
-            {section.lineItems.length > 0 && (
-              <div className="mb-1 overflow-x-auto rounded-md border border-neutral-200">
-              <table className="w-full min-w-[38rem] text-sm">
-                <thead>
-                  <tr className="text-left text-neutral-500">
-                    <th className="pb-1 font-normal">Description</th>
-                    <th className="pb-1 font-normal">Dept</th>
-                    <th className="pb-1 font-normal">Type</th>
-                    <th className="pb-1 text-right font-normal">Qty</th>
-                    <th className="pb-1 text-right font-normal">Unit cost</th>
-                    <th className="pb-1 text-right font-normal">Est. total</th>
-                    {version.isLocked && (
-                      <>
-                        <th className="pb-1 text-right font-normal">Actual</th>
-                        <th className="pb-1 text-right font-normal">Variance</th>
-                      </>
+            {section.lineItems.length > 0 &&
+              (() => {
+                const boothGroups =
+                  section.lineItems.length > BOOTH_GROUP_ROW_THRESHOLD
+                    ? groupLineItemsByBoothInstance(section.lineItems)
+                    : null;
+
+                // No booth marker found, or the section is small enough to
+                // just read as-is -- today's flat table, unchanged.
+                if (!boothGroups) {
+                  return (
+                    <div className="mb-1 overflow-x-auto rounded-md border border-neutral-200">
+                      <LineItemsTable
+                        lineItems={section.lineItems}
+                        version={version}
+                        estimateId={estimateId}
+                        opportunityId={opportunityId}
+                      />
+                    </div>
+                  );
+                }
+
+                const rollup = summarizeRepeatedDescriptions(section.lineItems);
+                return (
+                  <div className="mb-1 flex flex-col gap-3">
+                    {rollup.length > 0 && (
+                      <div className="flex flex-wrap gap-2 rounded-md bg-neutral-50 p-3 text-xs text-neutral-600">
+                        {rollup.map((r) => (
+                          <span
+                            key={r.description}
+                            className="rounded-full border border-neutral-200 bg-white px-2 py-1"
+                          >
+                            {r.description} — {r.count} instances, {r.qtyTotal} total
+                          </span>
+                        ))}
+                      </div>
                     )}
-                    {!version.isLocked && <th></th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {section.lineItems.map((li) => {
-                    const deleteWithIds = deleteLineItemAction.bind(null, estimateId, li.id);
-                    const confirmWithIds = confirmDraftLineItemAction.bind(null, estimateId, li.id);
-                    const updateUnitCostWithIds = updateLineItemUnitCostAction.bind(
-                      null,
-                      estimateId,
-                      version.id,
-                      li.id,
-                    );
-                    const actualCost = version.isLocked ? computeActualTotal(li.costActuals) : null;
-                    const variance = actualCost !== null ? actualCost.minus(li.totalCost) : null;
-                    // The check-and-balance: only real when sourceQuote is
-                    // present (a pricing-schedule row's own cell text, or
-                    // an AI-proposed item's verified quote -- never asked
-                    // of the model as a page number, always computed by
-                    // actually finding the quote in the source, see
-                    // pricing-import-service.ts / scope-line-item-service.ts).
-                    // Absent for a manually added row or one imported
-                    // before this existed -- no silent/fake link either way.
-                    const sourceHref =
-                      li.document && li.sourceQuote
-                        ? citationHref(opportunityId, li.document, {
-                            sourceQuote: li.sourceQuote,
-                            pageNumber: li.sourcePageNumber,
-                          })
-                        : null;
-                    return (
-                      <tr key={li.id} className="border-t border-neutral-100">
-                        <td className="py-1.5">
-                          {li.description}
-                          {li.isDraft && (
-                            <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">
-                              draft
-                            </span>
-                          )}
-                          {sourceHref && (
-                            <Link
-                              href={sourceHref}
-                              className="ml-2 text-xs text-brand-navy hover:underline"
-                              title={`Verify against ${li.document!.filename}`}
-                            >
-                              source →
-                            </Link>
-                          )}
-                        </td>
-                        <td className="py-1.5">{li.department ?? ""}</td>
-                        <td className="py-1.5">{li.lineType}</td>
-                        <td className="py-1.5 text-right">{li.qty.toString()}</td>
-                        <td className="py-1.5 text-right">
-                          {!version.isLocked && li.isDraft ? (
-                            <form action={updateUnitCostWithIds} className="flex items-center justify-end gap-1">
-                              <input
-                                type="number"
-                                name="unitCost"
-                                step="any"
-                                defaultValue={li.unitCost.toString()}
-                                className="w-20 rounded border border-neutral-300 px-1.5 py-0.5 text-right text-sm outline-none focus:border-neutral-500"
-                              />
-                              <button className="text-xs text-neutral-500 hover:underline">save</button>
-                            </form>
-                          ) : (
-                            money(li.unitCost)
-                          )}
-                        </td>
-                        <td className="py-1.5 text-right">{money(li.totalCost)}</td>
-                        {version.isLocked && actualCost !== null && variance !== null && (
-                          <>
-                            <td className="py-1.5 text-right">{money(actualCost)}</td>
-                            <td
-                              className={`py-1.5 text-right ${variance.isPositive() ? "text-red-600" : variance.isNegative() ? "text-green-600" : ""}`}
-                            >
-                              {variance.isPositive() ? "+" : ""}
-                              {money(variance)}
-                            </td>
-                          </>
-                        )}
-                        {!version.isLocked && (
-                          <td className="py-1.5 text-right whitespace-nowrap">
-                            {li.isDraft && (
-                              <form action={confirmWithIds} className="inline">
-                                <button className="mr-2 text-xs text-neutral-700 hover:underline">confirm</button>
-                              </form>
-                            )}
-                            <form action={deleteWithIds} className="inline">
-                              <button className="text-xs text-red-500 hover:underline">remove</button>
-                            </form>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              </div>
-            )}
+                    {boothGroups.map((group, i) => (
+                      <details key={i} className="rounded-md border border-neutral-200">
+                        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium marker:content-none [&::-webkit-details-marker]:hidden">
+                          {group.label}
+                          <span className="text-xs font-normal text-neutral-400">
+                            ({group.items.length} items)
+                          </span>
+                        </summary>
+                        <div className="overflow-x-auto border-t border-neutral-200">
+                          <LineItemsTable
+                            lineItems={group.items}
+                            version={version}
+                            estimateId={estimateId}
+                            opportunityId={opportunityId}
+                          />
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                );
+              })()}
             {version.isLocked && section.lineItems.length > 0 && (
               <p className="mb-3 text-xs text-neutral-400 sm:hidden">
                 ← Scroll the table for Actual &amp; Variance

@@ -20,20 +20,42 @@ import { addLineItemsBulk, addSection } from "@/lib/estimate-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { getDocumentBytes } from "@/lib/document-service";
 
+// Fixed vocabulary, not free text -- re-running "Propose items" on the
+// exact same document used to produce a different taxonomy every time
+// ("Doors and Hardware" vs. "Doors and Locks," "Electrical and Lighting"
+// vs. folded into "Lighting and Safety"). This list is the merged,
+// canonical form of every category name two real AI runs on the same
+// document actually produced. "Other" is the deliberate catch-all so a
+// genuinely novel scope item never gets force-fit into a wrong bucket.
+export const SCOPE_CATEGORIES = [
+  "Booth Structure & Walls",
+  "Doors & Hardware",
+  "Countertops & Cable Management",
+  "Electrical & Lighting",
+  "Fire & Life Safety",
+  "Roof & Coverings",
+  "Flooring & Platforms",
+  "Labor & Installation",
+  "Documentation & Compliance",
+  "Other",
+] as const;
+
+export type ScopeCategory = (typeof SCOPE_CATEGORIES)[number];
+
 export interface ProposedLineItem {
   description: string;
   qty: number;
   qtyIsExplicit: boolean;
   unit: string;
   lineType: "MATERIAL" | "LABOR" | "FEE";
-  category: string;
+  category: ScopeCategory;
   sourceQuote: string;
 }
 
 const SOURCE_QUOTE_DESCRIPTION =
   "A short (under 150 characters) quote copied EXACTLY, character-for-character, from the document text above, showing where this item comes from. Never paraphrase or summarize the quote itself.";
 
-const PROPOSAL_SCHEMA = {
+export const PROPOSAL_SCHEMA = {
   name: "scope_line_items",
   strict: true,
   schema: {
@@ -54,7 +76,7 @@ const PROPOSAL_SCHEMA = {
             },
             unit: { type: "string", description: "A sensible unit for this item -- EA, SQFT, LF, HR, LOT, etc." },
             lineType: { type: "string", enum: ["MATERIAL", "LABOR", "FEE"] },
-            category: { type: "string", description: "A short (3-6 word) section grouping label, consistent across items that belong together." },
+            category: { type: "string", enum: SCOPE_CATEGORIES },
             sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
           },
           required: ["description", "qty", "qtyIsExplicit", "unit", "lineType", "category", "sourceQuote"],
@@ -72,10 +94,12 @@ For each item:
 - qtyIsExplicit: true ONLY when that qty value was actually written in the source text.
 - unit: a sensible unit for this item (EA, SQFT, LF, HR, LOT) -- infer from context if the document doesn't state one.
 - lineType: MATERIAL for goods/fabrication, LABOR for installation/labor-only work, FEE for flat fees/rentals/services.
-- category: a short section grouping label, consistent across items that belong together, so items can be grouped into sections.
+- category: which section this item belongs to.
 - sourceQuote: a short verbatim quote copied EXACTLY from the document showing where this item comes from -- an exact substring of the source text, never a paraphrase.
 
-Only propose items that describe actual work or goods to be provided -- skip administrative, legal, or process clauses entirely. If the document has no concrete scope of deliverables, return an empty items array rather than inventing something.`;
+Only propose items that describe actual work or goods to be provided -- skip administrative, legal, or process clauses entirely. If the document has no concrete scope of deliverables, return an empty items array rather than inventing something.
+
+category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closest fit rather than inventing a new name -- use "Other" only when nothing on the list is a reasonable match. Always use this fixed list, even if a previous run on the same document used different wording.`;
 
 const MAX_INPUT_CHARS = 60_000;
 

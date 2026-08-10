@@ -18,11 +18,13 @@ import { PDF_MIME } from "@/lib/ai/text-extraction";
 
 const IMAGE_MIMES = ["image/png", "image/jpeg", "image/jpg"];
 
-// Bounds cost, not accuracy -- a real fabrication drawing/CAD package in
-// this app's own reference data is a handful of sheets (cover, plan,
-// elevation, key details), not a full architectural set. Configurable so
-// a package that genuinely needs more sheets analyzed isn't hard-blocked.
-const MAX_DRAWING_PAGES = Number(process.env.AI_DRAWING_MAX_PAGES) || 5;
+// Bounds cost, not accuracy -- raised from 5 after a real 11-page CAD PDF
+// only had its first 5 pages analyzed and missed real, later-page facts.
+// Roughly doubles the realistic per-drawing vision-call cost ceiling
+// (~$0.013 at 4-5 images -> ~$0.025-0.03 at 10), worth it against missing
+// content entirely. Configurable so a package that genuinely needs more
+// sheets analyzed isn't hard-blocked.
+const MAX_DRAWING_PAGES = Number(process.env.AI_DRAWING_MAX_PAGES) || 10;
 
 type DrawingItemFromAI = { text: string; pageNumber: number };
 type DrawingKeyDateFromAI = { label: string; date: string; dateType: KeyDateType; pageNumber: number };
@@ -105,6 +107,8 @@ const SYSTEM_PROMPT = `You are looking at page images of a fabrication/construct
 scopeSummary: specific, sheet-grounded facts a bidder needs to price the work -- dimensions, materials called out, construction/assembly methods, finish notes. Not a generic description of "a booth drawing."
 riskFlags: anything a reviewer should double-check before bidding -- structural/load callouts, code/compliance notes, ADA clearances, an engineer's stamp, or a revision marked "hold"/"not for construction."
 keyDates: almost always empty -- only populate if an actual date is printed on the sheet (e.g. a title-block revision date or issue date). Never invent a submission deadline from a drawing; that belongs to the RFP text, not this document.
+
+Extract every distinct dimension, material, price, and callout you can find on each sheet, not just the most prominent ones -- a second look at the same sheet should find just as much as the first. Err toward including a borderline item rather than omitting it.
 
 For every item, report pageNumber: the 1-indexed position of the image (in the order provided) where you saw it -- your actual position in the list you were given, not a guess.`;
 

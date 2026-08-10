@@ -4,9 +4,21 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { commitPricingImport } from "@/lib/pricing-import-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
+import { buildEstimateFromAllDocuments } from "@/lib/ai/estimate-synthesis-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import { recomputeVersionTotals, updateLineItem } from "@/lib/estimate-service";
 import { requireEstimateAccess } from "@/lib/opportunity-access";
+
+export async function buildFullEstimateFromDocumentsAction(
+  estimateId: string,
+  versionId: string,
+  opportunityId: string,
+) {
+  const user = await requireEstimateAccess(estimateId);
+  const result = await buildEstimateFromAllDocuments(versionId, opportunityId, user.id);
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}?buildResult=${encodeURIComponent(JSON.stringify(result))}`);
+}
 
 export async function previewImportAction(estimateId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
-import { deleteDocument, uploadDocument } from "@/lib/document-service";
+import { deleteDocument, updateDocumentType, uploadDocument } from "@/lib/document-service";
 import { analyzeDocument } from "@/lib/ai/analyze-document";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import type { DocumentType } from "@/generated/prisma/enums";
@@ -33,6 +33,13 @@ export async function uploadDocumentAction(opportunityId: string, formData: Form
 export async function deleteDocumentAction(opportunityId: string, documentId: string) {
   await requireOpportunityAccess(opportunityId);
   await deleteDocument(documentId);
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+export async function updateDocumentTypeAction(opportunityId: string, documentId: string, formData: FormData) {
+  await requireOpportunityAccess(opportunityId);
+  const documentType = String(formData.get("documentType") ?? "") as DocumentType;
+  await updateDocumentType(documentId, documentType);
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 

@@ -5,11 +5,12 @@ import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { changeStage, deleteOpportunity, updateCollaborators, updateOpportunity } from "../actions";
 import { buildEstimateFromDocumentsAction, convertToEstimate, convertToProject } from "../convert-actions";
-import { analyzeDocumentAction, deleteDocumentAction, uploadDocumentAction } from "./documents/actions";
+import { analyzeDocumentAction, deleteDocumentAction, updateDocumentTypeAction, uploadDocumentAction } from "./documents/actions";
 import { listDocuments } from "@/lib/document-service";
 import { getThreadMessages } from "@/lib/chat-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref, linkifyDocumentMentions, parseFreeTextDate } from "@/lib/citation";
+import { XLSX_MIME } from "@/lib/ai/text-extraction";
 import { Button, CollapsibleSection, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
@@ -54,6 +55,33 @@ function fmtBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// A near-empty result on a multi-page DRAWING extraction is far more
+// often a bad vision-call run than a truly bare drawing (confirmed live:
+// a real 11-page CAD PDF found 6 facts on one run and ~0-1 on a re-run of
+// the same pages) -- surfaced as a hint next to the status chip, derived
+// from the already-stored extractedSummary at render time, no new
+// ExtractionStatus or persisted field.
+function isLowYieldDrawingResult(doc: {
+  documentType: string;
+  extractionStatus: string;
+  extractedSummary: unknown;
+}): boolean {
+  if (doc.documentType !== "DRAWING" || doc.extractionStatus !== "COMPLETE" || !doc.extractedSummary) return false;
+  const summary = doc.extractedSummary as DocumentSummary;
+  return summary.scopeSummary.length + summary.riskFlags.length < 3;
+}
+
+// Caught a real test job's Financial Proposal Schedule .xlsx tagged as
+// RFP instead of Pricing Schedule -- it went through the generic text
+// summarizer (which doesn't know how to read spreadsheets) instead of
+// pricing-import-service.ts's deterministic XLSX parser, came back
+// UNSUPPORTED, and its real qty/unit-cost rows never made it into the
+// estimate at all. A spreadsheet mime type is unambiguous regardless of
+// how it's tagged, so this is a cheap, reliable catch -- not a heuristic.
+function isLikelyMistaggedSpreadsheet(doc: { mimeType: string; documentType: string }): boolean {
+  return doc.mimeType === XLSX_MIME && doc.documentType !== "PRICING_SCHEDULE";
 }
 
 function CitationLink({
@@ -467,6 +495,30 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <ExtractionStatusChip status={doc.extractionStatus} documentType={doc.documentType} />
+                  {isLikelyMistaggedSpreadsheet(doc) && (
+                    <>
+                      <span
+                        className="text-xs text-amber-600"
+                        title="This is a spreadsheet file, but it's not tagged as Pricing Schedule -- it won't get parsed for real qty/unit-cost rows this way."
+                      >
+                        Looks like a Pricing Schedule?
+                      </span>
+                      <form action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)} className="flex items-center gap-1">
+                        <input type="hidden" name="documentType" value="PRICING_SCHEDULE" />
+                        <button type="submit" className="text-xs text-brand-navy hover:underline">
+                          Retag as Pricing Schedule
+                        </button>
+                      </form>
+                    </>
+                  )}
+                  {isLowYieldDrawingResult(doc) && (
+                    <span
+                      className="text-xs text-amber-600"
+                      title="Fewer than 3 facts found across the analyzed pages -- for a drawing, that's often a bad extraction rather than a truly bare sheet. Consider Re-analyze."
+                    >
+                      Sparse result
+                    </span>
+                  )}
                   {doc.documentType !== "PRICING_SCHEDULE" &&
                     (doc.extractionStatus === "PENDING" || doc.extractionStatus === "FAILED") && (
                       <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
