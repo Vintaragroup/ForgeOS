@@ -430,6 +430,12 @@ model RentalItem {
   name                String
   unitPrice           Decimal @db.Decimal(10, 2)
   priceDerivationNote String?
+  // Added alongside a real catalog expansion (rentals_master.csv /
+  // BeMatrix rental accessories) -- Material already had this; RentalItem
+  // didn't, and the source data's own category groupings (Furniture, A/V,
+  // Flooring, etc.) shouldn't get flattened away just because the column
+  // didn't exist yet.
+  category String?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

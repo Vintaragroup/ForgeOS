@@ -16,7 +16,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MIME } from "@/lib/ai/text-extraction";
 import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
-import { addLineItemsBulk, addSection } from "@/lib/estimate-service";
+import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { getDocumentBytes } from "@/lib/document-service";
 
@@ -198,7 +198,12 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
   let nextSortOrder = existingSectionCount;
   const created = [];
   for (const category of categories) {
-    const section = await addSection(estimateVersionId, {
+    // Reuses an existing section of the same name in this version rather
+    // than creating a duplicate -- matters once more than one document is
+    // committed into the same version (see estimate-synthesis-service.ts),
+    // where two documents proposing the same category (e.g. "Other") used
+    // to produce two separate sections on a real test job.
+    const section = await findOrCreateSection(estimateVersionId, {
       name: category,
       sectionType: "CATEGORY",
       sortOrder: nextSortOrder++,

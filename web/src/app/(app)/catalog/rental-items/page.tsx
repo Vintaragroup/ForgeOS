@@ -18,7 +18,7 @@ export default async function RentalItemsPage({
   const [items, total] = await Promise.all([
     db.rentalItem.findMany({
       where,
-      orderBy: { name: "asc" },
+      orderBy: [{ category: "asc" }, { name: "asc" }],
       skip: (page - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
     }),
@@ -45,7 +45,10 @@ export default async function RentalItemsPage({
                   href={`/catalog/rental-items/${item.id}`}
                   className="flex items-center justify-between px-5 py-4 hover:bg-neutral-50"
                 >
-                  <div className="font-medium">{item.name}</div>
+                  <div>
+                    <div className="font-medium">{item.name}</div>
+                    {item.category && <div className="text-sm text-neutral-500">{item.category}</div>}
+                  </div>
                   <div className="text-sm font-medium text-neutral-700">
                     ${item.unitPrice.toString()}
                   </div>

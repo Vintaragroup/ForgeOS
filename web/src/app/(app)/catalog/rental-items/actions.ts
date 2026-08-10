@@ -12,6 +12,7 @@ export async function createRentalItem(formData: FormData) {
     data: {
       name,
       unitPrice: parsePrice(formData.get("unitPrice")),
+      category: emptyToNull(formData.get("category")),
       priceDerivationNote: emptyToNull(formData.get("priceDerivationNote")),
     },
   });
@@ -29,6 +30,7 @@ export async function updateRentalItem(id: string, formData: FormData) {
     data: {
       name,
       unitPrice: parsePrice(formData.get("unitPrice")),
+      category: emptyToNull(formData.get("category")),
       priceDerivationNote: emptyToNull(formData.get("priceDerivationNote")),
     },
   });

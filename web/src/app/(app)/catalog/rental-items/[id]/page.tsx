@@ -18,6 +18,7 @@ export default async function RentalItemDetailPage(props: PageProps<"/catalog/re
       <Card className="p-6">
         <form action={updateRentalItemWithId} className="flex flex-col gap-4">
           <Field label="Item name" name="name" defaultValue={item.name} required />
+          <Field label="Category" name="category" defaultValue={item.category ?? ""} placeholder="e.g. Furniture, A/V, BeMatrix System" />
           <Field
             label="Unit price ($)"
             name="unitPrice"

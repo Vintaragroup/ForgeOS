@@ -117,4 +117,53 @@ describe("buildEstimateFromAllDocuments", () => {
     const committedLineItem = await db.lineItem.findFirstOrThrow({ where: { documentId: document.id } });
     expect(committedLineItem.description).toBe("Booth structure fabrication (qty estimated -- verify)");
   });
+
+  it("merges two documents that both propose items under the same category into one shared section, not two", async () => {
+    const opportunity = await makeOpportunity();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const makeProposedDoc = async (filename: string, description: string) => {
+      const document = await db.document.create({
+        data: {
+          opportunityId: opportunity.id,
+          filename,
+          mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          sizeBytes: 100,
+          storageKey: `key-${filename}`,
+          documentType: "RFP",
+          extractionStatus: "COMPLETE",
+          extractedText: "some scope text",
+        },
+      });
+      const proposed: ProposedLineItem[] = [
+        {
+          description,
+          qty: 1,
+          qtyIsExplicit: false,
+          unit: "LOT",
+          lineType: "MATERIAL",
+          category: "Other",
+          sourceQuote: "some scope text",
+        },
+      ];
+      await db.document.update({
+        where: { id: document.id },
+        data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+      });
+      return document;
+    };
+
+    await makeProposedDoc("Doc A.docx", "Item from doc A");
+    await makeProposedDoc("Doc B.docx", "Item from doc B");
+
+    const result = await buildEstimateFromAllDocuments(version.id, opportunity.id, null);
+    expect(result.imported).toHaveLength(2);
+
+    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id, name: "Other" } });
+    expect(sections).toHaveLength(1);
+
+    const lineItems = await db.lineItem.findMany({ where: { sectionId: sections[0].id } });
+    expect(lineItems).toHaveLength(2);
+  });
 });

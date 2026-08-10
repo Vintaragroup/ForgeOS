@@ -39,3 +39,10 @@ __pycache__/
 # Expo CCI's internal brand identity manual (PDF) -- proprietary company
 # material, not something to publish alongside the open app code.
 /data/ExpCCI-brandguidelines/
+
+# Ground-truth estimating workbook extraction (real historical materials/
+# rental/labor-rate data) and the BeMatrix vendor price list -- same
+# "never goes to the public remote" reasoning as the other data/ entries
+# above. web/scripts/generate-catalog-expansion.ts reads this locally and
+# writes its output to the committed web/prisma/seed-data/ instead.
+/data/Catalog_Data/

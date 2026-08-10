@@ -14,7 +14,7 @@
 
 import ExcelJS from "exceljs";
 import { getDocumentBytes } from "@/lib/document-service";
-import { addLineItemsBulk, addSection } from "@/lib/estimate-service";
+import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import { db } from "@/lib/db";
 import { cellText } from "@/lib/xlsx-utils";
 import { loadCatalogForMatching, matchDescription, type CatalogMatch } from "@/lib/catalog-match-service";
@@ -186,7 +186,10 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
   let nextSortOrder = existingSectionCount;
   const created = [];
   for (const category of preview.categories) {
-    const section = await addSection(estimateVersionId, {
+    // Reuses an existing section of the same name in this version instead
+    // of creating a duplicate -- matters once a version can receive more
+    // than one pricing-schedule import (see estimate-synthesis-service.ts).
+    const section = await findOrCreateSection(estimateVersionId, {
       name: category,
       sectionType: "CATEGORY",
       sortOrder: nextSortOrder++,

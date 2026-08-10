@@ -127,6 +127,25 @@ export async function addSection(
   });
 }
 
+// Same as addSection, but reuses an existing section with the same name
+// in this version (base estimate only, not an Option) instead of always
+// creating a new one. Needed once a version can receive commits from more
+// than one document (see estimate-synthesis-service.ts's
+// buildEstimateFromAllDocuments) -- without this, two documents that both
+// produce an "Other" category (or two Pricing Schedule sheets that both
+// have a "TemporaryBooth_BUILD" category) each got their own duplicate
+// section instead of one merged one, on a real test job.
+export async function findOrCreateSection(
+  estimateVersionId: string,
+  data: { name: string; sectionType: SectionType; sortOrder?: number },
+) {
+  const existing = await db.estimateSection.findFirst({
+    where: { estimateVersionId, optionId: null, name: data.name },
+  });
+  if (existing) return existing;
+  return addSection(estimateVersionId, data);
+}
+
 // An alternate/upgrade pricing path within one estimate (business-
 // rules.md/data-model-v0.md's Option, direct port of the OPTION sheet
 // pattern) -- priced separately from the base estimate via

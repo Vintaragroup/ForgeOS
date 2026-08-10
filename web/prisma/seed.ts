@@ -8,6 +8,11 @@ import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { LaborRateType } from "../src/generated/prisma/enums";
+import {
+  CATALOG_EXPANSION_LABOR_RATES,
+  CATALOG_EXPANSION_MATERIALS,
+  CATALOG_EXPANSION_RENTAL_ITEMS,
+} from "./seed-data/catalog-expansion";
 
 const adapter = new PrismaPg(process.env.DATABASE_URL!);
 const db = new PrismaClient({ adapter });
@@ -181,6 +186,44 @@ async function main() {
     }
   }
   console.log(`Seeded ${MATERIALS.length} materials.`);
+
+  // Real extraction from data/Catalog_Data/ (materials_master.csv,
+  // rentals_master.csv, standard_costs.csv's non-overlapping categories,
+  // labor_rates_show_site.csv, and the BeMatrix vendor price file) --
+  // see scripts/generate-catalog-expansion.ts for provenance and the
+  // price-conflict/categorization decisions baked into this generated
+  // data.
+  for (const m of CATALOG_EXPANSION_MATERIALS) {
+    const existing = await db.material.findFirst({ where: { name: m.name } });
+    const data = { category: m.category, unit: m.unit, currentUnitCost: m.currentUnitCost, sourceNote: m.sourceNote };
+    if (existing) {
+      await db.material.update({ where: { id: existing.id }, data });
+    } else {
+      await db.material.create({ data: { name: m.name, ...data } });
+    }
+  }
+  console.log(`Seeded ${CATALOG_EXPANSION_MATERIALS.length} expansion materials.`);
+
+  for (const r of CATALOG_EXPANSION_RENTAL_ITEMS) {
+    const existing = await db.rentalItem.findFirst({ where: { name: r.name } });
+    const data = { category: r.category, unitPrice: r.unitPrice, priceDerivationNote: r.note };
+    if (existing) {
+      await db.rentalItem.update({ where: { id: existing.id }, data });
+    } else {
+      await db.rentalItem.create({ data: { name: r.name, ...data } });
+    }
+  }
+  console.log(`Seeded ${CATALOG_EXPANSION_RENTAL_ITEMS.length} expansion rental items.`);
+
+  for (const l of CATALOG_EXPANSION_LABOR_RATES) {
+    const id = `city-${l.city}`;
+    await db.laborRate.upsert({
+      where: { id },
+      create: { id, rateType: LaborRateType.CITY_MARKET, city: l.city, rate: l.rate },
+      update: { rate: l.rate },
+    });
+  }
+  console.log(`Seeded ${CATALOG_EXPANSION_LABOR_RATES.length} show-site city labor rates.`);
 }
 
 main()

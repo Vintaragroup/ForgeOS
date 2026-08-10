@@ -54,7 +54,30 @@ export interface DocumentSummary {
   keyDates: KeyDateFact[];
   scopeSummary: CitedText[];
   riskFlags: CitedText[];
+  // Optional: drawing-summary-service.ts doesn't populate this (a
+  // document already in the vision pipeline has no ambiguity left to
+  // resolve). Excludes PRICING_SCHEDULE -- that's a mime-type/structure
+  // question (see opportunities/[id]/page.tsx's
+  // isLikelyMistaggedSpreadsheet), not something inferred from prose.
+  suggestedDocumentType?: SuggestableDocumentType;
 }
+
+// The real, recurring mistake this catches: a real test job had its
+// actual scope-of-work spec and its vendor services agreement both
+// uploaded tagged "RFP" -- generically true but not useful, since
+// RFP-typed documents get a different candidate list than SCOPE_OF_WORK/
+// CONTRACT elsewhere in the app. Suggesting a more specific type from the
+// content itself, right when it's already being read anyway, catches this
+// without a second AI call.
+export const SUGGESTABLE_DOCUMENT_TYPES = [
+  "RFP",
+  "SCOPE_OF_WORK",
+  "CONTRACT",
+  "SCHEDULE",
+  "DRAWING",
+  "OTHER",
+] as const;
+export type SuggestableDocumentType = (typeof SUGGESTABLE_DOCUMENT_TYPES)[number];
 
 // What OpenAI actually returns -- pageNumber added in a pass afterward,
 // so it's absent from both the schema and this intermediate type.
@@ -65,6 +88,7 @@ type DocumentSummaryFromAI = {
   keyDates: { label: string; date: string; dateType: KeyDateType; sourceQuote: string }[];
   scopeSummary: { text: string; sourceQuote: string }[];
   riskFlags: { text: string; sourceQuote: string }[];
+  suggestedDocumentType: SuggestableDocumentType;
 };
 
 const SOURCE_QUOTE_DESCRIPTION =
@@ -126,14 +150,22 @@ const SUMMARY_SCHEMA = {
           required: ["text", "sourceQuote"],
         },
       },
+      suggestedDocumentType: {
+        type: "string",
+        enum: SUGGESTABLE_DOCUMENT_TYPES,
+        description:
+          "The document TYPE this content actually reads as, regardless of how it's currently filed. RFP: an invitation/instructions to bid. SCOPE_OF_WORK: describes the deliverables/work to be done. CONTRACT: a services agreement, terms and conditions, or legal agreement. SCHEDULE: primarily a timeline, event schedule, or list of dates. DRAWING: primarily dimensions/technical drawing callouts (rare for a text document -- most drawings are images). OTHER: none of the above fit well.",
+      },
     },
-    required: ["eventOrProjectName", "venue", "submissionDeadline", "keyDates", "scopeSummary", "riskFlags"],
+    required: ["eventOrProjectName", "venue", "submissionDeadline", "keyDates", "scopeSummary", "riskFlags", "suggestedDocumentType"],
   },
 } as const;
 
 const SYSTEM_PROMPT = `You analyze RFP and client-supplied project documents for an event/exhibit contractor. Extract only facts stated in the document -- never infer or guess a date, name, or figure that isn't written there. If something isn't present, use null or an empty array. Keep scopeSummary and riskFlags as short, specific bullet points, not paragraphs. For every key date, scope item, and risk flag, include sourceQuote: a short verbatim quote copied exactly from the document showing where that fact came from -- this is used to jump a reader straight to it, so it must be an exact substring of the source text, not a paraphrase.
 
-For every key date, also classify dateType from the READER's point of view, not the document author's: a date is only a DEADLINE if the reader (the bidder/contractor) must submit, respond, or deliver something by it. "RFP Sent" or "Answers to Bidders' Questions Sent" are INFORMATIONAL -- they're facts about what the client already did, not something the reader owes anyone. "Potential Site Visit" or "Opening Night" are MILESTONE -- fixed points in the event worth planning around, but nothing is due from the reader that day. "Bidder Questions Due" or "Tender Submission Due" are DEADLINE -- the reader must act by then. Get this classification right; a Dashboard view uses it to decide what actually belongs in a deadlines list versus a timeline.`;
+For every key date, also classify dateType from the READER's point of view, not the document author's: a date is only a DEADLINE if the reader (the bidder/contractor) must submit, respond, or deliver something by it. "RFP Sent" or "Answers to Bidders' Questions Sent" are INFORMATIONAL -- they're facts about what the client already did, not something the reader owes anyone. "Potential Site Visit" or "Opening Night" are MILESTONE -- fixed points in the event worth planning around, but nothing is due from the reader that day. "Bidder Questions Due" or "Tender Submission Due" are DEADLINE -- the reader must act by then. Get this classification right; a Dashboard view uses it to decide what actually belongs in a deadlines list versus a timeline.
+
+Also classify suggestedDocumentType: what this document's content actually IS, independent of how it happens to be filed right now -- a vendor services agreement is a CONTRACT even if it was uploaded as a generic RFP attachment.`;
 
 // Truncated, not chunked -- this app has no RAG/embedding infra (see
 // chat-context-service.ts's same budget approach), and a single document's
@@ -215,6 +247,7 @@ export async function summarizeDocument(documentId: string, userId: string | nul
       keyDates: withPage(parsed.keyDates),
       scopeSummary: withPage(parsed.scopeSummary),
       riskFlags: withPage(parsed.riskFlags),
+      suggestedDocumentType: parsed.suggestedDocumentType,
     };
 
     return db.document.update({

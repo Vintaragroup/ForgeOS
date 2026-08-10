@@ -8,6 +8,7 @@ export default function NewRentalItemPage() {
       <Card className="p-6">
         <form action={createRentalItem} className="flex flex-col gap-4">
           <Field label="Item name" name="name" required />
+          <Field label="Category" name="category" placeholder="e.g. Furniture, A/V, BeMatrix System" />
           <Field label="Unit price ($)" name="unitPrice" type="number" required />
           <Field
             label="Price derivation note"

@@ -73,6 +73,25 @@ function isLowYieldDrawingResult(doc: {
   return summary.scopeSummary.length + summary.riskFlags.length < 3;
 }
 
+// The AI already reads every text document's full content once at Analyze
+// time -- suggestedDocumentType (document-summary-service.ts) piggybacks
+// on that same call to flag when a document's content doesn't match how
+// it's currently filed, instead of only catching the narrow XLSX case
+// below. Caught two real mistags on a real test job this way: a Vendor
+// Services Agreement and a Scope of Work spec, both uploaded as generic
+// "RFP".
+function getSuggestedRetag(doc: {
+  documentType: string;
+  extractionStatus: string;
+  extractedSummary: unknown;
+}): string | null {
+  if (doc.extractionStatus !== "COMPLETE" || !doc.extractedSummary) return null;
+  const summary = doc.extractedSummary as DocumentSummary;
+  const suggested = summary.suggestedDocumentType;
+  if (!suggested || suggested === doc.documentType) return null;
+  return suggested;
+}
+
 // Caught a real test job's Financial Proposal Schedule .xlsx tagged as
 // RFP instead of Pricing Schedule -- it went through the generic text
 // summarizer (which doesn't know how to read spreadsheets) instead of
@@ -322,6 +341,14 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   // "no such opportunity" and "exists but you can't see it."
   if (!(await canAccessOpportunity(user, opportunity.id))) notFound();
 
+  // A Pricing Schedule document never goes through Analyze -- it's parsed
+  // directly on the Estimate page's Import panel instead (see
+  // ExtractionStatusChip below). Without a link there, retagging a
+  // document to Pricing Schedule looked like a dead end: no Analyze
+  // button appears for it here, and nothing pointed at where its real
+  // next step actually lives.
+  const estimateId = opportunity.estimates[0]?.id;
+
   const [companies, users, contacts, documents, chatMessages] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -495,6 +522,11 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <ExtractionStatusChip status={doc.extractionStatus} documentType={doc.documentType} />
+                  {doc.documentType === "PRICING_SCHEDULE" && estimateId && (
+                    <Link href={`/estimates/${estimateId}`} className="text-xs text-brand-navy hover:underline">
+                      Import on Estimate page →
+                    </Link>
+                  )}
                   {isLikelyMistaggedSpreadsheet(doc) && (
                     <>
                       <span
@@ -519,6 +551,24 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                       Sparse result
                     </span>
                   )}
+                  {getSuggestedRetag(doc) &&
+                    (() => {
+                      const suggested = getSuggestedRetag(doc)!;
+                      const label = DOCUMENT_TYPE_OPTIONS.find((o) => o.value === suggested)?.label ?? suggested;
+                      return (
+                        <>
+                          <span className="text-xs text-amber-600" title="Suggested from this document's own analyzed content.">
+                            AI suggests: {label}?
+                          </span>
+                          <form action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)} className="flex items-center gap-1">
+                            <input type="hidden" name="documentType" value={suggested} />
+                            <button type="submit" className="text-xs text-brand-navy hover:underline">
+                              Retag as {label}
+                            </button>
+                          </form>
+                        </>
+                      );
+                    })()}
                   {doc.documentType !== "PRICING_SCHEDULE" &&
                     (doc.extractionStatus === "PENDING" || doc.extractionStatus === "FAILED") && (
                       <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>

@@ -287,12 +287,13 @@ vendor account and DSN to point it at — deliberately not fabricated here.
 
 The workbook never had a materials price-list catalog to extract (Rule 2:
 material lines were always open, per-job, per-component free entry).
-`prisma/seed.ts`'s 39-item starter catalog is built two ways, and every
-row's `sourceNote` says which:
+`prisma/seed.ts`'s starter catalog (141 materials, 207 rental items, 94
+labor rates as of the latest expansion) is built three ways, and every
+row's `sourceNote`/`priceDerivationNote` says which:
 
-- **Real, evidenced entries** — extracted directly from the raw
-  MATERIAL/QTY/UNIT COST columns across all 8 real historical job
-  workbooks in `data/historical_jobs/xlsx/` (gitignored, local only).
+- **Real, evidenced entries (Phase 7 original pass)** — extracted directly
+  from the raw MATERIAL/QTY/UNIT COST columns across all 8 real historical
+  job workbooks in `data/historical_jobs/xlsx/` (gitignored, local only).
   SEG Fabric Graphic ($5.75/sq ft) is the best-evidenced number in the
   catalog — identical across 18 line items spanning 7 different real
   jobs. It's also BeMatrix's standard silicone-edge-graphic panel infill
@@ -300,11 +301,27 @@ row's `sourceNote` says which:
   "CUSTOM HALFWALL - BEMATRIX W/ SEG FABRIC"), the modular aluminum
   exhibit-frame system a handful of the catalog's `BeMatrix System`
   category entries are built around.
+- **Real, evidenced entries (catalog expansion pass)** — a larger real
+  extraction from the ground-truth estimating workbook
+  (`data/Catalog_Data/`, gitignored, local only): deduplicated materials
+  and rental line items across every historical COMPONENT/OPTION sheet,
+  real show-site city/market labor rates, and a real BeMatrix vendor
+  price list (purchase + rental accessory pricing). See
+  `scripts/generate-catalog-expansion.ts` for exactly how each row was
+  extracted, categorized, and how the handful of real price conflicts in
+  the source data were resolved (higher price kept, with the conflict
+  explained in the row's own note) — the generated data itself lives in
+  `prisma/seed-data/catalog-expansion.ts`, committed so seeding doesn't
+  depend on the gitignored source folder being present.
 - **Industry-reference entries** — standard exhibit-shop materials (wood
   sheet goods, aluminum extrusion, hardware) with no real-job evidence.
   Starting estimates only, every one's `sourceNote` says so explicitly —
   confirm against your real current supplier pricing before using one in
   a client-facing estimate.
+
+Show-site city labor rates are straight-time only for now — the source
+data also has overtime/double-time rates, but `LaborRate` only models one
+rate value; revisit if OT/DT needs to drive estimate math.
 
 ## Scope (Backlog batch 2)
 
