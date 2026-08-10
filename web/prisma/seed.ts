@@ -42,19 +42,26 @@ const DEPARTMENT_RATES: { code: string; name: string; rate: number }[] = [
 // business-rules.md Rule 9: Standard Cost Sheet's flat rental prices.
 // WAREHOUSE LABOR's derivation ($35 x 2 x 1.25 = $87.50) is preserved in
 // priceDerivationNote rather than lost the way it nearly was in the
-// original single-formula-cell workbook.
-const RENTAL_ITEMS: { name: string; unitPrice: number; note?: string }[] = [
-  { name: "Flooring — per square foot", unitPrice: 4.9 },
-  { name: "Hanging Sign (existing) — hardware only, existing graphic", unitPrice: 1000 },
-  { name: "Frames", unitPrice: 100 },
-  { name: "Slatwalls", unitPrice: 250 },
-  { name: "Doors", unitPrice: 150 },
-  { name: "Stem Lights", unitPrice: 50 },
-  { name: "Shelves", unitPrice: 100 },
-  { name: "Pedestals", unitPrice: 250 },
+// original single-formula-cell workbook. Categories added after these
+// predated RentalItem.category -- Structure groups them with the other
+// booth-structure rentals from the later catalog expansion.
+const RENTAL_ITEMS: { name: string; unitPrice: number; category: string; note?: string }[] = [
+  { name: "Flooring — per square foot", unitPrice: 4.9, category: "Flooring" },
+  {
+    name: "Hanging Sign (existing) — hardware only, existing graphic",
+    unitPrice: 1000,
+    category: "Hanging Sign",
+  },
+  { name: "Frames", unitPrice: 100, category: "Structure" },
+  { name: "Slatwalls", unitPrice: 250, category: "Structure" },
+  { name: "Doors", unitPrice: 150, category: "Structure" },
+  { name: "Stem Lights", unitPrice: 50, category: "Structure" },
+  { name: "Shelves", unitPrice: 100, category: "Structure" },
+  { name: "Pedestals", unitPrice: 250, category: "Structure" },
   {
     name: "Warehouse Labor (pull & prep) / hr",
     unitPrice: 87.5,
+    category: "Labor",
     note: "Derived in the original workbook as =(35*2)*1.25 — base rate $35, doubled, plus 25% markup.",
   },
 ];
@@ -161,11 +168,11 @@ async function main() {
     if (existing) {
       await db.rentalItem.update({
         where: { id: existing.id },
-        data: { unitPrice: r.unitPrice, priceDerivationNote: r.note },
+        data: { unitPrice: r.unitPrice, category: r.category, priceDerivationNote: r.note },
       });
     } else {
       await db.rentalItem.create({
-        data: { name: r.name, unitPrice: r.unitPrice, priceDerivationNote: r.note },
+        data: { name: r.name, unitPrice: r.unitPrice, category: r.category, priceDerivationNote: r.note },
       });
     }
   }
