@@ -3,19 +3,30 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
-import { changeStage, deleteOpportunity, updateCollaborators, updateOpportunity } from "../actions";
+import {
+  applyOpportunityFieldSuggestionAction,
+  changeStage,
+  deleteOpportunity,
+  updateCollaborators,
+  updateOpportunity,
+} from "../actions";
 import { buildEstimateFromDocumentsAction, convertToEstimate, convertToProject } from "../convert-actions";
 import { analyzeDocumentAction, deleteDocumentAction, updateDocumentTypeAction, uploadDocumentAction } from "./documents/actions";
 import { listDocuments } from "@/lib/document-service";
 import { getThreadMessages } from "@/lib/chat-service";
-import type { DocumentSummary } from "@/lib/ai/document-summary-service";
+import {
+  EXTRACTABLE_OPPORTUNITY_FIELDS,
+  type DocumentSummary,
+  type ExtractableOpportunityField,
+} from "@/lib/ai/document-summary-service";
 import { citationHref, linkifyDocumentMentions, parseFreeTextDate } from "@/lib/citation";
 import { XLSX_MIME } from "@/lib/ai/text-extraction";
-import { taxRateLabel } from "@/lib/tax-rate";
+import { taxRateLabel, taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { Button, CollapsibleSection, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
 import { DocumentUploadForm } from "@/components/document-upload-form";
+import { ProjectTypeFields } from "@/components/project-type-fields";
 
 const DOCUMENT_TYPE_OPTIONS = [
   { value: "RFP", label: "RFP" },
@@ -292,6 +303,133 @@ function ProjectBriefCard({
   );
 }
 
+const EXTRACTABLE_FIELD_LABELS: Record<ExtractableOpportunityField, string> = {
+  boothNumber: "Booth number",
+  boothSize: "Booth size",
+  shipDate: "Ship date",
+  eventStartDate: "Event start date",
+  eventEndDate: "Event end date",
+  siteAddress: "Site address",
+};
+
+const EXTRACTABLE_DATE_FIELDS = new Set<ExtractableOpportunityField>(["shipDate", "eventStartDate", "eventEndDate"]);
+
+function fmtSuggestionDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+// A suggestion only shows when it would actually change something -- a
+// field the opportunity already has set to the same value (accepted last
+// time, or entered manually and it happens to match) doesn't need to
+// nag. Same "propose once, never silently apply" contract as
+// getSuggestedRetag above, just for onboarding fields instead of document
+// type.
+function getFieldSuggestions(
+  opportunity: {
+    boothNumber: string | null;
+    boothSize: string | null;
+    shipDate: Date | null;
+    eventStartDate: Date | null;
+    eventEndDate: Date | null;
+    siteAddress: string | null;
+  },
+  documents: { id: string; filename: string; mimeType: string; extractionStatus: string; extractedSummary: unknown }[],
+) {
+  const analyzed = documents.filter(
+    (d) => d.extractionStatus === "COMPLETE" && d.extractedSummary,
+  ) as { id: string; filename: string; mimeType: string; extractionStatus: string; extractedSummary: DocumentSummary }[];
+
+  const suggestions: {
+    field: ExtractableOpportunityField;
+    label: string;
+    value: string;
+    doc: (typeof analyzed)[number];
+    sourceQuote: string;
+    pageNumber: number | null;
+  }[] = [];
+
+  for (const field of EXTRACTABLE_OPPORTUNITY_FIELDS) {
+    const found = analyzed
+      .flatMap((d) => (d.extractedSummary.extractedFields ?? []).map((ef) => ({ ...ef, doc: d })))
+      .find((ef) => ef.field === field && ef.value.trim() !== "");
+    if (!found) continue;
+
+    if (EXTRACTABLE_DATE_FIELDS.has(field)) {
+      const parsed = parseFreeTextDate(found.value);
+      if (!parsed) continue; // nothing a human could meaningfully accept
+      const current = field === "shipDate" ? opportunity.shipDate
+        : field === "eventStartDate" ? opportunity.eventStartDate
+        : opportunity.eventEndDate;
+      if (current && fmtSuggestionDate(current) === fmtSuggestionDate(parsed)) continue;
+    } else {
+      const current = field === "boothNumber" ? opportunity.boothNumber
+        : field === "boothSize" ? opportunity.boothSize
+        : opportunity.siteAddress;
+      if (current && current.trim() === found.value.trim()) continue;
+    }
+
+    suggestions.push({
+      field,
+      label: EXTRACTABLE_FIELD_LABELS[field],
+      value: found.value,
+      doc: found.doc,
+      sourceQuote: found.sourceQuote,
+      pageNumber: found.pageNumber,
+    });
+  }
+
+  return suggestions;
+}
+
+function OpportunityFieldSuggestions({
+  opportunityId,
+  opportunity,
+  documents,
+}: {
+  opportunityId: string;
+  opportunity: {
+    boothNumber: string | null;
+    boothSize: string | null;
+    shipDate: Date | null;
+    eventStartDate: Date | null;
+    eventEndDate: Date | null;
+    siteAddress: string | null;
+  };
+  documents: { id: string; filename: string; mimeType: string; extractionStatus: string; extractedSummary: unknown }[];
+}) {
+  const suggestions = getFieldSuggestions(opportunity, documents);
+  if (suggestions.length === 0) return null;
+
+  return (
+    <div className="mt-4 border-t border-neutral-200 pt-4">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+        Suggested from documents
+      </h3>
+      <ul className="flex flex-col gap-2">
+        {suggestions.map((s) => (
+          <li key={s.field} className="flex items-center justify-between gap-3 rounded-md bg-amber-50 px-3 py-2 text-sm">
+            <span>
+              <span className="font-medium text-amber-900">{s.label}:</span>{" "}
+              <span className="text-amber-900">{s.value}</span>{" "}
+              <CitationLink
+                href={citationHref(opportunityId, s.doc, s)}
+                source={s.doc.filename}
+                page={s.pageNumber}
+              />
+            </span>
+            <form action={applyOpportunityFieldSuggestionAction.bind(null, opportunityId, s.field)}>
+              <input type="hidden" name="value" value={s.value} />
+              <button type="submit" className="shrink-0 text-xs font-medium text-brand-navy hover:underline">
+                Accept
+              </button>
+            </form>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 const STAGE_OPTIONS = [
   { value: "NEW", label: "New" },
   { value: "CONTACTED", label: "Contacted" },
@@ -350,7 +488,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   // next step actually lives.
   const estimateId = opportunity.estimates[0]?.id;
 
-  const [companies, users, contacts, documents, chatMessages] = await Promise.all([
+  const [companies, users, contacts, documents, chatMessages, taxRates] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.contact.findMany({
@@ -359,6 +497,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     }),
     listDocuments(opportunity.id),
     getThreadMessages(opportunity.id),
+    db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
   ]);
 
   const updateWithId = updateOpportunity.bind(null, opportunity.id);
@@ -428,7 +567,21 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             options={companies.map((c) => ({ value: c.id, label: c.name }))}
           />
           <Field label="Show name" name="showName" defaultValue={opportunity.showName} required />
-          <Field label="Booth number" name="boothNumber" defaultValue={opportunity.boothNumber ?? ""} />
+          <ProjectTypeFields
+            defaults={{
+              projectType: opportunity.projectType,
+              boothNumber: opportunity.boothNumber ?? "",
+              boothSize: opportunity.boothSize ?? "",
+              boothSpace: opportunity.boothSpace ?? "",
+              boothType: opportunity.boothType ?? "",
+              shipDate: fmtDate(opportunity.shipDate),
+              venue: opportunity.venue ?? "",
+              eventStartDate: fmtDate(opportunity.eventStartDate),
+              eventEndDate: fmtDate(opportunity.eventEndDate),
+              siteAddress: opportunity.siteAddress ?? "",
+              projectDetails: opportunity.projectDetails ?? "",
+            }}
+          />
           <div className="grid grid-cols-2 gap-4">
             <Field label="Target move-in" name="targetMoveIn" type="date" defaultValue={fmtDate(opportunity.targetMoveIn)} />
             <Field label="Target move-out" name="targetMoveOut" type="date" defaultValue={fmtDate(opportunity.targetMoveOut)} />
@@ -451,10 +604,20 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
               ...users.map((u) => ({ value: u.id, label: u.name })),
             ]}
           />
+          <SelectField
+            label="Tax jurisdiction"
+            name="taxRateId"
+            defaultValue={opportunity.taxRateId ?? ""}
+            options={[
+              { value: "", label: "— none —" },
+              ...taxRates.map((t) => ({ value: t.id, label: taxRateOptionLabel(t) })),
+            ]}
+          />
           <div>
             <Button>Save changes</Button>
           </div>
         </form>
+        <OpportunityFieldSuggestions opportunityId={opportunity.id} opportunity={opportunity} documents={documents} />
         <ConfirmForm
           action={deleteWithId}
           confirmMessage="Delete this opportunity? This can't be undone."

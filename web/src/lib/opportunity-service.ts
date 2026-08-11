@@ -31,7 +31,10 @@ export async function convertOpportunityToEstimate(opportunityId: string) {
   });
 
   const [estimate] = await db.$transaction([
-    db.estimate.create({ data: { opportunityId } }),
+    // Inherits the opportunity's tax jurisdiction (itself possibly
+    // inherited from the company) as a starting default -- the estimate
+    // detail page's own "Tax jurisdiction" picker can still override it.
+    db.estimate.create({ data: { opportunityId, taxRateId: opportunity.taxRateId } }),
     db.opportunity.update({
       where: { id: opportunityId },
       data: { stage: "ESTIMATING" },

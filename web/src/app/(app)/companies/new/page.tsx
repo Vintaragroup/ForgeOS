@@ -1,7 +1,11 @@
 import { createCompany } from "../actions";
-import { Button, Card, Field, PageHeader } from "@/components/ui";
+import { db } from "@/lib/db";
+import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
+import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 
-export default function NewCompanyPage() {
+export default async function NewCompanyPage() {
+  const taxRates = await db.taxRate.findMany(TAX_RATE_PICKER_QUERY);
+
   return (
     <div>
       <PageHeader title="New company" backHref="/companies" backLabel="Companies" />
@@ -10,6 +14,15 @@ export default function NewCompanyPage() {
           <Field label="Company name" name="name" required />
           <Field label="Billing address" name="billingAddress" />
           <Field label="Industry" name="industry" />
+          <SelectField
+            label="Default tax jurisdiction"
+            name="taxRateId"
+            defaultValue=""
+            options={[
+              { value: "", label: "— none —" },
+              ...taxRates.map((t) => ({ value: t.id, label: taxRateOptionLabel(t) })),
+            ]}
+          />
           <div>
             <Button>Create company</Button>
           </div>

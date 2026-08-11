@@ -1,16 +1,19 @@
 import { db } from "@/lib/db";
 import { createOpportunity } from "../actions";
+import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 import { EmptyState, LinkButton } from "@/components/ui";
+import { ProjectTypeFields } from "@/components/project-type-fields";
 
 // The company/user dropdowns must reflect live data, not a build-time
 // snapshot -- see opportunities/page.tsx's comment for the same reasoning.
 export const dynamic = "force-dynamic";
 
 export default async function NewOpportunityPage() {
-  const [companies, users] = await Promise.all([
+  const [companies, users, taxRates] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
+    db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
   ]);
 
   if (companies.length === 0) {
@@ -37,11 +40,35 @@ export default async function NewOpportunityPage() {
             options={companies.map((c) => ({ value: c.id, label: c.name }))}
           />
           <Field label="Show name" name="showName" required />
-          <Field label="Booth number" name="boothNumber" />
+          <ProjectTypeFields
+            defaults={{
+              projectType: "TRADESHOW_EXHIBIT",
+              boothNumber: "",
+              boothSize: "",
+              boothSpace: "",
+              boothType: "",
+              shipDate: "",
+              venue: "",
+              eventStartDate: "",
+              eventEndDate: "",
+              siteAddress: "",
+              projectDetails: "",
+            }}
+          />
           <div className="grid grid-cols-2 gap-4">
             <Field label="Target move-in" name="targetMoveIn" type="date" />
             <Field label="Target move-out" name="targetMoveOut" type="date" />
           </div>
+          <SelectField
+            label="Tax jurisdiction"
+            name="taxRateId"
+            defaultValue=""
+            options={[
+              { value: "", label: "— use company's default —" },
+              { value: "__none__", label: "— none —" },
+              ...taxRates.map((t) => ({ value: t.id, label: taxRateOptionLabel(t) })),
+            ]}
+          />
           <SelectField
             label="Owner"
             name="ownerId"

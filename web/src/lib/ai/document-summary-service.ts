@@ -47,6 +47,37 @@ export interface CitedText {
   pageNumber: number | null;
 }
 
+// Onboarding fields (opportunities/[id]/page.tsx's ProjectTypeFields) that
+// a document's own text might state outright -- a generic array rather
+// than one bespoke top-level property per field (like venue/
+// eventOrProjectName above) so adding another suggestible field later is
+// a one-line change here, not a schema+type+prompt edit everywhere. Dates
+// are kept as free text (same as submissionDeadline) and parsed with
+// parseFreeTextDate at the point of use, not here.
+export type ExtractableOpportunityField =
+  | "boothNumber"
+  | "boothSize"
+  | "shipDate"
+  | "eventStartDate"
+  | "eventEndDate"
+  | "siteAddress";
+
+export const EXTRACTABLE_OPPORTUNITY_FIELDS: ExtractableOpportunityField[] = [
+  "boothNumber",
+  "boothSize",
+  "shipDate",
+  "eventStartDate",
+  "eventEndDate",
+  "siteAddress",
+];
+
+export interface ExtractedField {
+  field: ExtractableOpportunityField;
+  value: string;
+  sourceQuote: string;
+  pageNumber: number | null;
+}
+
 export interface DocumentSummary {
   eventOrProjectName: string | null;
   venue: string | null;
@@ -54,6 +85,9 @@ export interface DocumentSummary {
   keyDates: KeyDateFact[];
   scopeSummary: CitedText[];
   riskFlags: CitedText[];
+  // Optional -- older analyzed documents predate this field and won't
+  // have it in their stored extractedSummary; treat as an empty array.
+  extractedFields?: ExtractedField[];
   // Optional: drawing-summary-service.ts doesn't populate this (a
   // document already in the vision pipeline has no ambiguity left to
   // resolve). Excludes PRICING_SCHEDULE -- that's a mime-type/structure
@@ -88,6 +122,7 @@ type DocumentSummaryFromAI = {
   keyDates: { label: string; date: string; dateType: KeyDateType; sourceQuote: string }[];
   scopeSummary: { text: string; sourceQuote: string }[];
   riskFlags: { text: string; sourceQuote: string }[];
+  extractedFields: { field: ExtractableOpportunityField; value: string; sourceQuote: string }[];
   suggestedDocumentType: SuggestableDocumentType;
 };
 
@@ -150,6 +185,24 @@ const SUMMARY_SCHEMA = {
           required: ["text", "sourceQuote"],
         },
       },
+      extractedFields: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            field: {
+              type: "string",
+              enum: EXTRACTABLE_OPPORTUNITY_FIELDS,
+              description:
+                "boothNumber: the exhibitor's assigned booth number. boothSize: booth footprint as written, e.g. '20x20' or '10 x 30'. shipDate: when materials/freight must ship or arrive at the show, distinct from any move-in date. eventStartDate/eventEndDate: the show or event's own open-to-public dates, distinct from installation/move-in and dismantle/move-out dates. siteAddress: a physical jobsite address for non-show work (e.g. a permanent install or on-site build), not a show venue name.",
+            },
+            value: { type: "string", description: "The fact as written in the source -- dates as free text, not reformatted." },
+            sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+          },
+          required: ["field", "value", "sourceQuote"],
+        },
+      },
       suggestedDocumentType: {
         type: "string",
         enum: SUGGESTABLE_DOCUMENT_TYPES,
@@ -157,13 +210,15 @@ const SUMMARY_SCHEMA = {
           "The document TYPE this content actually reads as, regardless of how it's currently filed. RFP: an invitation/instructions to bid. SCOPE_OF_WORK: describes the deliverables/work to be done. CONTRACT: a services agreement, terms and conditions, or legal agreement. SCHEDULE: primarily a timeline, event schedule, or list of dates. DRAWING: primarily dimensions/technical drawing callouts (rare for a text document -- most drawings are images). OTHER: none of the above fit well.",
       },
     },
-    required: ["eventOrProjectName", "venue", "submissionDeadline", "keyDates", "scopeSummary", "riskFlags", "suggestedDocumentType"],
+    required: ["eventOrProjectName", "venue", "submissionDeadline", "keyDates", "scopeSummary", "riskFlags", "extractedFields", "suggestedDocumentType"],
   },
 } as const;
 
-const SYSTEM_PROMPT = `You analyze RFP and client-supplied project documents for an event/exhibit contractor. Extract only facts stated in the document -- never infer or guess a date, name, or figure that isn't written there. If something isn't present, use null or an empty array. Keep scopeSummary and riskFlags as short, specific bullet points, not paragraphs. For every key date, scope item, and risk flag, include sourceQuote: a short verbatim quote copied exactly from the document showing where that fact came from -- this is used to jump a reader straight to it, so it must be an exact substring of the source text, not a paraphrase.
+const SYSTEM_PROMPT = `You analyze RFP and client-supplied project documents for a contractor whose work spans tradeshow exhibits, standalone events, exhibitor I&D/labor contracting, and specialized/experiential builds -- not every document is about a booth. Extract only facts stated in the document -- never infer or guess a date, name, or figure that isn't written there. If something isn't present, use null or an empty array. Keep scopeSummary and riskFlags as short, specific bullet points, not paragraphs. For every key date, scope item, risk flag, and extracted field, include sourceQuote: a short verbatim quote copied exactly from the document showing where that fact came from -- this is used to jump a reader straight to it, so it must be an exact substring of the source text, not a paraphrase.
 
 For every key date, also classify dateType from the READER's point of view, not the document author's: a date is only a DEADLINE if the reader (the bidder/contractor) must submit, respond, or deliver something by it. "RFP Sent" or "Answers to Bidders' Questions Sent" are INFORMATIONAL -- they're facts about what the client already did, not something the reader owes anyone. "Potential Site Visit" or "Opening Night" are MILESTONE -- fixed points in the event worth planning around, but nothing is due from the reader that day. "Bidder Questions Due" or "Tender Submission Due" are DEADLINE -- the reader must act by then. Get this classification right; a Dashboard view uses it to decide what actually belongs in a deadlines list versus a timeline.
+
+Also extract extractedFields: onboarding facts about the job itself (booth number, booth size, ship date, event start/end dates, jobsite address) whenever the document states them plainly -- these get proposed to a human as suggestions to accept or ignore, never applied automatically, so extract anything genuinely stated even if you're not certain it's the final value.
 
 Also classify suggestedDocumentType: what this document's content actually IS, independent of how it happens to be filed right now -- a vendor services agreement is a CONTRACT even if it was uploaded as a generic RFP attachment.`;
 
@@ -247,6 +302,7 @@ export async function summarizeDocument(documentId: string, userId: string | nul
       keyDates: withPage(parsed.keyDates),
       scopeSummary: withPage(parsed.scopeSummary),
       riskFlags: withPage(parsed.riskFlags),
+      extractedFields: withPage(parsed.extractedFields),
       suggestedDocumentType: parsed.suggestedDocumentType,
     };
 

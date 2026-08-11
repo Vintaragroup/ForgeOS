@@ -6,7 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { sendProposalAction, signProposalAction } from "../actions";
 import { extractBranding, extractPaymentMethodNote } from "@/lib/proposal-branding";
-import { taxRateLabel } from "@/lib/tax-rate";
+import { taxRateLabel, TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
 import { BRAND, BRAND_ADDRESS_LINES } from "@/lib/brand";
 import { SERVICE_STYLE_CATEGORIES, SHOW_SERVICES_CATEGORIES } from "@/lib/line-item-category";
 import {
@@ -243,15 +243,20 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                 <span className="w-24 text-right font-medium text-neutral-700">{moneyFromNumber(rentalTotal)}</span>
               </div>
               {version.estimate.taxRate && (
-                <div className="flex gap-4">
-                  <span>
-                    Estimated tax ({taxRateLabel(version.estimate.taxRate)},{" "}
-                    {(version.estimate.taxRate.rate.toNumber() * 100).toFixed(2)}%)
+                <>
+                  <div className="flex gap-4">
+                    <span>
+                      Estimated tax ({taxRateLabel(version.estimate.taxRate)},{" "}
+                      {(version.estimate.taxRate.rate.toNumber() * 100).toFixed(2)}%)
+                    </span>
+                    <span className="w-24 text-right font-medium text-neutral-700">
+                      {moneyFromNumber(rentalTotal * version.estimate.taxRate.rate.toNumber())}
+                    </span>
+                  </div>
+                  <span className="max-w-xs text-right text-[11px] italic text-neutral-400">
+                    {TAX_ESTIMATE_DISCLAIMER}
                   </span>
-                  <span className="w-24 text-right font-medium text-neutral-700">
-                    {moneyFromNumber(rentalTotal * version.estimate.taxRate.rate.toNumber())}
-                  </span>
-                </div>
+                </>
               )}
             </div>
           )}

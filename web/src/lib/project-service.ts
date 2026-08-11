@@ -11,8 +11,21 @@ import { parseFreeTextDate } from "@/lib/citation";
 // Opportunity -- mirrors Phase 2's "Convert to estimate." No stage
 // transition here (unlike convertOpportunityToEstimate): the opportunity
 // is already at its terminal WON stage by the time this runs.
+//
+// showStartDate/showEndDate inherit from the opportunity's own
+// eventStartDate/eventEndDate (set during onboarding, manually or via an
+// accepted AI suggestion) rather than starting blank -- same inheritance
+// principle as Estimate.taxRateId defaulting from the opportunity in
+// opportunity-service.ts. Still editable afterward on the Project page.
 export async function convertOpportunityToProject(opportunityId: string) {
-  return db.project.create({ data: { opportunityId } });
+  const opportunity = await db.opportunity.findUniqueOrThrow({ where: { id: opportunityId } });
+  return db.project.create({
+    data: {
+      opportunityId,
+      showStartDate: opportunity.eventStartDate,
+      showEndDate: opportunity.eventEndDate,
+    },
+  });
 }
 
 export async function updateProjectDetails(

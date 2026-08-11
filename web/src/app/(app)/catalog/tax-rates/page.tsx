@@ -21,8 +21,10 @@ export default async function TaxRatesPage() {
       />
       <p className="mb-4 text-sm text-neutral-500">
         One combined sales tax rate per jurisdiction (state and local already rolled together) --
-        selected per estimate to compute an estimated tax line on the proposal. No rates are
-        pre-loaded; enter the real rate for each jurisdiction you bid in.
+        selected on a company, opportunity, or estimate to compute an estimated tax line on the
+        proposal, with each level able to override the one above it. A starter set of major
+        trade-show markets is seeded (scripts/seed-tax-rates.ts); verify a rate before relying on
+        it, and add any jurisdiction you bid in that isn&apos;t listed.
       </p>
       {rates.length === 0 ? (
         <EmptyState message="No tax rates yet." />

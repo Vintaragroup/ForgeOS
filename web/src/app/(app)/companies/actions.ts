@@ -13,6 +13,7 @@ export async function createCompany(formData: FormData) {
       name,
       billingAddress: emptyToNull(formData.get("billingAddress")),
       industry: emptyToNull(formData.get("industry")),
+      taxRateId: emptyToNull(formData.get("taxRateId")),
     },
   });
 
@@ -30,6 +31,7 @@ export async function updateCompany(id: string, formData: FormData) {
       name,
       billingAddress: emptyToNull(formData.get("billingAddress")),
       industry: emptyToNull(formData.get("industry")),
+      taxRateId: emptyToNull(formData.get("taxRateId")),
     },
   });
 

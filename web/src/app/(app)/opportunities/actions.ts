@@ -1,11 +1,15 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { OpportunityStage } from "@/generated/prisma/enums";
+import { OpportunityStage, ProjectType, BoothType, BoothSpace } from "@/generated/prisma/enums";
 import { changeOpportunityStage } from "@/lib/opportunity-service";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
+import { EXTRACTABLE_OPPORTUNITY_FIELDS, type ExtractableOpportunityField } from "@/lib/ai/document-summary-service";
+import { parseFreeTextDate } from "@/lib/citation";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+
+const DATE_FIELDS = new Set<ExtractableOpportunityField>(["shipDate", "eventStartDate", "eventEndDate"]);
 
 // No access check -- creating a new Opportunity has nothing to authorize
 // against yet. The creator isn't auto-added as a collaborator: ownership
@@ -18,16 +22,28 @@ export async function createOpportunity(formData: FormData) {
   if (!companyId) throw new Error("Company is required");
 
   const collaboratorIds = formData.getAll("collaboratorIds").map(String);
+  const taxRateId = await resolveOpportunityTaxRateId(formData.get("taxRateId"), companyId);
 
   const opportunity = await db.opportunity.create({
     data: {
       showName,
       companyId,
+      projectType: String(formData.get("projectType") ?? "TRADESHOW_EXHIBIT") as ProjectType,
       boothNumber: emptyToNull(formData.get("boothNumber")),
+      boothSize: emptyToNull(formData.get("boothSize")),
+      boothSpace: emptyToNull(formData.get("boothSpace")) as BoothSpace | null,
+      boothType: emptyToNull(formData.get("boothType")) as BoothType | null,
+      shipDate: emptyToDate(formData.get("shipDate")),
+      venue: emptyToNull(formData.get("venue")),
+      eventStartDate: emptyToDate(formData.get("eventStartDate")),
+      eventEndDate: emptyToDate(formData.get("eventEndDate")),
+      siteAddress: emptyToNull(formData.get("siteAddress")),
+      projectDetails: emptyToNull(formData.get("projectDetails")),
       primaryContactId: emptyToNull(formData.get("primaryContactId")),
       ownerId: emptyToNull(formData.get("ownerId")),
       targetMoveIn: emptyToDate(formData.get("targetMoveIn")),
       targetMoveOut: emptyToDate(formData.get("targetMoveOut")),
+      taxRateId,
       collaborators: { create: collaboratorIds.map((userId) => ({ userId })) },
     },
   });
@@ -54,17 +70,59 @@ export async function updateOpportunity(id: string, formData: FormData) {
     data: {
       showName,
       companyId,
+      projectType: String(formData.get("projectType") ?? "TRADESHOW_EXHIBIT") as ProjectType,
       boothNumber: emptyToNull(formData.get("boothNumber")),
+      boothSize: emptyToNull(formData.get("boothSize")),
+      boothSpace: emptyToNull(formData.get("boothSpace")) as BoothSpace | null,
+      boothType: emptyToNull(formData.get("boothType")) as BoothType | null,
+      shipDate: emptyToDate(formData.get("shipDate")),
+      venue: emptyToNull(formData.get("venue")),
+      eventStartDate: emptyToDate(formData.get("eventStartDate")),
+      eventEndDate: emptyToDate(formData.get("eventEndDate")),
+      siteAddress: emptyToNull(formData.get("siteAddress")),
+      projectDetails: emptyToNull(formData.get("projectDetails")),
       primaryContactId: emptyToNull(formData.get("primaryContactId")),
       ownerId: emptyToNull(formData.get("ownerId")),
       targetMoveIn: emptyToDate(formData.get("targetMoveIn")),
       targetMoveOut: emptyToDate(formData.get("targetMoveOut")),
+      taxRateId: emptyToNull(formData.get("taxRateId")),
     },
   });
 
   revalidatePath("/opportunities");
   revalidatePath(`/opportunities/${id}`);
   redirect(`/opportunities/${id}`);
+}
+
+// Accepting an AI-suggested onboarding field (opportunities/[id]/page.tsx's
+// "Suggested from documents" panel, computed from DocumentSummary.
+// extractedFields) -- mirrors updateDocumentTypeAction's accept-a-
+// suggestion shape: the value only ever lands on the Opportunity when a
+// human clicks Accept, never automatically at analysis time. `field` is
+// checked against the fixed allowlist rather than trusted from the form
+// post, since it's used as a dynamic Prisma update key.
+export async function applyOpportunityFieldSuggestionAction(
+  opportunityId: string,
+  field: string,
+  formData: FormData,
+) {
+  await requireOpportunityAccess(opportunityId);
+
+  if (!EXTRACTABLE_OPPORTUNITY_FIELDS.includes(field as ExtractableOpportunityField)) {
+    throw new Error(`Not a suggestible field: ${field}`);
+  }
+
+  const rawValue = String(formData.get("value") ?? "").trim();
+  if (!rawValue) return;
+
+  const value: string | Date | null = DATE_FIELDS.has(field as ExtractableOpportunityField)
+    ? parseFreeTextDate(rawValue)
+    : rawValue;
+  if (value === null) return; // unparseable date -- leave the field untouched rather than write garbage
+
+  await db.opportunity.update({ where: { id: opportunityId }, data: { [field]: value } });
+
+  revalidatePath(`/opportunities/${opportunityId}`);
 }
 
 // Diffs the submitted checkbox list against the current collaborator
@@ -111,6 +169,24 @@ export async function deleteOpportunity(id: string) {
   await db.opportunity.update({ where: { id }, data: { deletedAt: new Date() } });
   revalidatePath("/opportunities");
   redirect("/opportunities");
+}
+
+// The "new opportunity" form's taxRateId select offers three states: blank
+// (inherit the company's default), the "__none__" sentinel (explicitly no
+// tax), or a concrete TaxRate id. A plain emptyToNull can't tell "inherit"
+// apart from "explicit none", hence this dedicated resolver -- only used at
+// creation time, since after that the stored value is already concrete and
+// updateOpportunity's plain emptyToNull is unambiguous.
+async function resolveOpportunityTaxRateId(
+  value: FormDataEntryValue | null,
+  companyId: string,
+): Promise<string | null> {
+  const str = String(value ?? "").trim();
+  if (str === "__none__") return null;
+  if (str !== "") return str;
+
+  const company = await db.company.findUnique({ where: { id: companyId }, select: { taxRateId: true } });
+  return company?.taxRateId ?? null;
 }
 
 function emptyToNull(value: FormDataEntryValue | null): string | null {

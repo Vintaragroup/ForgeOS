@@ -194,12 +194,18 @@ export function SelectField({
   defaultValue,
   required,
   options,
+  onChange,
 }: {
   label: string;
   name: string;
   defaultValue?: string;
   required?: boolean;
   options: { value: string; label: string }[];
+  // Optional -- every existing caller renders this as an uncontrolled
+  // select (defaultValue only), so adding this doesn't change their
+  // behavior. Lets a client component (e.g. project-type-fields.tsx)
+  // react to a selection without needing its own raw <select>.
+  onChange?: (value: string) => void;
 }) {
   return (
     <div className="flex flex-col gap-1">
@@ -212,6 +218,7 @@ export function SelectField({
         name={name}
         defaultValue={defaultValue}
         required={required}
+        onChange={onChange ? (e) => onChange(e.target.value) : undefined}
         className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-500"
       >
         {options.map((opt) => (

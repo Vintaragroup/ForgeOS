@@ -9,6 +9,7 @@ import { Document, Page, Text, View, Image as PdfImage, StyleSheet, Font } from 
 import type { Prisma } from "@/generated/prisma/client";
 import { BRAND, BRAND_ADDRESS_LINES, BRAND_COMPANY_NAME, BRAND_TAGLINE } from "@/lib/brand";
 import { SERVICE_STYLE_CATEGORIES, SHOW_SERVICES_CATEGORIES } from "@/lib/line-item-category";
+import { TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
 import {
   aggregateByCategory,
   bucketSubtotal,
@@ -219,6 +220,7 @@ const styles = StyleSheet.create({
   subtotalsRow: { flexDirection: "row", justifyContent: "flex-end", marginTop: 2 },
   subtotalsRowLabel: { fontSize: 9, color: "#737373", marginRight: 16 },
   subtotalsRowValue: { fontSize: 9, fontWeight: 700, width: 80, textAlign: "right" },
+  taxDisclaimer: { fontSize: 7, fontStyle: "italic", color: "#a3a3a3", marginTop: 2, maxWidth: 280, textAlign: "right" },
   // Informational note only -- see paymentMethodNote's own comment on
   // ProposalPdfData. Right-aligned to sit with the totals column it
   // precedes, not a table row of its own.
@@ -511,12 +513,15 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               <Text style={styles.subtotalsRowValue}>{moneyFromNumber(rentalTotal)}</Text>
             </View>
             {data.taxRate && (
-              <View style={styles.subtotalsRow}>
-                <Text style={styles.subtotalsRowLabel}>
-                  Estimated tax ({data.taxRate.label}, {(data.taxRate.rate * 100).toFixed(2)}%)
-                </Text>
-                <Text style={styles.subtotalsRowValue}>{moneyFromNumber(rentalTotal * data.taxRate.rate)}</Text>
-              </View>
+              <>
+                <View style={styles.subtotalsRow}>
+                  <Text style={styles.subtotalsRowLabel}>
+                    Estimated tax ({data.taxRate.label}, {(data.taxRate.rate * 100).toFixed(2)}%)
+                  </Text>
+                  <Text style={styles.subtotalsRowValue}>{moneyFromNumber(rentalTotal * data.taxRate.rate)}</Text>
+                </View>
+                <Text style={styles.taxDisclaimer}>{TAX_ESTIMATE_DISCLAIMER}</Text>
+              </>
             )}
           </View>
         )}

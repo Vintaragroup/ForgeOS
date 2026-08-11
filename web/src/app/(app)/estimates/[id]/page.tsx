@@ -35,7 +35,7 @@ import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { CANONICAL_CATEGORIES } from "@/lib/line-item-category";
-import { taxRateLabel } from "@/lib/tax-rate";
+import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref } from "@/lib/citation";
@@ -67,10 +67,6 @@ const CATEGORY_OPTIONS = [
 
 function money(d: { toFixed(n: number): string }): string {
   return `$${d.toFixed(2)}`;
-}
-
-function taxRateOptionLabel(t: { state: string; city: string | null; label: string | null; rate: { toNumber(): number } }): string {
-  return `${taxRateLabel(t)} — ${(t.rate.toNumber() * 100).toFixed(2)}%`;
 }
 
 export default async function EstimateDetailPage(props: PageProps<"/estimates/[id]">) {
@@ -131,7 +127,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const [users, proposalTemplates, taxRates, attachments, pricingScheduleDocuments, scopeDocuments] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.proposalTemplate.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
-    db.taxRate.findMany({ where: { deletedAt: null }, orderBy: [{ state: "asc" }, { city: "asc" }] }),
+    db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
     db.attachment.findMany({
       where: { estimateId: estimate.id, deletedAt: null },
       orderBy: { createdAt: "desc" },

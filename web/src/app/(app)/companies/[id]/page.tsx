@@ -2,18 +2,22 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { deleteCompany, updateCompany } from "../actions";
-import { Button, Card, Field, PageHeader } from "@/components/ui";
+import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
+import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 
 export default async function CompanyDetailPage(props: PageProps<"/companies/[id]">) {
   const { id } = await props.params;
-  const company = await db.company.findFirst({
-    where: { id, deletedAt: null },
-    include: {
-      contacts: { where: { deletedAt: null } },
-      opportunities: { where: { deletedAt: null } },
-    },
-  });
+  const [company, taxRates] = await Promise.all([
+    db.company.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        contacts: { where: { deletedAt: null } },
+        opportunities: { where: { deletedAt: null } },
+      },
+    }),
+    db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
+  ]);
   if (!company) notFound();
 
   const updateCompanyWithId = updateCompany.bind(null, company.id);
@@ -32,6 +36,15 @@ export default async function CompanyDetailPage(props: PageProps<"/companies/[id
             defaultValue={company.billingAddress ?? ""}
           />
           <Field label="Industry" name="industry" defaultValue={company.industry ?? ""} />
+          <SelectField
+            label="Default tax jurisdiction"
+            name="taxRateId"
+            defaultValue={company.taxRateId ?? ""}
+            options={[
+              { value: "", label: "— none —" },
+              ...taxRates.map((t) => ({ value: t.id, label: taxRateOptionLabel(t) })),
+            ]}
+          />
           <div className="flex gap-3">
             <Button>Save changes</Button>
           </div>

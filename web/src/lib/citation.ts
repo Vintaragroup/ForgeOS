@@ -59,6 +59,18 @@ export function parseFreeTextDate(raw: string): Date | null {
   const direct = new Date(raw);
   if (!isNaN(direct.getTime())) return direct;
 
+  // "14th February 2027" / "February 14th, 2027" -- JS's Date constructor
+  // doesn't understand ordinal day suffixes at all (Invalid Date, not a
+  // partial parse), and models routinely write dates this way when asked
+  // to keep a date "as written" from RFP prose that itself uses ordinals.
+  // Stripping the suffix and retrying the same direct parse covers it
+  // without a bespoke regex per date shape.
+  const deOrdinalized = raw.replace(/(\d{1,2})(st|nd|rd|th)\b/gi, "$1");
+  if (deOrdinalized !== raw) {
+    const retried = new Date(deOrdinalized);
+    if (!isNaN(retried.getTime())) return retried;
+  }
+
   return null;
 }
 
