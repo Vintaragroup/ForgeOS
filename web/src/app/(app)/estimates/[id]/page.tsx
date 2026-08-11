@@ -36,6 +36,8 @@ import { previewPricingImport } from "@/lib/pricing-import-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { CANONICAL_CATEGORIES } from "@/lib/line-item-category";
 import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
+import { laborRateOptionLabel } from "@/lib/labor-rate";
+import { LaborRateLineItemFields } from "@/components/labor-rate-line-item-picker";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref } from "@/lib/citation";
@@ -124,10 +126,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const currentVersion = versions.find((v) => v.isCurrent) ?? versions[0];
   const olderVersions = versions.filter((v) => v.id !== currentVersion?.id);
 
-  const [users, proposalTemplates, taxRates, attachments, pricingScheduleDocuments, scopeDocuments] = await Promise.all([
+  const [users, proposalTemplates, taxRates, laborRates, attachments, pricingScheduleDocuments, scopeDocuments] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.proposalTemplate.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
+    db.laborRate.findMany({
+      where: { deletedAt: null },
+      orderBy: [{ rateType: "asc" }, { departmentName: "asc" }, { city: "asc" }, { laborTier: "asc" }],
+    }),
     db.attachment.findMany({
       where: { estimateId: estimate.id, deletedAt: null },
       orderBy: { createdAt: "desc" },
@@ -151,6 +157,18 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       orderBy: { createdAt: "desc" },
     }),
   ]);
+
+  // Plain-object, pre-formatted rows -- not the raw Prisma LaborRate[]
+  // (its `rate` is a Decimal instance, which shouldn't cross into the
+  // "use client" picker component as a prop) and not passed as an
+  // opaque id needing a further lookup, since the picker needs the
+  // department code/rate values up front to autofill the line item form.
+  const laborRateOptions = laborRates.map((r) => ({
+    id: r.id,
+    label: laborRateOptionLabel({ ...r, rate: r.rate.toNumber() }),
+    department: r.rateType === "DEPARTMENT" ? r.departmentCode : null,
+    rate: r.rate.toNumber(),
+  }));
 
   const addAttachmentWithId = addAttachmentAction.bind(null, estimate.id);
   const updateEstimateDetailsWithId = updateEstimateDetails.bind(null, estimate.id);
@@ -551,6 +569,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           users={users}
           proposalTemplates={proposalTemplates}
           attachments={attachments}
+          laborRates={laborRateOptions}
         />
       )}
 
@@ -777,6 +796,7 @@ function EstimateVersionCard({
   users,
   proposalTemplates,
   attachments,
+  laborRates,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -784,6 +804,7 @@ function EstimateVersionCard({
   users: { id: string; name: string }[];
   proposalTemplates: { id: string; name: string }[];
   attachments: { id: string; fileRef: string }[];
+  laborRates: { id: string; label: string; department: string | null; rate: number }[];
 }) {
   const updateMarginTargetWithIds = updateMarginTargetAction.bind(null, estimateId, version.id);
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
@@ -1057,6 +1078,7 @@ function EstimateVersionCard({
                 versionId={version.id}
                 sectionId={section.id}
                 attachments={attachments}
+                laborRates={laborRates}
               />
             )}
           </div>
@@ -1082,7 +1104,14 @@ function EstimateVersionCard({
           </h3>
           <div className="flex flex-col gap-6">
             {version.options.map((option) => (
-              <OptionCard key={option.id} estimateId={estimateId} versionId={version.id} option={option} isLocked={version.isLocked} />
+              <OptionCard
+                key={option.id}
+                estimateId={estimateId}
+                versionId={version.id}
+                option={option}
+                isLocked={version.isLocked}
+                laborRates={laborRates}
+              />
             ))}
           </div>
           {!version.isLocked && (
@@ -1104,11 +1133,13 @@ function OptionCard({
   versionId,
   option,
   isLocked,
+  laborRates,
 }: {
   estimateId: string;
   versionId: string;
   option: VersionWithSections["options"][number];
   isLocked: boolean;
+  laborRates: { id: string; label: string; department: string | null; rate: number }[];
 }) {
   const addOptionSectionWithIds = addOptionSectionAction.bind(null, estimateId, versionId, option.id);
   const optionTotal = computeOptionTotal(option.sections);
@@ -1139,7 +1170,9 @@ function OptionCard({
               </tbody>
             </table>
           )}
-          {!isLocked && <AddLineItemForm estimateId={estimateId} versionId={versionId} sectionId={section.id} />}
+          {!isLocked && (
+            <AddLineItemForm estimateId={estimateId} versionId={versionId} sectionId={section.id} laborRates={laborRates} />
+          )}
         </div>
       ))}
       {!isLocked && (
@@ -1249,11 +1282,13 @@ function AddLineItemForm({
   versionId,
   sectionId,
   attachments = [],
+  laborRates = [],
 }: {
   estimateId: string;
   versionId: string;
   sectionId: string;
   attachments?: { id: string; fileRef: string }[];
+  laborRates?: { id: string; label: string; department: string | null; rate: number }[];
 }) {
   const addLineItemWithIds = addLineItemAction.bind(null, estimateId, versionId, sectionId);
   return (
@@ -1268,20 +1303,12 @@ function AddLineItemForm({
         <div className="sm:order-1 sm:w-36">
           <SelectField label="Type" name="lineType" defaultValue="MATERIAL" options={LINE_TYPE_OPTIONS} />
         </div>
-        <div className="sm:order-3 sm:w-24">
-          <Field label="Dept" name="department" placeholder="EF" />
-        </div>
-        <div className="sm:order-4 sm:w-40">
-          <SelectField label="Category" name="category" defaultValue="" options={CATEGORY_OPTIONS} />
-        </div>
+        <LaborRateLineItemFields categoryOptions={CATEGORY_OPTIONS} laborRates={laborRates} />
         <div className="sm:order-5 sm:w-24">
           <Field label="Qty" name="qty" type="number" defaultValue="1" required />
         </div>
         <div className="sm:order-6 sm:w-24">
           <Field label="Unit" name="unit" placeholder="EA, SQFT, LF" />
-        </div>
-        <div className="sm:order-7 sm:w-28">
-          <Field label="Unit cost ($)" name="unitCost" type="number" required />
         </div>
         <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-8 sm:col-span-1">
           <input type="checkbox" name="isClientOwned" />

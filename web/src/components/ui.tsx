@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode } from "react";
+import { type ChangeEvent, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 
 // Every page gets a breadcrumb back to Dashboard by default -- before this,
@@ -121,6 +121,8 @@ export function Field({
   name,
   type = "text",
   defaultValue,
+  value,
+  onChange,
   required,
   placeholder,
 }: {
@@ -128,9 +130,18 @@ export function Field({
   name: string;
   type?: string;
   defaultValue?: string;
+  // Optional controlled pair, same shape as SelectField's onChange --
+  // every existing caller stays on defaultValue (uncontrolled), so this
+  // only activates when both are passed together (e.g. a labor-rate
+  // picker autofilling this field's value from a client component).
+  value?: string;
+  onChange?: (value: string) => void;
   required?: boolean;
   placeholder?: string;
 }) {
+  const valueProps = onChange
+    ? { value: value ?? "", onChange: (e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value) }
+    : { defaultValue };
   return (
     <div className="flex flex-col gap-1">
       <label htmlFor={name} className="text-sm font-medium text-neutral-700">
@@ -141,7 +152,7 @@ export function Field({
         id={name}
         name={name}
         type={type}
-        defaultValue={defaultValue}
+        {...valueProps}
         required={required}
         placeholder={placeholder}
         step={type === "number" ? "any" : undefined}
@@ -192,6 +203,7 @@ export function SelectField({
   label,
   name,
   defaultValue,
+  value,
   required,
   options,
   onChange,
@@ -199,14 +211,18 @@ export function SelectField({
   label: string;
   name: string;
   defaultValue?: string;
+  // Optional, paired with onChange -- same controlled/uncontrolled split
+  // as Field's. Passing onChange alone (no value) keeps today's
+  // uncontrolled-select-with-a-listener behavior (project-type-fields.tsx,
+  // labor-rate-fields.tsx); passing both makes it fully controlled, for a
+  // picker that needs to set this field's value programmatically (e.g.
+  // AddLineItemForm's labor-rate picker autofilling Category).
+  value?: string;
   required?: boolean;
   options: { value: string; label: string }[];
-  // Optional -- every existing caller renders this as an uncontrolled
-  // select (defaultValue only), so adding this doesn't change their
-  // behavior. Lets a client component (e.g. project-type-fields.tsx)
-  // react to a selection without needing its own raw <select>.
   onChange?: (value: string) => void;
 }) {
+  const valueProps = onChange && value !== undefined ? { value } : { defaultValue };
   return (
     <div className="flex flex-col gap-1">
       <label htmlFor={name} className="text-sm font-medium text-neutral-700">
@@ -216,7 +232,7 @@ export function SelectField({
       <select
         id={name}
         name={name}
-        defaultValue={defaultValue}
+        {...valueProps}
         required={required}
         onChange={onChange ? (e) => onChange(e.target.value) : undefined}
         className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-500"

@@ -1,18 +1,12 @@
 import { db } from "@/lib/db";
 import { Card, CollapsibleSection, EmptyState, LinkButton, PageHeader } from "@/components/ui";
+import { LABOR_TIER_LABELS, LABOR_UNION_LABELS } from "@/lib/labor-rate";
 import Link from "next/link";
 
 // See opportunities/page.tsx's comment.
 export const dynamic = "force-dynamic";
 
-const TIER_LABELS: Record<string, string> = {
-  STRAIGHT_TIME: "Straight time",
-  OVERTIME: "Overtime",
-  DOUBLE_TIME: "Double time",
-};
 const TIER_ORDER: Record<string, number> = { STRAIGHT_TIME: 0, OVERTIME: 1, DOUBLE_TIME: 2 };
-
-const UNION_LABELS: Record<string, string> = { UNION: "Union", NON_UNION: "Non-union" };
 
 export default async function LaborRatesPage() {
   const rates = await db.laborRate.findMany({
@@ -80,7 +74,7 @@ export default async function LaborRatesPage() {
                       {city}
                       {group[0].unionStatus && (
                         <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500">
-                          {UNION_LABELS[group[0].unionStatus]}
+                          {LABOR_UNION_LABELS[group[0].unionStatus]}
                         </span>
                       )}
                       {group[0].notes && (
@@ -94,7 +88,7 @@ export default async function LaborRatesPage() {
                             href={`/catalog/labor-rates/${rate.id}`}
                             className="flex items-center justify-between rounded px-2 py-1 text-sm hover:bg-neutral-50"
                           >
-                            <span className="text-neutral-600">{TIER_LABELS[rate.laborTier ?? ""] ?? "—"}</span>
+                            <span className="text-neutral-600">{LABOR_TIER_LABELS[rate.laborTier ?? ""] ?? "—"}</span>
                             <span className="font-medium text-neutral-700">${rate.rate.toString()}/hr</span>
                           </Link>
                         </li>
