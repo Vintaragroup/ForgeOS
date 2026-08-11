@@ -12,6 +12,7 @@ import {
   deleteLineItem,
   lockEstimateVersion,
   recomputeVersionTotals,
+  updateLineItem,
   updateMarginTarget,
 } from "@/lib/estimate-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
@@ -119,6 +120,50 @@ export async function addLineItemAction(
     unitCost,
     isDraft,
     attachmentId,
+  });
+  await recomputeVersionTotals(versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// General-purpose edit for an existing (non-draft-only) line item --
+// draft line items already have their own narrower unitCost-only editor
+// (import-actions.ts's updateLineItemUnitCostAction, tied to the confirm
+// workflow); this covers every field on any line item, added so a
+// mis-categorized or manually-priced row (e.g. a labor line added before
+// the labor-rate picker existed) can be corrected in place instead of
+// deleted and re-added.
+export async function updateLineItemAction(
+  estimateId: string,
+  versionId: string,
+  lineItemId: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  const description = String(formData.get("description") ?? "").trim();
+  if (!description) throw new Error("Line item description is required");
+  const lineType = String(formData.get("lineType")) as LineItemType;
+  const department = emptyToNull(formData.get("department"));
+  // Same auto-detect-on-blank fallback as addLineItemAction, so clearing
+  // the category back to "— auto-detect —" during an edit behaves the
+  // same way it would have at creation time.
+  const category = emptyToNull(formData.get("category")) ?? inferCategoryFromDescription(description);
+  const isClientOwned = formData.get("isClientOwned") === "on" || inferIsClientOwned(description);
+  const unit = emptyToNull(formData.get("unit"));
+  const qty = Number(formData.get("qty"));
+  const unitCost = Number(formData.get("unitCost"));
+  if (!Number.isFinite(qty) || !Number.isFinite(unitCost)) {
+    throw new Error("Qty and unit cost must be numbers");
+  }
+
+  await updateLineItem(lineItemId, {
+    description,
+    lineType,
+    department,
+    category,
+    isClientOwned,
+    qty,
+    unit,
+    unitCost,
   });
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);

@@ -20,13 +20,21 @@ export interface LaborRateOption {
 export function LaborRateLineItemFields({
   categoryOptions,
   laborRates,
+  defaultCategory = "",
+  defaultDepartment = "",
+  defaultUnitCost = "",
 }: {
   categoryOptions: { value: string; label: string }[];
   laborRates: LaborRateOption[];
+  // Prefill for editing an existing line item -- blank (Add Line Item's
+  // default) for a brand new one.
+  defaultCategory?: string;
+  defaultDepartment?: string;
+  defaultUnitCost?: string;
 }) {
-  const [category, setCategory] = useState("");
-  const [department, setDepartment] = useState("");
-  const [unitCost, setUnitCost] = useState("");
+  const [category, setCategory] = useState(defaultCategory);
+  const [department, setDepartment] = useState(defaultDepartment);
+  const [unitCost, setUnitCost] = useState(defaultUnitCost);
 
   function handlePick(id: string) {
     const picked = laborRates.find((r) => r.id === id);

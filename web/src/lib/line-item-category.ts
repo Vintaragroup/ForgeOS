@@ -5,8 +5,16 @@
 // CUSTOM RENTAL, Professional Services, SHOW SERVICES), and (2) the
 // category values already live in the Material/RentalItem catalogs
 // (catalog/materials, catalog/rental-items). Order here is the order
-// categories render in on the proposal PDF.
+// categories render in on the proposal PDF -- Custom Build (the exhibit/
+// booth build, with Structure nested under it) leads, matching how every
+// historical proposal opened with RENTAL STRUCTURE; Labor/Shipping/Other
+// trail as the "Show Services" group, matching SHOW SERVICES always
+// closing the document. Professional Services sits last among the
+// "rental" categories, immediately before that trailing group -- it
+// historically appears just above the RENTAL COMPONENTS TOTAL line (see
+// SERVICE_STYLE_CATEGORIES below).
 export const CANONICAL_CATEGORIES = [
+  "Custom Build",
   "Structure",
   "Flooring",
   "Furniture",
@@ -14,7 +22,6 @@ export const CANONICAL_CATEGORIES = [
   "Audio/Visual",
   "Graphics",
   "Signage",
-  "Custom Build",
   "Professional Services",
   "Labor",
   "Shipping",

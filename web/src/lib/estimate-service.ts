@@ -276,7 +276,16 @@ export async function addLineItemsBulk(
 
 export async function updateLineItem(
   lineItemId: string,
-  data: { description?: string; department?: string | null; qty?: DecimalInput; unit?: string | null; unitCost?: DecimalInput },
+  data: {
+    description?: string;
+    lineType?: LineItemType;
+    department?: string | null;
+    category?: string | null;
+    isClientOwned?: boolean;
+    qty?: DecimalInput;
+    unit?: string | null;
+    unitCost?: DecimalInput;
+  },
 ) {
   const existing = await db.lineItem.findUniqueOrThrow({
     where: { id: lineItemId },
@@ -291,7 +300,10 @@ export async function updateLineItem(
     where: { id: lineItemId },
     data: {
       description: data.description ?? existing.description,
+      lineType: data.lineType ?? existing.lineType,
       department: data.department !== undefined ? data.department : existing.department,
+      category: data.category !== undefined ? data.category : existing.category,
+      isClientOwned: data.isClientOwned ?? existing.isClientOwned,
       qty: new Prisma.Decimal(qty),
       unit: data.unit !== undefined ? data.unit : existing.unit,
       unitCost: new Prisma.Decimal(unitCost),

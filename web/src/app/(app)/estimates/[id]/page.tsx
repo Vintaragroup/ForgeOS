@@ -20,6 +20,7 @@ import {
   lockVersionAction,
   recordCostActualAction,
   updateEstimateDetails,
+  updateLineItemAction,
   updateMarginTargetAction,
 } from "../actions";
 import {
@@ -28,7 +29,6 @@ import {
   commitScopeItemsAction,
   previewImportAction,
   proposeScopeItemsAction,
-  updateLineItemUnitCostAction,
 } from "./import-actions";
 import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import { computeOptionTotal } from "@/lib/estimate-service";
@@ -37,7 +37,8 @@ import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-se
 import { CANONICAL_CATEGORIES } from "@/lib/line-item-category";
 import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { laborRateOptionLabel } from "@/lib/labor-rate";
-import { LaborRateLineItemFields } from "@/components/labor-rate-line-item-picker";
+import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
+import { LineItemRow } from "@/components/line-item-row";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref } from "@/lib/citation";
@@ -670,11 +671,13 @@ function LineItemsTable({
   version,
   estimateId,
   opportunityId,
+  laborRates,
 }: {
   lineItems: SectionLineItem[];
   version: VersionWithSections;
   estimateId: string;
   opportunityId: string;
+  laborRates: LaborRateOption[];
 }) {
   return (
     <table className="w-full min-w-[38rem] text-sm">
@@ -699,7 +702,7 @@ function LineItemsTable({
         {lineItems.map((li) => {
           const deleteWithIds = deleteLineItemAction.bind(null, estimateId, li.id);
           const confirmWithIds = confirmDraftLineItemAction.bind(null, estimateId, li.id);
-          const updateUnitCostWithIds = updateLineItemUnitCostAction.bind(null, estimateId, version.id, li.id);
+          const updateWithIds = updateLineItemAction.bind(null, estimateId, version.id, li.id);
           const actualCost = version.isLocked ? computeActualTotal(li.costActuals) : null;
           const variance = actualCost !== null ? actualCost.minus(li.totalCost) : null;
           // The check-and-balance: only real when sourceQuote is present
@@ -717,71 +720,30 @@ function LineItemsTable({
                 })
               : null;
           return (
-            <tr key={li.id} className="border-t border-neutral-100">
-              <td className="py-1.5">
-                {li.description}
-                {li.isDraft && (
-                  <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">
-                    draft
-                  </span>
-                )}
-                {sourceHref && (
-                  <Link
-                    href={sourceHref}
-                    className="ml-2 text-xs text-brand-navy hover:underline"
-                    title={`Verify against ${li.document!.filename}`}
-                  >
-                    source →
-                  </Link>
-                )}
-              </td>
-              <td className="py-1.5">{li.department ?? ""}</td>
-              <td className="py-1.5">{li.lineType}</td>
-              <td className="py-1.5 text-right">
-                {li.qty.toString()}
-                {li.unit && <span className="ml-1 text-neutral-400">{li.unit}</span>}
-              </td>
-              <td className="py-1.5 text-right">
-                {!version.isLocked && li.isDraft ? (
-                  <form action={updateUnitCostWithIds} className="flex items-center justify-end gap-1">
-                    <input
-                      type="number"
-                      name="unitCost"
-                      step="any"
-                      defaultValue={li.unitCost.toString()}
-                      className="w-20 rounded border border-neutral-300 px-1.5 py-0.5 text-right text-sm outline-none focus:border-neutral-500"
-                    />
-                    <button className="text-xs text-neutral-500 hover:underline">save</button>
-                  </form>
-                ) : (
-                  money(li.unitCost)
-                )}
-              </td>
-              <td className="py-1.5 text-right">{money(li.totalCost)}</td>
-              {version.isLocked && actualCost !== null && variance !== null && (
-                <>
-                  <td className="py-1.5 text-right">{money(actualCost)}</td>
-                  <td
-                    className={`py-1.5 text-right ${variance.isPositive() ? "text-red-600" : variance.isNegative() ? "text-green-600" : ""}`}
-                  >
-                    {variance.isPositive() ? "+" : ""}
-                    {money(variance)}
-                  </td>
-                </>
-              )}
-              {!version.isLocked && (
-                <td className="py-1.5 text-right whitespace-nowrap">
-                  {li.isDraft && (
-                    <form action={confirmWithIds} className="inline">
-                      <button className="mr-2 text-xs text-neutral-700 hover:underline">confirm</button>
-                    </form>
-                  )}
-                  <form action={deleteWithIds} className="inline">
-                    <button className="text-xs text-red-500 hover:underline">remove</button>
-                  </form>
-                </td>
-              )}
-            </tr>
+            <LineItemRow
+              key={li.id}
+              description={li.description}
+              isDraft={li.isDraft}
+              sourceHref={sourceHref}
+              department={li.department ?? ""}
+              lineType={li.lineType}
+              category={li.category ?? ""}
+              qty={li.qty.toString()}
+              unit={li.unit ?? ""}
+              unitCost={li.unitCost.toString()}
+              totalCostDisplay={money(li.totalCost)}
+              isClientOwned={li.isClientOwned}
+              isLocked={version.isLocked}
+              actualCostDisplay={actualCost !== null ? money(actualCost) : null}
+              varianceDisplay={variance !== null ? money(variance) : null}
+              varianceTone={variance === null ? null : variance.isPositive() ? "up" : variance.isNegative() ? "down" : "flat"}
+              lineTypeOptions={LINE_TYPE_OPTIONS}
+              categoryOptions={CATEGORY_OPTIONS}
+              laborRates={laborRates}
+              deleteAction={deleteWithIds}
+              confirmAction={confirmWithIds}
+              updateAction={updateWithIds}
+            />
           );
         })}
       </tbody>
@@ -1019,6 +981,7 @@ function EstimateVersionCard({
                         version={version}
                         estimateId={estimateId}
                         opportunityId={opportunityId}
+                        laborRates={laborRates}
                       />
                     </div>
                   );
@@ -1053,6 +1016,7 @@ function EstimateVersionCard({
                             version={version}
                             estimateId={estimateId}
                             opportunityId={opportunityId}
+                            laborRates={laborRates}
                           />
                         </div>
                       </details>
