@@ -151,6 +151,43 @@ export function Field({
   );
 }
 
+export function TextareaField({
+  label,
+  name,
+  defaultValue,
+  required,
+  placeholder,
+  rows = 5,
+  hint,
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string;
+  required?: boolean;
+  placeholder?: string;
+  rows?: number;
+  hint?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={name} className="text-sm font-medium text-neutral-700">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </label>
+      {hint && <p className="text-xs text-neutral-500">{hint}</p>}
+      <textarea
+        id={name}
+        name={name}
+        defaultValue={defaultValue}
+        required={required}
+        placeholder={placeholder}
+        rows={rows}
+        className="rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+      />
+    </div>
+  );
+}
+
 export function SelectField({
   label,
   name,

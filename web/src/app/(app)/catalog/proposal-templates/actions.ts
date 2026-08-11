@@ -52,8 +52,11 @@ function buildBrandingConfig(formData: FormData) {
 
 function buildLayoutConfig(formData: FormData) {
   const note = emptyToNull(formData.get("layoutNote"));
-  if (!note) return undefined;
-  return { note };
+  const professionalServicesItems = emptyToNull(formData.get("professionalServicesItems"));
+  const termsAndConditions = emptyToNull(formData.get("termsAndConditions"));
+  const paymentMethodNote = emptyToNull(formData.get("paymentMethodNote"));
+  if (!note && !professionalServicesItems && !termsAndConditions && !paymentMethodNote) return undefined;
+  return { note, professionalServicesItems, termsAndConditions, paymentMethodNote };
 }
 
 function emptyToNull(value: FormDataEntryValue | null): string | null {

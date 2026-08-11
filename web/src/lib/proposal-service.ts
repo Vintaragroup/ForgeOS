@@ -38,14 +38,8 @@ export async function revokeApproval(estimateVersionId: string) {
 // schema.prisma's Proposal comment. templateConfigSnapshot freezes the
 // template's current branding/layout so a later template edit doesn't
 // retroactively change how an already-generated proposal renders
-// (data-model-v0.md's Proposal versioning note). detailConfig rides in the
-// same snapshot for the same reason -- the itemized-vs-rolled-up choice
-// made at generation time shouldn't drift if line items change later.
-export async function generateProposal(
-  estimateVersionId: string,
-  templateId: string,
-  detailConfig: { mode: "summary" | "full"; sectionNames: string[] } = { mode: "summary", sectionNames: [] },
-) {
+// (data-model-v0.md's Proposal versioning note).
+export async function generateProposal(estimateVersionId: string, templateId: string) {
   const version = await db.estimateVersion.findUniqueOrThrow({ where: { id: estimateVersionId } });
   if (!version.isLocked || !version.isApproved) {
     throw new Error(
@@ -61,7 +55,6 @@ export async function generateProposal(
       templateConfigSnapshot: {
         brandingConfig: template.brandingConfig ?? undefined,
         layoutConfig: template.layoutConfig ?? undefined,
-        detailConfig,
       },
     },
   });

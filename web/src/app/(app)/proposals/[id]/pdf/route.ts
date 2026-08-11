@@ -3,7 +3,14 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
-import { extractBranding, extractDetailConfig } from "@/lib/proposal-branding";
+import {
+  extractBranding,
+  extractPaymentMethodNote,
+  extractProfessionalServices,
+  extractTermsAndConditions,
+} from "@/lib/proposal-branding";
+import { getProposalCoverInfo } from "@/lib/proposal-timeline";
+import { taxRateLabel } from "@/lib/tax-rate";
 import { ProposalPdfDocument } from "@/lib/proposal-pdf";
 
 export async function GET(_request: Request, { params }: RouteContext<"/proposals/[id]/pdf">) {
@@ -17,7 +24,7 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
       template: true,
       estimateVersion: {
         include: {
-          estimate: { include: { opportunity: { include: { company: true } } } },
+          estimate: { include: { opportunity: { include: { company: true, primaryContact: true } }, taxRate: true } },
           sections: { where: { optionId: null }, include: { lineItems: true } },
         },
       },
@@ -28,25 +35,40 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
 
   const version = proposal.estimateVersion;
   const opportunity = version.estimate.opportunity;
-  const { brandColor } = extractBranding(proposal.templateConfigSnapshot);
-  const { mode, sectionNames } = extractDetailConfig(proposal.templateConfigSnapshot);
+  const { brandColor, logoUrl } = extractBranding(proposal.templateConfigSnapshot);
+  const professionalServices = extractProfessionalServices(proposal.templateConfigSnapshot);
+  const termsAndConditions = extractTermsAndConditions(proposal.templateConfigSnapshot);
+  const paymentMethodNote = extractPaymentMethodNote(proposal.templateConfigSnapshot);
+  const { timeline, venue, scopeSummary } = await getProposalCoverInfo(opportunity.id);
+  const taxRate = version.estimate.taxRate
+    ? { label: taxRateLabel(version.estimate.taxRate), rate: version.estimate.taxRate.rate.toNumber() }
+    : null;
 
   const buffer = await renderToBuffer(
     ProposalPdfDocument({
       data: {
         companyName: opportunity.company.name,
+        companyAddress: opportunity.company.billingAddress,
+        contactName: opportunity.primaryContact?.name ?? null,
+        contactEmail: opportunity.primaryContact?.email ?? null,
         showName: opportunity.showName,
         templateName: proposal.template.name,
         brandColor,
+        logoUrl,
         proposalDate: proposal.createdAt,
+        timeline,
+        venue,
+        scopeSummary,
         sections: version.sections,
+        professionalServices,
+        termsAndConditions,
+        paymentMethodNote,
+        taxRate,
         grandTotal: version.grandTotal,
         sentAt: proposal.sentAt,
         signedAt: proposal.signedAt,
         signedByName: proposal.signedByName,
         signedByTitle: proposal.signedByTitle,
-        detailMode: mode,
-        detailSectionNames: sectionNames,
       },
     }),
   );

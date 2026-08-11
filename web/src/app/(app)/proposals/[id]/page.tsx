@@ -5,55 +5,90 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { sendProposalAction, signProposalAction } from "../actions";
-import { extractBranding, extractDetailConfig } from "@/lib/proposal-branding";
+import { extractBranding, extractPaymentMethodNote } from "@/lib/proposal-branding";
+import { taxRateLabel } from "@/lib/tax-rate";
 import { BRAND, BRAND_ADDRESS_LINES } from "@/lib/brand";
+import { SERVICE_STYLE_CATEGORIES, SHOW_SERVICES_CATEGORIES } from "@/lib/line-item-category";
+import {
+  aggregateByCategory,
+  bucketSubtotal,
+  buildTopLevelCategoryViews,
+  computeRentalAndServicesTotals,
+  type AggregatedLineItem,
+} from "@/lib/proposal-view-model";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
 
 const SECTION_ACCENTS = [BRAND.navy, BRAND.teal, BRAND.tangerine, BRAND.tan];
 
-function money(d: { toFixed(n: number): string }): string {
-  return `$${d.toFixed(2)}`;
+// Intl.NumberFormat, not template-literal toFixed(2) -- see
+// proposal-pdf.tsx's identical formatters for why (no thousands separator
+// on totals over four digits otherwise).
+const CURRENCY_FORMATTER = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const QTY_FORMATTER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+
+function money(d: { toNumber(): number }): string {
+  return CURRENCY_FORMATTER.format(d.toNumber());
 }
 
 function moneyFromNumber(n: number): string {
-  return `$${n.toFixed(2)}`;
+  return CURRENCY_FORMATTER.format(n);
 }
 
-type SectionWithItems = {
-  id: string;
-  name: string;
-  groupLabel: string | null;
-  lineItems: { id: string; description: string; qty: { toString(): string }; unit: string | null; totalCost: { toFixed(n: number): string; toString(): string } }[];
-};
-
-type RenderBlock =
-  | { kind: "booth"; label: string; sections: SectionWithItems[] }
-  | { kind: "standalone"; section: SectionWithItems };
-
-// Mirrors proposal-pdf.tsx's buildRenderBlocks -- groups sections sharing
-// a groupLabel (a booth/exhibit instance) under one shared heading,
-// preserving each block's original relative order.
-function buildRenderBlocks(sections: SectionWithItems[]): RenderBlock[] {
-  const blocks: RenderBlock[] = [];
-  const boothBlockIndex = new Map<string, number>();
-  for (const section of sections) {
-    if (section.groupLabel) {
-      let index = boothBlockIndex.get(section.groupLabel);
-      if (index === undefined) {
-        index = blocks.length;
-        boothBlockIndex.set(section.groupLabel, index);
-        blocks.push({ kind: "booth", label: section.groupLabel, sections: [] });
-      }
-      (blocks[index] as { kind: "booth"; label: string; sections: SectionWithItems[] }).sections.push(section);
-    } else {
-      blocks.push({ kind: "standalone", section });
-    }
-  }
-  return blocks;
+function formatQtyNumber(n: number): string {
+  return QTY_FORMATTER.format(n);
 }
 
-function sectionSubtotal(section: SectionWithItems): number {
-  return section.lineItems.reduce((sum, li) => sum + Number(li.totalCost.toString()), 0);
+function ItemRow({ item }: { item: AggregatedLineItem }) {
+  return (
+    <tr className="border-t border-neutral-100">
+      <td className="px-2 py-1.5">{item.description}</td>
+      <td className="px-2 py-1.5 text-right">{formatQtyNumber(item.qty)}</td>
+      <td className="px-2 py-1.5 text-right text-neutral-500">{item.unit ?? ""}</td>
+      <td className={`px-2 py-1.5 text-right ${item.isClientOwned ? "italic text-neutral-500" : ""}`}>
+        {item.isClientOwned ? "Client Owned" : moneyFromNumber(item.totalCost)}
+      </td>
+    </tr>
+  );
+}
+
+// Every distinct aggregated item renders as its own row -- see
+// proposal-pdf.tsx's ProposalPdfDocument (same rendering rules, same
+// underlying data via proposal-view-model.ts) for why: cross-booth
+// aggregation already does the summarizing, so a category never needs a
+// second "rolled up" collapse on top of that.
+function CategoryTable({ items }: { items: AggregatedLineItem[] }) {
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-left text-neutral-500">
+          <th className="px-2 pb-1 font-normal">Description</th>
+          <th className="px-2 pb-1 text-right font-normal">Qty</th>
+          <th className="px-2 pb-1 text-right font-normal">Unit</th>
+          <th className="px-2 pb-1 text-right font-normal">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((item) => (
+          <ItemRow key={item.key} item={item} />
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function ServiceTable({ items }: { items: AggregatedLineItem[] }) {
+  return (
+    <div className="flex flex-col">
+      {items.map((item) => (
+        <div key={item.key} className="flex items-center justify-between border-t border-neutral-100 px-2 py-1.5 text-sm">
+          <span>{item.description}</span>
+          <span className={item.isClientOwned ? "italic text-neutral-500" : "font-medium"}>
+            {item.isClientOwned ? "Client Owned" : moneyFromNumber(item.totalCost)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default async function ProposalDetailPage(props: PageProps<"/proposals/[id]">) {
@@ -67,7 +102,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
       template: true,
       estimateVersion: {
         include: {
-          estimate: { include: { opportunity: { include: { company: true } } } },
+          estimate: { include: { opportunity: { include: { company: true } }, taxRate: true } },
           // Base estimate sections only -- Option (alternates) pricing is
           // rendered separately once that UI exists (task #44).
           sections: { where: { optionId: null }, include: { lineItems: true } },
@@ -84,52 +119,14 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   const signWithId = signProposalAction.bind(null, proposal.id);
 
   const { brandColor, logoUrl } = extractBranding(proposal.templateConfigSnapshot);
-  const { mode: detailMode, sectionNames: detailSectionNames } = extractDetailConfig(proposal.templateConfigSnapshot);
-  const isDetailed = (section: SectionWithItems) =>
-    detailMode === "full" ||
-    (section.groupLabel !== null && detailSectionNames.includes(section.groupLabel)) ||
-    detailSectionNames.includes(section.name);
+  const paymentMethodNote = extractPaymentMethodNote(proposal.templateConfigSnapshot);
 
-  const renderBody = (section: SectionWithItems) =>
-    isDetailed(section) ? (
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-neutral-500">
-            <th className="px-2 pb-1 font-normal">Description</th>
-            <th className="px-2 pb-1 text-right font-normal">Qty</th>
-            <th className="px-2 pb-1 text-right font-normal">Unit</th>
-            <th className="px-2 pb-1 text-right font-normal">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {section.lineItems.map((li) => (
-            <tr key={li.id} className="border-t border-neutral-100">
-              <td className="px-2 py-1.5">{li.description}</td>
-              <td className="px-2 py-1.5 text-right">{li.qty.toString()}</td>
-              <td className="px-2 py-1.5 text-right text-neutral-500">{li.unit ?? ""}</td>
-              <td className="px-2 py-1.5 text-right">{money(li.totalCost)}</td>
-            </tr>
-          ))}
-          <tr className="border-t border-neutral-200">
-            <td colSpan={3} className="px-2 py-1.5 text-right text-sm font-semibold text-brand-navy">
-              {section.name} total
-            </td>
-            <td className="px-2 py-1.5 text-right text-sm font-semibold text-brand-navy">
-              {moneyFromNumber(sectionSubtotal(section))}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    ) : (
-      <div className="flex items-center justify-between px-2 py-1.5 text-sm">
-        <span className="text-neutral-500">
-          {section.lineItems.length} item{section.lineItems.length === 1 ? "" : "s"}
-        </span>
-        <span className="font-semibold text-brand-navy">{moneyFromNumber(sectionSubtotal(section))}</span>
-      </div>
-    );
-
-  const blocks = buildRenderBlocks(version.sections.filter((section) => section.lineItems.length > 0));
+  const buckets = aggregateByCategory(version.sections.filter((section) => section.lineItems.length > 0));
+  const topLevelCategories = buildTopLevelCategoryViews(buckets);
+  const { rentalTotal, servicesTotal, hasServiceSplit } = computeRentalAndServicesTotals(
+    buckets,
+    SHOW_SERVICES_CATEGORIES,
+  );
 
   return (
     <div className="flex flex-col gap-8">
@@ -179,6 +176,9 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
             <div>
               {logoUrl && <img src={logoUrl} alt="" className="mb-2 h-8" />}
               <div className="text-sm text-neutral-500">Prepared for {opportunity.company.name}</div>
+              {opportunity.company.billingAddress && (
+                <div className="text-sm text-neutral-500">{opportunity.company.billingAddress}</div>
+              )}
               <div className="font-display text-2xl tracking-wide">{opportunity.showName}</div>
             </div>
             <div className="text-right text-sm">
@@ -187,47 +187,81 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
             </div>
           </div>
 
-          {blocks.map((block, blockIndex) => {
-            const accent = SECTION_ACCENTS[blockIndex % SECTION_ACCENTS.length];
-            if (block.kind === "standalone") {
-              const section = block.section;
-              return (
-                <div key={section.id} className="mb-4">
-                  <div className="mb-1 flex items-center gap-2 bg-brand-black px-2 py-1.5">
-                    <span className="h-1.5 w-1.5" style={{ backgroundColor: accent }} />
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-white">
-                      {section.name}
-                    </span>
-                  </div>
-                  {renderBody(section)}
-                </div>
-              );
-            }
-            const boothTotal = block.sections.reduce((sum, s) => sum + sectionSubtotal(s), 0);
+          {topLevelCategories.map(({ name: categoryName, ownItems, children, totalWithChildren }, categoryIndex) => {
+            const accent = SECTION_ACCENTS[categoryIndex % SECTION_ACCENTS.length];
+            const isServiceStyle = SERVICE_STYLE_CATEGORIES.has(categoryName);
             return (
-              <div key={block.label} className="mb-4">
+              <div key={categoryName} className="mb-4">
                 <div className="mb-1.5 flex items-center justify-between bg-brand-black px-2 py-2">
                   <div className="flex items-center gap-2">
                     <span className="h-1.5 w-1.5" style={{ backgroundColor: accent }} />
-                    <span className="text-xs font-semibold uppercase tracking-wide text-white">{block.label}</span>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-white">{categoryName}</span>
                   </div>
-                  <span className="text-xs font-semibold text-white">{moneyFromNumber(boothTotal)}</span>
+                  <span className="text-xs font-semibold text-white">{moneyFromNumber(totalWithChildren)}</span>
                 </div>
-                <div className="ml-3 flex flex-col gap-3">
-                  {block.sections.map((section) => (
-                    <div key={section.id}>
-                      <div className="mb-1 bg-neutral-100 px-2 py-1">
-                        <span className="text-[9px] font-semibold uppercase tracking-wide text-neutral-700">
-                          {section.name}
-                        </span>
+                {isServiceStyle ? <ServiceTable items={ownItems} /> : <CategoryTable items={ownItems} />}
+                {children.length > 0 && (
+                  <div className="ml-3 flex flex-col gap-3">
+                    {children.map((child) => (
+                      <div key={child.name}>
+                        <div className="mb-1 flex items-center justify-between bg-neutral-100 px-2 py-1">
+                          <span className="text-[9px] font-semibold uppercase tracking-wide text-neutral-700">
+                            {child.name}
+                          </span>
+                          <span className="text-[9px] font-semibold text-neutral-700">
+                            {moneyFromNumber(bucketSubtotal(child.items))}
+                          </span>
+                        </div>
+                        <CategoryTable items={child.items} />
                       </div>
-                      {renderBody(section)}
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
+
+          {version.grandTotal.toNumber() > 0 && (
+            <div className="mb-2 flex flex-col items-end gap-0.5 text-sm text-neutral-500">
+              {hasServiceSplit && (
+                <>
+                  <div className="flex gap-4">
+                    <span>Rental components total</span>
+                    <span className="w-24 text-right font-medium text-neutral-700">{moneyFromNumber(rentalTotal)}</span>
+                  </div>
+                  <div className="flex gap-4">
+                    <span>Show services total</span>
+                    <span className="w-24 text-right font-medium text-neutral-700">{moneyFromNumber(servicesTotal)}</span>
+                  </div>
+                </>
+              )}
+              {/* Not a computed tax amount -- see proposal-pdf.tsx's identical
+                  line for why the taxable base is just the rental
+                  components total, already computed above. */}
+              <div className="flex gap-4">
+                <span>Total taxable</span>
+                <span className="w-24 text-right font-medium text-neutral-700">{moneyFromNumber(rentalTotal)}</span>
+              </div>
+              {version.estimate.taxRate && (
+                <div className="flex gap-4">
+                  <span>
+                    Estimated tax ({taxRateLabel(version.estimate.taxRate)},{" "}
+                    {(version.estimate.taxRate.rate.toNumber() * 100).toFixed(2)}%)
+                  </span>
+                  <span className="w-24 text-right font-medium text-neutral-700">
+                    {moneyFromNumber(rentalTotal * version.estimate.taxRate.rate.toNumber())}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {paymentMethodNote && (
+            <div className="mb-2 flex flex-col items-end gap-0.5 text-right text-xs text-neutral-500">
+              <span className="font-semibold uppercase tracking-wide text-neutral-700">Payment Method</span>
+              <span className="max-w-xs">{paymentMethodNote}</span>
+            </div>
+          )}
 
           <div className="flex justify-end border-t border-neutral-200 pt-4">
             <div className="text-right">

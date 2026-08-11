@@ -80,7 +80,7 @@ describe("previewPricingImport", () => {
     const doorRow = preview.rows.find((r) => r.description.toLowerCase().includes("compliant door"));
 
     expect(doorRow).toBeDefined();
-    expect(doorRow?.catalogMatch).toEqual({ source: "Rental", name: "Doors", unitCost: 150 });
+    expect(doorRow?.catalogMatch).toEqual({ source: "Rental", name: "Doors", unitCost: 150, category: null });
   });
 
   it("leaves catalogMatch null for a turnkey line description with no real catalog vocabulary overlap", async () => {

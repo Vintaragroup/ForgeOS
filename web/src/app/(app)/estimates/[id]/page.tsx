@@ -34,6 +34,8 @@ import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
+import { CANONICAL_CATEGORIES } from "@/lib/line-item-category";
+import { taxRateLabel } from "@/lib/tax-rate";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref } from "@/lib/citation";
@@ -54,8 +56,21 @@ const LINE_TYPE_OPTIONS = [
   { value: "FEE", label: "Fee" },
 ];
 
+// Blank stays blank on submit (see emptyToNull in actions.ts) -- left
+// unset, category resolves from a catalog match or the description
+// heuristic instead of a guess forced at entry time. See
+// line-item-category.ts.
+const CATEGORY_OPTIONS = [
+  { value: "", label: "— auto-detect —" },
+  ...CANONICAL_CATEGORIES.map((c) => ({ value: c, label: c })),
+];
+
 function money(d: { toFixed(n: number): string }): string {
   return `$${d.toFixed(2)}`;
+}
+
+function taxRateOptionLabel(t: { state: string; city: string | null; label: string | null; rate: { toNumber(): number } }): string {
+  return `${taxRateLabel(t)} — ${(t.rate.toNumber() * 100).toFixed(2)}%`;
 }
 
 export default async function EstimateDetailPage(props: PageProps<"/estimates/[id]">) {
@@ -82,7 +97,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
 
   const estimate = await db.estimate.findFirst({
     where: { id, deletedAt: null },
-    include: { opportunity: { include: { company: true } } },
+    include: { opportunity: { include: { company: true } }, taxRate: true },
   });
   if (!estimate) notFound();
   if (!(await canAccessOpportunity(user, estimate.opportunityId))) notFound();
@@ -113,9 +128,10 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const currentVersion = versions.find((v) => v.isCurrent) ?? versions[0];
   const olderVersions = versions.filter((v) => v.id !== currentVersion?.id);
 
-  const [users, proposalTemplates, attachments, pricingScheduleDocuments, scopeDocuments] = await Promise.all([
+  const [users, proposalTemplates, taxRates, attachments, pricingScheduleDocuments, scopeDocuments] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.proposalTemplate.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
+    db.taxRate.findMany({ where: { deletedAt: null }, orderBy: [{ state: "asc" }, { city: "asc" }] }),
     db.attachment.findMany({
       where: { estimateId: estimate.id, deletedAt: null },
       orderBy: { createdAt: "desc" },
@@ -195,7 +211,15 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
               type="number"
               defaultValue={estimate.budget?.toString() ?? ""}
             />
-            <Field label="Tax city" name="taxCity" defaultValue={estimate.taxCity ?? ""} />
+            <SelectField
+              label="Tax jurisdiction"
+              name="taxRateId"
+              defaultValue={estimate.taxRateId ?? ""}
+              options={[
+                { value: "", label: "— none —" },
+                ...taxRates.map((t) => ({ value: t.id, label: taxRateOptionLabel(t) })),
+              ]}
+            />
           </div>
           <div>
             <Button>Save details</Button>
@@ -750,42 +774,6 @@ function LineItemsTable({
   );
 }
 
-// Shared by the Preview PDF and Generate proposal forms -- "summary" (the
-// default) rolls each category up to a count + subtotal; picking specific
-// sections here shows full line-item detail for just those, even while
-// the rest of the document stays rolled up. See proposal-pdf.tsx.
-function DetailLevelFields({ sectionNames }: { sectionNames: string[] }) {
-  const uniqueNames = [...new Set(sectionNames)];
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="w-56">
-        <SelectField
-          label="Detail level"
-          name="detailMode"
-          defaultValue="summary"
-          options={[
-            { value: "summary", label: "Summary (category + subtotal)" },
-            { value: "full", label: "Full itemized detail" },
-          ]}
-        />
-      </div>
-      {uniqueNames.length > 0 && (
-        <div className="text-xs text-neutral-600">
-          <div className="mb-1 text-neutral-500">Always show full detail for:</div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1">
-            {uniqueNames.map((name) => (
-              <label key={name} className="flex items-center gap-1.5">
-                <input type="checkbox" name="detailSections" value={name} className="h-3.5 w-3.5" />
-                {name}
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function EstimateVersionCard({
   estimateId,
   opportunityId,
@@ -859,22 +847,17 @@ function EstimateVersionCard({
             action={`/estimates/${estimateId}/versions/${version.id}/preview-pdf`}
             method="get"
             target="_blank"
-            className="flex flex-col gap-3"
+            className="flex items-end gap-3"
           >
-            <div className="flex items-end gap-3">
-              <div className="w-56">
-                <SelectField
-                  label="Proposal template"
-                  name="templateId"
-                  required
-                  options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
-                />
-              </div>
-              <Button variant="secondary">Preview PDF</Button>
+            <div className="w-56">
+              <SelectField
+                label="Proposal template"
+                name="templateId"
+                required
+                options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
+              />
             </div>
-            <DetailLevelFields
-              sectionNames={version.sections.flatMap((s) => [s.groupLabel ?? s.name, s.name])}
-            />
+            <Button variant="secondary">Preview PDF</Button>
           </form>
         )}
       </div>
@@ -924,21 +907,16 @@ function EstimateVersionCard({
                     actionLabel="Add a template"
                   />
                 ) : (
-                  <form action={generateProposalWithIds} className="flex flex-col gap-3">
-                    <div className="flex items-end gap-3">
-                      <div className="w-56">
-                        <SelectField
-                          label="Proposal template"
-                          name="templateId"
-                          required
-                          options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
-                        />
-                      </div>
-                      <Button variant="secondary">Generate proposal</Button>
+                  <form action={generateProposalWithIds} className="flex items-end gap-3">
+                    <div className="w-56">
+                      <SelectField
+                        label="Proposal template"
+                        name="templateId"
+                        required
+                        options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
+                      />
                     </div>
-                    <DetailLevelFields
-                      sectionNames={version.sections.flatMap((s) => [s.groupLabel ?? s.name, s.name])}
-                    />
+                    <Button variant="secondary">Generate proposal</Button>
                   </form>
                 )}
                 {version.proposals.length > 0 && (
@@ -1297,30 +1275,37 @@ function AddLineItemForm({
         <div className="sm:order-3 sm:w-24">
           <Field label="Dept" name="department" placeholder="EF" />
         </div>
-        <div className="sm:order-4 sm:w-24">
-          <Field label="Qty" name="qty" type="number" defaultValue="1" required />
+        <div className="sm:order-4 sm:w-40">
+          <SelectField label="Category" name="category" defaultValue="" options={CATEGORY_OPTIONS} />
         </div>
         <div className="sm:order-5 sm:w-24">
+          <Field label="Qty" name="qty" type="number" defaultValue="1" required />
+        </div>
+        <div className="sm:order-6 sm:w-24">
           <Field label="Unit" name="unit" placeholder="EA, SQFT, LF" />
         </div>
-        <div className="sm:order-6 sm:w-28">
+        <div className="sm:order-7 sm:w-28">
           <Field label="Unit cost ($)" name="unitCost" type="number" required />
         </div>
+        <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-8 sm:col-span-1">
+          <input type="checkbox" name="isClientOwned" />
+          Client owned (no charge)
+        </label>
         {attachments.length > 0 && (
           <>
-            <div className="col-span-2 sm:order-7 sm:w-40 sm:col-span-1">
+            <div className="col-span-2 sm:order-9 sm:w-40 sm:col-span-1">
               <SelectField
                 label="From attachment"
                 name="attachmentId"
                 options={[{ value: "", label: "— none —" }, ...attachments.map((a) => ({ value: a.id, label: a.fileRef }))]}
               />
             </div>
-            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-8 sm:col-span-1">
+            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-10 sm:col-span-1">
               <input type="checkbox" name="isDraft" /> Draft
             </label>
           </>
         )}
-        <div className="col-span-2 sm:order-9">
+        <div className="col-span-2 sm:order-11">
           <Button variant="secondary">Add line item</Button>
         </div>
       </form>

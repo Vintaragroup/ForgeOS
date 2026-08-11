@@ -23,12 +23,14 @@ export interface CatalogEntry {
   source: "Material" | "Rental";
   name: string;
   unitCost: number;
+  category: string | null;
 }
 
 export interface CatalogMatch {
   source: "Material" | "Rental";
   name: string;
   unitCost: number;
+  category: string | null;
 }
 
 const STOPWORDS = new Set([
@@ -46,13 +48,13 @@ function significantTokens(text: string): string[] {
 
 export async function loadCatalogForMatching(): Promise<CatalogEntry[]> {
   const [materials, rentals] = await Promise.all([
-    db.material.findMany({ where: { deletedAt: null }, select: { name: true, currentUnitCost: true } }),
-    db.rentalItem.findMany({ where: { deletedAt: null }, select: { name: true, unitPrice: true } }),
+    db.material.findMany({ where: { deletedAt: null }, select: { name: true, currentUnitCost: true, category: true } }),
+    db.rentalItem.findMany({ where: { deletedAt: null }, select: { name: true, unitPrice: true, category: true } }),
   ]);
 
   return [
-    ...materials.map((m) => ({ source: "Material" as const, name: m.name, unitCost: Number(m.currentUnitCost) })),
-    ...rentals.map((r) => ({ source: "Rental" as const, name: r.name, unitCost: Number(r.unitPrice) })),
+    ...materials.map((m) => ({ source: "Material" as const, name: m.name, unitCost: Number(m.currentUnitCost), category: m.category })),
+    ...rentals.map((r) => ({ source: "Rental" as const, name: r.name, unitCost: Number(r.unitPrice), category: r.category })),
   ];
 }
 
@@ -71,5 +73,7 @@ export function matchDescription(description: string, catalog: CatalogEntry[]): 
     if (!best || score > best.score) best = { score, entry };
   }
 
-  return best ? { source: best.entry.source, name: best.entry.name, unitCost: best.entry.unitCost } : null;
+  return best
+    ? { source: best.entry.source, name: best.entry.name, unitCost: best.entry.unitCost, category: best.entry.category }
+    : null;
 }

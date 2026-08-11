@@ -18,6 +18,7 @@ import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import { db } from "@/lib/db";
 import { cellText } from "@/lib/xlsx-utils";
 import { loadCatalogForMatching, matchDescription, type CatalogMatch } from "@/lib/catalog-match-service";
+import { inferIsClientOwned, resolveLineItemCategory } from "@/lib/line-item-category";
 
 const HEADER_SCAN_ROWS = 20; // header always appears near the top, after a title/merge block
 
@@ -259,6 +260,8 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
         qty: row.qty,
         unit: row.unit || null,
         unitCost: row.catalogMatch?.unitCost ?? 0,
+        category: resolveLineItemCategory({ catalogCategory: row.catalogMatch?.category, description: row.description }),
+        isClientOwned: inferIsClientOwned(row.description),
         documentId,
         // The Description cell's own text, verbatim -- exactly what the
         // spreadsheet viewer renders in that cell, so the "Source" link's

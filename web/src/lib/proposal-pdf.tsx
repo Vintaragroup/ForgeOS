@@ -8,6 +8,16 @@ import path from "node:path";
 import { Document, Page, Text, View, Image as PdfImage, StyleSheet, Font } from "@react-pdf/renderer";
 import type { Prisma } from "@/generated/prisma/client";
 import { BRAND, BRAND_ADDRESS_LINES, BRAND_COMPANY_NAME, BRAND_TAGLINE } from "@/lib/brand";
+import { SERVICE_STYLE_CATEGORIES, SHOW_SERVICES_CATEGORIES } from "@/lib/line-item-category";
+import {
+  aggregateByCategory,
+  bucketSubtotal,
+  buildTopLevelCategoryViews,
+  computeRentalAndServicesTotals,
+  type AggregatedLineItem,
+  type ProposalViewLineItem,
+  type ProposalViewSection,
+} from "@/lib/proposal-view-model";
 
 // The extracted primary black logotype (see web/public/brand -- pulled from
 // the brand guide's own "3.1 Logotype" page since we don't have a separate
@@ -32,7 +42,38 @@ Font.registerHyphenationCallback((word) => [word]);
 const SECTION_ACCENTS = [BRAND.navy, BRAND.teal, BRAND.tangerine, BRAND.tan];
 
 const styles = StyleSheet.create({
-  page: { padding: 48, fontSize: 10, fontFamily: "Helvetica", color: BRAND.black },
+  // paddingTop/paddingBottom reserve room for the fixed running header
+  // (pages 2+ only, see runningHeader) and fixed footer (every page) so
+  // flowing content never collides with either -- costs the cover page a
+  // bit of unused top space since it uses the same page-wide padding for
+  // its own non-fixed header instead, which reads fine as cover-page
+  // breathing room (see the historical Expo CCI proposals' own page 1).
+  page: {
+    paddingTop: 84,
+    paddingBottom: 60,
+    paddingHorizontal: 48,
+    fontSize: 10,
+    fontFamily: "Helvetica",
+    color: BRAND.black,
+  },
+  runningHeader: { position: "absolute", top: 28, left: 48, right: 48 },
+  runningHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e5e5",
+    paddingBottom: 8,
+  },
+  runningHeaderLogo: { height: 14, width: 41 },
+  runningHeaderShowName: {
+    fontSize: 9,
+    fontWeight: 700,
+    color: BRAND.navy,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  runningHeaderLabel: { fontSize: 8, color: BRAND.teal, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 },
   accentBar: { height: 6, marginBottom: 20 },
   issuerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 },
   issuerLogo: { height: 20, width: 59 },
@@ -54,11 +95,13 @@ const styles = StyleSheet.create({
   sectionHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     backgroundColor: BRAND.black,
     paddingVertical: 6,
     paddingHorizontal: 8,
     marginBottom: 2,
   },
+  sectionHeaderLeft: { flexDirection: "row", alignItems: "center" },
   sectionAccentSwatch: { width: 7, height: 7, marginRight: 6 },
   sectionHeaderText: {
     fontSize: 8,
@@ -67,39 +110,30 @@ const styles = StyleSheet.create({
     letterSpacing: 0.75,
     color: BRAND.white,
   },
-  // A booth/exhibit group's main heading -- one level up from a plain
-  // section header (slightly larger, shows a running total for
-  // everything inside it), with its sub-sections (Booth Build, Platform,
-  // etc.) nested underneath via categoryHeaderRow.
-  boothHeaderRow: {
+  sectionHeaderTotal: { fontSize: 8, fontWeight: 700, color: BRAND.white },
+  // A category with children (currently just Custom Build > Structure --
+  // see line-item-category.ts's CATEGORY_PARENT) renders its own items
+  // first, then each child nested underneath via subsection/
+  // subsectionHeaderRow -- a lighter, indented header so it reads as
+  // "part of" the parent rather than a co-equal top-level category.
+  subsection: { marginLeft: 10, marginBottom: 10 },
+  subsectionHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: BRAND.black,
-    paddingVertical: 7,
-    paddingHorizontal: 8,
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  boothHeaderLeft: { flexDirection: "row", alignItems: "center" },
-  boothHeaderText: { fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.75, color: BRAND.white },
-  boothHeaderTotal: { fontSize: 9.5, fontWeight: 700, color: BRAND.white },
-  boothBody: { marginLeft: 10 },
-  categoryHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
     backgroundColor: "#efefef",
     paddingVertical: 4,
     paddingHorizontal: 8,
     marginBottom: 2,
   },
-  categoryHeaderText: {
+  subsectionHeaderText: {
     fontSize: 7.5,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: 0.5,
     color: BRAND.black,
   },
+  subsectionHeaderTotal: { fontSize: 7.5, fontWeight: 700, color: BRAND.black },
   tableHeaderRow: {
     flexDirection: "row",
     borderBottomWidth: 1,
@@ -115,26 +149,14 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 6,
   },
-  summaryRow: {
-    flexDirection: "row",
-    paddingVertical: 4,
-    paddingHorizontal: 6,
-  },
-  summaryDescription: { width: "48%", color: "#737373" },
-  subtotalRow: {
-    flexDirection: "row",
-    borderTopWidth: 1,
-    borderTopColor: "#e5e5e5",
-    paddingTop: 4,
-    paddingHorizontal: 6,
-  },
   colDescription: { width: "48%" },
   colQty: { width: "14%", textAlign: "right" },
   colUnit: { width: "13%", textAlign: "right" },
   colTotal: { width: "25%", textAlign: "right" },
+  // A $0.00 the client already owns/supplies, not "not yet priced" -- see
+  // ProposalViewLineItem.isClientOwned's comment.
+  clientOwnedLabel: { fontStyle: "italic", color: "#737373" },
   headerCell: { color: BRAND.black, fontSize: 8, textTransform: "uppercase", fontWeight: 700 },
-  subtotalLabel: { width: "75%", textAlign: "right", fontSize: 9, fontWeight: 700, color: BRAND.navy },
-  subtotalValue: { width: "25%", textAlign: "right", fontSize: 9, fontWeight: 700, color: BRAND.navy },
   totalRow: {
     flexDirection: "row",
     justifyContent: "flex-end",
@@ -148,7 +170,7 @@ const styles = StyleSheet.create({
   totalValue: { fontSize: 20, fontWeight: 700, marginTop: 2, color: BRAND.navy },
   footer: {
     position: "absolute",
-    bottom: 32,
+    bottom: 24,
     left: 48,
     right: 48,
     fontSize: 8,
@@ -157,138 +179,204 @@ const styles = StyleSheet.create({
     borderTopColor: "#e5e5e5",
     paddingTop: 8,
   },
+  footerBottomRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 2 },
+  contactLine: { fontSize: 9, color: "#404040", marginTop: 2 },
+  // The template's own configured logo (brandingConfig.logoUrl) -- distinct
+  // from the fixed Expo logotype in issuerLogo above. Bounded, not fixed,
+  // since a client-supplied logo's own aspect ratio is unknown.
+  templateLogo: { maxHeight: 28, maxWidth: 140, marginBottom: 4 },
+  projectDescriptionSection: { marginBottom: 20 },
+  projectVenue: { fontSize: 9, fontWeight: 700, color: BRAND.black, marginTop: 6, marginBottom: 4, paddingHorizontal: 8 },
+  projectScopeItem: { fontSize: 8.5, lineHeight: 1.6, color: "#404040", paddingHorizontal: 8, marginBottom: 2 },
+  timelineSection: { marginBottom: 20 },
+  timelineRow: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#f5f5f5",
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+  },
+  timelineDate: { width: "22%", fontSize: 9, fontWeight: 700 },
+  timelineLabel: { width: "78%", fontSize: 9 },
+  serviceRow: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#f5f5f5",
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+  },
+  serviceDescription: { width: "75%", lineHeight: 1.4 },
+  serviceTotal: { width: "25%", textAlign: "right", fontWeight: 700 },
+  professionalServicesRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
+  professionalServicesList: { width: "100%" },
+  professionalServicesItem: { fontSize: 8.5, lineHeight: 1.6 },
+  subtotalsBlock: { alignItems: "flex-end", marginTop: 8 },
+  subtotalsRow: { flexDirection: "row", justifyContent: "flex-end", marginTop: 2 },
+  subtotalsRowLabel: { fontSize: 9, color: "#737373", marginRight: 16 },
+  subtotalsRowValue: { fontSize: 9, fontWeight: 700, width: 80, textAlign: "right" },
+  // Informational note only -- see paymentMethodNote's own comment on
+  // ProposalPdfData. Right-aligned to sit with the totals column it
+  // precedes, not a table row of its own.
+  paymentMethodNote: { alignItems: "flex-end", marginTop: 10 },
+  paymentMethodLabel: { fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: BRAND.black },
+  paymentMethodText: { fontSize: 8, color: "#737373", marginTop: 2, maxWidth: 260, textAlign: "right" },
+  // Tight enough that a normal 21-clause terms block (matching the
+  // historical Expo CCI proposals' own terms page) fits on one page
+  // together with the signature blocks, instead of pushing them onto an
+  // otherwise-blank following page -- the historical documents keep terms
+  // and signatures on a single dense page at exactly this kind of small
+  // print, not a design compromise unique to ForgeOS.
+  termsSection: { marginTop: 12 },
+  termsHeading: {
+    fontSize: 11,
+    fontWeight: 700,
+    marginBottom: 8,
+    color: BRAND.navy,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  termsClause: { fontSize: 7.5, lineHeight: 1.35, marginBottom: 4, color: "#404040" },
+  termsClauseNumber: { fontWeight: 700 },
+  signatureSection: { marginTop: 16, flexDirection: "row", justifyContent: "space-between" },
+  signatureBlock: { width: "45%" },
+  signatureLine: { borderTopWidth: 1, borderTopColor: BRAND.black, marginTop: 20, paddingTop: 4 },
+  signatureLabel: { fontSize: 8, color: "#737373" },
 });
 
+// Intl.NumberFormat, not template-literal toFixed(2) -- a real job total
+// like $58,311.18 rendered as "$58311.18" with no thousands separator on
+// every dollar figure over four digits.
+const CURRENCY_FORMATTER = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const QTY_FORMATTER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+
 function money(d: Prisma.Decimal): string {
-  return `$${d.toFixed(2)}`;
+  return CURRENCY_FORMATTER.format(d.toNumber());
 }
 
 function moneyFromNumber(n: number): string {
-  return `$${n.toFixed(2)}`;
+  return CURRENCY_FORMATTER.format(n);
 }
 
-function formatQty(d: Prisma.Decimal): string {
-  const n = d.toNumber();
-  return Number.isInteger(n) ? n.toString() : n.toFixed(2);
+function formatQtyNumber(n: number): string {
+  return QTY_FORMATTER.format(n);
 }
 
 function formatDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-export interface ProposalPdfLineItem {
-  id: string;
-  description: string;
-  qty: Prisma.Decimal;
-  unit: string | null;
-  totalCost: Prisma.Decimal;
+export interface ProposalPdfTimelineEntry {
+  label: string;
+  date: Date;
 }
 
-export interface ProposalPdfSection {
-  name: string;
-  // Non-null when this section is one sub-element (Booth Build, Platform,
-  // etc.) of a booth/exhibit instance -- see pricing-import-service.ts.
-  // Sections sharing the same groupLabel render nested under one shared
-  // booth heading instead of as separate top-level sections.
-  groupLabel: string | null;
-  lineItems: ProposalPdfLineItem[];
+// Descriptive scope-of-services copy only -- no price of its own. The
+// dollar amount comes from real line items tagged with the "Professional
+// Services" category (same mechanism as Labor/Shipping: actual line
+// items, so the total already flows into data.grandTotal correctly). This
+// is boilerplate text injected above that category's items when any
+// exist; if none do, there's nothing to attach the copy to, so it's
+// simply not rendered.
+export interface ProposalPdfProfessionalServices {
+  items: string[];
 }
-
-// Detail level controls the itemized-vs-rolled-up tradeoff: "summary"
-// (the default) shows just each section's item count and subtotal --
-// "full" itemizes every line, document-wide. detailSectionNames lets
-// specific booths or categories opt into full detail even when the
-// document-wide mode is summary (matched against either a booth's
-// groupLabel or a plain/category section's own name).
-export type ProposalDetailMode = "summary" | "full";
 
 export interface ProposalPdfData {
   companyName: string;
+  companyAddress: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
   showName: string;
   templateName: string;
   brandColor: string | null;
+  logoUrl: string | null;
   proposalDate: Date;
-  sections: ProposalPdfSection[];
+  timeline: ProposalPdfTimelineEntry[];
+  venue: string | null;
+  scopeSummary: string[];
+  sections: ProposalViewSection[];
+  professionalServices: ProposalPdfProfessionalServices | null;
+  termsAndConditions: string[];
+  paymentMethodNote: string | null;
+  // Informational only, same as paymentMethodNote -- never changes
+  // grandTotal. label is a display string (e.g. "Orlando, FL"); rate is a
+  // decimal fraction (0.065 for 6.5%), multiplied against the already-
+  // computed rentalTotal (Total Taxable) to get the estimated dollar
+  // amount. No real tax-rate API involved -- see catalog/tax-rates.
+  taxRate: { label: string; rate: number } | null;
   grandTotal: Prisma.Decimal;
   sentAt: Date | null;
   signedAt: Date | null;
   signedByName: string | null;
   signedByTitle: string | null;
-  detailMode: ProposalDetailMode;
-  detailSectionNames: string[];
-}
-
-type RenderBlock =
-  | { kind: "booth"; label: string; sections: ProposalPdfSection[] }
-  | { kind: "standalone"; section: ProposalPdfSection };
-
-// Groups the flat section list into booth blocks (consecutive-or-not
-// sections sharing a groupLabel, collected under their first occurrence)
-// plus standalone blocks for sections with no groupLabel -- preserves
-// each block's original relative order.
-function buildRenderBlocks(sections: ProposalPdfSection[]): RenderBlock[] {
-  const blocks: RenderBlock[] = [];
-  const boothBlockIndex = new Map<string, number>();
-  for (const section of sections) {
-    if (section.groupLabel) {
-      let index = boothBlockIndex.get(section.groupLabel);
-      if (index === undefined) {
-        index = blocks.length;
-        boothBlockIndex.set(section.groupLabel, index);
-        blocks.push({ kind: "booth", label: section.groupLabel, sections: [] });
-      }
-      (blocks[index] as { kind: "booth"; label: string; sections: ProposalPdfSection[] }).sections.push(section);
-    } else {
-      blocks.push({ kind: "standalone", section });
-    }
-  }
-  return blocks;
-}
-
-function sectionSubtotal(section: ProposalPdfSection): number {
-  return section.lineItems.reduce((sum, li) => sum + li.totalCost.toNumber(), 0);
 }
 
 export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
-  const sections = data.sections.filter((s) => s.lineItems.length > 0);
-  const blocks = buildRenderBlocks(sections);
-  const isDetailed = (section: ProposalPdfSection) =>
-    data.detailMode === "full" ||
-    (section.groupLabel !== null && data.detailSectionNames.includes(section.groupLabel)) ||
-    data.detailSectionNames.includes(section.name);
+  const buckets = aggregateByCategory(data.sections);
+  const topLevelCategories = buildTopLevelCategoryViews(buckets);
 
-  const renderBody = (section: ProposalPdfSection) =>
-    isDetailed(section) ? (
-      <>
-        {section.lineItems.map((li) => (
-          <View key={li.id} style={styles.tableRow} wrap={false}>
-            <Text style={styles.colDescription}>{li.description}</Text>
-            <Text style={styles.colQty}>{formatQty(li.qty)}</Text>
-            <Text style={styles.colUnit}>{li.unit ?? ""}</Text>
-            <Text style={styles.colTotal}>{money(li.totalCost)}</Text>
-          </View>
-        ))}
-        <View style={styles.subtotalRow}>
-          <Text style={styles.subtotalLabel}>{section.name} total</Text>
-          <Text style={styles.subtotalValue}>{moneyFromNumber(sectionSubtotal(section))}</Text>
+  // Every distinct aggregated item renders as its own row, always -- no
+  // detail-mode toggle, no "Includes: A, B, C" collapse. Cross-booth
+  // aggregation (see aggregateByCategory) already did the summarizing;
+  // a second collapse on top of that either hid real quantities behind a
+  // vague blurb or, worse, silently dropped distinct booths that happened
+  // to share a description's first line. Matches every historical Expo
+  // CCI proposal, which itemizes every component with a real qty/total,
+  // never a rolled-up description.
+  const renderBody = (items: AggregatedLineItem[]) => (
+    <>
+      {items.map((li) => (
+        <View key={li.key} style={styles.tableRow} wrap={false}>
+          <Text style={styles.colDescription}>{li.description}</Text>
+          <Text style={styles.colQty}>{formatQtyNumber(li.qty)}</Text>
+          <Text style={styles.colUnit}>{li.unit ?? ""}</Text>
+          <Text style={{ ...styles.colTotal, ...(li.isClientOwned ? styles.clientOwnedLabel : {}) }}>
+            {li.isClientOwned ? "Client Owned" : moneyFromNumber(li.totalCost)}
+          </Text>
         </View>
-      </>
-    ) : (
-      <View style={styles.summaryRow}>
-        <Text style={styles.summaryDescription}>
-          {section.lineItems.length} item{section.lineItems.length === 1 ? "" : "s"}
-        </Text>
-        <Text style={styles.colQty} />
-        <Text style={styles.colUnit} />
-        <Text style={[styles.colTotal, { fontWeight: 700, color: BRAND.navy }]}>
-          {moneyFromNumber(sectionSubtotal(section))}
-        </Text>
-      </View>
-    );
+      ))}
+    </>
+  );
+
+  const renderServiceBody = (items: AggregatedLineItem[]) => (
+    <>
+      {items.map((li) => (
+        <View key={li.key} style={styles.serviceRow} wrap={false}>
+          <Text style={styles.serviceDescription}>{li.description}</Text>
+          <Text style={{ ...styles.serviceTotal, ...(li.isClientOwned ? styles.clientOwnedLabel : {}) }}>
+            {li.isClientOwned ? "Client Owned" : moneyFromNumber(li.totalCost)}
+          </Text>
+        </View>
+      ))}
+    </>
+  );
+
+  const { rentalTotal, servicesTotal, hasServiceSplit } = computeRentalAndServicesTotals(
+    buckets,
+    SHOW_SERVICES_CATEGORIES,
+  );
 
   return (
     <Document title={`Proposal — ${data.showName}`}>
       <Page size="LETTER" style={styles.page}>
+        <View
+          style={styles.runningHeader}
+          fixed
+          render={({ pageNumber }) =>
+            pageNumber === 1 ? null : (
+              <View style={styles.runningHeaderRow}>
+                <PdfImage src={LOGO_PATH} style={styles.runningHeaderLogo} />
+                <Text style={styles.runningHeaderShowName}>{data.showName}</Text>
+                <Text style={styles.runningHeaderLabel}>Proposal</Text>
+              </View>
+            )
+          }
+        />
         <View style={[styles.accentBar, { backgroundColor: data.brandColor ?? BRAND.navy }]} />
         <View style={styles.issuerRow}>
           <View>
@@ -303,7 +391,14 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
         </View>
         <View style={styles.headerRow}>
           <View>
+            {data.logoUrl && <PdfImage src={data.logoUrl} style={styles.templateLogo} />}
             <Text style={styles.company}>Prepared for {data.companyName}</Text>
+            {data.companyAddress && <Text style={styles.contactLine}>{data.companyAddress}</Text>}
+            {(data.contactName || data.contactEmail) && (
+              <Text style={styles.contactLine}>
+                {[data.contactName, data.contactEmail].filter(Boolean).join(" — ")}
+              </Text>
+            )}
             <Text style={styles.showName}>{data.showName}</Text>
           </View>
           <View>
@@ -312,50 +407,126 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           </View>
         </View>
 
-        <View style={styles.tableHeaderRow}>
+        {data.timeline.length > 0 && (
+          <View style={styles.timelineSection}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionHeaderText}>Timeline</Text>
+            </View>
+            {data.timeline.map((entry, i) => (
+              <View key={`${entry.label}-${i}`} style={styles.timelineRow} wrap={false}>
+                <Text style={styles.timelineDate}>{formatDate(entry.date)}</Text>
+                <Text style={styles.timelineLabel}>{entry.label}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {(data.venue || data.scopeSummary.length > 0) && (
+          <View style={styles.projectDescriptionSection}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionHeaderText}>Project Description</Text>
+            </View>
+            {data.venue && <Text style={styles.projectVenue}>Venue: {data.venue}</Text>}
+            {data.scopeSummary.map((item, i) => (
+              <Text key={i} style={styles.projectScopeItem}>
+                • {item}
+              </Text>
+            ))}
+          </View>
+        )}
+
+        {/* Cover content (header, timeline, project description) always stays
+            on its own page(s) -- quote details start fresh regardless of how
+            much or little cover content there is, so the pricing table never
+            competes with it for room mid-page. */}
+        <View style={styles.tableHeaderRow} break>
           <Text style={[styles.colDescription, styles.headerCell]}>Description</Text>
           <Text style={[styles.colQty, styles.headerCell]}>Qty</Text>
           <Text style={[styles.colUnit, styles.headerCell]}>Unit</Text>
           <Text style={[styles.colTotal, styles.headerCell]}>Total</Text>
         </View>
 
-        {blocks.map((block, blockIndex) => {
-          const accent = SECTION_ACCENTS[blockIndex % SECTION_ACCENTS.length];
-          if (block.kind === "standalone") {
-            const section = block.section;
-            return (
-              <View key={`section-${blockIndex}`} style={styles.section}>
-                <View style={styles.sectionHeaderRow} minPresenceAhead={24}>
-                  <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
-                  <Text style={styles.sectionHeaderText}>{section.name}</Text>
-                </View>
-                {renderBody(section)}
-              </View>
-            );
-          }
-          const boothTotal = block.sections.reduce((sum, s) => sum + sectionSubtotal(s), 0);
+        {topLevelCategories.map(({ name: categoryName, ownItems, children, totalWithChildren }, categoryIndex) => {
+          const accent = SECTION_ACCENTS[categoryIndex % SECTION_ACCENTS.length];
+          const isServiceStyle = SERVICE_STYLE_CATEGORIES.has(categoryName);
+
           return (
-            <View key={`booth-${blockIndex}`} style={styles.section}>
-              <View style={styles.boothHeaderRow} minPresenceAhead={24}>
-                <View style={styles.boothHeaderLeft}>
+            <View key={categoryName} style={styles.section}>
+              <View style={styles.sectionHeaderRow} minPresenceAhead={24}>
+                <View style={styles.sectionHeaderLeft}>
                   <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
-                  <Text style={styles.boothHeaderText}>{block.label}</Text>
+                  <Text style={styles.sectionHeaderText}>{categoryName}</Text>
                 </View>
-                <Text style={styles.boothHeaderTotal}>{moneyFromNumber(boothTotal)}</Text>
+                <Text style={styles.sectionHeaderTotal}>{moneyFromNumber(totalWithChildren)}</Text>
               </View>
-              <View style={styles.boothBody}>
-                {block.sections.map((section, sectionIndex) => (
-                  <View key={`${section.name}-${sectionIndex}`} style={styles.section}>
-                    <View style={styles.categoryHeaderRow} minPresenceAhead={24}>
-                      <Text style={styles.categoryHeaderText}>{section.name}</Text>
+              {categoryName === "Professional Services" &&
+                data.professionalServices &&
+                data.professionalServices.items.length > 0 && (
+                  <View style={styles.professionalServicesRow}>
+                    <View style={styles.professionalServicesList}>
+                      {data.professionalServices.items.map((item, i) => (
+                        <Text key={i} style={styles.professionalServicesItem}>
+                          • {item}
+                        </Text>
+                      ))}
                     </View>
-                    {renderBody(section)}
                   </View>
-                ))}
-              </View>
+                )}
+              {isServiceStyle ? renderServiceBody(ownItems) : renderBody(ownItems)}
+              {children.map((child) => (
+                <View key={child.name} style={styles.subsection}>
+                  <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
+                    <Text style={styles.subsectionHeaderText}>{child.name}</Text>
+                    <Text style={styles.subsectionHeaderTotal}>{moneyFromNumber(bucketSubtotal(child.items))}</Text>
+                  </View>
+                  {renderBody(child.items)}
+                </View>
+              ))}
             </View>
           );
         })}
+
+        {data.grandTotal.toNumber() > 0 && (
+          <View style={styles.subtotalsBlock}>
+            {hasServiceSplit && (
+              <>
+                <View style={styles.subtotalsRow}>
+                  <Text style={styles.subtotalsRowLabel}>Rental components total</Text>
+                  <Text style={styles.subtotalsRowValue}>{moneyFromNumber(rentalTotal)}</Text>
+                </View>
+                <View style={styles.subtotalsRow}>
+                  <Text style={styles.subtotalsRowLabel}>Show services total</Text>
+                  <Text style={styles.subtotalsRowValue}>{moneyFromNumber(servicesTotal)}</Text>
+                </View>
+              </>
+            )}
+            {/* Not a computed tax amount -- Labor/Shipping are excluded
+                from sales tax in this business's actual practice, so the
+                taxable base is exactly the rental components total
+                (already computed above). No tax rate or jurisdiction
+                logic involved; this just labels which part of the total
+                is subject to tax at all. */}
+            <View style={styles.subtotalsRow}>
+              <Text style={styles.subtotalsRowLabel}>Total taxable</Text>
+              <Text style={styles.subtotalsRowValue}>{moneyFromNumber(rentalTotal)}</Text>
+            </View>
+            {data.taxRate && (
+              <View style={styles.subtotalsRow}>
+                <Text style={styles.subtotalsRowLabel}>
+                  Estimated tax ({data.taxRate.label}, {(data.taxRate.rate * 100).toFixed(2)}%)
+                </Text>
+                <Text style={styles.subtotalsRowValue}>{moneyFromNumber(rentalTotal * data.taxRate.rate)}</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {data.paymentMethodNote && (
+          <View style={styles.paymentMethodNote}>
+            <Text style={styles.paymentMethodLabel}>Payment Method</Text>
+            <Text style={styles.paymentMethodText}>{data.paymentMethodNote}</Text>
+          </View>
+        )}
 
         <View style={styles.totalRow}>
           <View style={styles.totalBlock}>
@@ -364,7 +535,29 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           </View>
         </View>
 
-        <View style={styles.footer}>
+        {data.termsAndConditions.length > 0 && (
+          <View break style={styles.termsSection}>
+            <Text style={styles.termsHeading}>Terms &amp; Conditions</Text>
+            {data.termsAndConditions.map((clause, i) => (
+              <Text key={i} style={styles.termsClause}>
+                <Text style={styles.termsClauseNumber}>{i + 1}. </Text>
+                {clause}
+              </Text>
+            ))}
+            <View style={styles.signatureSection} wrap={false}>
+              <View style={styles.signatureBlock}>
+                <View style={styles.signatureLine} />
+                <Text style={styles.signatureLabel}>Client — signature, name, date</Text>
+              </View>
+              <View style={styles.signatureBlock}>
+                <View style={styles.signatureLine} />
+                <Text style={styles.signatureLabel}>{BRAND_COMPANY_NAME} — signature, name, date</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        <View style={styles.footer} fixed>
           <Text>
             {data.signedAt
               ? `Signed by ${data.signedByName ?? "unknown"}${data.signedByTitle ? `, ${data.signedByTitle}` : ""} — ${formatDate(data.signedAt)}`
@@ -372,12 +565,12 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 ? `Sent ${formatDate(data.sentAt)}`
                 : "Draft — not yet sent"}
           </Text>
-          <Text style={{ marginTop: 2 }}>{BRAND_COMPANY_NAME} — {BRAND_TAGLINE}</Text>
-          <Text style={{ marginTop: 2 }}>Powered by ForgeOS</Text>
+          <View style={styles.footerBottomRow}>
+            <Text>{BRAND_COMPANY_NAME} — {BRAND_TAGLINE} — Powered by ForgeOS</Text>
+            <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
+          </View>
         </View>
       </Page>
     </Document>
   );
 }
-
-

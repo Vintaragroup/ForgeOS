@@ -347,9 +347,15 @@ model Estimate {
   opportunityId String
   opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
 
-  budget  Decimal?       @db.Decimal(12, 2)
-  taxCity String?
-  status  EstimateStatus @default(DRAFT)
+  budget Decimal? @db.Decimal(12, 2)
+  status EstimateStatus @default(DRAFT)
+
+  // Replaces the old free-text taxCity field (a label nothing ever read --
+  // no calculation used it). A real jurisdiction, so the proposal PDF can
+  // compute an actual estimated-tax line against it -- see
+  // proposal-view-model.ts's Total Taxable, which this multiplies by.
+  taxRateId String?
+  taxRate   TaxRate? @relation(fields: [taxRateId], references: [id])
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -400,6 +406,33 @@ model LaborRate {
   deletedAt DateTime?
 
   @@map("labor_rates")
+}
+
+// One combined sales tax rate per jurisdiction (state + local county/city
+// already rolled into one number), not separate state/local rates that
+// stack -- how they combine varies by state and would need a real tax-rate
+// API (Avalara, TaxJar) to get right; ForgeOS doesn't have that
+// integration. city is optional the same way LaborRate's is: a
+// state-level default when no more specific local rate has been entered.
+// No rates are pre-seeded -- real sales tax figures need a citable source,
+// not a guess.
+model TaxRate {
+  id    String  @id @default(cuid())
+  state String // 2-letter USPS code, e.g. "FL"
+  city  String?
+  // Optional human label for the jurisdiction picker, e.g. "Orange County, FL"
+  // -- falls back to "city, state" or just "state" when unset.
+  label         String?
+  rate          Decimal  @db.Decimal(6, 4) // e.g. 0.0650 for 6.5%
+  effectiveDate DateTime @default(now())
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  estimates Estimate[]
+
+  @@map("tax_rates")
 }
 
 model Material {
@@ -539,6 +572,26 @@ model LineItem {
   lineType    LineItemType
   description String
   department  String? // labor lines only, business-rules.md Rule 1 department codes
+  // Proposal-facing grouping (Structure, Furniture, A/V, Custom Build,
+  // Labor, ...) -- see line-item-category.ts for the canonical list and
+  // resolution order (explicit > catalog-match > description heuristic).
+  // Distinct from `department` (labor-cost-code accounting) and from
+  // EstimateSection.name (production/build-tracking, stays per-booth) --
+  // this field exists specifically so the client-facing PDF can group
+  // and aggregate line items across the whole show the way the
+  // historical hand-built proposals always did, instead of per booth.
+  // Null for line items added before this field existed or where nothing
+  // confidently resolved -- the PDF buckets those into "Other" at render
+  // time rather than guessing a category into the database.
+  category    String?
+  // A $0.00 line is ambiguous without this -- the historical Expo CCI
+  // proposals always distinguish "client already owns/supplies this" (a
+  // real $0 by design) from "not yet priced" (a draft placeholder). Same
+  // resolution order as category: an estimator's explicit checkbox wins,
+  // otherwise inferred from the description text ("Client Owned",
+  // "Existing", etc.) at import/add time -- see
+  // line-item-category.ts's inferIsClientOwned.
+  isClientOwned Boolean @default(false)
   qty         Decimal      @db.Decimal(10, 2)
   // A real pricing schedule's Qty column is meaningless without this --
   // e.g. BOOTH_PLATFORM's "228" is only sensible once you know it's SQFT

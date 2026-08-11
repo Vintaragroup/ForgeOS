@@ -28,21 +28,37 @@ export function extractBranding(templateConfigSnapshot: unknown): {
   };
 }
 
-// Detail level is captured once, at generateProposal() time, into the same
-// JSON snapshot as branding -- so a Proposal always renders with the
-// itemized-vs-rolled-up choice the estimator picked when they generated it,
-// not whatever the estimate's line items look like today.
-export function extractDetailConfig(templateConfigSnapshot: unknown): {
-  mode: "summary" | "full";
-  sectionNames: string[];
-} {
-  const detailConfig = objectField(templateConfigSnapshot, "detailConfig");
-  const mode = stringField(detailConfig, "mode") === "full" ? "full" : "summary";
-  const rawSectionNames =
-    detailConfig && typeof detailConfig === "object" && "sectionNames" in detailConfig
-      ? (detailConfig as Record<string, unknown>).sectionNames
-      : null;
-  const sectionNames = Array.isArray(rawSectionNames) ? rawSectionNames.filter((n) => typeof n === "string") : [];
-  return { mode, sectionNames };
+// Both fields are stored as one newline-separated textarea value on
+// ProposalTemplate.layoutConfig (see catalog/proposal-templates) rather
+// than a JSON array -- estimators editing boilerplate copy shouldn't have
+// to think about JSON escaping.
+function splitLines(raw: string | null): string[] {
+  if (!raw) return [];
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+// Professional Services bullet copy has no price of its own -- see
+// proposal-pdf.tsx's ProposalPdfProfessionalServices comment for why it's
+// only rendered when the estimate itself has a matching section.
+export function extractProfessionalServices(templateConfigSnapshot: unknown): { items: string[] } | null {
+  const layoutConfig = objectField(templateConfigSnapshot, "layoutConfig");
+  const items = splitLines(stringField(layoutConfig, "professionalServicesItems"));
+  return items.length > 0 ? { items } : null;
+}
+
+export function extractTermsAndConditions(templateConfigSnapshot: unknown): string[] {
+  const layoutConfig = objectField(templateConfigSnapshot, "layoutConfig");
+  return splitLines(stringField(layoutConfig, "termsAndConditions"));
+}
+
+// Informational only -- e.g. "3.5% convenience fee (credit card)" -- never
+// changes Total or Grand Total the way the historical Expo CCI proposals
+// use it (the fee is disclosed, not baked into the displayed numbers).
+export function extractPaymentMethodNote(templateConfigSnapshot: unknown): string | null {
+  const layoutConfig = objectField(templateConfigSnapshot, "layoutConfig");
+  return stringField(layoutConfig, "paymentMethodNote");
 }
 

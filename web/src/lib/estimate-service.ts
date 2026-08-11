@@ -175,6 +175,13 @@ export async function addLineItem(
     lineType: LineItemType;
     description: string;
     department?: string | null;
+    // Proposal-facing grouping -- see line-item-category.ts. Optional
+    // here since a manually added line item's category is whatever the
+    // estimator picked in the form, which may be left unset.
+    category?: string | null;
+    // A real $0 by design (client already owns/supplies it) vs. simply not
+    // yet priced -- see line-item-category.ts's inferIsClientOwned.
+    isClientOwned?: boolean;
     qty: DecimalInput;
     unit?: string | null;
     unitCost: DecimalInput;
@@ -194,6 +201,8 @@ export async function addLineItem(
       lineType: data.lineType,
       description: data.description,
       department: data.department ?? null,
+      category: data.category ?? null,
+      isClientOwned: data.isClientOwned ?? false,
       qty: new Prisma.Decimal(data.qty),
       unit: data.unit ?? null,
       unitCost: new Prisma.Decimal(data.unitCost),
@@ -217,6 +226,8 @@ export async function addLineItemsBulk(
     lineType: LineItemType;
     description: string;
     department?: string | null;
+    category?: string | null;
+    isClientOwned?: boolean;
     qty: DecimalInput;
     unit?: string | null;
     unitCost: DecimalInput;
@@ -244,6 +255,8 @@ export async function addLineItemsBulk(
           lineType: item.lineType,
           description: item.description,
           department: item.department ?? null,
+          category: item.category ?? null,
+          isClientOwned: item.isClientOwned ?? false,
           qty: new Prisma.Decimal(item.qty),
           unit: item.unit ?? null,
           unitCost: new Prisma.Decimal(item.unitCost),

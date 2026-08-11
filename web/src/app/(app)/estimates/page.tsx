@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
+import { taxRateLabel } from "@/lib/tax-rate";
 import { Card, EmptyState, PageHeader, StatusChip } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ export default async function EstimatesPage() {
     include: {
       opportunity: { include: { company: true } },
       versions: { where: { isCurrent: true } },
+      taxRate: true,
     },
   });
 
@@ -45,7 +47,7 @@ export default async function EstimatesPage() {
                       <div className="font-medium">{estimate.opportunity.showName}</div>
                       <div className="text-sm text-neutral-500">
                         {estimate.opportunity.company.name}
-                        {estimate.taxCity ? ` · ${estimate.taxCity}` : ""}
+                        {estimate.taxRate ? ` · ${taxRateLabel(estimate.taxRate)}` : ""}
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-1.5 text-sm text-neutral-500">

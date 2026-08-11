@@ -15,6 +15,7 @@ import {
   updateMarginTarget,
 } from "@/lib/estimate-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
+import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
 import { recordCostActual } from "@/lib/cost-actual-service";
 import { requireEstimateAccess } from "@/lib/opportunity-access";
 import type { LineItemType, SectionType } from "@/generated/prisma/enums";
@@ -91,6 +92,13 @@ export async function addLineItemAction(
   if (!description) throw new Error("Line item description is required");
   const lineType = String(formData.get("lineType")) as LineItemType;
   const department = emptyToNull(formData.get("department"));
+  // Left unset ("— auto-detect —" in the form), fall back to the same
+  // description heuristic the pricing-schedule import path uses -- see
+  // line-item-category.ts.
+  const category = emptyToNull(formData.get("category")) ?? inferCategoryFromDescription(description);
+  // The checkbox is an explicit override; unchecked, fall back to the same
+  // description heuristic import paths use -- see line-item-category.ts.
+  const isClientOwned = formData.get("isClientOwned") === "on" || inferIsClientOwned(description);
   const unit = emptyToNull(formData.get("unit"));
   const qty = Number(formData.get("qty"));
   const unitCost = Number(formData.get("unitCost"));
@@ -100,7 +108,18 @@ export async function addLineItemAction(
   const isDraft = formData.get("isDraft") === "on";
   const attachmentId = emptyToNull(formData.get("attachmentId"));
 
-  await addLineItem(sectionId, { lineType, description, department, qty, unit, unitCost, isDraft, attachmentId });
+  await addLineItem(sectionId, {
+    lineType,
+    description,
+    department,
+    category,
+    isClientOwned,
+    qty,
+    unit,
+    unitCost,
+    isDraft,
+    attachmentId,
+  });
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
@@ -152,9 +171,7 @@ export async function generateProposalAction(estimateId: string, versionId: stri
   await requireEstimateAccess(estimateId);
   const templateId = String(formData.get("templateId") ?? "").trim();
   if (!templateId) throw new Error("Select a proposal template");
-  const mode = formData.get("detailMode") === "full" ? "full" : "summary";
-  const sectionNames = formData.getAll("detailSections").map(String);
-  const proposal = await generateProposal(versionId, templateId, { mode, sectionNames });
+  const proposal = await generateProposal(versionId, templateId);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/proposals/${proposal.id}`);
 }
@@ -173,13 +190,13 @@ export async function recordCostActualAction(estimateId: string, lineItemId: str
 export async function updateEstimateDetails(estimateId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
   const budgetRaw = String(formData.get("budget") ?? "").trim();
-  const taxCity = emptyToNull(formData.get("taxCity"));
+  const taxRateId = emptyToNull(formData.get("taxRateId"));
 
   await db.estimate.update({
     where: { id: estimateId },
     data: {
       budget: budgetRaw === "" ? null : Number(budgetRaw),
-      taxCity,
+      taxRateId,
     },
   });
   revalidatePath(`/estimates/${estimateId}`);

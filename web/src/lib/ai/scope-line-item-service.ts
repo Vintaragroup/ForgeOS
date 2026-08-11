@@ -19,6 +19,13 @@ import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { getDocumentBytes } from "@/lib/document-service";
+import {
+  inferCategoryFromDescription,
+  inferIsClientOwned,
+  isCompoundAssemblyDescription,
+  mapCatalogCategoryToCanonical,
+  mapScopeCategoryToCanonical,
+} from "@/lib/line-item-category";
 
 // Fixed vocabulary, not free text -- re-running "Propose items" on the
 // exact same document used to produce a different taxonomy every time
@@ -213,16 +220,30 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,
-      itemsForCategory.map((item) => ({
-        lineType: item.lineType,
-        description: item.qtyIsExplicit ? item.description : `${item.description} (qty estimated -- verify)`,
-        qty: item.qty,
-        unit: item.unit || null,
-        unitCost: matchDescription(item.description, catalog)?.unitCost ?? 0,
-        documentId,
-        sourceQuote: item.sourceQuote,
-        sourcePageNumber: pageTexts ? locateQuotePage(pageTexts, item.sourceQuote) : null,
-      })),
+      itemsForCategory.map((item) => {
+        const catalogMatch = matchDescription(item.description, catalog);
+        return {
+          lineType: item.lineType,
+          description: item.qtyIsExplicit ? item.description : `${item.description} (qty estimated -- verify)`,
+          qty: item.qty,
+          unit: item.unit || null,
+          unitCost: catalogMatch?.unitCost ?? 0,
+          // A compound "Complete X Build" assembly line wins outright (see
+          // line-item-category.ts -- catalog match is unreliable against
+          // that much text). Otherwise prefer a confident catalog match's
+          // own category over the AI's coarser scope bucket, and fall
+          // back to the description heuristic only if neither resolved.
+          category: isCompoundAssemblyDescription(item.description)
+            ? "Custom Build"
+            : (mapCatalogCategoryToCanonical(catalogMatch?.category) ??
+              mapScopeCategoryToCanonical(category) ??
+              inferCategoryFromDescription(item.description)),
+          isClientOwned: inferIsClientOwned(item.description),
+          documentId,
+          sourceQuote: item.sourceQuote,
+          sourcePageNumber: pageTexts ? locateQuotePage(pageTexts, item.sourceQuote) : null,
+        };
+      }),
     );
     created.push({ section, count: lineItems.length });
   }

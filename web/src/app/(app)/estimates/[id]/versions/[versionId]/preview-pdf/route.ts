@@ -11,7 +11,14 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
-import { extractBranding } from "@/lib/proposal-branding";
+import {
+  extractBranding,
+  extractPaymentMethodNote,
+  extractProfessionalServices,
+  extractTermsAndConditions,
+} from "@/lib/proposal-branding";
+import { getProposalCoverInfo } from "@/lib/proposal-timeline";
+import { taxRateLabel } from "@/lib/tax-rate";
 import { ProposalPdfDocument } from "@/lib/proposal-pdf";
 
 export async function GET(
@@ -22,8 +29,6 @@ export async function GET(
   const url = new URL(request.url);
   const templateId = url.searchParams.get("templateId");
   if (!templateId) return new Response("Missing templateId", { status: 400 });
-  const detailMode = url.searchParams.get("detail") === "full" ? "full" : "summary";
-  const detailSectionNames = url.searchParams.getAll("detailSections");
 
   const user = await getCurrentUser();
   if (!user) notFound();
@@ -31,7 +36,7 @@ export async function GET(
   const version = await db.estimateVersion.findFirst({
     where: { id: versionId, estimateId: id },
     include: {
-      estimate: { include: { opportunity: { include: { company: true } } } },
+      estimate: { include: { opportunity: { include: { company: true, primaryContact: true } }, taxRate: true } },
       sections: { where: { optionId: null }, include: { lineItems: true } },
     },
   });
@@ -42,24 +47,40 @@ export async function GET(
   if (!template) notFound();
 
   const opportunity = version.estimate.opportunity;
-  const { brandColor } = extractBranding({ brandingConfig: template.brandingConfig });
+  const { brandColor, logoUrl } = extractBranding({ brandingConfig: template.brandingConfig });
+  const professionalServices = extractProfessionalServices({ layoutConfig: template.layoutConfig });
+  const termsAndConditions = extractTermsAndConditions({ layoutConfig: template.layoutConfig });
+  const paymentMethodNote = extractPaymentMethodNote({ layoutConfig: template.layoutConfig });
+  const { timeline, venue, scopeSummary } = await getProposalCoverInfo(opportunity.id);
+  const taxRate = version.estimate.taxRate
+    ? { label: taxRateLabel(version.estimate.taxRate), rate: version.estimate.taxRate.rate.toNumber() }
+    : null;
 
   const buffer = await renderToBuffer(
     ProposalPdfDocument({
       data: {
         companyName: opportunity.company.name,
+        companyAddress: opportunity.company.billingAddress,
+        contactName: opportunity.primaryContact?.name ?? null,
+        contactEmail: opportunity.primaryContact?.email ?? null,
         showName: opportunity.showName,
         templateName: template.name,
         brandColor,
+        logoUrl,
         proposalDate: new Date(),
+        timeline,
+        venue,
+        scopeSummary,
         sections: version.sections,
+        professionalServices,
+        termsAndConditions,
+        paymentMethodNote,
+        taxRate,
         grandTotal: version.grandTotal,
         sentAt: null,
         signedAt: null,
         signedByName: null,
         signedByTitle: null,
-        detailMode,
-        detailSectionNames,
       },
     }),
   );

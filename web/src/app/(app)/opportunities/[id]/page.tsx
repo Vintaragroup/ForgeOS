@@ -11,6 +11,7 @@ import { getThreadMessages } from "@/lib/chat-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref, linkifyDocumentMentions, parseFreeTextDate } from "@/lib/citation";
 import { XLSX_MIME } from "@/lib/ai/text-extraction";
+import { taxRateLabel } from "@/lib/tax-rate";
 import { Button, CollapsibleSection, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
@@ -329,7 +330,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     where: { id, deletedAt: null },
     include: {
       company: true,
-      estimates: { orderBy: { createdAt: "desc" } },
+      estimates: { orderBy: { createdAt: "desc" }, include: { taxRate: true } },
       projects: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
       stageEvents: { orderBy: { changedAt: "desc" } },
       collaborators: { select: { userId: true } },
@@ -474,7 +475,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
               <li key={e.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
                 <span>
                   Estimate {e.id.slice(0, 8)} — {e.status}
-                  {e.taxCity ? ` · ${e.taxCity}` : ""}
+                  {e.taxRate ? ` · ${taxRateLabel(e.taxRate)}` : ""}
                 </span>
                 <Link href={`/estimates/${e.id}`} className="text-neutral-900 hover:underline">
                   Open estimate →
