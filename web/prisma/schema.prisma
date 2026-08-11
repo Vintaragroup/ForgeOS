@@ -505,6 +505,14 @@ model EstimateSection {
   sortOrder   Int         @default(0)
   sectionType SectionType
 
+  // Groups several sections under one shared main heading (a booth /
+  // exhibit instance, e.g. "Section 203 - Booth - Page 2 & 3") when a
+  // pricing schedule's own "Item" column identifies one -- `name` stays
+  // the sub-element within it (e.g. "Platform", "Booth Build"). Null for
+  // sections that aren't part of any such group (they render standalone,
+  // same as before this column existed). See pricing-import-service.ts.
+  groupLabel String?
+
   // Set when this section belongs to an Option (alternate) rather than
   // the base estimate -- estimateVersionId still points at the same
   // parent version either way, so locking/rollup queries share one path.
@@ -532,6 +540,15 @@ model LineItem {
   description String
   department  String? // labor lines only, business-rules.md Rule 1 department codes
   qty         Decimal      @db.Decimal(10, 2)
+  // A real pricing schedule's Qty column is meaningless without this --
+  // e.g. BOOTH_PLATFORM's "228" is only sensible once you know it's SQFT
+  // (a computed L x W area, not a literal platform count). Discovered
+  // missing entirely on a real job's estimate: qty rendered bare with no
+  // unit anywhere, reading as obviously-wrong quantities that were
+  // actually a faithful, correct parse of the source spreadsheet. Null
+  // for older rows seeded before this field existed, and for manually
+  // added line items where a unit wasn't given.
+  unit        String?
   unitCost    Decimal      @db.Decimal(10, 2)
   totalCost   Decimal      @db.Decimal(12, 2)
 

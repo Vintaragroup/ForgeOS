@@ -27,3 +27,22 @@ export function extractBranding(templateConfigSnapshot: unknown): {
     logoUrl: stringField(brandingConfig, "logoUrl"),
   };
 }
+
+// Detail level is captured once, at generateProposal() time, into the same
+// JSON snapshot as branding -- so a Proposal always renders with the
+// itemized-vs-rolled-up choice the estimator picked when they generated it,
+// not whatever the estimate's line items look like today.
+export function extractDetailConfig(templateConfigSnapshot: unknown): {
+  mode: "summary" | "full";
+  sectionNames: string[];
+} {
+  const detailConfig = objectField(templateConfigSnapshot, "detailConfig");
+  const mode = stringField(detailConfig, "mode") === "full" ? "full" : "summary";
+  const rawSectionNames =
+    detailConfig && typeof detailConfig === "object" && "sectionNames" in detailConfig
+      ? (detailConfig as Record<string, unknown>).sectionNames
+      : null;
+  const sectionNames = Array.isArray(rawSectionNames) ? rawSectionNames.filter((n) => typeof n === "string") : [];
+  return { mode, sectionNames };
+}
+

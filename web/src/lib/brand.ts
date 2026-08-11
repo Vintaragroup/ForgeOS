@@ -21,6 +21,14 @@ export const BRAND = {
 // example ("Let's show off together!").
 export const BRAND_TAGLINE = "Let's show off together!";
 
+// The company's own letterhead address/phone, as it appears on every
+// historical proposal (data/historical_jobs/xlsx's own "PROPOSAL" sheet
+// header) -- the vendor's own public business info, not client data.
+export const BRAND_ADDRESS_LINES = [
+  "11821 S. Orange Blossom Trail, Suite E., Orlando, FL 32837",
+  "Phone: 407.219.3050",
+] as const;
+
 // Legal/display name of the company these documents are issued on behalf
 // of, per the brand guide's cover page.
 export const BRAND_COMPANY_NAME = "Expo Convention Contractors";

@@ -113,7 +113,7 @@ export async function createEstimateVersion(estimateId: string, marginTargetPct:
 
 export async function addSection(
   estimateVersionId: string,
-  data: { name: string; sectionType: SectionType; sortOrder?: number; optionId?: string },
+  data: { name: string; sectionType: SectionType; sortOrder?: number; optionId?: string; groupLabel?: string | null },
 ) {
   await assertUnlocked(estimateVersionId);
   return db.estimateSection.create({
@@ -123,24 +123,28 @@ export async function addSection(
       sectionType: data.sectionType,
       sortOrder: data.sortOrder ?? 0,
       optionId: data.optionId,
+      groupLabel: data.groupLabel,
     },
   });
 }
 
-// Same as addSection, but reuses an existing section with the same name
-// in this version (base estimate only, not an Option) instead of always
-// creating a new one. Needed once a version can receive commits from more
-// than one document (see estimate-synthesis-service.ts's
-// buildEstimateFromAllDocuments) -- without this, two documents that both
-// produce an "Other" category (or two Pricing Schedule sheets that both
-// have a "TemporaryBooth_BUILD" category) each got their own duplicate
-// section instead of one merged one, on a real test job.
+// Same as addSection, but reuses an existing section with the same
+// (name, groupLabel) pair in this version (base estimate only, not an
+// Option) instead of always creating a new one. Needed once a version can
+// receive commits from more than one document (see
+// estimate-synthesis-service.ts's buildEstimateFromAllDocuments) --
+// without this, two documents that both produce an "Other" category (or
+// two Pricing Schedule sheets that both have a "TemporaryBooth_BUILD"
+// category) each got their own duplicate section instead of one merged
+// one, on a real test job. groupLabel is part of the match key too --
+// otherwise every booth's identically-named "Platform" sub-section would
+// collapse into a single shared one across all booths.
 export async function findOrCreateSection(
   estimateVersionId: string,
-  data: { name: string; sectionType: SectionType; sortOrder?: number },
+  data: { name: string; sectionType: SectionType; sortOrder?: number; groupLabel?: string | null },
 ) {
   const existing = await db.estimateSection.findFirst({
-    where: { estimateVersionId, optionId: null, name: data.name },
+    where: { estimateVersionId, optionId: null, name: data.name, groupLabel: data.groupLabel ?? null },
   });
   if (existing) return existing;
   return addSection(estimateVersionId, data);
@@ -172,6 +176,7 @@ export async function addLineItem(
     description: string;
     department?: string | null;
     qty: DecimalInput;
+    unit?: string | null;
     unitCost: DecimalInput;
     // Phase 4 design-intake prototype: a draft line item references the
     // Attachment (design pull sheet) it was drafted from and is excluded
@@ -190,6 +195,7 @@ export async function addLineItem(
       description: data.description,
       department: data.department ?? null,
       qty: new Prisma.Decimal(data.qty),
+      unit: data.unit ?? null,
       unitCost: new Prisma.Decimal(data.unitCost),
       totalCost: computeLineItemTotal(data.qty, data.unitCost),
       isDraft: data.isDraft ?? false,
@@ -212,6 +218,7 @@ export async function addLineItemsBulk(
     description: string;
     department?: string | null;
     qty: DecimalInput;
+    unit?: string | null;
     unitCost: DecimalInput;
     documentId: string;
     // The exact source text this row came from -- a pricing-schedule
@@ -238,6 +245,7 @@ export async function addLineItemsBulk(
           description: item.description,
           department: item.department ?? null,
           qty: new Prisma.Decimal(item.qty),
+          unit: item.unit ?? null,
           unitCost: new Prisma.Decimal(item.unitCost),
           totalCost: computeLineItemTotal(item.qty, item.unitCost),
           isDraft: true,
@@ -255,7 +263,7 @@ export async function addLineItemsBulk(
 
 export async function updateLineItem(
   lineItemId: string,
-  data: { description?: string; department?: string | null; qty?: DecimalInput; unitCost?: DecimalInput },
+  data: { description?: string; department?: string | null; qty?: DecimalInput; unit?: string | null; unitCost?: DecimalInput },
 ) {
   const existing = await db.lineItem.findUniqueOrThrow({
     where: { id: lineItemId },
@@ -272,6 +280,7 @@ export async function updateLineItem(
       description: data.description ?? existing.description,
       department: data.department !== undefined ? data.department : existing.department,
       qty: new Prisma.Decimal(qty),
+      unit: data.unit !== undefined ? data.unit : existing.unit,
       unitCost: new Prisma.Decimal(unitCost),
       totalCost: computeLineItemTotal(qty, unitCost),
     },

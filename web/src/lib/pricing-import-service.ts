@@ -40,7 +40,12 @@ export interface PricingImportPreview {
 }
 
 function normalizeHeader(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  // Must go through cellText, not String(value) directly -- a header
+  // cell can be richText (e.g. "Item (Page Reference to Appendix B)" in
+  // a real Super Bowl schedule, styled with mixed run formatting), which
+  // String() stringifies to the useless literal "[object Object]"
+  // instead of its actual text.
+  return cellText(value).replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 interface ColumnMap {
@@ -146,17 +151,50 @@ export async function previewPricingImport(documentId: string): Promise<PricingI
   };
 }
 
-// Creates one EstimateSection per distinct Category (a real pricing
-// schedule collapses ~185 rows into a handful of categories, e.g.
-// TemporaryBooth_BUILD/CAMERA_PLATFORM/BOOTH_PLATFORM) and bulk-inserts
-// every row as an isDraft LineItem pointing back at the source Document --
-// the same review-before-it-counts gate as attachmentId-sourced drafts.
-// The Pricing Schedule's own Unit Rate column is blank by design (that's
-// the bidder's job to fill in), not something to guess at wholesale -- but
-// where a row's description confidently matches a real catalog entry
-// (see catalog-match-service.ts, shown to the reviewer in the preview
-// table before they ever click Commit), that rate seeds unitCost instead
-// of leaving every single row at $0. Still isDraft, still requires the
+// Real pricing schedules identify which booth/exhibit instance a row
+// belongs to via the Item column (header: "Item (Page Reference to
+// Appendix B)"), always as "Section ### - ..." on every booth-labeled row
+// observed across real Super Bowl jobs -- confirmed against Appendix B's
+// own CAD bid set, which labels the matching drawings the same way
+// ("SECTION 203", "SECTION 211", etc). Rows where the Item column holds
+// something else entirely (e.g. the ADD-ON alternates sub-table reusing
+// that column for an alternate system's own name) don't match, and fall
+// back to today's flat category-only grouping -- this pattern only ever
+// promotes a section into a booth group, never demotes or hides one.
+const BOOTH_ITEM_PATTERN = /^Section\s+\d+/i;
+
+// Friendly sub-section labels for the category codes actually observed in
+// real Super Bowl pricing schedules -- anything else falls back to the
+// raw category string rather than guess at a naming convention we haven't
+// seen real data for.
+const CATEGORY_LABELS: Record<string, string> = {
+  BOOTH_PLATFORM: "Platform",
+  CAMERA_PLATFORM: "Platform",
+  TemporaryBooth_BUILD: "Booth Build",
+  "TemporaryBooth_ADD ON": "Add-Ons & Alternates",
+  TemporaryBooth_SERVICE: "Show Services",
+};
+
+function humanizeCategory(category: string): string {
+  return CATEGORY_LABELS[category] ?? category;
+}
+
+// Creates one EstimateSection per distinct (booth, category) pair -- a
+// real pricing schedule collapses ~185 rows into ~15 booths x a handful
+// of categories each (Booth Build/Platform), plus a couple of
+// booth-independent categories (Add-Ons, Show Services). Booth-labeled
+// sections share a groupLabel so the proposal can render them as one
+// "Section 203 - Booth" heading with Booth Build/Platform underneath it,
+// instead of one giant flat "Platform" section mixing all 15 booths'
+// platforms together. Every row still becomes an isDraft LineItem
+// pointing back at the source Document -- the same review-before-it-
+// counts gate as attachmentId-sourced drafts. The Pricing Schedule's own
+// Unit Rate column is blank by design (that's the bidder's job to fill
+// in), not something to guess at wholesale -- but where a row's
+// description confidently matches a real catalog entry (see
+// catalog-match-service.ts, shown to the reviewer in the preview table
+// before they ever click Commit), that rate seeds unitCost instead of
+// leaving every single row at $0. Still isDraft, still requires the
 // existing confirm-before-it-counts step either way.
 export async function commitPricingImport(estimateVersionId: string, documentId: string) {
   const preview = await previewPricingImport(documentId);
@@ -183,35 +221,49 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
     where: { estimateVersionId, optionId: null },
   });
 
+  const groupKey = (row: ParsedPricingRow) => {
+    const boothLabel = row.item && BOOTH_ITEM_PATTERN.test(row.item) ? row.item : null;
+    return { boothLabel, category: row.category, key: `${boothLabel ?? ""}\u0000${row.category}` };
+  };
+
+  const seenKeys = new Set<string>();
+  const groups: { boothLabel: string | null; category: string }[] = [];
+  for (const row of preview.rows) {
+    const { boothLabel, category, key } = groupKey(row);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    groups.push({ boothLabel, category });
+  }
+
   let nextSortOrder = existingSectionCount;
   const created = [];
-  for (const category of preview.categories) {
-    // Reuses an existing section of the same name in this version instead
-    // of creating a duplicate -- matters once a version can receive more
-    // than one pricing-schedule import (see estimate-synthesis-service.ts).
+  for (const group of groups) {
+    // Reuses an existing (name, groupLabel) section in this version
+    // instead of creating a duplicate -- matters once a version can
+    // receive more than one pricing-schedule import (see
+    // estimate-synthesis-service.ts).
     const section = await findOrCreateSection(estimateVersionId, {
-      name: category,
+      name: humanizeCategory(group.category),
       sectionType: "CATEGORY",
       sortOrder: nextSortOrder++,
+      groupLabel: group.boothLabel,
     });
 
-    const rowsForCategory = preview.rows.filter((r) => r.category === category);
+    const rowsForGroup = preview.rows.filter((r) => groupKey(r).key === `${group.boothLabel ?? ""}\u0000${group.category}`);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,
-      rowsForCategory.map((row) => ({
+      rowsForGroup.map((row) => ({
         lineType: "MATERIAL" as const,
-        description: row.item ? `${row.item} — ${row.description}` : row.description,
+        description: row.description,
         qty: row.qty,
+        unit: row.unit || null,
         unitCost: row.catalogMatch?.unitCost ?? 0,
         documentId,
         // The Description cell's own text, verbatim -- exactly what the
         // spreadsheet viewer renders in that cell, so the "Source" link's
         // highlight (document-view-service.ts's highlightSpreadsheetCell)
-        // always finds a real, exact match. Not the "item — description"
-        // display string above: item and description are separate cells,
-        // so that concatenation never appears as one contiguous run in
-        // the rendered table.
+        // always finds a real, exact match.
         sourceQuote: row.description,
       })),
     );

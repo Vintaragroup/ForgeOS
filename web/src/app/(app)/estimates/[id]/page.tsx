@@ -698,7 +698,10 @@ function LineItemsTable({
               </td>
               <td className="py-1.5">{li.department ?? ""}</td>
               <td className="py-1.5">{li.lineType}</td>
-              <td className="py-1.5 text-right">{li.qty.toString()}</td>
+              <td className="py-1.5 text-right">
+                {li.qty.toString()}
+                {li.unit && <span className="ml-1 text-neutral-400">{li.unit}</span>}
+              </td>
               <td className="py-1.5 text-right">
                 {!version.isLocked && li.isDraft ? (
                   <form action={updateUnitCostWithIds} className="flex items-center justify-end gap-1">
@@ -744,6 +747,42 @@ function LineItemsTable({
         })}
       </tbody>
     </table>
+  );
+}
+
+// Shared by the Preview PDF and Generate proposal forms -- "summary" (the
+// default) rolls each category up to a count + subtotal; picking specific
+// sections here shows full line-item detail for just those, even while
+// the rest of the document stays rolled up. See proposal-pdf.tsx.
+function DetailLevelFields({ sectionNames }: { sectionNames: string[] }) {
+  const uniqueNames = [...new Set(sectionNames)];
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="w-56">
+        <SelectField
+          label="Detail level"
+          name="detailMode"
+          defaultValue="summary"
+          options={[
+            { value: "summary", label: "Summary (category + subtotal)" },
+            { value: "full", label: "Full itemized detail" },
+          ]}
+        />
+      </div>
+      {uniqueNames.length > 0 && (
+        <div className="text-xs text-neutral-600">
+          <div className="mb-1 text-neutral-500">Always show full detail for:</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {uniqueNames.map((name) => (
+              <label key={name} className="flex items-center gap-1.5">
+                <input type="checkbox" name="detailSections" value={name} className="h-3.5 w-3.5" />
+                {name}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -804,6 +843,42 @@ function EstimateVersionCard({
         </div>
       </div>
 
+      <div className="mb-6 rounded-md border border-dashed border-neutral-300 p-4">
+        <p className="mb-3 text-sm text-neutral-500">
+          Check the branded PDF format anytime, even while this version is still unlocked and
+          changing — this doesn&apos;t create a real Proposal record, just renders current numbers.
+        </p>
+        {proposalTemplates.length === 0 ? (
+          <Notice
+            message="Previewing a PDF needs a branded template, and there are no templates yet."
+            actionHref="/catalog/proposal-templates/new"
+            actionLabel="Add a template"
+          />
+        ) : (
+          <form
+            action={`/estimates/${estimateId}/versions/${version.id}/preview-pdf`}
+            method="get"
+            target="_blank"
+            className="flex flex-col gap-3"
+          >
+            <div className="flex items-end gap-3">
+              <div className="w-56">
+                <SelectField
+                  label="Proposal template"
+                  name="templateId"
+                  required
+                  options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
+                />
+              </div>
+              <Button variant="secondary">Preview PDF</Button>
+            </div>
+            <DetailLevelFields
+              sectionNames={version.sections.flatMap((s) => [s.groupLabel ?? s.name, s.name])}
+            />
+          </form>
+        )}
+      </div>
+
       {version.isLocked && <VarianceByDepartment sections={version.sections} />}
 
       {version.isLocked ? (
@@ -849,16 +924,21 @@ function EstimateVersionCard({
                     actionLabel="Add a template"
                   />
                 ) : (
-                  <form action={generateProposalWithIds} className="flex items-end gap-3">
-                    <div className="w-56">
-                      <SelectField
-                        label="Proposal template"
-                        name="templateId"
-                        required
-                        options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
-                      />
+                  <form action={generateProposalWithIds} className="flex flex-col gap-3">
+                    <div className="flex items-end gap-3">
+                      <div className="w-56">
+                        <SelectField
+                          label="Proposal template"
+                          name="templateId"
+                          required
+                          options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
+                        />
+                      </div>
+                      <Button variant="secondary">Generate proposal</Button>
                     </div>
-                    <Button variant="secondary">Generate proposal</Button>
+                    <DetailLevelFields
+                      sectionNames={version.sections.flatMap((s) => [s.groupLabel ?? s.name, s.name])}
+                    />
                   </form>
                 )}
                 {version.proposals.length > 0 && (
@@ -1074,7 +1154,10 @@ function OptionCard({
                 {section.lineItems.map((li) => (
                   <tr key={li.id} className="border-t border-neutral-100">
                     <td className="py-1.5">{li.description}</td>
-                    <td className="py-1.5 text-right">{li.qty.toString()}</td>
+                    <td className="py-1.5 text-right">
+                      {li.qty.toString()}
+                      {li.unit && <span className="ml-1 text-neutral-400">{li.unit}</span>}
+                    </td>
                     <td className="py-1.5 text-right">{money(li.unitCost)}</td>
                     <td className="py-1.5 text-right">{money(li.totalCost)}</td>
                   </tr>
@@ -1217,24 +1300,27 @@ function AddLineItemForm({
         <div className="sm:order-4 sm:w-24">
           <Field label="Qty" name="qty" type="number" defaultValue="1" required />
         </div>
-        <div className="sm:order-5 sm:w-28">
+        <div className="sm:order-5 sm:w-24">
+          <Field label="Unit" name="unit" placeholder="EA, SQFT, LF" />
+        </div>
+        <div className="sm:order-6 sm:w-28">
           <Field label="Unit cost ($)" name="unitCost" type="number" required />
         </div>
         {attachments.length > 0 && (
           <>
-            <div className="col-span-2 sm:order-6 sm:w-40 sm:col-span-1">
+            <div className="col-span-2 sm:order-7 sm:w-40 sm:col-span-1">
               <SelectField
                 label="From attachment"
                 name="attachmentId"
                 options={[{ value: "", label: "— none —" }, ...attachments.map((a) => ({ value: a.id, label: a.fileRef }))]}
               />
             </div>
-            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-7 sm:col-span-1">
+            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-8 sm:col-span-1">
               <input type="checkbox" name="isDraft" /> Draft
             </label>
           </>
         )}
-        <div className="col-span-2 sm:order-8">
+        <div className="col-span-2 sm:order-9">
           <Button variant="secondary">Add line item</Button>
         </div>
       </form>

@@ -3,7 +3,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
-import { extractBranding } from "@/lib/proposal-branding";
+import { extractBranding, extractDetailConfig } from "@/lib/proposal-branding";
 import { ProposalPdfDocument } from "@/lib/proposal-pdf";
 
 export async function GET(_request: Request, { params }: RouteContext<"/proposals/[id]/pdf">) {
@@ -29,6 +29,7 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
   const version = proposal.estimateVersion;
   const opportunity = version.estimate.opportunity;
   const { brandColor } = extractBranding(proposal.templateConfigSnapshot);
+  const { mode, sectionNames } = extractDetailConfig(proposal.templateConfigSnapshot);
 
   const buffer = await renderToBuffer(
     ProposalPdfDocument({
@@ -37,12 +38,15 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
         showName: opportunity.showName,
         templateName: proposal.template.name,
         brandColor,
+        proposalDate: proposal.createdAt,
         sections: version.sections,
         grandTotal: version.grandTotal,
         sentAt: proposal.sentAt,
         signedAt: proposal.signedAt,
         signedByName: proposal.signedByName,
         signedByTitle: proposal.signedByTitle,
+        detailMode: mode,
+        detailSectionNames: sectionNames,
       },
     }),
   );

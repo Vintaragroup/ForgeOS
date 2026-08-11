@@ -217,6 +217,7 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
         lineType: item.lineType,
         description: item.qtyIsExplicit ? item.description : `${item.description} (qty estimated -- verify)`,
         qty: item.qty,
+        unit: item.unit || null,
         unitCost: matchDescription(item.description, catalog)?.unitCost ?? 0,
         documentId,
         sourceQuote: item.sourceQuote,

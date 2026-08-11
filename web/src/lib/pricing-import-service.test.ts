@@ -104,21 +104,39 @@ describe("previewPricingImport", () => {
 });
 
 describe("commitPricingImport", () => {
-  it("creates one CATEGORY section per distinct category with isDraft line items summing to the right count", async () => {
+  it("creates one CATEGORY section per distinct (booth, category) pair, grouping booth-labeled sections under a shared groupLabel", async () => {
     const { opportunity, document } = await makeDocument();
     const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
     const version = await createEstimateVersion(estimate.id, 0);
 
     const result = await commitPricingImport(version.id, document.id);
 
-    expect(result.sectionsCreated).toBe(5);
+    // 17 distinct booth/exhibit instances x 2 categories each (Booth
+    // Build + Platform), plus 2 booth-independent categories (Add-Ons,
+    // Show Services) -- not just 5 flat categories -- see
+    // pricing-import-service.ts's groupLabel comment.
+    expect(result.sectionsCreated).toBe(36);
     expect(result.rowsImported).toBe(149);
 
     const sections = await db.estimateSection.findMany({
       where: { estimateVersionId: version.id },
       include: { lineItems: true },
     });
-    expect(sections).toHaveLength(5);
+    expect(sections).toHaveLength(36);
+
+    // Real booth's "Item" header cell is richText with mixed run
+    // formatting -- a real regression where a naive String(cell.value)
+    // stringified it to "[object Object]" instead of its actual text,
+    // silently leaving every row's booth grouping off.
+    const boothSections = sections.filter((s) => s.groupLabel !== null);
+    expect(boothSections).toHaveLength(34);
+    expect(new Set(boothSections.map((s) => s.groupLabel)).size).toBe(17);
+    const camera203 = boothSections.filter((s) => s.groupLabel === "Section 203 - Camera Booth - Page 2 & 3");
+    expect(camera203.map((s) => s.name).sort()).toEqual(["Booth Build", "Platform"]);
+
+    // The two booth-independent categories stay standalone (no groupLabel).
+    const standalone = sections.filter((s) => s.groupLabel === null);
+    expect(standalone.map((s) => s.name).sort()).toEqual(["Add-Ons & Alternates", "Show Services"]);
 
     const allLineItems = sections.flatMap((s) => s.lineItems);
     expect(allLineItems).toHaveLength(149);
@@ -128,6 +146,7 @@ describe("commitPricingImport", () => {
     // null and every unitCost stays at the $0 fallback -- see the
     // dedicated catalog-match test below for the non-empty-catalog case.
     expect(allLineItems.every((li) => li.unitCost.toNumber() === 0)).toBe(true);
+
 
     // Drafts are excluded from totals until confirmed -- same gate as
     // the attachmentId-sourced draft flow.
@@ -177,7 +196,7 @@ describe("commitPricingImport", () => {
     // had this exact document imported twice before this check existed,
     // doubling all 149 rows to 298.
     const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
-    expect(sections).toHaveLength(5);
+    expect(sections).toHaveLength(36);
     const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
     expect(lineItemCount).toBe(149);
   });

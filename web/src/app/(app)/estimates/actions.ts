@@ -91,6 +91,7 @@ export async function addLineItemAction(
   if (!description) throw new Error("Line item description is required");
   const lineType = String(formData.get("lineType")) as LineItemType;
   const department = emptyToNull(formData.get("department"));
+  const unit = emptyToNull(formData.get("unit"));
   const qty = Number(formData.get("qty"));
   const unitCost = Number(formData.get("unitCost"));
   if (!Number.isFinite(qty) || !Number.isFinite(unitCost)) {
@@ -99,7 +100,7 @@ export async function addLineItemAction(
   const isDraft = formData.get("isDraft") === "on";
   const attachmentId = emptyToNull(formData.get("attachmentId"));
 
-  await addLineItem(sectionId, { lineType, description, department, qty, unitCost, isDraft, attachmentId });
+  await addLineItem(sectionId, { lineType, description, department, qty, unit, unitCost, isDraft, attachmentId });
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
@@ -151,7 +152,9 @@ export async function generateProposalAction(estimateId: string, versionId: stri
   await requireEstimateAccess(estimateId);
   const templateId = String(formData.get("templateId") ?? "").trim();
   if (!templateId) throw new Error("Select a proposal template");
-  const proposal = await generateProposal(versionId, templateId);
+  const mode = formData.get("detailMode") === "full" ? "full" : "summary";
+  const sectionNames = formData.getAll("detailSections").map(String);
+  const proposal = await generateProposal(versionId, templateId, { mode, sectionNames });
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/proposals/${proposal.id}`);
 }
