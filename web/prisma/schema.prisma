@@ -686,6 +686,15 @@ model LineItem {
   // confidently resolved -- the PDF buckets those into "Other" at render
   // time rather than guessing a category into the database.
   category      String?
+  // Order within `category`'s proposal-facing group (drag-and-drop on the
+  // estimate page's category board, estimates/actions.ts's
+  // reorderCategoryLineItemsAction) -- unrelated to EstimateSection's own
+  // sortOrder, which orders sections/production-tracking, not line items
+  // within a client-facing category. Default 0 for every existing row
+  // (insertion order was never tracked before this field existed), reset
+  // to a dense 0..n-1 sequence per category the first time that
+  // category's board is reordered.
+  sortOrder     Int          @default(0)
   // A $0.00 line is ambiguous without this -- the historical Expo CCI
   // proposals always distinguish "client already owns/supplies this" (a
   // real $0 by design) from "not yet priced" (a draft placeholder). Same

@@ -312,6 +312,37 @@ export async function updateLineItem(
   });
 }
 
+// Powers the estimate page's drag-and-drop category board -- a drop
+// always supplies the destination category plus that column's full,
+// final ordered id list (the client-side reorder already happened
+// optimistically; this just persists it). Only the destination column
+// needs writing: removing an item from its source column leaves a gap in
+// that column's sortOrder sequence, which is harmless -- relative order
+// among the remaining items is unaffected, and the next reorder of that
+// column densifies it again (index 0..n-1).
+export async function reorderCategoryLineItems(
+  estimateVersionId: string,
+  category: string,
+  orderedLineItemIds: string[],
+) {
+  await assertUnlocked(estimateVersionId);
+
+  // Defense against a stale/tampered client payload naming an id that
+  // isn't actually part of this version -- only ids verified to belong
+  // here get written.
+  const items = await db.lineItem.findMany({
+    where: { id: { in: orderedLineItemIds }, section: { estimateVersionId } },
+    select: { id: true },
+  });
+  const validIds = new Set(items.map((i) => i.id));
+
+  await db.$transaction(
+    orderedLineItemIds
+      .filter((id) => validIds.has(id))
+      .map((id, index) => db.lineItem.update({ where: { id }, data: { category, sortOrder: index } })),
+  );
+}
+
 export async function archiveEstimate(id: string) {
   return db.estimate.update({ where: { id }, data: { deletedAt: new Date() } });
 }

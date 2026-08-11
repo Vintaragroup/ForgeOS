@@ -20,6 +20,7 @@ export interface ProposalViewLineItem {
   qty: Prisma.Decimal;
   unit: string | null;
   totalCost: Prisma.Decimal;
+  sortOrder: number;
 }
 
 export interface ProposalViewSection {
@@ -38,6 +39,11 @@ export interface AggregatedLineItem {
   // rental of the same named part) shouldn't display as "Client Owned"
   // for the combined row.
   isClientOwned: boolean;
+  // The minimum sortOrder among every raw instance merged into this row --
+  // drives display order within the category (estimate page's drag board
+  // sets sortOrder per raw LineItem; an aggregated row's position follows
+  // whichever instance was dragged earliest/highest in that category).
+  sortOrder: number;
 }
 
 export interface CategoryBucket {
@@ -73,6 +79,7 @@ export function aggregateByCategory(sections: ProposalViewSection[]): CategoryBu
         existing.qty += li.qty.toNumber();
         existing.totalCost += li.totalCost.toNumber();
         existing.isClientOwned = existing.isClientOwned && li.isClientOwned;
+        existing.sortOrder = Math.min(existing.sortOrder, li.sortOrder);
       } else {
         bucket.set(key, {
           key,
@@ -81,14 +88,16 @@ export function aggregateByCategory(sections: ProposalViewSection[]): CategoryBu
           unit: li.unit,
           totalCost: li.totalCost.toNumber(),
           isClientOwned: li.isClientOwned,
+          sortOrder: li.sortOrder,
         });
       }
     }
   }
 
-  return CANONICAL_CATEGORIES.map((name) => ({ name, items: [...(byCategory.get(name)?.values() ?? [])] })).filter(
-    (bucket) => bucket.items.length > 0,
-  );
+  return CANONICAL_CATEGORIES.map((name) => ({
+    name,
+    items: [...(byCategory.get(name)?.values() ?? [])].sort((a, b) => a.sortOrder - b.sortOrder),
+  })).filter((bucket) => bucket.items.length > 0);
 }
 
 export function bucketSubtotal(items: AggregatedLineItem[]): number {

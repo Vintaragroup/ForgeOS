@@ -44,16 +44,25 @@ export function LaborRateLineItemFields({
     setUnitCost(String(picked.rate));
   }
 
+  // Hidden once a real, non-Labor category is picked/known -- e.g.
+  // editing a Flooring line shouldn't lead with a "Labor rate" dropdown
+  // (that was the actual bug report: the picker showed unconditionally,
+  // even on unrelated items). Still shown when category is blank
+  // ("— auto-detect —", Add Line Item's default for a brand-new row) so
+  // the original one-step "pick a rate, everything autofills" flow for a
+  // genuinely new labor line is unaffected.
+  const showPicker = laborRates.length > 0 && (category === "" || category === "Labor");
+
   return (
     <>
-      {laborRates.length > 0 && (
+      {showPicker && (
         <div className="col-span-2 sm:order-0 sm:w-64">
           <SelectField
             label="Labor rate"
             name="_laborRatePicker"
             defaultValue=""
             options={[
-              { value: "", label: "— pick to autofill Dept/Category/Unit cost —" },
+              { value: "", label: "— pick to autofill Dept/Unit cost —" },
               ...laborRates.map((r) => ({ value: r.id, label: r.label })),
             ]}
             onChange={handlePick}

@@ -19,6 +19,7 @@ import {
   generateProposalAction,
   lockVersionAction,
   recordCostActualAction,
+  reorderCategoryLineItemsAction,
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
@@ -34,11 +35,12 @@ import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
-import { CANONICAL_CATEGORIES } from "@/lib/line-item-category";
+import { CANONICAL_CATEGORIES, isCanonicalCategory } from "@/lib/line-item-category";
 import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { laborRateOptionLabel } from "@/lib/labor-rate";
 import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
 import { LineItemRow } from "@/components/line-item-row";
+import { CategoryDragBoard, type BoardItem } from "@/components/category-drag-board";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref } from "@/lib/citation";
@@ -751,6 +753,24 @@ function LineItemsTable({
   );
 }
 
+// Flattens every base section's line items into one board, keyed by the
+// same canonical category the proposal PDF buckets into ("Other" for
+// null/non-canonical, matching aggregateByCategory's own fallback in
+// proposal-view-model.ts). Sorted by sortOrder before bucketing (a stable
+// sort preserves each category's relative order after partitioning) so
+// the board opens already reflecting any previous drag.
+function buildCategoryBoard(sections: VersionWithSections["sections"]): Record<string, BoardItem[]> {
+  const board: Record<string, BoardItem[]> = Object.fromEntries(CANONICAL_CATEGORIES.map((c) => [c, []]));
+  const allLineItems = sections
+    .flatMap((s) => s.lineItems)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  for (const li of allLineItems) {
+    const category = isCanonicalCategory(li.category) ? li.category : "Other";
+    board[category].push({ id: li.id, description: li.description, totalCostDisplay: money(li.totalCost) });
+  }
+  return board;
+}
+
 function EstimateVersionCard({
   estimateId,
   opportunityId,
@@ -776,6 +796,7 @@ function EstimateVersionCard({
   const approveVersionWithIds = approveVersionAction.bind(null, estimateId, version.id);
   const generateProposalWithIds = generateProposalAction.bind(null, estimateId, version.id);
   const createChangeOrderWithIds = createChangeOrderAction.bind(null, estimateId, version.id);
+  const reorderCategoryLineItemsWithIds = reorderCategoryLineItemsAction.bind(null, estimateId, version.id);
 
   return (
     <Card className="p-6">
@@ -840,6 +861,23 @@ function EstimateVersionCard({
           </form>
         )}
       </div>
+
+      {!version.isLocked && (
+        <div className="mb-6 rounded-md border border-dashed border-neutral-300 p-4">
+          <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Proposal categories
+          </h3>
+          <p className="mb-3 text-sm text-neutral-500">
+            Drag a line item to regroup it under a different category, or reorder within one -- this controls how
+            the proposal PDF/web view organizes and orders items, independent of the production sections above.
+          </p>
+          <CategoryDragBoard
+            categories={[...CANONICAL_CATEGORIES]}
+            initialBoard={buildCategoryBoard(version.sections)}
+            reorderAction={reorderCategoryLineItemsWithIds}
+          />
+        </div>
+      )}
 
       {version.isLocked && <VarianceByDepartment sections={version.sections} />}
 

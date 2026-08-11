@@ -12,6 +12,7 @@ import {
   deleteLineItem,
   lockEstimateVersion,
   recomputeVersionTotals,
+  reorderCategoryLineItems,
   updateLineItem,
   updateMarginTarget,
 } from "@/lib/estimate-service";
@@ -166,6 +167,22 @@ export async function updateLineItemAction(
     unitCost,
   });
   await recomputeVersionTotals(versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Called directly (not bound to a <form>) from the category board's drag
+// handlers -- an array of ids doesn't fit FormData naturally, and a drag
+// interaction isn't a form submission anyway. No recomputeVersionTotals:
+// category/sortOrder don't affect totalCost, so the grand total is
+// unaffected by a drag.
+export async function reorderCategoryLineItemsAction(
+  estimateId: string,
+  versionId: string,
+  category: string,
+  orderedLineItemIds: string[],
+) {
+  await requireEstimateAccess(estimateId);
+  await reorderCategoryLineItems(versionId, category, orderedLineItemIds);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
