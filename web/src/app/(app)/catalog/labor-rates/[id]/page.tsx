@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { deleteLaborRate, updateLaborRate } from "../actions";
-import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
+import { Button, Card, Field, PageHeader } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
+import { LaborRateFields } from "@/components/labor-rate-fields";
 
 export default async function LaborRateDetailPage(props: PageProps<"/catalog/labor-rates/[id]">) {
   const { id } = await props.params;
@@ -20,30 +21,18 @@ export default async function LaborRateDetailPage(props: PageProps<"/catalog/lab
         backLabel="Labor rates"
       />
       <Card className="p-6">
-        <form action={updateLaborRateWithId} className="flex flex-col gap-4" key={rate.rateType}>
-          <SelectField
-            label="Rate type"
-            name="rateType"
-            defaultValue={rate.rateType}
-            required
-            options={[
-              { value: "DEPARTMENT", label: "Department (internal shop labor)" },
-              { value: "CITY_MARKET", label: "City market (on-site/show labor)" },
-            ]}
+        <form action={updateLaborRateWithId} className="flex flex-col gap-4">
+          <LaborRateFields
+            defaults={{
+              rateType: rate.rateType,
+              departmentCode: rate.departmentCode ?? "",
+              departmentName: rate.departmentName ?? "",
+              city: rate.city ?? "",
+              laborTier: rate.laborTier ?? "STRAIGHT_TIME",
+              unionStatus: rate.unionStatus ?? "",
+              notes: rate.notes ?? "",
+            }}
           />
-          <Field
-            label="Department code"
-            name="departmentCode"
-            defaultValue={rate.departmentCode ?? ""}
-            placeholder="e.g. EF"
-          />
-          <Field
-            label="Department name"
-            name="departmentName"
-            defaultValue={rate.departmentName ?? ""}
-            placeholder="e.g. Exhibit Fabrication"
-          />
-          <Field label="City" name="city" defaultValue={rate.city ?? ""} placeholder="e.g. Orlando, FL" />
           <Field label="Rate ($/hr)" name="rate" type="number" defaultValue={rate.rate.toString()} required />
           <div className="flex gap-3">
             <Button>Save changes</Button>

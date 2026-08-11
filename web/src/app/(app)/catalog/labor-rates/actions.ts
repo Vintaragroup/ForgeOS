@@ -1,13 +1,14 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { LaborRateType } from "@/generated/prisma/enums";
+import { LaborRateType, LaborRateTier, LaborUnionStatus } from "@/generated/prisma/enums";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function createLaborRate(formData: FormData) {
   const rateType = String(formData.get("rateType")) as LaborRateType;
   const rate = parseRate(formData.get("rate"));
+  const isCityMarket = rateType === "CITY_MARKET";
 
   await db.laborRate.create({
     data: {
@@ -16,6 +17,11 @@ export async function createLaborRate(formData: FormData) {
       departmentCode: emptyToNull(formData.get("departmentCode")),
       departmentName: emptyToNull(formData.get("departmentName")),
       city: emptyToNull(formData.get("city")),
+      // Tier/union/notes only apply to CITY_MARKET rows -- see
+      // LaborRateTier/LaborUnionStatus's schema comments.
+      laborTier: isCityMarket ? (emptyToNull(formData.get("laborTier")) as LaborRateTier | null) : null,
+      unionStatus: isCityMarket ? (emptyToNull(formData.get("unionStatus")) as LaborUnionStatus | null) : null,
+      notes: isCityMarket ? emptyToNull(formData.get("notes")) : null,
     },
   });
 
@@ -26,6 +32,7 @@ export async function createLaborRate(formData: FormData) {
 export async function updateLaborRate(id: string, formData: FormData) {
   const rateType = String(formData.get("rateType")) as LaborRateType;
   const rate = parseRate(formData.get("rate"));
+  const isCityMarket = rateType === "CITY_MARKET";
 
   await db.laborRate.update({
     where: { id },
@@ -35,6 +42,9 @@ export async function updateLaborRate(id: string, formData: FormData) {
       departmentCode: emptyToNull(formData.get("departmentCode")),
       departmentName: emptyToNull(formData.get("departmentName")),
       city: emptyToNull(formData.get("city")),
+      laborTier: isCityMarket ? (emptyToNull(formData.get("laborTier")) as LaborRateTier | null) : null,
+      unionStatus: isCityMarket ? (emptyToNull(formData.get("unionStatus")) as LaborUnionStatus | null) : null,
+      notes: isCityMarket ? emptyToNull(formData.get("notes")) : null,
     },
   });
 

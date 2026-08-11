@@ -450,19 +450,54 @@ enum LaborRateType {
   CITY_MARKET
 }
 
+// Only meaningful for CITY_MARKET rows -- DEPARTMENT (shop) rates are a
+// single flat number with no time-and-a-half concept, per how this
+// catalog is actually used (see LaborRate's comment). Real market data
+// (data/Catalog_Data/.../labor_rates_show_site.csv) shows OT/DT are NOT
+// a clean 1.5x/2x multiple of straight time -- Chicago's OT is 1.34x its
+// ST, Huntsville's is 1.57x -- so each tier is its own stored rate, never
+// computed from a multiplier.
+enum LaborRateTier {
+  STRAIGHT_TIME
+  OVERTIME
+  DOUBLE_TIME
+}
+
+// Left null (unspecified) rather than defaulted to either value when the
+// source data doesn't actually distinguish union from non-union labor --
+// see labor_rates_show_site.csv's own comment for why the seeded
+// 78-market rates don't assert one. Only meaningful for CITY_MARKET rows,
+// same as laborTier.
+enum LaborUnionStatus {
+  UNION
+  NON_UNION
+}
+
 // Unifies business-rules.md Rule 1 (15 department rates, hardcoded on
 // COMPONENT 1 and fanned out by formula to 43 sibling sheets) and Rule 10
 // (a city rate table with zero formula consumers anywhere in the
 // workbook) into one catalog with a rate_type discriminator -- exactly
 // the remediation data-model-v0.md's LaborRate entity proposed.
+//
+// DEPARTMENT = shop labor (Design, Metal, CNC, Carpenters, etc.) -- one
+// flat rate, no tier/union concept. CITY_MARKET = show/event site labor,
+// where laborTier and unionStatus apply: a market typically has 2-3 rows
+// (straight time always, overtime almost always, double time only where
+// the source data actually has one -- 15 of 78 markets).
 model LaborRate {
-  id             String        @id @default(cuid())
+  id             String            @id @default(cuid())
   rateType       LaborRateType
   departmentCode String? // e.g. "DE", "EN" -- business-rules.md Rule 1's 15 codes
   departmentName String?
   city           String?
-  rate           Decimal       @db.Decimal(10, 2)
-  effectiveDate  DateTime      @default(now())
+  laborTier      LaborRateTier?
+  unionStatus    LaborUnionStatus?
+  // e.g. "Travel Required", "Travel Required outside of Bay Area" --
+  // straight from the source rate card, operationally relevant (travel
+  // cost/logistics), not just decorative.
+  notes          String?
+  rate           Decimal           @db.Decimal(10, 2)
+  effectiveDate  DateTime          @default(now())
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

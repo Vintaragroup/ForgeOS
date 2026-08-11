@@ -1,5 +1,6 @@
 import { createLaborRate } from "../actions";
-import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
+import { Button, Card, Field, PageHeader } from "@/components/ui";
+import { LaborRateFields } from "@/components/labor-rate-fields";
 
 export default function NewLaborRatePage() {
   return (
@@ -7,19 +8,17 @@ export default function NewLaborRatePage() {
       <PageHeader title="New labor rate" backHref="/catalog/labor-rates" backLabel="Labor rates" />
       <Card className="p-6">
         <form action={createLaborRate} className="flex flex-col gap-4">
-          <SelectField
-            label="Rate type"
-            name="rateType"
-            defaultValue="DEPARTMENT"
-            required
-            options={[
-              { value: "DEPARTMENT", label: "Department (internal shop labor)" },
-              { value: "CITY_MARKET", label: "City market (on-site/show labor)" },
-            ]}
+          <LaborRateFields
+            defaults={{
+              rateType: "DEPARTMENT",
+              departmentCode: "",
+              departmentName: "",
+              city: "",
+              laborTier: "STRAIGHT_TIME",
+              unionStatus: "",
+              notes: "",
+            }}
           />
-          <Field label="Department code" name="departmentCode" placeholder="e.g. EF" />
-          <Field label="Department name" name="departmentName" placeholder="e.g. Exhibit Fabrication" />
-          <Field label="City" name="city" placeholder="e.g. Orlando, FL" />
           <Field label="Rate ($/hr)" name="rate" type="number" required />
           <div>
             <Button>Create labor rate</Button>
