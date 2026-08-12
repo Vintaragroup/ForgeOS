@@ -18,8 +18,9 @@ import {
   deleteLineItemAction,
   generateProposalAction,
   lockVersionAction,
+  moveLineItemAction,
+  moveSectionAction,
   recordCostActualAction,
-  reorderCategoryLineItemsAction,
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
@@ -35,12 +36,11 @@ import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
-import { CANONICAL_CATEGORIES, isCanonicalCategory } from "@/lib/line-item-category";
+import { CANONICAL_CATEGORIES } from "@/lib/line-item-category";
 import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { laborRateOptionLabel } from "@/lib/labor-rate";
 import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
 import { LineItemRow } from "@/components/line-item-row";
-import { CategoryDragBoard, type BoardItem } from "@/components/category-drag-board";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref } from "@/lib/citation";
@@ -112,6 +112,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         orderBy: { sortOrder: "asc" },
         include: {
           lineItems: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
             include: { costActuals: true, document: { select: { id: true, mimeType: true, filename: true } } },
           },
         },
@@ -701,10 +702,12 @@ function LineItemsTable({
         </tr>
       </thead>
       <tbody>
-        {lineItems.map((li) => {
+        {lineItems.map((li, index) => {
           const deleteWithIds = deleteLineItemAction.bind(null, estimateId, li.id);
           const confirmWithIds = confirmDraftLineItemAction.bind(null, estimateId, li.id);
           const updateWithIds = updateLineItemAction.bind(null, estimateId, version.id, li.id);
+          const moveUpWithIds = moveLineItemAction.bind(null, estimateId, li.id, "up");
+          const moveDownWithIds = moveLineItemAction.bind(null, estimateId, li.id, "down");
           const actualCost = version.isLocked ? computeActualTotal(li.costActuals) : null;
           const variance = actualCost !== null ? actualCost.minus(li.totalCost) : null;
           // The check-and-balance: only real when sourceQuote is present
@@ -739,36 +742,22 @@ function LineItemsTable({
               actualCostDisplay={actualCost !== null ? money(actualCost) : null}
               varianceDisplay={variance !== null ? money(variance) : null}
               varianceTone={variance === null ? null : variance.isPositive() ? "up" : variance.isNegative() ? "down" : "flat"}
+              isFirst={index === 0}
+              isLast={index === lineItems.length - 1}
               lineTypeOptions={LINE_TYPE_OPTIONS}
               categoryOptions={CATEGORY_OPTIONS}
               laborRates={laborRates}
               deleteAction={deleteWithIds}
               confirmAction={confirmWithIds}
               updateAction={updateWithIds}
+              moveUpAction={moveUpWithIds}
+              moveDownAction={moveDownWithIds}
             />
           );
         })}
       </tbody>
     </table>
   );
-}
-
-// Flattens every base section's line items into one board, keyed by the
-// same canonical category the proposal PDF buckets into ("Other" for
-// null/non-canonical, matching aggregateByCategory's own fallback in
-// proposal-view-model.ts). Sorted by sortOrder before bucketing (a stable
-// sort preserves each category's relative order after partitioning) so
-// the board opens already reflecting any previous drag.
-function buildCategoryBoard(sections: VersionWithSections["sections"]): Record<string, BoardItem[]> {
-  const board: Record<string, BoardItem[]> = Object.fromEntries(CANONICAL_CATEGORIES.map((c) => [c, []]));
-  const allLineItems = sections
-    .flatMap((s) => s.lineItems)
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-  for (const li of allLineItems) {
-    const category = isCanonicalCategory(li.category) ? li.category : "Other";
-    board[category].push({ id: li.id, description: li.description, totalCostDisplay: money(li.totalCost) });
-  }
-  return board;
 }
 
 function EstimateVersionCard({
@@ -796,7 +785,6 @@ function EstimateVersionCard({
   const approveVersionWithIds = approveVersionAction.bind(null, estimateId, version.id);
   const generateProposalWithIds = generateProposalAction.bind(null, estimateId, version.id);
   const createChangeOrderWithIds = createChangeOrderAction.bind(null, estimateId, version.id);
-  const reorderCategoryLineItemsWithIds = reorderCategoryLineItemsAction.bind(null, estimateId, version.id);
 
   return (
     <Card className="p-6">
@@ -861,23 +849,6 @@ function EstimateVersionCard({
           </form>
         )}
       </div>
-
-      {!version.isLocked && (
-        <div className="mb-6 rounded-md border border-dashed border-neutral-300 p-4">
-          <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Proposal categories
-          </h3>
-          <p className="mb-3 text-sm text-neutral-500">
-            Drag a line item to regroup it under a different category, or reorder within one -- this controls how
-            the proposal PDF/web view organizes and orders items, independent of the production sections above.
-          </p>
-          <CategoryDragBoard
-            categories={[...CANONICAL_CATEGORIES]}
-            initialBoard={buildCategoryBoard(version.sections)}
-            reorderAction={reorderCategoryLineItemsWithIds}
-          />
-        </div>
-      )}
 
       {version.isLocked && <VarianceByDepartment sections={version.sections} />}
 
@@ -994,13 +965,35 @@ function EstimateVersionCard({
       )}
 
       <div className="flex flex-col gap-6">
-        {version.sections.map((section) => (
+        {version.sections.map((section, sectionIndex) => (
           <div key={section.id} className="border-t border-neutral-200 pt-4">
-            <h3 className="mb-3 font-medium">
+            <h3 className="mb-3 flex items-center gap-2 font-medium">
               {section.name}{" "}
               <span className="text-xs font-normal uppercase text-neutral-400">
                 {section.sectionType}
               </span>
+              {!version.isLocked && (
+                <span className="flex gap-1">
+                  <form action={moveSectionAction.bind(null, estimateId, section.id, "up")} className="inline">
+                    <button
+                      disabled={sectionIndex === 0}
+                      className="text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
+                      title="Move section up"
+                    >
+                      ▲
+                    </button>
+                  </form>
+                  <form action={moveSectionAction.bind(null, estimateId, section.id, "down")} className="inline">
+                    <button
+                      disabled={sectionIndex === version.sections.length - 1}
+                      className="text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
+                      title="Move section down"
+                    >
+                      ▼
+                    </button>
+                  </form>
+                </span>
+              )}
             </h3>
             {section.lineItems.length > 0 &&
               (() => {

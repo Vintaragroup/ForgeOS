@@ -30,12 +30,16 @@ export function LineItemRow({
   actualCostDisplay,
   varianceDisplay,
   varianceTone,
+  isFirst,
+  isLast,
   lineTypeOptions,
   categoryOptions,
   laborRates,
   deleteAction,
   confirmAction,
   updateAction,
+  moveUpAction,
+  moveDownAction,
 }: {
   description: string;
   isDraft: boolean;
@@ -52,12 +56,16 @@ export function LineItemRow({
   actualCostDisplay: string | null;
   varianceDisplay: string | null;
   varianceTone: "up" | "down" | "flat" | null;
+  isFirst: boolean;
+  isLast: boolean;
   lineTypeOptions: { value: string; label: string }[];
   categoryOptions: { value: string; label: string }[];
   laborRates: LaborRateOption[];
   deleteAction: (formData: FormData) => void | Promise<void>;
   confirmAction: (formData: FormData) => void | Promise<void>;
   updateAction: (formData: FormData) => void | Promise<void>;
+  moveUpAction: (formData: FormData) => void | Promise<void>;
+  moveDownAction: (formData: FormData) => void | Promise<void>;
 }) {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -147,6 +155,24 @@ export function LineItemRow({
       )}
       {!isLocked && (
         <td className="py-1.5 text-right whitespace-nowrap">
+          <form action={moveUpAction} className="inline">
+            <button
+              disabled={isFirst}
+              className="mr-1 text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
+              title="Move up"
+            >
+              ▲
+            </button>
+          </form>
+          <form action={moveDownAction} className="inline">
+            <button
+              disabled={isLast}
+              className="mr-2 text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
+              title="Move down"
+            >
+              ▼
+            </button>
+          </form>
           <button onClick={() => setIsEditing(true)} className="mr-2 text-xs text-neutral-700 hover:underline">
             edit
           </button>

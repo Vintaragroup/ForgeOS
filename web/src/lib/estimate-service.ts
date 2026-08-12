@@ -128,6 +128,35 @@ export async function addSection(
   });
 }
 
+// Swaps a section with its immediate neighbor (by current display order)
+// in the given direction -- siblings are every other section sharing the
+// same estimateVersionId AND optionId (an Option's own sections reorder
+// independently from the base estimate's). Renumbers ALL siblings to a
+// dense 0..n-1 sequence rather than swapping two raw sortOrder values,
+// since freshly-created sections all default to sortOrder 0 -- a plain
+// swap between two zeroes would be a no-op. A no-op (already at the top/
+// bottom) is silently ignored rather than an error, since a UI button
+// simply won't be at an edge case the caller needs to specially handle.
+export async function moveSectionOrder(sectionId: string, direction: "up" | "down") {
+  const section = await db.estimateSection.findUniqueOrThrow({ where: { id: sectionId } });
+  await assertUnlocked(section.estimateVersionId);
+
+  const siblings = await db.estimateSection.findMany({
+    where: { estimateVersionId: section.estimateVersionId, optionId: section.optionId },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+  const index = siblings.findIndex((s) => s.id === sectionId);
+  const swapWith = direction === "up" ? index - 1 : index + 1;
+  if (swapWith < 0 || swapWith >= siblings.length) return;
+
+  const reordered = [...siblings];
+  [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
+
+  await db.$transaction(
+    reordered.map((s, i) => db.estimateSection.update({ where: { id: s.id }, data: { sortOrder: i } })),
+  );
+}
+
 // Same as addSection, but reuses an existing section with the same
 // (name, groupLabel) pair in this version (base estimate only, not an
 // Option) instead of always creating a new one. Needed once a version can
@@ -312,34 +341,28 @@ export async function updateLineItem(
   });
 }
 
-// Powers the estimate page's drag-and-drop category board -- a drop
-// always supplies the destination category plus that column's full,
-// final ordered id list (the client-side reorder already happened
-// optimistically; this just persists it). Only the destination column
-// needs writing: removing an item from its source column leaves a gap in
-// that column's sortOrder sequence, which is harmless -- relative order
-// among the remaining items is unaffected, and the next reorder of that
-// column densifies it again (index 0..n-1).
-export async function reorderCategoryLineItems(
-  estimateVersionId: string,
-  category: string,
-  orderedLineItemIds: string[],
-) {
-  await assertUnlocked(estimateVersionId);
+// Same swap-with-neighbor-then-renumber-all approach as moveSectionOrder,
+// scoped to line items sharing this item's sectionId (production-tracking
+// order within a COMPONENT/CATEGORY-type section) -- unrelated to
+// `category`, the client-facing proposal grouping, which this never
+// touches.
+export async function moveLineItemWithinSection(lineItemId: string, direction: "up" | "down") {
+  const item = await db.lineItem.findUniqueOrThrow({ where: { id: lineItemId }, include: { section: true } });
+  await assertUnlocked(item.section.estimateVersionId);
 
-  // Defense against a stale/tampered client payload naming an id that
-  // isn't actually part of this version -- only ids verified to belong
-  // here get written.
-  const items = await db.lineItem.findMany({
-    where: { id: { in: orderedLineItemIds }, section: { estimateVersionId } },
-    select: { id: true },
+  const siblings = await db.lineItem.findMany({
+    where: { sectionId: item.sectionId },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
-  const validIds = new Set(items.map((i) => i.id));
+  const index = siblings.findIndex((s) => s.id === lineItemId);
+  const swapWith = direction === "up" ? index - 1 : index + 1;
+  if (swapWith < 0 || swapWith >= siblings.length) return;
+
+  const reordered = [...siblings];
+  [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
 
   await db.$transaction(
-    orderedLineItemIds
-      .filter((id) => validIds.has(id))
-      .map((id, index) => db.lineItem.update({ where: { id }, data: { category, sortOrder: index } })),
+    reordered.map((li, i) => db.lineItem.update({ where: { id: li.id }, data: { sortOrder: i } })),
   );
 }
 
