@@ -637,14 +637,33 @@ function groupLineItemsByBoothInstance(
   if (!lineItems.some((li) => BOOTH_START_PATTERN.test(li.description))) return null;
 
   const groups: { label: string; items: SectionLineItem[] }[] = [];
+  const isBoothInstance: boolean[] = [];
   for (const li of lineItems) {
     if (BOOTH_START_PATTERN.test(li.description)) {
       groups.push({ label: li.description, items: [li] });
+      isBoothInstance.push(true);
     } else if (groups.length === 0) {
       groups.push({ label: "Other items", items: [li] });
+      isBoothInstance.push(false);
     } else {
       groups[groups.length - 1].items.push(li);
     }
+  }
+
+  // Real pricing schedules sometimes list two physically-identical booths
+  // back to back with the exact same description text (e.g. two "Camera
+  // Booth" rows filed under the same numbered section, seen on a real
+  // Super Bowl 2026 job -- different unit costs, identical wording). An
+  // ordinal suffix is the only way to tell the groups apart in the UI,
+  // since the source text itself doesn't distinguish them.
+  const boothInstanceTotal = isBoothInstance.filter(Boolean).length;
+  if (boothInstanceTotal > 1) {
+    let seen = 0;
+    groups.forEach((g, i) => {
+      if (!isBoothInstance[i]) return;
+      seen += 1;
+      g.label = `${g.label} — Booth ${seen} of ${boothInstanceTotal}`;
+    });
   }
   return groups;
 }
@@ -972,8 +991,11 @@ function EstimateVersionCard({
       <div className="flex flex-col gap-6">
         {version.sections.map((section, sectionIndex) => (
           <div key={section.id} className="border-t border-neutral-200 pt-4">
-            <h3 className="mb-3 flex items-center gap-2 font-medium">
-              {section.name}{" "}
+            <h3 className="mb-3 flex flex-wrap items-center gap-2 font-medium">
+              {section.name}
+              {section.groupLabel && (
+                <span className="text-sm font-normal text-neutral-500">— {section.groupLabel}</span>
+              )}
               <span className="text-xs font-normal uppercase text-neutral-400">
                 {section.sectionType}
               </span>
