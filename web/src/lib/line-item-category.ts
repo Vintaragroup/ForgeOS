@@ -16,6 +16,17 @@ export function isKnownCategory(categories: Pick<Category, "name">[], value: str
   return !!value && categories.some((c) => c.name === value);
 }
 
+// Every heuristic below resolves to a category by its display name, since
+// LineItem.category is a plain string matched against Category.name (see
+// proposal-view-model.ts's isKnownCategory), not a foreign key -- so a
+// literal here has to be kept in sync by hand whenever this category gets
+// renamed in /catalog/categories (it already drifted once: this was
+// "Custom Build" until a rename to "Custom Build / Rental" silently
+// orphaned every line item these functions had already tagged with the
+// old name -- see categories/actions.ts's rename cascade for the fix on
+// the existing-data side of that same problem).
+export const CUSTOM_BUILD_CATEGORY = "Custom Build / Rental";
+
 // One level of nesting only -- see Category's schema comment on why (the
 // proposal PDF/web view only ever render a top-level section with its
 // direct children, never grandchildren).
@@ -48,13 +59,13 @@ const CATALOG_CATEGORY_MAP: Record<string, string> = {
   "printing substrates": "Graphics",
   "hanging sign": "Signage",
   "design time": "Professional Services",
-  "electrical": "Custom Build",
-  "acrylic": "Custom Build",
-  "wood & sheet goods": "Custom Build",
-  "hardware & fasteners": "Custom Build",
-  "custom fabrication & millwork": "Custom Build",
-  "metal & extrusion": "Custom Build",
-  "laminate & finishes": "Custom Build",
+  "electrical": CUSTOM_BUILD_CATEGORY,
+  "acrylic": CUSTOM_BUILD_CATEGORY,
+  "wood & sheet goods": CUSTOM_BUILD_CATEGORY,
+  "hardware & fasteners": CUSTOM_BUILD_CATEGORY,
+  "custom fabrication & millwork": CUSTOM_BUILD_CATEGORY,
+  "metal & extrusion": CUSTOM_BUILD_CATEGORY,
+  "laminate & finishes": CUSTOM_BUILD_CATEGORY,
   "packing & crating": "Shipping",
   "labor": "Labor",
   "shipping": "Shipping",
@@ -76,7 +87,7 @@ const SCOPE_CATEGORY_MAP: Record<string, string> = {
   "booth structure & walls": "Structure",
   "doors & hardware": "Structure",
   "countertops & cable management": "Furniture",
-  "electrical & lighting": "Custom Build",
+  "electrical & lighting": CUSTOM_BUILD_CATEGORY,
   "fire & life safety": "Structure",
   "roof & coverings": "Structure",
   "flooring & platforms": "Flooring",
@@ -101,9 +112,9 @@ const DESCRIPTION_PATTERNS: { pattern: RegExp; category: string }[] = [
   { pattern: /\b(cad|engineering|project (coordination|management)|art (proofing|template|set ?up)|electrical layout)\b/i, category: "Professional Services" },
   { pattern: /\b(seg fabric|dtp|vinyl wrap|graphic|signage fabric)\b/i, category: "Graphics" },
   { pattern: /\bhanging sign\b/i, category: "Signage" },
-  { pattern: /\bcomplete .* build\b/i, category: "Custom Build" },
+  { pattern: /\bcomplete .* build\b/i, category: CUSTOM_BUILD_CATEGORY },
   { pattern: /\bplatform|sleeper floor|carpet|padding|visqueen\b/i, category: "Flooring" },
-  { pattern: /\b(door|frame|backer|panel|wall|b-matrix)\b/i, category: "Structure" },
+  { pattern: /\b(door|frame|backer|panel|wall|b-matrix|roof|curtain)\b/i, category: "Structure" },
   { pattern: /\b(chair|table|stool|counter|showcase|sofa)\b/i, category: "Furniture" },
   { pattern: /\b(monitor|screen|media player|touchscreen|led)\b/i, category: "Audio/Visual" },
 ];
@@ -173,7 +184,7 @@ export function resolveLineItemCategory(
   categories: Pick<Category, "name">[] = [],
 ): string | null {
   if (input.explicit && isKnownCategory(categories, input.explicit)) return input.explicit;
-  if (isCompoundAssemblyDescription(input.description)) return "Custom Build";
+  if (isCompoundAssemblyDescription(input.description)) return CUSTOM_BUILD_CATEGORY;
   const fromCatalog = mapCatalogCategoryToCanonical(input.catalogCategory);
   if (fromCatalog) return fromCatalog;
   return inferCategoryFromDescription(input.description);

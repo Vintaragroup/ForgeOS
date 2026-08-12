@@ -20,6 +20,7 @@ import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { getDocumentBytes } from "@/lib/document-service";
 import {
+  CUSTOM_BUILD_CATEGORY,
   inferCategoryFromDescription,
   inferIsClientOwned,
   isCompoundAssemblyDescription,
@@ -234,7 +235,7 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
           // own category over the AI's coarser scope bucket, and fall
           // back to the description heuristic only if neither resolved.
           category: isCompoundAssemblyDescription(item.description)
-            ? "Custom Build"
+            ? CUSTOM_BUILD_CATEGORY
             : (mapCatalogCategoryToCanonical(catalogMatch?.category) ??
               mapScopeCategoryToCanonical(category) ??
               inferCategoryFromDescription(item.description)),
