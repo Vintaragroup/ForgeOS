@@ -221,6 +221,7 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
   const existingSectionCount = await db.estimateSection.count({
     where: { estimateVersionId, optionId: null },
   });
+  const categories = await db.category.findMany({ where: { deletedAt: null } });
 
   const groupKey = (row: ParsedPricingRow) => {
     const boothLabel = row.item && BOOTH_ITEM_PATTERN.test(row.item) ? row.item : null;
@@ -260,7 +261,10 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
         qty: row.qty,
         unit: row.unit || null,
         unitCost: row.catalogMatch?.unitCost ?? 0,
-        category: resolveLineItemCategory({ catalogCategory: row.catalogMatch?.category, description: row.description }),
+        category: resolveLineItemCategory(
+          { catalogCategory: row.catalogMatch?.category, description: row.description },
+          categories,
+        ),
         isClientOwned: inferIsClientOwned(row.description),
         documentId,
         // The Description cell's own text, verbatim -- exactly what the

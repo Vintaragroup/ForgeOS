@@ -103,8 +103,9 @@ export async function addLineItemAction(
   const department = emptyToNull(formData.get("department"));
   // Left unset ("— auto-detect —" in the form), fall back to the same
   // description heuristic the pricing-schedule import path uses -- see
-  // line-item-category.ts.
-  const category = emptyToNull(formData.get("category")) ?? inferCategoryFromDescription(description);
+  // line-item-category.ts. Only fetches categories when actually needed
+  // (most edits pick an explicit category from the dropdown).
+  const category = emptyToNull(formData.get("category")) ?? inferCategoryFromDescription(description, await fetchActiveCategories());
   // The checkbox is an explicit override; unchecked, fall back to the same
   // description heuristic import paths use -- see line-item-category.ts.
   const isClientOwned = formData.get("isClientOwned") === "on" || inferIsClientOwned(description);
@@ -154,7 +155,7 @@ export async function updateLineItemAction(
   // Same auto-detect-on-blank fallback as addLineItemAction, so clearing
   // the category back to "— auto-detect —" during an edit behaves the
   // same way it would have at creation time.
-  const category = emptyToNull(formData.get("category")) ?? inferCategoryFromDescription(description);
+  const category = emptyToNull(formData.get("category")) ?? inferCategoryFromDescription(description, await fetchActiveCategories());
   const isClientOwned = formData.get("isClientOwned") === "on" || inferIsClientOwned(description);
   const unit = emptyToNull(formData.get("unit"));
   const qty = Number(formData.get("qty"));
@@ -271,4 +272,13 @@ export async function archiveEstimateAction(estimateId: string, opportunityId: s
 function emptyToNull(value: FormDataEntryValue | null): string | null {
   const str = String(value ?? "").trim();
   return str === "" ? null : str;
+}
+
+// The categorization heuristics resolve a category by its live name via a
+// stable key (see line-item-category.ts's resolveCategoryNameFromKey), so
+// the auto-detect fallback below needs a freshly fetched catalog, not the
+// categoryOptions list already threaded through the page's own props
+// (that one's built at render time and may be stale by submit time).
+function fetchActiveCategories() {
+  return db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } });
 }

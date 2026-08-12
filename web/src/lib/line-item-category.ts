@@ -16,16 +16,18 @@ export function isKnownCategory(categories: Pick<Category, "name">[], value: str
   return !!value && categories.some((c) => c.name === value);
 }
 
-// Every heuristic below resolves to a category by its display name, since
-// LineItem.category is a plain string matched against Category.name (see
-// proposal-view-model.ts's isKnownCategory), not a foreign key -- so a
-// literal here has to be kept in sync by hand whenever this category gets
-// renamed in /catalog/categories (it already drifted once: this was
-// "Custom Build" until a rename to "Custom Build / Rental" silently
-// orphaned every line item these functions had already tagged with the
-// old name -- see categories/actions.ts's rename cascade for the fix on
-// the existing-data side of that same problem).
-export const CUSTOM_BUILD_CATEGORY = "Custom Build / Rental";
+// Resolves a category's live display name from its stable key (see
+// Category.key's schema comment) -- returns null if no live, non-deleted
+// category currently holds that key (deleted, or `categories` wasn't
+// fetched). Every heuristic below goes through this instead of returning
+// a display-name literal directly, so a rename in /catalog/categories can
+// never leave a heuristic emitting a stale name: it either resolves to
+// whatever the category is currently called, or -- if the key genuinely
+// has no match -- returns null, which the category-audit.ts review system
+// surfaces rather than silently persisting a wrong guess.
+export function resolveCategoryNameFromKey(categories: Pick<Category, "key" | "name">[], key: string): string | null {
+  return categories.find((c) => c.key === key)?.name ?? null;
+}
 
 // One level of nesting only -- see Category's schema comment on why (the
 // proposal PDF/web view only ever render a top-level section with its
@@ -36,45 +38,55 @@ export function getCategoryChildren(categories: Category[], parentName: string):
   return categories.filter((c) => c.parentId === parent.id);
 }
 
+// Stable key for the seeded "Custom Build / Rental" category -- see
+// Category.key's schema comment. Never a display name (that's what broke
+// before this existed): resolve it through resolveCategoryNameFromKey at
+// the point of use, always against a freshly fetched `categories`.
+export const CUSTOM_BUILD_CATEGORY_KEY = "custom_build";
+
 // Best-effort mapping from the raw category strings actually observed in
 // the Material/RentalItem catalogs (see the "category" column on both
-// models) to the canonical list above. Catalog categories are a mix of
-// finished-goods groupings (Furniture, A/V, Hanging Sign) and raw
-// fabrication-input groupings (Acrylic, Wood & Sheet Goods, Hardware &
-// Fasteners) -- the latter all fold into "Custom Build" since they're
-// inputs to something Expo fabricates for the job, not a rentable or
-// purchasable line in their own right. The "(Standard Rate)" suffix on
-// some rental categories is a pricing-model variant, not a distinct
-// category, so it maps the same as its base name.
-const CATALOG_CATEGORY_MAP: Record<string, string> = {
-  "structure": "Structure",
-  "bematrix system": "Structure",
-  "flooring": "Flooring",
-  "furniture": "Furniture",
-  "furniture (standard rate)": "Furniture",
-  "accessories": "Accessories",
-  "a/v": "Audio/Visual",
-  "a/v (standard rate)": "Audio/Visual",
-  "graphics package": "Graphics",
-  "printing substrates": "Graphics",
-  "hanging sign": "Signage",
-  "design time": "Professional Services",
-  "electrical": CUSTOM_BUILD_CATEGORY,
-  "acrylic": CUSTOM_BUILD_CATEGORY,
-  "wood & sheet goods": CUSTOM_BUILD_CATEGORY,
-  "hardware & fasteners": CUSTOM_BUILD_CATEGORY,
-  "custom fabrication & millwork": CUSTOM_BUILD_CATEGORY,
-  "metal & extrusion": CUSTOM_BUILD_CATEGORY,
-  "laminate & finishes": CUSTOM_BUILD_CATEGORY,
-  "packing & crating": "Shipping",
-  "labor": "Labor",
-  "shipping": "Shipping",
-  "miscellaneous": "Other",
+// models) to the canonical list above, by stable key. Catalog categories
+// are a mix of finished-goods groupings (Furniture, A/V, Hanging Sign) and
+// raw fabrication-input groupings (Acrylic, Wood & Sheet Goods, Hardware &
+// Fasteners) -- the latter all fold into Custom Build since they're inputs
+// to something Expo fabricates for the job, not a rentable or purchasable
+// line in their own right. The "(Standard Rate)" suffix on some rental
+// categories is a pricing-model variant, not a distinct category, so it
+// maps the same as its base name.
+const CATALOG_CATEGORY_KEY_MAP: Record<string, string> = {
+  "structure": "structure",
+  "bematrix system": "structure",
+  "flooring": "flooring",
+  "furniture": "furniture",
+  "furniture (standard rate)": "furniture",
+  "accessories": "accessories",
+  "a/v": "audio_visual",
+  "a/v (standard rate)": "audio_visual",
+  "graphics package": "graphics",
+  "printing substrates": "graphics",
+  "hanging sign": "signage",
+  "design time": "professional_services",
+  "electrical": CUSTOM_BUILD_CATEGORY_KEY,
+  "acrylic": CUSTOM_BUILD_CATEGORY_KEY,
+  "wood & sheet goods": CUSTOM_BUILD_CATEGORY_KEY,
+  "hardware & fasteners": CUSTOM_BUILD_CATEGORY_KEY,
+  "custom fabrication & millwork": CUSTOM_BUILD_CATEGORY_KEY,
+  "metal & extrusion": CUSTOM_BUILD_CATEGORY_KEY,
+  "laminate & finishes": CUSTOM_BUILD_CATEGORY_KEY,
+  "packing & crating": "shipping",
+  "labor": "labor",
+  "shipping": "shipping",
+  "miscellaneous": "other",
 };
 
-export function mapCatalogCategoryToCanonical(rawCategory: string | null | undefined): string | null {
+export function mapCatalogCategoryToCanonical(
+  rawCategory: string | null | undefined,
+  categories: Pick<Category, "key" | "name">[],
+): string | null {
   if (!rawCategory) return null;
-  return CATALOG_CATEGORY_MAP[rawCategory.trim().toLowerCase()] ?? null;
+  const key = CATALOG_CATEGORY_KEY_MAP[rawCategory.trim().toLowerCase()];
+  return key ? resolveCategoryNameFromKey(categories, key) : null;
 }
 
 // scope-line-item-service.ts's AI extraction path (the "Build from all
@@ -83,45 +95,55 @@ export function mapCatalogCategoryToCanonical(rawCategory: string | null | undef
 // mapped here too so every line-item creation path in the system
 // converges on this one canonical taxonomy instead of each keeping its
 // own scheme.
-const SCOPE_CATEGORY_MAP: Record<string, string> = {
-  "booth structure & walls": "Structure",
-  "doors & hardware": "Structure",
-  "countertops & cable management": "Furniture",
-  "electrical & lighting": CUSTOM_BUILD_CATEGORY,
-  "fire & life safety": "Structure",
-  "roof & coverings": "Structure",
-  "flooring & platforms": "Flooring",
-  "labor & installation": "Labor",
-  "documentation & compliance": "Professional Services",
-  "other": "Other",
+const SCOPE_CATEGORY_KEY_MAP: Record<string, string> = {
+  "booth structure & walls": "structure",
+  "doors & hardware": "structure",
+  "countertops & cable management": "furniture",
+  "electrical & lighting": CUSTOM_BUILD_CATEGORY_KEY,
+  "fire & life safety": "structure",
+  "roof & coverings": "structure",
+  "flooring & platforms": "flooring",
+  "labor & installation": "labor",
+  "documentation & compliance": "professional_services",
+  "other": "other",
 };
 
-export function mapScopeCategoryToCanonical(scopeCategory: string | null | undefined): string | null {
+export function mapScopeCategoryToCanonical(
+  scopeCategory: string | null | undefined,
+  categories: Pick<Category, "key" | "name">[],
+): string | null {
   if (!scopeCategory) return null;
-  return SCOPE_CATEGORY_MAP[scopeCategory.trim().toLowerCase()] ?? null;
+  const key = SCOPE_CATEGORY_KEY_MAP[scopeCategory.trim().toLowerCase()];
+  return key ? resolveCategoryNameFromKey(categories, key) : null;
 }
 
 // Fallback for descriptions that never match the catalog at all -- real
 // RFP pricing-schedule line descriptions ("Complete Booth Build 12' x 7'
 // booth...") routinely don't, by catalog-match-service.ts's own design
 // (deliberately conservative matching). Order matters: first pattern that
-// matches wins, most-specific first.
-const DESCRIPTION_PATTERNS: { pattern: RegExp; category: string }[] = [
-  { pattern: /\b(on[\s-]?site labor|installation|dismantle|labor)\b/i, category: "Labor" },
-  { pattern: /\bshipping|drayage|freight\b/i, category: "Shipping" },
-  { pattern: /\b(cad|engineering|project (coordination|management)|art (proofing|template|set ?up)|electrical layout)\b/i, category: "Professional Services" },
-  { pattern: /\b(seg fabric|dtp|vinyl wrap|graphic|signage fabric)\b/i, category: "Graphics" },
-  { pattern: /\bhanging sign\b/i, category: "Signage" },
-  { pattern: /\bcomplete .* build\b/i, category: CUSTOM_BUILD_CATEGORY },
-  { pattern: /\bplatform|sleeper floor|carpet|padding|visqueen\b/i, category: "Flooring" },
-  { pattern: /\b(door|frame|backer|panel|wall|b-matrix|roof|curtain)\b/i, category: "Structure" },
-  { pattern: /\b(chair|table|stool|counter|showcase|sofa)\b/i, category: "Furniture" },
-  { pattern: /\b(monitor|screen|media player|touchscreen|led)\b/i, category: "Audio/Visual" },
+// matches wins, most-specific first. A matched pattern whose key has no
+// live category returns null immediately rather than trying the next,
+// weaker pattern -- preserves most-specific-wins semantics instead of
+// letting a worse match silently win when a category's been deleted.
+const DESCRIPTION_PATTERNS: { pattern: RegExp; key: string }[] = [
+  { pattern: /\b(on[\s-]?site labor|installation|dismantle|labor)\b/i, key: "labor" },
+  { pattern: /\bshipping|drayage|freight\b/i, key: "shipping" },
+  { pattern: /\b(cad|engineering|project (coordination|management)|art (proofing|template|set ?up)|electrical layout)\b/i, key: "professional_services" },
+  { pattern: /\b(seg fabric|dtp|vinyl wrap|graphic|signage fabric)\b/i, key: "graphics" },
+  { pattern: /\bhanging sign\b/i, key: "signage" },
+  { pattern: /\bcomplete .* build\b/i, key: CUSTOM_BUILD_CATEGORY_KEY },
+  { pattern: /\bplatform|sleeper floor|carpet|padding|visqueen\b/i, key: "flooring" },
+  { pattern: /\b(door|frame|backer|panel|wall|b-matrix|roof|curtain)\b/i, key: "structure" },
+  { pattern: /\b(chair|table|stool|counter|showcase|sofa)\b/i, key: "furniture" },
+  { pattern: /\b(monitor|screen|media player|touchscreen|led)\b/i, key: "audio_visual" },
 ];
 
-export function inferCategoryFromDescription(description: string): string | null {
-  for (const { pattern, category } of DESCRIPTION_PATTERNS) {
-    if (pattern.test(description)) return category;
+export function inferCategoryFromDescription(
+  description: string,
+  categories: Pick<Category, "key" | "name">[],
+): string | null {
+  for (const { pattern, key } of DESCRIPTION_PATTERNS) {
+    if (pattern.test(description)) return resolveCategoryNameFromKey(categories, key);
   }
   return null;
 }
@@ -171,21 +193,25 @@ export function isCompoundAssemblyDescription(description: string): boolean {
 // presentation-layer bucket for unresolved items, not a category to
 // persist as if it were a real determination.
 //
-// `categories` defaults to [] -- only needed to validate `explicit`
-// against the live catalog; callers that never pass `explicit` (e.g.
-// pricing-import-service.ts, which only ever supplies catalogCategory +
-// description) don't need to fetch/pass it.
+// `categories` defaults to [] for callers that only need explicit
+// validation, but every other branch is now load-bearing on it (see
+// resolveCategoryNameFromKey) -- a caller that forgets to pass a real,
+// freshly fetched `categories` will get null back instead of a category,
+// which is deliberate: an honestly-uncategorized item gets caught by
+// category-audit.ts, a silently-stale name would not have been.
 export function resolveLineItemCategory(
   input: {
     explicit?: string | null;
     catalogCategory?: string | null;
     description: string;
   },
-  categories: Pick<Category, "name">[] = [],
+  categories: Pick<Category, "key" | "name">[] = [],
 ): string | null {
   if (input.explicit && isKnownCategory(categories, input.explicit)) return input.explicit;
-  if (isCompoundAssemblyDescription(input.description)) return CUSTOM_BUILD_CATEGORY;
-  const fromCatalog = mapCatalogCategoryToCanonical(input.catalogCategory);
+  if (isCompoundAssemblyDescription(input.description)) {
+    return resolveCategoryNameFromKey(categories, CUSTOM_BUILD_CATEGORY_KEY);
+  }
+  const fromCatalog = mapCatalogCategoryToCanonical(input.catalogCategory, categories);
   if (fromCatalog) return fromCatalog;
-  return inferCategoryFromDescription(input.description);
+  return inferCategoryFromDescription(input.description, categories);
 }

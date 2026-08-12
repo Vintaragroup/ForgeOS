@@ -18,6 +18,7 @@ async function main() {
   const db = new PrismaClient({ adapter });
 
   const catalog = await loadCatalogForMatching();
+  const categories = await db.category.findMany({ where: { deletedAt: null } });
   const rows = await db.lineItem.findMany({
     select: { id: true, description: true, category: true, isClientOwned: true },
   });
@@ -28,7 +29,10 @@ async function main() {
 
   for (const row of rows) {
     const catalogMatch = matchDescription(row.description, catalog);
-    const category = resolveLineItemCategory({ catalogCategory: catalogMatch?.category, description: row.description });
+    const category = resolveLineItemCategory(
+      { catalogCategory: catalogMatch?.category, description: row.description },
+      categories,
+    );
     const isClientOwned = inferIsClientOwned(row.description);
 
     const data: { category?: string; isClientOwned?: boolean } = {};

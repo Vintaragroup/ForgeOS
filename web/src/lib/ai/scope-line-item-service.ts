@@ -20,12 +20,13 @@ import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { getDocumentBytes } from "@/lib/document-service";
 import {
-  CUSTOM_BUILD_CATEGORY,
+  CUSTOM_BUILD_CATEGORY_KEY,
   inferCategoryFromDescription,
   inferIsClientOwned,
   isCompoundAssemblyDescription,
   mapCatalogCategoryToCanonical,
   mapScopeCategoryToCanonical,
+  resolveCategoryNameFromKey,
 } from "@/lib/line-item-category";
 
 // Fixed vocabulary, not free text -- re-running "Propose items" on the
@@ -188,6 +189,7 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
   }
 
   const catalog = await loadCatalogForMatching();
+  const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
   const categories = [...new Set(items.map((i) => i.category))];
 
   // pageNumber is computed here, not stored at propose time -- same
@@ -235,10 +237,10 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
           // own category over the AI's coarser scope bucket, and fall
           // back to the description heuristic only if neither resolved.
           category: isCompoundAssemblyDescription(item.description)
-            ? CUSTOM_BUILD_CATEGORY
-            : (mapCatalogCategoryToCanonical(catalogMatch?.category) ??
-              mapScopeCategoryToCanonical(category) ??
-              inferCategoryFromDescription(item.description)),
+            ? resolveCategoryNameFromKey(liveCategories, CUSTOM_BUILD_CATEGORY_KEY)
+            : (mapCatalogCategoryToCanonical(catalogMatch?.category, liveCategories) ??
+              mapScopeCategoryToCanonical(category, liveCategories) ??
+              inferCategoryFromDescription(item.description, liveCategories)),
           isClientOwned: inferIsClientOwned(item.description),
           documentId,
           sourceQuote: item.sourceQuote,

@@ -468,8 +468,19 @@ enum LaborRateType {
 // web view, same meaning as EstimateSection.sortOrder but for this
 // unrelated grouping axis.
 model Category {
-  id       String     @id @default(cuid())
-  name     String     @unique
+  id   String @id @default(cuid())
+  name String @unique
+  // Stable identifier the categorization heuristics (line-item-category.ts)
+  // resolve against -- set once at creation (slugified from name, see
+  // categories/actions.ts's createCategory) and never regenerated on a
+  // later rename, unlike `name`, which /catalog/categories lets an
+  // estimator freely edit. Exists specifically so a display-name rename
+  // ("Custom Build" -> "Custom Build / Rental") can't silently break every
+  // *future* categorization decision the way it broke every *existing*
+  // LineItem before updateCategory's rename cascade existed -- name drift
+  // is handled for existing data by that cascade; key stability is what
+  // prevents it for data written after the rename.
+  key      String @unique
   parentId String?
   parent   Category?  @relation("CategoryParent", fields: [parentId], references: [id])
   children Category[] @relation("CategoryParent")

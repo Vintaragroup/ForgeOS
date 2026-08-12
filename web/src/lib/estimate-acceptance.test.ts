@@ -39,6 +39,7 @@ afterEach(async () => {
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
   await db.user.deleteMany();
+  await db.category.deleteMany();
 });
 
 afterAll(async () => {
@@ -114,11 +115,16 @@ describe("Yoku Moku through the Phase 4 workflow", () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 45.3996887538702);
     const section = await addSection(version.id, { name: "COST SUMMARY", sectionType: "CATEGORY" });
+    // sendProposal (proposal-service.ts) hard-blocks on an unresolved
+    // category (see category-audit.ts), so this fixture needs a real,
+    // matching Category row -- forgeos_test has no seeded categories.
+    const category = await db.category.create({ data: { name: "Professional Services", key: "professional_services" } });
     await addLineItem(section.id, {
       lineType: "FEE",
       description: "Total job cost (Phase 1 validated)",
       qty: 1,
       unitCost: 36060.684,
+      category: category.name,
     });
     const locked = await lockEstimateVersion(version.id);
     return { estimate, version: locked };

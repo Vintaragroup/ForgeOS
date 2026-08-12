@@ -13,6 +13,10 @@ import { PrismaPg } from "@prisma/adapter-pg";
 
 interface SeedCategory {
   name: string;
+  // Stable identifier line-item-category.ts's heuristics resolve against
+  // -- see Category.key's schema comment. Fixed here, independent of
+  // `name` (which a later /catalog/categories rename can freely change).
+  key: string;
   parent?: string;
   isLumpSum?: boolean;
   isShowService?: boolean;
@@ -20,18 +24,18 @@ interface SeedCategory {
 
 // Order matches the old CANONICAL_CATEGORIES array exactly.
 const SEED_CATEGORIES: SeedCategory[] = [
-  { name: "Custom Build" },
-  { name: "Structure", parent: "Custom Build" },
-  { name: "Flooring" },
-  { name: "Furniture" },
-  { name: "Accessories" },
-  { name: "Audio/Visual" },
-  { name: "Graphics" },
-  { name: "Signage" },
-  { name: "Professional Services", isLumpSum: true },
-  { name: "Labor", isLumpSum: true, isShowService: true },
-  { name: "Shipping", isLumpSum: true, isShowService: true },
-  { name: "Other" },
+  { name: "Custom Build", key: "custom_build" },
+  { name: "Structure", key: "structure", parent: "Custom Build" },
+  { name: "Flooring", key: "flooring" },
+  { name: "Furniture", key: "furniture" },
+  { name: "Accessories", key: "accessories" },
+  { name: "Audio/Visual", key: "audio_visual" },
+  { name: "Graphics", key: "graphics" },
+  { name: "Signage", key: "signage" },
+  { name: "Professional Services", key: "professional_services", isLumpSum: true },
+  { name: "Labor", key: "labor", isLumpSum: true, isShowService: true },
+  { name: "Shipping", key: "shipping", isLumpSum: true, isShowService: true },
+  { name: "Other", key: "other" },
 ];
 
 async function main() {
@@ -52,7 +56,7 @@ async function main() {
     };
     const row = existing
       ? await db.category.update({ where: { id: existing.id }, data })
-      : await db.category.create({ data: { name: seed.name, ...data } });
+      : await db.category.create({ data: { name: seed.name, key: seed.key, ...data } });
     idByName.set(seed.name, row.id);
     console.log(`${existing ? "Updated" : "Created"}: ${seed.name}`);
   }

@@ -19,6 +19,7 @@ afterEach(async () => {
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
   await db.user.deleteMany();
+  await db.category.deleteMany();
 });
 
 afterAll(async () => {
@@ -33,7 +34,17 @@ async function makeLockedVersion() {
   const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
   const version = await createEstimateVersion(estimate.id, 50);
   const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-  await addLineItem(section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+  // sendProposal (proposal-service.ts) hard-blocks on an unresolved
+  // category (see category-audit.ts), so this fixture needs a real,
+  // matching Category row -- forgeos_test has no seeded categories.
+  const category = await db.category.create({ data: { name: "Structure", key: "structure" } });
+  await addLineItem(section.id, {
+    lineType: "MATERIAL",
+    description: "Plywood",
+    qty: 10,
+    unitCost: 20,
+    category: category.name,
+  });
   await lockEstimateVersion(version.id);
   const user = await db.user.create({ data: { name: "Test Approver", email: `approver-${Date.now()}@example.com` } });
   return { version, user };

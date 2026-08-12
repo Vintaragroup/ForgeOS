@@ -8,10 +8,12 @@ export async function createCategory(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Category name is required");
   const sortOrder = parseSortOrder(formData.get("sortOrder"));
+  const key = await uniqueKeyFor(name);
 
   await db.category.create({
     data: {
       name,
+      key,
       parentId: emptyToNull(formData.get("parentId")),
       sortOrder,
       isLumpSum: formData.get("isLumpSum") === "on",
@@ -36,6 +38,11 @@ export async function updateCategory(id: string, formData: FormData) {
   // the old name, silently dropping it into the "Other" fallback bucket on
   // every proposal. A real job's "Custom Build" -> "Custom Build / Rental"
   // rename did exactly this to 18 line items before this cascade existed.
+  // `key` is deliberately never touched here -- it's the stable identifier
+  // line-item-category.ts's heuristics resolve against for every *future*
+  // categorization decision (see Category.key's schema comment), so a
+  // rename only ever changes what a category is called, never what
+  // future line items resolve it by.
   const existing = await db.category.findUniqueOrThrow({ where: { id } });
   await db.$transaction([
     db.category.update({
@@ -77,4 +84,22 @@ function parseSortOrder(value: FormDataEntryValue | null): number {
 function emptyToNull(value: FormDataEntryValue | null): string | null {
   const str = String(value ?? "").trim();
   return str === "" ? null : str;
+}
+
+function slugify(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+// No form field for this -- key is an internal stability mechanism, not
+// something an estimator names themselves (see Category.key's schema
+// comment). Derived once at creation from the category's initial name and
+// never touched again, even if that name is later edited.
+async function uniqueKeyFor(name: string): Promise<string> {
+  const base = slugify(name) || "category";
+  let candidate = base;
+  let suffix = 2;
+  while (await db.category.findUnique({ where: { key: candidate } })) {
+    candidate = `${base}_${suffix++}`;
+  }
+  return candidate;
 }

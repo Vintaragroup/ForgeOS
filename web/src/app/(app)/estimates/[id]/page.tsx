@@ -43,6 +43,7 @@ import { LineItemRow } from "@/components/line-item-row";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref } from "@/lib/citation";
+import { auditLineItemCategories } from "@/lib/category-audit";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
@@ -206,6 +207,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     return summary.riskFlags.map((r) => ({ ...r, doc: d }));
   });
 
+  // Surfaces exactly what aggregateByCategory's isKnownCategory fallback
+  // already silently detects on the proposal-facing side -- these items
+  // will render under "Other" on the PDF/web view, not their real
+  // category, until fixed. sendProposal (proposal-service.ts) hard-blocks
+  // on the same check; this banner is the "catch it during editing, not
+  // at send time" half of that same safety net.
+  const categoryAudit = currentVersion
+    ? auditLineItemCategories(currentVersion.sections, categories)
+    : { issues: [], isClean: true };
+
   return (
     <div className="flex flex-col gap-8">
       <PageHeader
@@ -313,6 +324,38 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                 </li>
               );
             })}
+          </ul>
+        </Card>
+      )}
+
+      {categoryAudit.issues.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Category review
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            These line items won&apos;t bucket correctly on the client-facing proposal — they&apos;ll fall
+            into &quot;Other&quot; instead of their real category. Fix them here before sending.
+          </p>
+          <ul className="flex flex-col gap-2 text-sm">
+            {categoryAudit.issues.map((issue) => (
+              <li
+                key={issue.lineItemId}
+                className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
+              >
+                <span className="flex items-start gap-2 text-amber-900">
+                  <span aria-hidden>⚠</span>
+                  {issue.description}
+                  {issue.reason === "orphaned" && (
+                    <span className="text-amber-700"> — category &quot;{issue.category}&quot; no longer exists</span>
+                  )}
+                </span>
+                <a href={`#line-item-${issue.lineItemId}`} className="shrink-0 text-xs text-brand-navy hover:underline">
+                  {issue.sectionName}
+                  {issue.groupLabel ? ` — ${issue.groupLabel}` : ""} →
+                </a>
+              </li>
+            ))}
           </ul>
         </Card>
       )}
@@ -749,6 +792,7 @@ function LineItemsTable({
           return (
             <LineItemRow
               key={li.id}
+              id={li.id}
               description={li.description}
               isDraft={li.isDraft}
               sourceHref={sourceHref}

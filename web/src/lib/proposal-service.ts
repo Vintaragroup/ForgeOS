@@ -4,6 +4,7 @@
 // Action wrappers -- see that file's header comment for why.
 
 import { db } from "@/lib/db";
+import { auditLineItemCategories } from "@/lib/category-audit";
 
 async function assertLocked(estimateVersionId: string) {
   const version = await db.estimateVersion.findUniqueOrThrow({
@@ -65,10 +66,32 @@ export async function generateProposal(estimateVersionId: string, templateId: st
 // re-sends create a new Proposal row via generateProposal above rather
 // than mutating this one.
 export async function sendProposal(proposalId: string) {
-  const proposal = await db.proposal.findUniqueOrThrow({ where: { id: proposalId } });
+  const proposal = await db.proposal.findUniqueOrThrow({
+    where: { id: proposalId },
+    include: {
+      estimateVersion: {
+        include: { sections: { where: { optionId: null }, include: { lineItems: true } } },
+      },
+    },
+  });
   if (proposal.sentAt) {
     throw new Error(`Proposal ${proposalId} was already sent at ${proposal.sentAt.toISOString()}.`);
   }
+
+  // Hard gate, no override -- matches every other gate in this file.
+  // Nothing with an unresolved category reaches a client: it either never
+  // got categorized, or references a category that's since been renamed
+  // (with no cascade -- shouldn't happen anymore, see
+  // categories/actions.ts's updateCategory) or deleted out from under it.
+  const categories = await db.category.findMany({ where: { deletedAt: null } });
+  const audit = auditLineItemCategories(proposal.estimateVersion.sections, categories);
+  if (!audit.isClean) {
+    throw new Error(
+      `Proposal ${proposalId} has ${audit.issues.length} line item(s) with an unresolved category ` +
+        `(e.g. "${audit.issues[0].description.slice(0, 60)}") -- fix them on the estimate before sending.`,
+    );
+  }
+
   return db.proposal.update({ where: { id: proposalId }, data: { sentAt: new Date() } });
 }
 

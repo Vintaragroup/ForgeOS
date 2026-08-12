@@ -15,6 +15,7 @@ import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labo
 // mis-categorized or manually-priced item doesn't have to be deleted and
 // re-added just to fix it.
 export function LineItemRow({
+  id,
   description,
   isDraft,
   sourceHref,
@@ -41,6 +42,7 @@ export function LineItemRow({
   moveUpAction,
   moveDownAction,
 }: {
+  id: string;
   description: string;
   isDraft: boolean;
   sourceHref: string | null;
@@ -71,7 +73,7 @@ export function LineItemRow({
 
   if (isEditing) {
     return (
-      <tr className="border-t border-neutral-100 bg-neutral-50">
+      <tr id={`line-item-${id}`} className="border-t border-neutral-100 bg-neutral-50">
         <td colSpan={7} className="px-2 py-2">
           <form
             action={async (formData) => {
@@ -120,7 +122,7 @@ export function LineItemRow({
   }
 
   return (
-    <tr className="border-t border-neutral-100">
+    <tr id={`line-item-${id}`} className="border-t border-neutral-100">
       <td className="px-2 py-1.5">
         {description}
         {isDraft && (
