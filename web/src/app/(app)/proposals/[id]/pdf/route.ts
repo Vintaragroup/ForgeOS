@@ -18,18 +18,21 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
   const user = await getCurrentUser();
   if (!user) notFound();
 
-  const proposal = await db.proposal.findFirst({
-    where: { id, deletedAt: null },
-    include: {
-      template: true,
-      estimateVersion: {
-        include: {
-          estimate: { include: { opportunity: { include: { company: true, primaryContact: true } }, taxRate: true } },
-          sections: { where: { optionId: null }, include: { lineItems: true } },
+  const [proposal, categories] = await Promise.all([
+    db.proposal.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        template: true,
+        estimateVersion: {
+          include: {
+            estimate: { include: { opportunity: { include: { company: true, primaryContact: true } }, taxRate: true } },
+            sections: { where: { optionId: null }, include: { lineItems: true } },
+          },
         },
       },
-    },
-  });
+    }),
+    db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } }),
+  ]);
   if (!proposal) notFound();
   if (!(await canAccessOpportunity(user, proposal.estimateVersion.estimate.opportunityId))) notFound();
 
@@ -60,6 +63,7 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
         venue,
         scopeSummary,
         sections: version.sections,
+        categories,
         professionalServices,
         termsAndConditions,
         paymentMethodNote,

@@ -9,8 +9,8 @@
 // truth here; each caller does its own presentation (PDF vs HTML) on top
 // of the same data shape.
 
-import type { Prisma } from "@/generated/prisma/client";
-import { CANONICAL_CATEGORIES, CATEGORY_PARENT, getCategoryChildren, isCanonicalCategory, type CanonicalCategory } from "@/lib/line-item-category";
+import type { Category, Prisma } from "@/generated/prisma/client";
+import { getCategoryChildren, isKnownCategory } from "@/lib/line-item-category";
 
 export interface ProposalViewLineItem {
   id: string;
@@ -47,7 +47,7 @@ export interface AggregatedLineItem {
 }
 
 export interface CategoryBucket {
-  name: CanonicalCategory;
+  name: string;
   items: AggregatedLineItem[];
 }
 
@@ -57,16 +57,21 @@ export interface CategoryBucket {
 // frame, not a per-booth breakdown. ForgeOS's estimate-editing UI still
 // tracks line items per booth/section (useful for production/build
 // tracking), but every client-facing view flattens all of it, buckets by
-// canonical category, and sums identical (description, unit) pairs
-// across every booth -- which is also what actually fixes duplicate rows
-// like the same compliant-door SKU appearing 16 times, rather than just
-// hiding the count.
-export function aggregateByCategory(sections: ProposalViewSection[]): CategoryBucket[] {
+// category, and sums identical (description, unit) pairs across every
+// booth -- which is also what actually fixes duplicate rows like the
+// same compliant-door SKU appearing 16 times, rather than just hiding
+// the count.
+//
+// `categories` is the live catalog (db.category.findMany, ordered by
+// sortOrder) -- both which names are valid (falling back to "Other" for
+// anything else, e.g. a category since renamed/deleted out from under an
+// old LineItem) and the bucket ordering come from it, not a hardcoded list.
+export function aggregateByCategory(sections: ProposalViewSection[], categories: Category[]): CategoryBucket[] {
   const byCategory = new Map<string, Map<string, AggregatedLineItem>>();
 
   for (const section of sections) {
     for (const li of section.lineItems) {
-      const category = isCanonicalCategory(li.category) ? li.category : "Other";
+      const category = isKnownCategory(categories, li.category) ? li.category! : "Other";
       let bucket = byCategory.get(category);
       if (!bucket) {
         bucket = new Map();
@@ -94,10 +99,16 @@ export function aggregateByCategory(sections: ProposalViewSection[]): CategoryBu
     }
   }
 
-  return CANONICAL_CATEGORIES.map((name) => ({
-    name,
-    items: [...(byCategory.get(name)?.values() ?? [])].sort((a, b) => a.sortOrder - b.sortOrder),
-  })).filter((bucket) => bucket.items.length > 0);
+  // "Other" is expected to already be one of the seeded categories (the
+  // designated fallback bucket above) -- not appended separately here to
+  // avoid a duplicate entry if it is.
+  return categories
+    .map((c) => c.name)
+    .map((name) => ({
+      name,
+      items: [...(byCategory.get(name)?.values() ?? [])].sort((a, b) => a.sortOrder - b.sortOrder),
+    }))
+    .filter((bucket) => bucket.items.length > 0);
 }
 
 export function bucketSubtotal(items: AggregatedLineItem[]): number {
@@ -105,29 +116,36 @@ export function bucketSubtotal(items: AggregatedLineItem[]): number {
 }
 
 export interface TopLevelCategoryView {
-  name: CanonicalCategory;
+  name: string;
   ownItems: AggregatedLineItem[];
   children: CategoryBucket[];
   totalWithChildren: number;
 }
 
-// Only categories with no parent (see CATEGORY_PARENT) render as their own
-// top-level section -- a child category (Structure) renders nested under
-// its parent instead, even when the parent bucket has no direct items of
-// its own (e.g. Custom Build items exist only as Structure's children).
-export function buildTopLevelCategoryViews(buckets: CategoryBucket[]): TopLevelCategoryView[] {
+// Only categories with no parent (Category.parentId null) render as
+// their own top-level section -- a child category (Structure) renders
+// nested under its parent instead, even when the parent bucket has no
+// direct items of its own (e.g. Custom Build items exist only as
+// Structure's children). `categories` drives both membership and order,
+// same as aggregateByCategory.
+export function buildTopLevelCategoryViews(buckets: CategoryBucket[], categories: Category[]): TopLevelCategoryView[] {
   const bucketsByName = new Map(buckets.map((b) => [b.name, b] as const));
 
-  return CANONICAL_CATEGORIES.filter(
-    (name) => !CATEGORY_PARENT[name] && (bucketsByName.has(name) || getCategoryChildren(name).some((c) => bucketsByName.has(c))),
-  ).map((name) => {
-    const ownItems = bucketsByName.get(name)?.items ?? [];
-    const children = getCategoryChildren(name)
-      .map((childName) => bucketsByName.get(childName))
-      .filter((b): b is CategoryBucket => !!b);
-    const totalWithChildren = bucketSubtotal(ownItems) + children.reduce((sum, child) => sum + bucketSubtotal(child.items), 0);
-    return { name, ownItems, children, totalWithChildren };
-  });
+  return categories
+    .filter((c) => !c.parentId)
+    .map((c) => c.name)
+    .filter(
+      (name) =>
+        bucketsByName.has(name) || getCategoryChildren(categories, name).some((child) => bucketsByName.has(child.name)),
+    )
+    .map((name) => {
+      const ownItems = bucketsByName.get(name)?.items ?? [];
+      const children = getCategoryChildren(categories, name)
+        .map((child) => bucketsByName.get(child.name))
+        .filter((b): b is CategoryBucket => !!b);
+      const totalWithChildren = bucketSubtotal(ownItems) + children.reduce((sum, child) => sum + bucketSubtotal(child.items), 0);
+      return { name, ownItems, children, totalWithChildren };
+    });
 }
 
 export function computeRentalAndServicesTotals(

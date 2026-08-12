@@ -450,6 +450,50 @@ enum LaborRateType {
   CITY_MARKET
 }
 
+// The proposal-facing category taxonomy, moved from a hardcoded
+// TypeScript constant (line-item-category.ts's old CANONICAL_CATEGORIES)
+// to a real catalog once estimators needed to edit it themselves --
+// add/rename/reorder categories and define sub-categories, not just the
+// one hardcoded Structure-under-Custom-Build case. LineItem.category
+// stays a plain string (matched against this table's `name` at render
+// time), not a foreign key -- every existing comparison in the codebase
+// is a string equality check, and converting would mean migrating every
+// historical LineItem row plus every call site for no behavioral gain.
+//
+// parentId supports exactly one level of nesting (a child's own parentId
+// must point at a top-level category, not another child) -- matches what
+// buildTopLevelCategoryViews (proposal-view-model.ts) actually renders:
+// a top-level section with its direct children nested under it, not an
+// arbitrary tree. sortOrder controls render order on the proposal PDF/
+// web view, same meaning as EstimateSection.sortOrder but for this
+// unrelated grouping axis.
+model Category {
+  id       String     @id @default(cuid())
+  name     String     @unique
+  parentId String?
+  parent   Category?  @relation("CategoryParent", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryParent")
+
+  sortOrder Int @default(0)
+
+  // Professional Services/Labor/Shipping render as a description + price
+  // line with no qty/unit columns (priced as a lump sum), matching every
+  // historical proposal's "On site labor" / "Shipping" / bulleted
+  // scope-of-services treatment -- everything else itemizes with qty/unit.
+  isLumpSum     Boolean @default(false)
+  // Labor/Shipping roll into the proposal's "Show Services" subtotal
+  // instead of "Rental Components" -- Professional Services is lump-sum
+  // (isLumpSum) but still rolls into Rental Components, so this is a
+  // second, independent flag, not implied by isLumpSum.
+  isShowService Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("categories")
+}
+
 // Only meaningful for CITY_MARKET rows -- DEPARTMENT (shop) rates are a
 // single flat number with no time-and-a-half concept, per how this
 // catalog is actually used (see LaborRate's comment). Real market data

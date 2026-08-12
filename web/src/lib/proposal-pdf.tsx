@@ -6,9 +6,8 @@
 
 import path from "node:path";
 import { Document, Page, Text, View, Image as PdfImage, StyleSheet, Font } from "@react-pdf/renderer";
-import type { Prisma } from "@/generated/prisma/client";
+import type { Category, Prisma } from "@/generated/prisma/client";
 import { BRAND, BRAND_ADDRESS_LINES, BRAND_COMPANY_NAME, BRAND_TAGLINE } from "@/lib/brand";
-import { SERVICE_STYLE_CATEGORIES, SHOW_SERVICES_CATEGORIES } from "@/lib/line-item-category";
 import { TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
 import {
   aggregateByCategory,
@@ -302,6 +301,10 @@ export interface ProposalPdfData {
   venue: string | null;
   scopeSummary: string[];
   sections: ProposalViewSection[];
+  // Live catalog (db.category.findMany, ordered by sortOrder) -- drives
+  // section order/hierarchy (aggregateByCategory/buildTopLevelCategoryViews)
+  // and which categories render lump-sum / roll into Show Services below.
+  categories: Category[];
   professionalServices: ProposalPdfProfessionalServices | null;
   termsAndConditions: string[];
   paymentMethodNote: string | null;
@@ -319,8 +322,10 @@ export interface ProposalPdfData {
 }
 
 export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
-  const buckets = aggregateByCategory(data.sections);
-  const topLevelCategories = buildTopLevelCategoryViews(buckets);
+  const buckets = aggregateByCategory(data.sections, data.categories);
+  const topLevelCategories = buildTopLevelCategoryViews(buckets, data.categories);
+  const showServiceCategoryNames = new Set(data.categories.filter((c) => c.isShowService).map((c) => c.name));
+  const lumpSumCategoryNames = new Set(data.categories.filter((c) => c.isLumpSum).map((c) => c.name));
 
   // Every distinct aggregated item renders as its own row, always -- no
   // detail-mode toggle, no "Includes: A, B, C" collapse. Cross-booth
@@ -360,7 +365,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
 
   const { rentalTotal, servicesTotal, hasServiceSplit } = computeRentalAndServicesTotals(
     buckets,
-    SHOW_SERVICES_CATEGORIES,
+    showServiceCategoryNames,
   );
 
   return (
@@ -450,7 +455,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
 
         {topLevelCategories.map(({ name: categoryName, ownItems, children, totalWithChildren }, categoryIndex) => {
           const accent = SECTION_ACCENTS[categoryIndex % SECTION_ACCENTS.length];
-          const isServiceStyle = SERVICE_STYLE_CATEGORIES.has(categoryName);
+          const isServiceStyle = lumpSumCategoryNames.has(categoryName);
 
           return (
             <View key={categoryName} style={styles.section}>

@@ -8,7 +8,6 @@ import { sendProposalAction, signProposalAction } from "../actions";
 import { extractBranding, extractPaymentMethodNote } from "@/lib/proposal-branding";
 import { taxRateLabel, TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
 import { BRAND, BRAND_ADDRESS_LINES } from "@/lib/brand";
-import { SERVICE_STYLE_CATEGORIES, SHOW_SERVICES_CATEGORIES } from "@/lib/line-item-category";
 import {
   aggregateByCategory,
   bucketSubtotal,
@@ -96,20 +95,23 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const proposal = await db.proposal.findFirst({
-    where: { id, deletedAt: null },
-    include: {
-      template: true,
-      estimateVersion: {
-        include: {
-          estimate: { include: { opportunity: { include: { company: true } }, taxRate: true } },
-          // Base estimate sections only -- Option (alternates) pricing is
-          // rendered separately once that UI exists (task #44).
-          sections: { where: { optionId: null }, include: { lineItems: true } },
+  const [proposal, categories] = await Promise.all([
+    db.proposal.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        template: true,
+        estimateVersion: {
+          include: {
+            estimate: { include: { opportunity: { include: { company: true } }, taxRate: true } },
+            // Base estimate sections only -- Option (alternates) pricing is
+            // rendered separately once that UI exists (task #44).
+            sections: { where: { optionId: null }, include: { lineItems: true } },
+          },
         },
       },
-    },
-  });
+    }),
+    db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } }),
+  ]);
   if (!proposal) notFound();
   if (!(await canAccessOpportunity(user, proposal.estimateVersion.estimate.opportunityId))) notFound();
 
@@ -121,11 +123,13 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   const { brandColor, logoUrl } = extractBranding(proposal.templateConfigSnapshot);
   const paymentMethodNote = extractPaymentMethodNote(proposal.templateConfigSnapshot);
 
-  const buckets = aggregateByCategory(version.sections.filter((section) => section.lineItems.length > 0));
-  const topLevelCategories = buildTopLevelCategoryViews(buckets);
+  const buckets = aggregateByCategory(version.sections.filter((section) => section.lineItems.length > 0), categories);
+  const topLevelCategories = buildTopLevelCategoryViews(buckets, categories);
+  const showServiceCategoryNames = new Set(categories.filter((c) => c.isShowService).map((c) => c.name));
+  const lumpSumCategoryNames = new Set(categories.filter((c) => c.isLumpSum).map((c) => c.name));
   const { rentalTotal, servicesTotal, hasServiceSplit } = computeRentalAndServicesTotals(
     buckets,
-    SHOW_SERVICES_CATEGORIES,
+    showServiceCategoryNames,
   );
 
   return (
@@ -189,7 +193,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
 
           {topLevelCategories.map(({ name: categoryName, ownItems, children, totalWithChildren }, categoryIndex) => {
             const accent = SECTION_ACCENTS[categoryIndex % SECTION_ACCENTS.length];
-            const isServiceStyle = SERVICE_STYLE_CATEGORIES.has(categoryName);
+            const isServiceStyle = lumpSumCategoryNames.has(categoryName);
             return (
               <div key={categoryName} className="mb-4">
                 <div className="mb-1.5 flex items-center justify-between bg-brand-black px-2 py-2">

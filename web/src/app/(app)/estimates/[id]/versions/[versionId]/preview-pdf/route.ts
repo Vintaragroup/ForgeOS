@@ -33,13 +33,16 @@ export async function GET(
   const user = await getCurrentUser();
   if (!user) notFound();
 
-  const version = await db.estimateVersion.findFirst({
-    where: { id: versionId, estimateId: id },
-    include: {
-      estimate: { include: { opportunity: { include: { company: true, primaryContact: true } }, taxRate: true } },
-      sections: { where: { optionId: null }, include: { lineItems: true } },
-    },
-  });
+  const [version, categories] = await Promise.all([
+    db.estimateVersion.findFirst({
+      where: { id: versionId, estimateId: id },
+      include: {
+        estimate: { include: { opportunity: { include: { company: true, primaryContact: true } }, taxRate: true } },
+        sections: { where: { optionId: null }, include: { lineItems: true } },
+      },
+    }),
+    db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } }),
+  ]);
   if (!version) notFound();
   if (!(await canAccessOpportunity(user, version.estimate.opportunityId))) notFound();
 
@@ -72,6 +75,7 @@ export async function GET(
         venue,
         scopeSummary,
         sections: version.sections,
+        categories,
         professionalServices,
         termsAndConditions,
         paymentMethodNote,

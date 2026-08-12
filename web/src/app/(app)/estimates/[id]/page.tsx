@@ -36,7 +36,6 @@ import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
-import { CANONICAL_CATEGORIES } from "@/lib/line-item-category";
 import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { laborRateOptionLabel } from "@/lib/labor-rate";
 import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
@@ -59,15 +58,6 @@ const LINE_TYPE_OPTIONS = [
   { value: "MATERIAL", label: "Material" },
   { value: "LABOR", label: "Labor" },
   { value: "FEE", label: "Fee" },
-];
-
-// Blank stays blank on submit (see emptyToNull in actions.ts) -- left
-// unset, category resolves from a catalog match or the description
-// heuristic instead of a guess forced at entry time. See
-// line-item-category.ts.
-const CATEGORY_OPTIONS = [
-  { value: "", label: "— auto-detect —" },
-  ...CANONICAL_CATEGORIES.map((c) => ({ value: c, label: c })),
 ];
 
 function money(d: { toFixed(n: number): string }): string {
@@ -130,7 +120,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const currentVersion = versions.find((v) => v.isCurrent) ?? versions[0];
   const olderVersions = versions.filter((v) => v.id !== currentVersion?.id);
 
-  const [users, proposalTemplates, taxRates, laborRates, attachments, pricingScheduleDocuments, scopeDocuments] = await Promise.all([
+  const [users, proposalTemplates, taxRates, laborRates, categories, attachments, pricingScheduleDocuments, scopeDocuments] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.proposalTemplate.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
@@ -138,6 +128,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       where: { deletedAt: null },
       orderBy: [{ rateType: "asc" }, { departmentName: "asc" }, { city: "asc" }, { laborTier: "asc" }],
     }),
+    db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } }),
     db.attachment.findMany({
       where: { estimateId: estimate.id, deletedAt: null },
       orderBy: { createdAt: "desc" },
@@ -173,6 +164,15 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     department: r.rateType === "DEPARTMENT" ? r.departmentCode : null,
     rate: r.rate.toNumber(),
   }));
+
+  // Blank stays blank on submit (see emptyToNull in actions.ts) -- left
+  // unset, category resolves from a catalog match or the description
+  // heuristic instead of a guess forced at entry time. See
+  // line-item-category.ts.
+  const categoryOptions = [
+    { value: "", label: "— auto-detect —" },
+    ...categories.map((c) => ({ value: c.name, label: c.name })),
+  ];
 
   const addAttachmentWithId = addAttachmentAction.bind(null, estimate.id);
   const updateEstimateDetailsWithId = updateEstimateDetails.bind(null, estimate.id);
@@ -574,6 +574,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           proposalTemplates={proposalTemplates}
           attachments={attachments}
           laborRates={laborRateOptions}
+          categoryOptions={categoryOptions}
         />
       )}
 
@@ -675,12 +676,14 @@ function LineItemsTable({
   estimateId,
   opportunityId,
   laborRates,
+  categoryOptions,
 }: {
   lineItems: SectionLineItem[];
   version: VersionWithSections;
   estimateId: string;
   opportunityId: string;
   laborRates: LaborRateOption[];
+  categoryOptions: { value: string; label: string }[];
 }) {
   return (
     <table className="w-full min-w-[38rem] text-sm">
@@ -745,7 +748,7 @@ function LineItemsTable({
               isFirst={index === 0}
               isLast={index === lineItems.length - 1}
               lineTypeOptions={LINE_TYPE_OPTIONS}
-              categoryOptions={CATEGORY_OPTIONS}
+              categoryOptions={categoryOptions}
               laborRates={laborRates}
               deleteAction={deleteWithIds}
               confirmAction={confirmWithIds}
@@ -768,6 +771,7 @@ function EstimateVersionCard({
   proposalTemplates,
   attachments,
   laborRates,
+  categoryOptions,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -776,6 +780,7 @@ function EstimateVersionCard({
   proposalTemplates: { id: string; name: string }[];
   attachments: { id: string; fileRef: string }[];
   laborRates: { id: string; label: string; department: string | null; rate: number }[];
+  categoryOptions: { value: string; label: string }[];
 }) {
   const updateMarginTargetWithIds = updateMarginTargetAction.bind(null, estimateId, version.id);
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
@@ -1013,6 +1018,7 @@ function EstimateVersionCard({
                         estimateId={estimateId}
                         opportunityId={opportunityId}
                         laborRates={laborRates}
+                        categoryOptions={categoryOptions}
                       />
                     </div>
                   );
@@ -1048,6 +1054,7 @@ function EstimateVersionCard({
                             estimateId={estimateId}
                             opportunityId={opportunityId}
                             laborRates={laborRates}
+                            categoryOptions={categoryOptions}
                           />
                         </div>
                       </details>
@@ -1074,6 +1081,7 @@ function EstimateVersionCard({
                 sectionId={section.id}
                 attachments={attachments}
                 laborRates={laborRates}
+                categoryOptions={categoryOptions}
               />
             )}
           </div>
@@ -1106,6 +1114,7 @@ function EstimateVersionCard({
                 option={option}
                 isLocked={version.isLocked}
                 laborRates={laborRates}
+                categoryOptions={categoryOptions}
               />
             ))}
           </div>
@@ -1129,12 +1138,14 @@ function OptionCard({
   option,
   isLocked,
   laborRates,
+  categoryOptions,
 }: {
   estimateId: string;
   versionId: string;
   option: VersionWithSections["options"][number];
   isLocked: boolean;
   laborRates: { id: string; label: string; department: string | null; rate: number }[];
+  categoryOptions: { value: string; label: string }[];
 }) {
   const addOptionSectionWithIds = addOptionSectionAction.bind(null, estimateId, versionId, option.id);
   const optionTotal = computeOptionTotal(option.sections);
@@ -1166,7 +1177,13 @@ function OptionCard({
             </table>
           )}
           {!isLocked && (
-            <AddLineItemForm estimateId={estimateId} versionId={versionId} sectionId={section.id} laborRates={laborRates} />
+            <AddLineItemForm
+              estimateId={estimateId}
+              versionId={versionId}
+              sectionId={section.id}
+              laborRates={laborRates}
+              categoryOptions={categoryOptions}
+            />
           )}
         </div>
       ))}
@@ -1278,12 +1295,14 @@ function AddLineItemForm({
   sectionId,
   attachments = [],
   laborRates = [],
+  categoryOptions,
 }: {
   estimateId: string;
   versionId: string;
   sectionId: string;
   attachments?: { id: string; fileRef: string }[];
   laborRates?: { id: string; label: string; department: string | null; rate: number }[];
+  categoryOptions: { value: string; label: string }[];
 }) {
   const addLineItemWithIds = addLineItemAction.bind(null, estimateId, versionId, sectionId);
   return (
@@ -1298,7 +1317,7 @@ function AddLineItemForm({
         <div className="sm:order-1 sm:w-36">
           <SelectField label="Type" name="lineType" defaultValue="MATERIAL" options={LINE_TYPE_OPTIONS} />
         </div>
-        <LaborRateLineItemFields categoryOptions={CATEGORY_OPTIONS} laborRates={laborRates} />
+        <LaborRateLineItemFields categoryOptions={categoryOptions} laborRates={laborRates} />
         <div className="sm:order-5 sm:w-24">
           <Field label="Qty" name="qty" type="number" defaultValue="1" required />
         </div>

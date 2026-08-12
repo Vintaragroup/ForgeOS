@@ -1,67 +1,28 @@
-// The proposal-facing category taxonomy -- derived from two real sources,
-// not invented: (1) the fixed, repeated section headers used across every
-// historical Expo CCI proposal in data/historical_jobs/pdf (RENTAL
-// STRUCTURE, RENTAL FURNITURE, RENTAL A/V, CUSTOM PURCHASE-GRAPHICS,
-// CUSTOM RENTAL, Professional Services, SHOW SERVICES), and (2) the
-// category values already live in the Material/RentalItem catalogs
-// (catalog/materials, catalog/rental-items). Order here is the order
-// categories render in on the proposal PDF -- Custom Build (the exhibit/
-// booth build, with Structure nested under it) leads, matching how every
-// historical proposal opened with RENTAL STRUCTURE; Labor/Shipping/Other
-// trail as the "Show Services" group, matching SHOW SERVICES always
-// closing the document. Professional Services sits last among the
-// "rental" categories, immediately before that trailing group -- it
-// historically appears just above the RENTAL COMPONENTS TOTAL line (see
-// SERVICE_STYLE_CATEGORIES below).
-export const CANONICAL_CATEGORIES = [
-  "Custom Build",
-  "Structure",
-  "Flooring",
-  "Furniture",
-  "Accessories",
-  "Audio/Visual",
-  "Graphics",
-  "Signage",
-  "Professional Services",
-  "Labor",
-  "Shipping",
-  "Other",
-] as const;
+// The proposal-facing category taxonomy -- was a hardcoded CANONICAL_
+// CATEGORIES constant here, moved to a real Category table (see its
+// schema comment) once estimators needed to edit it themselves: add/
+// rename/reorder categories, define sub-categories. The functions below
+// are the pure heuristics that were always here (catalog-category
+// mapping, description-pattern matching, client-owned detection) --
+// unchanged in behavior, just no longer typed against a fixed literal
+// union. Anything that needs to know what categories currently exist,
+// their hierarchy, or their render/subtotal flags now takes a fetched
+// `Category[]` as a parameter (db.category.findMany, ordered by
+// sortOrder) instead of importing a constant.
 
-export type CanonicalCategory = (typeof CANONICAL_CATEGORIES)[number];
+import type { Category } from "@/generated/prisma/client";
 
-// Labor and Shipping roll into the proposal's "Show Services" total
-// (on-site labor, shipping) instead of "Rental Components" -- Professional
-// Services rolls into Rental Components (matches every historical
-// proposal: "Professional Services" appears just above "RENTAL COMPONENTS
-// TOTAL", not inside Show Services). All three render as a description +
-// price line with no qty/unit columns, same as the historical documents'
-// "On site labor" / "Shipping" / bulleted scope-of-services treatment,
-// since these are priced as a lump sum, not itemized rental components.
-export const SERVICE_STYLE_CATEGORIES: ReadonlySet<string> = new Set([
-  "Professional Services",
-  "Labor",
-  "Shipping",
-]);
-export const SHOW_SERVICES_CATEGORIES: ReadonlySet<string> = new Set(["Labor", "Shipping"]);
-
-// Structure renders nested under Custom Build rather than as its own
-// top-level section -- structural components (doors, walls, dividers,
-// frames) are the physical makeup of a booth Expo builds for the job, not
-// an independent line of business the way Furniture, A/V, or Graphics
-// are. The "category" value stored on a LineItem stays literally
-// "Structure" either way (unaffected by this) -- this mapping only
-// controls how the proposal PDF groups it visually.
-export const CATEGORY_PARENT: Partial<Record<CanonicalCategory, CanonicalCategory>> = {
-  Structure: "Custom Build",
-};
-
-export function getCategoryChildren(parent: CanonicalCategory): CanonicalCategory[] {
-  return CANONICAL_CATEGORIES.filter((c) => CATEGORY_PARENT[c] === parent);
+export function isKnownCategory(categories: Pick<Category, "name">[], value: string | null | undefined): boolean {
+  return !!value && categories.some((c) => c.name === value);
 }
 
-export function isCanonicalCategory(value: string | null | undefined): value is CanonicalCategory {
-  return !!value && (CANONICAL_CATEGORIES as readonly string[]).includes(value);
+// One level of nesting only -- see Category's schema comment on why (the
+// proposal PDF/web view only ever render a top-level section with its
+// direct children, never grandchildren).
+export function getCategoryChildren(categories: Category[], parentName: string): Category[] {
+  const parent = categories.find((c) => c.name === parentName);
+  if (!parent) return [];
+  return categories.filter((c) => c.parentId === parent.id);
 }
 
 // Best-effort mapping from the raw category strings actually observed in
@@ -74,7 +35,7 @@ export function isCanonicalCategory(value: string | null | undefined): value is 
 // purchasable line in their own right. The "(Standard Rate)" suffix on
 // some rental categories is a pricing-model variant, not a distinct
 // category, so it maps the same as its base name.
-const CATALOG_CATEGORY_MAP: Record<string, CanonicalCategory> = {
+const CATALOG_CATEGORY_MAP: Record<string, string> = {
   "structure": "Structure",
   "bematrix system": "Structure",
   "flooring": "Flooring",
@@ -100,7 +61,7 @@ const CATALOG_CATEGORY_MAP: Record<string, CanonicalCategory> = {
   "miscellaneous": "Other",
 };
 
-export function mapCatalogCategoryToCanonical(rawCategory: string | null | undefined): CanonicalCategory | null {
+export function mapCatalogCategoryToCanonical(rawCategory: string | null | undefined): string | null {
   if (!rawCategory) return null;
   return CATALOG_CATEGORY_MAP[rawCategory.trim().toLowerCase()] ?? null;
 }
@@ -111,7 +72,7 @@ export function mapCatalogCategoryToCanonical(rawCategory: string | null | undef
 // mapped here too so every line-item creation path in the system
 // converges on this one canonical taxonomy instead of each keeping its
 // own scheme.
-const SCOPE_CATEGORY_MAP: Record<string, CanonicalCategory> = {
+const SCOPE_CATEGORY_MAP: Record<string, string> = {
   "booth structure & walls": "Structure",
   "doors & hardware": "Structure",
   "countertops & cable management": "Furniture",
@@ -124,7 +85,7 @@ const SCOPE_CATEGORY_MAP: Record<string, CanonicalCategory> = {
   "other": "Other",
 };
 
-export function mapScopeCategoryToCanonical(scopeCategory: string | null | undefined): CanonicalCategory | null {
+export function mapScopeCategoryToCanonical(scopeCategory: string | null | undefined): string | null {
   if (!scopeCategory) return null;
   return SCOPE_CATEGORY_MAP[scopeCategory.trim().toLowerCase()] ?? null;
 }
@@ -134,7 +95,7 @@ export function mapScopeCategoryToCanonical(scopeCategory: string | null | undef
 // booth...") routinely don't, by catalog-match-service.ts's own design
 // (deliberately conservative matching). Order matters: first pattern that
 // matches wins, most-specific first.
-const DESCRIPTION_PATTERNS: { pattern: RegExp; category: CanonicalCategory }[] = [
+const DESCRIPTION_PATTERNS: { pattern: RegExp; category: string }[] = [
   { pattern: /\b(on[\s-]?site labor|installation|dismantle|labor)\b/i, category: "Labor" },
   { pattern: /\bshipping|drayage|freight\b/i, category: "Shipping" },
   { pattern: /\b(cad|engineering|project (coordination|management)|art (proofing|template|set ?up)|electrical layout)\b/i, category: "Professional Services" },
@@ -147,7 +108,7 @@ const DESCRIPTION_PATTERNS: { pattern: RegExp; category: CanonicalCategory }[] =
   { pattern: /\b(monitor|screen|media player|touchscreen|led)\b/i, category: "Audio/Visual" },
 ];
 
-export function inferCategoryFromDescription(description: string): CanonicalCategory | null {
+export function inferCategoryFromDescription(description: string): string | null {
   for (const { pattern, category } of DESCRIPTION_PATTERNS) {
     if (pattern.test(description)) return category;
   }
@@ -198,12 +159,20 @@ export function isCompoundAssemblyDescription(description: string): boolean {
 // null (not "Other") when nothing resolves -- "Other" is a
 // presentation-layer bucket for unresolved items, not a category to
 // persist as if it were a real determination.
-export function resolveLineItemCategory(input: {
-  explicit?: string | null;
-  catalogCategory?: string | null;
-  description: string;
-}): CanonicalCategory | null {
-  if (input.explicit && isCanonicalCategory(input.explicit)) return input.explicit;
+//
+// `categories` defaults to [] -- only needed to validate `explicit`
+// against the live catalog; callers that never pass `explicit` (e.g.
+// pricing-import-service.ts, which only ever supplies catalogCategory +
+// description) don't need to fetch/pass it.
+export function resolveLineItemCategory(
+  input: {
+    explicit?: string | null;
+    catalogCategory?: string | null;
+    description: string;
+  },
+  categories: Pick<Category, "name">[] = [],
+): string | null {
+  if (input.explicit && isKnownCategory(categories, input.explicit)) return input.explicit;
   if (isCompoundAssemblyDescription(input.description)) return "Custom Build";
   const fromCatalog = mapCatalogCategoryToCanonical(input.catalogCategory);
   if (fromCatalog) return fromCatalog;
