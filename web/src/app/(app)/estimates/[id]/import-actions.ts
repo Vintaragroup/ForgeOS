@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { commitPricingImport } from "@/lib/pricing-import-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
+import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
 import { buildEstimateFromAllDocuments } from "@/lib/ai/estimate-synthesis-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import { recomputeVersionTotals, updateLineItem } from "@/lib/estimate-service";
@@ -64,6 +65,26 @@ export async function commitScopeItemsAction(
   await commitScopeLineItems(versionId, documentId);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}`);
+}
+
+// Read-only advisory check, unlike every other action in this file --
+// never mutates a LineItem, so no recomputeVersionTotals call and no
+// restriction on a locked version (arguably most useful right before
+// generating a proposal). No redirect/query param needed, matching
+// updateLineItemUnitCostAction below: there's exactly one
+// coverageAnalysis blob per version, not one per document, so the page
+// just re-reads currentVersion.coverageAnalysis after revalidation.
+export async function runScopeCoverageAnalysisAction(estimateId: string, versionId: string) {
+  const user = await requireEstimateAccess(estimateId);
+  try {
+    await runScopeCoverageAnalysis(versionId, user.id);
+  } catch (err) {
+    if (err instanceof AiNotConfiguredError) {
+      throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable this.");
+    }
+    throw err;
+  }
+  revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function updateLineItemUnitCostAction(

@@ -31,8 +31,10 @@ import {
   commitScopeItemsAction,
   previewImportAction,
   proposeScopeItemsAction,
+  runScopeCoverageAnalysisAction,
 } from "./import-actions";
 import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
+import type { CoverageGap } from "@/lib/ai/scope-coverage-service";
 import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
@@ -216,6 +218,32 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const categoryAudit = currentVersion
     ? auditLineItemCategories(currentVersion.sections, categories)
     : { issues: [], isClean: true };
+
+  // Read-only advisory check of this version's line items against its
+  // scope documents (scope-coverage-service.ts) -- persisted on the
+  // version, not recomputed live, since it's an explicitly-triggered,
+  // deliberately expensive action, not something to re-run on every page
+  // load. Never gated on canImport: it doesn't mutate line items, and is
+  // arguably most useful on a locked version, right before generating a
+  // proposal.
+  const runCoverageAnalysisWithIds = currentVersion
+    ? runScopeCoverageAnalysisAction.bind(null, estimate.id, currentVersion.id)
+    : null;
+  const coverageAnalysis = currentVersion?.coverageAnalysis as unknown as {
+    generatedAt: string;
+    lineItemCount: number;
+    gaps: CoverageGap[];
+  } | null;
+  // Resolves each gap's documentId back to a real Document for
+  // citationHref + filename display -- coverageAnalysis only stores the
+  // id, not the full document. Dropped silently if that document was
+  // since deleted.
+  const coverageGapsWithDocs = coverageAnalysis
+    ? coverageAnalysis.gaps.flatMap((gap) => {
+        const doc = scopeDocuments.find((d) => d.id === gap.documentId);
+        return doc ? [{ ...gap, doc }] : [];
+      })
+    : [];
 
   return (
     <div className="flex flex-col gap-8">
@@ -404,6 +432,58 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           <form action={buildEstimateWithIds}>
             <Button>Build from all analyzed documents</Button>
           </form>
+        </Card>
+      )}
+
+      {currentVersion && scopeDocuments.length > 0 && runCoverageAnalysisWithIds && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Scope coverage
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Checks this version&apos;s line items against its scope documents for requirements that don&apos;t
+            appear to be priced anywhere -- advisory only, never adds line items automatically. Verify every
+            flag against the source before treating it as a real gap.
+          </p>
+          <form action={runCoverageAnalysisWithIds}>
+            <Button variant="secondary">
+              {coverageAnalysis ? "Re-run coverage analysis" : "Run coverage analysis"}
+            </Button>
+          </form>
+
+          {coverageAnalysis && (
+            <div className="mt-4 border-t border-neutral-200 pt-4">
+              <p className="mb-3 text-xs text-neutral-400">
+                Generated {new Date(coverageAnalysis.generatedAt).toLocaleString()}, based on{" "}
+                {coverageAnalysis.lineItemCount} line item(s) -- re-run after making changes to the estimate or
+                its documents.
+              </p>
+              {coverageGapsWithDocs.length === 0 ? (
+                <p className="text-sm text-neutral-500">No coverage gaps found.</p>
+              ) : (
+                <ul className="flex flex-col gap-2 text-sm">
+                  {coverageGapsWithDocs.map((gap, i) => {
+                    const href = citationHref(estimate.opportunityId, gap.doc, gap);
+                    return (
+                      <li key={i} className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2">
+                        <span className="flex items-start gap-2 text-amber-900">
+                          <span aria-hidden>⚠</span>
+                          {gap.requirement}
+                        </span>
+                        {href ? (
+                          <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
+                            {gap.doc.filename} →
+                          </Link>
+                        ) : (
+                          <span className="shrink-0 text-xs text-neutral-400">{gap.doc.filename}</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
         </Card>
       )}
 

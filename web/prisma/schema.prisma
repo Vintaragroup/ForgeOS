@@ -282,6 +282,7 @@ enum AiFeature {
   DRAWING_SUMMARY
   SCOPE_LINE_ITEMS
   CHAT
+  SCOPE_COVERAGE_ANALYSIS
 }
 
 // One row per OpenAI call, for case-based model routing's cost/token
@@ -676,6 +677,14 @@ model EstimateVersion {
 
   createdAt DateTime  @default(now())
   lockedAt  DateTime?
+
+  // Cache of the last "Run coverage analysis" result (scope-coverage-
+  // service.ts) -- { generatedAt, lineItemCount, gaps: CoverageGap[] }.
+  // Null until run once. Full-overwrite on every re-run, same posture as
+  // Document.proposedLineItems -- an advisory, explicitly-triggered check,
+  // not something that auto-invalidates when line items change (the UI
+  // shows generatedAt/lineItemCount so staleness is visible, not hidden).
+  coverageAnalysis Json?
 
   sections            EstimateSection[]
   options             Option[]
