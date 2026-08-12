@@ -173,16 +173,29 @@ export function LineItemRow({
               ▼
             </button>
           </form>
-          <button onClick={() => setIsEditing(true)} className="mr-2 text-xs text-neutral-700 hover:underline">
-            edit
+          <button
+            onClick={() => setIsEditing(true)}
+            className="mr-2 text-sm text-neutral-400 hover:text-neutral-700"
+            title="Edit"
+            aria-label="Edit line item"
+          >
+            ✎
           </button>
           {isDraft && (
             <form action={confirmAction} className="inline">
-              <button className="mr-2 text-xs text-neutral-700 hover:underline">confirm</button>
+              <button
+                className="mr-2 text-sm text-neutral-400 hover:text-green-600"
+                title="Confirm"
+                aria-label="Confirm draft line item"
+              >
+                ✓
+              </button>
             </form>
           )}
           <form action={deleteAction} className="inline">
-            <button className="text-xs text-red-500 hover:underline">remove</button>
+            <button className="text-sm text-neutral-400 hover:text-red-600" title="Remove" aria-label="Remove line item">
+              ✕
+            </button>
           </form>
         </td>
       )}
