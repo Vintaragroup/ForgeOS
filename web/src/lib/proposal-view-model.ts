@@ -10,7 +10,7 @@
 // of the same data shape.
 
 import type { Category, Prisma } from "@/generated/prisma/client";
-import { getCategoryChildren, isKnownCategory } from "@/lib/line-item-category";
+import { getCategoryChildren, isCompoundAssemblyDescription, isKnownCategory } from "@/lib/line-item-category";
 
 export interface ProposalViewLineItem {
   id: string;
@@ -25,12 +25,24 @@ export interface ProposalViewLineItem {
 
 export interface ProposalViewSection {
   name: string;
+  // The numbered booth/exhibit a pricing-schedule import split this
+  // section out for (e.g. "Section 402 - Booth 1 - Page 8") -- see
+  // pricing-import-service.ts's own groupLabel comment. Null for
+  // booth-independent sections (Add-Ons, Show Services, an AI-proposed
+  // scope section with no per-booth breakdown).
+  groupLabel: string | null;
   lineItems: ProposalViewLineItem[];
 }
 
 export interface AggregatedLineItem {
   key: string;
   description: string;
+  // The originating section's groupLabel, carried through only for a
+  // compound assembly line (see isCompoundAssemblyDescription) -- a real,
+  // one-off structure ("Complete Booth Build...") that a client needs to
+  // know is Booth 402 vs Booth 203, not a catalog SKU where the booth
+  // number is irrelevant once quantities are summed across the show.
+  boothLabel: string | null;
   qty: number;
   unit: string | null;
   totalCost: number;
@@ -78,7 +90,16 @@ export function aggregateByCategory(sections: ProposalViewSection[], categories:
         byCategory.set(category, bucket);
       }
 
-      const key = `${li.description} ${li.unit ?? ""}`;
+      // A compound "Complete X Build" assembly is a unique physical
+      // structure, never a catalog SKU repeated across booths -- two
+      // booths can share the exact same spec text (a real job had two
+      // identical "12' x 7' booth" camera booths at different unit
+      // costs), so merging them by description+unit like every other
+      // line would silently drop one booth's price into the other's qty.
+      // Keyed by the line item's own id instead, and carries the
+      // originating section's booth number through for display.
+      const isAssembly = isCompoundAssemblyDescription(li.description);
+      const key = isAssembly ? `assembly:${li.id}` : `${li.description} ${li.unit ?? ""}`;
       const existing = bucket.get(key);
       if (existing) {
         existing.qty += li.qty.toNumber();
@@ -89,6 +110,7 @@ export function aggregateByCategory(sections: ProposalViewSection[], categories:
         bucket.set(key, {
           key,
           description: li.description,
+          boothLabel: isAssembly ? section.groupLabel : null,
           qty: li.qty.toNumber(),
           unit: li.unit,
           totalCost: li.totalCost.toNumber(),
@@ -104,10 +126,34 @@ export function aggregateByCategory(sections: ProposalViewSection[], categories:
   // avoid a duplicate entry if it is.
   return categories
     .map((c) => c.name)
-    .map((name) => ({
-      name,
-      items: [...(byCategory.get(name)?.values() ?? [])].sort((a, b) => a.sortOrder - b.sortOrder),
-    }))
+    .map((name) => {
+      const items = [...(byCategory.get(name)?.values() ?? [])].sort((a, b) => a.sortOrder - b.sortOrder);
+
+      // Two physically-identical booths in the same numbered section (a
+      // real job had two "12' x 7'" camera booths under "Section 203")
+      // share both the exact same boothLabel and description -- otherwise
+      // indistinguishable rows to a client reading the PDF. An ordinal is
+      // the only way to tell them apart, same reasoning as the
+      // estimate-editing page's groupLineItemsByBoothInstance.
+      const dupeCounts = new Map<string, number>();
+      for (const item of items) {
+        if (!item.boothLabel) continue;
+        const dupeKey = `${item.boothLabel}::${item.description}`;
+        dupeCounts.set(dupeKey, (dupeCounts.get(dupeKey) ?? 0) + 1);
+      }
+      const seen = new Map<string, number>();
+      for (const item of items) {
+        if (!item.boothLabel) continue;
+        const dupeKey = `${item.boothLabel}::${item.description}`;
+        const total = dupeCounts.get(dupeKey)!;
+        if (total <= 1) continue;
+        const index = (seen.get(dupeKey) ?? 0) + 1;
+        seen.set(dupeKey, index);
+        item.boothLabel = `${item.boothLabel} — Booth ${index} of ${total}`;
+      }
+
+      return { name, items };
+    })
     .filter((bucket) => bucket.items.length > 0);
 }
 

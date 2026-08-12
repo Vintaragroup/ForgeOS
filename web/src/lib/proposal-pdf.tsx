@@ -150,6 +150,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   colDescription: { width: "48%" },
+  // A compound assembly's booth number (see AggregatedLineItem.boothLabel)
+  // reads as the item's actual name -- the raw spec text underneath it is
+  // supporting detail, not the primary label a client scans for.
+  itemBoothLabel: { fontSize: 8.5, fontWeight: 700, color: BRAND.navy, marginBottom: 1 },
   colQty: { width: "14%", textAlign: "right" },
   colUnit: { width: "13%", textAlign: "right" },
   colTotal: { width: "25%", textAlign: "right" },
@@ -339,7 +343,10 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     <>
       {items.map((li) => (
         <View key={li.key} style={styles.tableRow} wrap={false}>
-          <Text style={styles.colDescription}>{li.description}</Text>
+          <View style={styles.colDescription}>
+            {li.boothLabel && <Text style={styles.itemBoothLabel}>{li.boothLabel}</Text>}
+            <Text>{li.description}</Text>
+          </View>
           <Text style={styles.colQty}>{formatQtyNumber(li.qty)}</Text>
           <Text style={styles.colUnit}>{li.unit ?? ""}</Text>
           <Text style={{ ...styles.colTotal, ...(li.isClientOwned ? styles.clientOwnedLabel : {}) }}>

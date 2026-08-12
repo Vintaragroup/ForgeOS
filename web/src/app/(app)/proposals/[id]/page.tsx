@@ -40,7 +40,10 @@ function formatQtyNumber(n: number): string {
 function ItemRow({ item }: { item: AggregatedLineItem }) {
   return (
     <tr className="border-t border-neutral-100">
-      <td className="px-2 py-1.5">{item.description}</td>
+      <td className="px-2 py-1.5">
+        {item.boothLabel && <div className="font-medium text-brand-navy">{item.boothLabel}</div>}
+        {item.description}
+      </td>
       <td className="px-2 py-1.5 text-right">{formatQtyNumber(item.qty)}</td>
       <td className="px-2 py-1.5 text-right text-neutral-500">{item.unit ?? ""}</td>
       <td className={`px-2 py-1.5 text-right ${item.isClientOwned ? "italic text-neutral-500" : ""}`}>
