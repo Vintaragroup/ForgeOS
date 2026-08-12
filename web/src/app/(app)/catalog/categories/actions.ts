@@ -30,16 +30,28 @@ export async function updateCategory(id: string, formData: FormData) {
   const parentId = emptyToNull(formData.get("parentId"));
   if (parentId === id) throw new Error("A category cannot be its own parent");
 
-  await db.category.update({
-    where: { id },
-    data: {
-      name,
-      parentId,
-      sortOrder,
-      isLumpSum: formData.get("isLumpSum") === "on",
-      isShowService: formData.get("isShowService") === "on",
-    },
-  });
+  // LineItem.category is a plain string matched against Category.name (see
+  // proposal-view-model.ts's isKnownCategory), not a foreign key -- a
+  // rename with no cascade orphans every existing LineItem still holding
+  // the old name, silently dropping it into the "Other" fallback bucket on
+  // every proposal. A real job's "Custom Build" -> "Custom Build / Rental"
+  // rename did exactly this to 18 line items before this cascade existed.
+  const existing = await db.category.findUniqueOrThrow({ where: { id } });
+  await db.$transaction([
+    db.category.update({
+      where: { id },
+      data: {
+        name,
+        parentId,
+        sortOrder,
+        isLumpSum: formData.get("isLumpSum") === "on",
+        isShowService: formData.get("isShowService") === "on",
+      },
+    }),
+    ...(existing.name !== name
+      ? [db.lineItem.updateMany({ where: { category: existing.name }, data: { category: name } })]
+      : []),
+  ]);
 
   revalidatePath("/catalog/categories");
   redirect("/catalog/categories");
