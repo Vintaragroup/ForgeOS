@@ -3,7 +3,13 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { getDocument, getDocumentBytes } from "@/lib/document-service";
-import { renderDocx, renderSpreadsheet, highlightQuote, findSpreadsheetMatch } from "@/lib/document-view-service";
+import {
+  renderDocx,
+  renderSpreadsheet,
+  highlightQuote,
+  findSpreadsheetMatch,
+  renderHighlightedPdfPage,
+} from "@/lib/document-view-service";
 import { DOCX_MIME, PDF_MIME, XLSX_MIME } from "@/lib/ai/text-extraction";
 import { getThreadMessages } from "@/lib/chat-service";
 import { linkifyDocumentMentions } from "@/lib/citation";
@@ -42,13 +48,15 @@ export default async function DocumentViewPage(
 
   const rawUrl = `/opportunities/${id}/documents/${documentId}`;
   // A Project Brief citation links here with ?page=N&q=<quote> for a PDF --
-  // #page=N is genuine, well-supported native browser PDF viewer behavior.
-  // #search=<text> was an attempt to also highlight the quote inside the
-  // embedded PDF itself using Chromium's PDF viewer open parameters; that
-  // didn't hold up in practice (unverifiable from this environment, and
-  // confirmed not working), so it's dropped rather than left in as a
-  // silent no-op. The ReferencedExcerpt callout below is what actually
-  // shows the highlighted text now, for every file type uniformly.
+  // #page=N is genuine, well-supported native browser PDF viewer behavior,
+  // used for the full iframe below. Actually highlighting the quote
+  // inside that embedded viewer isn't possible -- an earlier #search=
+  // open-parameter attempt was confirmed not working, and the viewer
+  // itself isn't inspectable to try further. HighlightedPdfPage below
+  // solves this a different way: it renders just the cited page as its
+  // own image with the match actually marked on it (document-view-
+  // service.ts's renderHighlightedPdfPage), shown above the iframe rather
+  // than trying to control the iframe's own viewer.
   const inlineUrl = `${rawUrl}?inline=1${pageParam ? `#page=${pageParam}` : ""}`;
 
   return (
@@ -61,6 +69,10 @@ export default async function DocumentViewPage(
       />
 
       {quoteParam && <ReferencedExcerpt quote={quoteParam} />}
+
+      {document.mimeType === PDF_MIME && pageParam && quoteParam && (
+        <HighlightedPdfPage documentId={documentId} page={Number(pageParam)} quote={quoteParam} filename={document.filename} />
+      )}
 
       {document.mimeType === PDF_MIME ? (
         <Card className="overflow-hidden">
@@ -110,6 +122,38 @@ function ReferencedExcerpt({ quote }: { quote: string }) {
       <p className="text-sm text-neutral-800">
         <mark style={{ background: "#fddfb1" }}>{quote}</mark>
       </p>
+    </Card>
+  );
+}
+
+// Renders below ReferencedExcerpt as a companion, not a replacement --
+// this is the actual fix for "I have to search for it myself" (see
+// renderHighlightedPdfPage's own header comment for why the embedded PDF
+// viewer itself can't be made to highlight). Renders nothing when no
+// confident match is found -- ReferencedExcerpt and the full iframe below
+// are unaffected either way, so a failed match degrades gracefully rather
+// than showing a broken or empty box.
+async function HighlightedPdfPage({
+  documentId,
+  page,
+  quote,
+  filename,
+}: {
+  documentId: string;
+  page: number;
+  quote: string;
+  filename: string;
+}) {
+  const { bytes } = await getDocumentBytes(documentId);
+  const dataUrl = await renderHighlightedPdfPage(bytes, page, quote);
+  if (!dataUrl) return null;
+  return (
+    <Card className="overflow-hidden p-6">
+      <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-amber-700">
+        Highlighted in document (page {page})
+      </p>
+      {/* eslint-disable-next-line @next/next/no-img-element -- generated data URL, not a static/optimizable asset */}
+      <img src={dataUrl} alt={`${filename}, page ${page}, with citation highlighted`} className="max-w-full" />
     </Card>
   );
 }
