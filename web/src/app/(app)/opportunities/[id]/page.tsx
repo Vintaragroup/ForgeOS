@@ -12,6 +12,8 @@ import {
 } from "../actions";
 import { buildEstimateFromDocumentsAction, convertToEstimate, convertToProject } from "../convert-actions";
 import { analyzeDocumentAction, deleteDocumentAction, updateDocumentTypeAction, uploadDocumentAction } from "./documents/actions";
+import { runClarificationQuestionsAnalysisAction } from "./ai-actions";
+import type { ClarificationQuestion } from "@/lib/ai/clarification-questions-service";
 import { listDocuments } from "@/lib/document-service";
 import { getThreadMessages } from "@/lib/chat-service";
 import {
@@ -531,6 +533,40 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     ? buildEstimateFromDocumentsAction.bind(null, opportunity.id, pricingScheduleDoc.id)
     : null;
 
+  // Same document-eligibility rule as clarification-questions-service.ts's
+  // getScopeDocuments (scope-document-context.ts) -- pricing schedules and
+  // drawings never have real scope text to review.
+  const hasScopeDocuments = documents.some(
+    (d) => d.extractionStatus === "COMPLETE" && !["PRICING_SCHEDULE", "DRAWING"].includes(d.documentType),
+  );
+  const runClarificationQuestionsWithId = runClarificationQuestionsAnalysisAction.bind(null, opportunity.id);
+  const clarificationQuestions = opportunity.clarificationQuestions as unknown as {
+    generatedAt: string;
+    questions: ClarificationQuestion[];
+  } | null;
+  // Resolves each question's documentId back to a real Document for
+  // citationHref + filename display -- clarificationQuestions only stores
+  // the id, not the full document. Dropped silently if that document was
+  // since deleted.
+  const clarificationQuestionsWithDocs = clarificationQuestions
+    ? clarificationQuestions.questions.flatMap((q) => {
+        const doc = documents.find((d) => d.id === q.documentId);
+        return doc ? [{ ...q, doc }] : [];
+      })
+    : [];
+  // Best-effort: surfaces the submission-questions deadline next to the
+  // trigger button without duplicating ProjectBriefCard's own (more
+  // complete) key-date extraction below -- dateType has no distinct
+  // "bidder questions" value (see document-summary-service.ts), so this
+  // matches on label text within the DEADLINE group, same as a human
+  // scanning the list would.
+  const analyzedForDeadline = documents.filter(
+    (d) => d.extractionStatus === "COMPLETE" && d.extractedSummary,
+  ) as unknown as { extractedSummary: DocumentSummary }[];
+  const bidderQuestionsDeadline = analyzedForDeadline
+    .flatMap((d) => d.extractedSummary.keyDates)
+    .find((kd) => (kd.dateType ?? "MILESTONE") === "DEADLINE" && /question/i.test(kd.label));
+
   return (
     <div className="flex flex-col gap-8">
       <PageHeader
@@ -788,6 +824,69 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       </CollapsibleSection>
 
       <ProjectBriefCard opportunityId={opportunity.id} documents={documents} />
+
+      {hasScopeDocuments && (
+        <CollapsibleSection title="Clarification questions">
+          <p className="mb-4 text-sm text-neutral-500">
+            Reviews this RFP&apos;s scope documents for genuine ambiguities or gaps worth asking the client
+            about — calibrated to a seasoned professional&apos;s judgment, not just anything that looks
+            unclear. Read each one before sending; verify against the source.
+            {bidderQuestionsDeadline && (
+              <>
+                {" "}
+                Bidder questions are due <strong>{bidderQuestionsDeadline.date}</strong>.
+              </>
+            )}
+          </p>
+          <form action={runClarificationQuestionsWithId}>
+            <Button variant="secondary">
+              {clarificationQuestions ? "Re-generate clarification questions" : "Generate clarification questions"}
+            </Button>
+          </form>
+
+          {clarificationQuestions && (
+            <div className="mt-4 border-t border-neutral-200 pt-4">
+              <p className="mb-3 text-xs text-neutral-400">
+                Generated {new Date(clarificationQuestions.generatedAt).toLocaleString()} — re-run after the
+                documents change.
+              </p>
+              {clarificationQuestionsWithDocs.length === 0 ? (
+                <p className="text-sm text-neutral-500">No genuine gaps found — this RFP looks complete.</p>
+              ) : (
+                <ul className="flex flex-col gap-3 text-sm">
+                  {clarificationQuestionsWithDocs.map((q, i) => {
+                    const href = citationHref(
+                      opportunity.id,
+                      q.doc,
+                      q,
+                      `/opportunities/${opportunity.id}#clarification-question-${i}`,
+                    );
+                    return (
+                      <li
+                        key={i}
+                        id={`clarification-question-${i}`}
+                        className="flex flex-col gap-1 rounded-md bg-amber-50 px-3 py-2"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-amber-900">{q.question}</span>
+                          {href ? (
+                            <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
+                              {q.doc.filename} →
+                            </Link>
+                          ) : (
+                            <span className="shrink-0 text-xs text-neutral-400">{q.doc.filename}</span>
+                          )}
+                        </div>
+                        <span className="text-xs text-amber-700">Why: {q.rationale}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
+        </CollapsibleSection>
+      )}
 
       {opportunity.stage === "WON" && (
         <CollapsibleSection title="Project">

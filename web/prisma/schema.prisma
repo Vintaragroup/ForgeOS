@@ -219,6 +219,13 @@ model Opportunity {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  // Cache of the last "Generate clarification questions" run
+  // (clarification-questions-service.ts) -- { generatedAt, questions:
+  // ClarificationQuestion[] }. Null until run once. Same posture as
+  // EstimateVersion.coverageAnalysis: explicitly-triggered, deliberately
+  // expensive, full-overwrite on re-run rather than live-recomputed.
+  clarificationQuestions Json?
+
   stageEvents StageChangeEvent[]
   estimates   Estimate[]
   projects    Project[]
@@ -283,6 +290,7 @@ enum AiFeature {
   SCOPE_LINE_ITEMS
   CHAT
   SCOPE_COVERAGE_ANALYSIS
+  RFP_CLARIFICATION_QUESTIONS
 }
 
 // One row per OpenAI call, for case-based model routing's cost/token

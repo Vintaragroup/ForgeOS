@@ -14,6 +14,7 @@ import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MI
 import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { getDocumentBytes } from "@/lib/document-service";
+import { getScopeDocuments, buildScopeDocumentsBlock } from "@/lib/ai/scope-document-context";
 
 export interface CoverageGap {
   requirement: string;
@@ -80,21 +81,6 @@ For each gap:
 - sourceQuote: a short verbatim quote from the document proving the document actually asked for this -- an exact substring, never a paraphrase.
 - documentFilename: the exact filename (from the "Document:" header) this quote came from.`;
 
-// Equal split across documents, not priority-ranked like chat-context-
-// service.ts -- unlike chat's open-ended corpus, this is a bounded, opt-in
-// set (a job's own scope documents, typically a handful), so equal
-// division is sufficient; a job with an unusually large number of scope
-// documents could see individual documents clipped, which is a known,
-// visible-in-testing simplification, not a silent failure mode.
-const MAX_TOTAL_INPUT_CHARS = 60_000;
-
-function buildDocumentsBlock(documents: { filename: string; extractedText: string }[]): string {
-  const perDocBudget = Math.floor(MAX_TOTAL_INPUT_CHARS / documents.length);
-  return documents
-    .map((d) => `Document: ${d.filename}\n\n${d.extractedText.slice(0, perDocBudget)}`)
-    .join("\n\n---\n\n");
-}
-
 function buildLineItemsBlock(
   sections: { name: string; lineItems: { description: string; qty: Prisma.Decimal; unit: string | null; category: string | null }[] }[],
 ): string {
@@ -155,20 +141,7 @@ export async function runScopeCoverageAnalysis(estimateVersionId: string, userId
     },
   });
 
-  // Same document set as the estimate page's Risk & Compliance Flags /
-  // "Propose items from Scope of Work" -- pricing-schedule rows already
-  // become line items mechanically (pricing-import-service.ts), and
-  // drawings go through a separate vision pipeline, so neither belongs in
-  // a text-based coverage comparison.
-  const scopeDocuments = await db.document.findMany({
-    where: {
-      opportunityId: version.estimate.opportunityId,
-      deletedAt: null,
-      extractionStatus: "COMPLETE",
-      documentType: { notIn: ["PRICING_SCHEDULE", "DRAWING"] },
-    },
-    orderBy: { createdAt: "desc" },
-  });
+  const scopeDocuments = await getScopeDocuments(version.estimate.opportunityId);
   if (scopeDocuments.length === 0) {
     throw new Error("No analyzed scope documents yet -- click Analyze on a document from the Opportunity page first.");
   }
@@ -179,7 +152,7 @@ export async function runScopeCoverageAnalysis(estimateVersionId: string, userId
 
   const allLineItems = version.sections.flatMap((s) => s.lineItems);
   const lineItemsBlock = buildLineItemsBlock(version.sections);
-  const documentsBlock = buildDocumentsBlock(
+  const documentsBlock = buildScopeDocumentsBlock(
     scopeDocuments.map((d) => ({ filename: d.filename, extractedText: d.extractedText! })),
   );
 
