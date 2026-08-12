@@ -24,9 +24,19 @@ export default async function DocumentViewPage(
   props: PageProps<"/opportunities/[id]/documents/[documentId]/view">,
 ) {
   const { id, documentId } = await props.params;
-  const { page, q } = await props.searchParams;
+  const { page, q, returnTo } = await props.searchParams;
   const pageParam = Array.isArray(page) ? page[0] : page;
   const quoteParam = Array.isArray(q) ? q[0] : q;
+  const returnToParam = Array.isArray(returnTo) ? returnTo[0] : returnTo;
+  // Every citation link (citation.ts's citationHref) carries returnTo --
+  // the exact page + section the user clicked from -- so "back" lands
+  // there instead of the generic Documents list. Guarded to a real
+  // same-origin relative path (starts with "/", not "//") since this is
+  // an attacker-editable query param; anything else falls back to
+  // today's unchanged default.
+  const hasValidReturnTo = !!returnToParam && returnToParam.startsWith("/") && !returnToParam.startsWith("//");
+  const backTarget = hasValidReturnTo ? returnToParam! : `/opportunities/${id}`;
+  const backLabelText = hasValidReturnTo ? "Back" : "Documents";
 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -62,8 +72,8 @@ export default async function DocumentViewPage(
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        backHref={`/opportunities/${id}`}
-        backLabel="Documents"
+        backHref={backTarget}
+        backLabel={backLabelText}
         title={document.filename}
         action={<LinkButton href={rawUrl} variant="secondary">Download</LinkButton>}
       />

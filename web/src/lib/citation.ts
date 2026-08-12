@@ -10,25 +10,40 @@
 // XLSX cell highlight (?q=<quote>#hl, same fragment convention as DOCX).
 import { DOCX_MIME, PDF_MIME, XLSX_MIME } from "@/lib/ai/text-extraction";
 
+// `returnTo` is an optional relative URL (path + hash, e.g.
+// `/estimates/abc123#line-item-xyz`) the document viewer's Back link
+// should return to instead of its generic Opportunity-documents fallback
+// -- see view/page.tsx. Every call site passes its own current page plus
+// a hash anchor at the specific row/section the citation came from, so
+// "back" lands exactly where the user was, not just on the right page.
 export function citationHref(
   opportunityId: string,
   doc: { id: string; mimeType: string },
   fact: { sourceQuote: string; pageNumber: number | null },
+  returnTo?: string,
 ): string | null {
   const base = `/opportunities/${opportunityId}/documents/${doc.id}/view`;
+  // Built manually with encodeURIComponent, not URLSearchParams -- its
+  // .toString() encodes spaces as "+", not "%20", which would silently
+  // change every existing citation link's exact encoding.
+  const params: string[] = [];
+  let hash = "";
+
   if (doc.mimeType === PDF_MIME && fact.pageNumber) {
-    const q = fact.sourceQuote ? `&q=${encodeURIComponent(fact.sourceQuote)}` : "";
-    return `${base}?page=${fact.pageNumber}${q}`;
+    params.push(`page=${fact.pageNumber}`);
+    if (fact.sourceQuote) params.push(`q=${encodeURIComponent(fact.sourceQuote)}`);
+  } else if ((doc.mimeType === DOCX_MIME || doc.mimeType === XLSX_MIME) && fact.sourceQuote) {
+    params.push(`q=${encodeURIComponent(fact.sourceQuote)}`);
+    hash = "#hl";
+  } else if (doc.mimeType.startsWith("image/") && fact.pageNumber) {
+    // A raw-image drawing upload (see drawing-summary-service.ts) has no
+    // page/quote concept -- just jump to the document itself.
+  } else {
+    return null;
   }
-  if ((doc.mimeType === DOCX_MIME || doc.mimeType === XLSX_MIME) && fact.sourceQuote) {
-    return `${base}?q=${encodeURIComponent(fact.sourceQuote)}#hl`;
-  }
-  // A raw-image drawing upload (see drawing-summary-service.ts) has no
-  // page/quote concept -- just jump to the document itself.
-  if (doc.mimeType.startsWith("image/") && fact.pageNumber) {
-    return base;
-  }
-  return null;
+
+  if (returnTo) params.push(`returnTo=${encodeURIComponent(returnTo)}`);
+  return `${base}${params.length > 0 ? `?${params.join("&")}` : ""}${hash}`;
 }
 
 // Free-text dates ("August 31, 2026") mostly parse via the Date

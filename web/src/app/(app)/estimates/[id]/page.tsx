@@ -335,9 +335,13 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           </p>
           <ul className="flex flex-col gap-2 text-sm">
             {riskFlags.map((flag, i) => {
-              const href = citationHref(estimate.opportunityId, flag.doc, flag);
+              const href = citationHref(estimate.opportunityId, flag.doc, flag, `/estimates/${estimate.id}#risk-flag-${i}`);
               return (
-                <li key={i} className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2">
+                <li
+                  key={i}
+                  id={`risk-flag-${i}`}
+                  className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
+                >
                   <span className="flex items-start gap-2 text-amber-900">
                     <span aria-hidden>⚠</span>
                     {flag.text}
@@ -463,9 +467,18 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
               ) : (
                 <ul className="flex flex-col gap-2 text-sm">
                   {coverageGapsWithDocs.map((gap, i) => {
-                    const href = citationHref(estimate.opportunityId, gap.doc, gap);
+                    const href = citationHref(
+                      estimate.opportunityId,
+                      gap.doc,
+                      gap,
+                      `/estimates/${estimate.id}#coverage-gap-${i}`,
+                    );
                     return (
-                      <li key={i} className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2">
+                      <li
+                        key={i}
+                        id={`coverage-gap-${i}`}
+                        className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
+                      >
                         <span className="flex items-start gap-2 text-amber-900">
                           <span aria-hidden>⚠</span>
                           {gap.requirement}
@@ -864,10 +877,12 @@ function LineItemsTable({
           // existed -- no silent/fake link either way.
           const sourceHref =
             li.document && li.sourceQuote
-              ? citationHref(opportunityId, li.document, {
-                  sourceQuote: li.sourceQuote,
-                  pageNumber: li.sourcePageNumber,
-                })
+              ? citationHref(
+                  opportunityId,
+                  li.document,
+                  { sourceQuote: li.sourceQuote, pageNumber: li.sourcePageNumber },
+                  `/estimates/${estimateId}#line-item-${li.id}`,
+                )
               : null;
           return (
             <LineItemRow

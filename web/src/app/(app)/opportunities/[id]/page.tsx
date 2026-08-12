@@ -238,12 +238,21 @@ function ProjectBriefCard({
                 </div>
                 <ul className="flex flex-col gap-1 text-sm">
                   {group.items.map((kd, i) => (
-                    <li key={i} className="flex items-center justify-between gap-3">
+                    <li
+                      key={i}
+                      id={`key-date-${group.dateType}-${i}`}
+                      className="flex items-center justify-between gap-3"
+                    >
                       <span>
                         {kd.label} <span className="text-neutral-500">— {kd.date}</span>
                       </span>
                       <CitationLink
-                        href={citationHref(opportunityId, kd.doc, kd)}
+                        href={citationHref(
+                          opportunityId,
+                          kd.doc,
+                          kd,
+                          `/opportunities/${opportunityId}#key-date-${group.dateType}-${i}`,
+                        )}
                         source={kd.doc.filename}
                         page={kd.pageNumber}
                       />
@@ -261,13 +270,13 @@ function ProjectBriefCard({
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Scope</h3>
           <ul className="flex flex-col gap-1.5 text-sm">
             {scopeSummary.map((s, i) => (
-              <li key={i} className="flex items-start justify-between gap-3">
+              <li key={i} id={`scope-summary-${i}`} className="flex items-start justify-between gap-3">
                 <span className="flex gap-2">
                   <span className="text-neutral-300">•</span>
                   <span>{s.text}</span>
                 </span>
                 <CitationLink
-                  href={citationHref(opportunityId, s.doc, s)}
+                  href={citationHref(opportunityId, s.doc, s, `/opportunities/${opportunityId}#scope-summary-${i}`)}
                   source={s.doc.filename}
                   page={s.pageNumber}
                 />
@@ -284,13 +293,13 @@ function ProjectBriefCard({
           </h3>
           <ul className="flex flex-col gap-1.5 text-sm">
             {riskFlags.map((r, i) => (
-              <li key={i} className="flex items-start justify-between gap-3 text-amber-900">
+              <li key={i} id={`brief-risk-flag-${i}`} className="flex items-start justify-between gap-3 text-amber-900">
                 <span className="flex gap-2">
                   <span>⚠</span>
                   <span>{r.text}</span>
                 </span>
                 <CitationLink
-                  href={citationHref(opportunityId, r.doc, r)}
+                  href={citationHref(opportunityId, r.doc, r, `/opportunities/${opportunityId}#brief-risk-flag-${i}`)}
                   source={r.doc.filename}
                   page={r.pageNumber}
                 />
@@ -407,12 +416,21 @@ function OpportunityFieldSuggestions({
       </h3>
       <ul className="flex flex-col gap-2">
         {suggestions.map((s) => (
-          <li key={s.field} className="flex items-center justify-between gap-3 rounded-md bg-amber-50 px-3 py-2 text-sm">
+          <li
+            key={s.field}
+            id={`suggested-field-${s.field}`}
+            className="flex items-center justify-between gap-3 rounded-md bg-amber-50 px-3 py-2 text-sm"
+          >
             <span>
               <span className="font-medium text-amber-900">{s.label}:</span>{" "}
               <span className="text-amber-900">{s.value}</span>{" "}
               <CitationLink
-                href={citationHref(opportunityId, s.doc, s)}
+                href={citationHref(
+                  opportunityId,
+                  s.doc,
+                  s,
+                  `/opportunities/${opportunityId}#suggested-field-${s.field}`,
+                )}
                 source={s.doc.filename}
                 page={s.pageNumber}
               />
