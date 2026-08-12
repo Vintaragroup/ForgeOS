@@ -72,7 +72,7 @@ export function LineItemRow({
   if (isEditing) {
     return (
       <tr className="border-t border-neutral-100 bg-neutral-50">
-        <td colSpan={7} className="py-2">
+        <td colSpan={7} className="px-2 py-2">
           <form
             action={async (formData) => {
               await updateAction(formData);
@@ -121,7 +121,7 @@ export function LineItemRow({
 
   return (
     <tr className="border-t border-neutral-100">
-      <td className="py-1.5">
+      <td className="px-2 py-1.5">
         {description}
         {isDraft && (
           <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">draft</span>
@@ -132,19 +132,19 @@ export function LineItemRow({
           </Link>
         )}
       </td>
-      <td className="py-1.5">{department}</td>
-      <td className="py-1.5">{lineType}</td>
-      <td className="py-1.5 text-right">
+      <td className="px-2 py-1.5">{department}</td>
+      <td className="px-2 py-1.5">{lineType}</td>
+      <td className="px-2 py-1.5 text-right">
         {qty}
         {unit && <span className="ml-1 text-neutral-400">{unit}</span>}
       </td>
-      <td className="py-1.5 text-right">${Number(unitCost).toFixed(2)}</td>
-      <td className="py-1.5 text-right">{totalCostDisplay}</td>
+      <td className="px-2 py-1.5 text-right">${Number(unitCost).toFixed(2)}</td>
+      <td className="px-2 py-1.5 text-right">{totalCostDisplay}</td>
       {isLocked && actualCostDisplay !== null && varianceDisplay !== null && (
         <>
-          <td className="py-1.5 text-right">{actualCostDisplay}</td>
+          <td className="px-2 py-1.5 text-right">{actualCostDisplay}</td>
           <td
-            className={`py-1.5 text-right ${
+            className={`px-2 py-1.5 text-right ${
               varianceTone === "up" ? "text-red-600" : varianceTone === "down" ? "text-green-600" : ""
             }`}
           >
@@ -154,49 +154,51 @@ export function LineItemRow({
         </>
       )}
       {!isLocked && (
-        <td className="py-1.5 text-right whitespace-nowrap">
-          <form action={moveUpAction} className="inline">
-            <button
-              disabled={isFirst}
-              className="mr-1 text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
-              title="Move up"
-            >
-              ▲
-            </button>
-          </form>
-          <form action={moveDownAction} className="inline">
-            <button
-              disabled={isLast}
-              className="mr-2 text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
-              title="Move down"
-            >
-              ▼
-            </button>
-          </form>
-          <button
-            onClick={() => setIsEditing(true)}
-            className="mr-2 text-sm text-neutral-400 hover:text-neutral-700"
-            title="Edit"
-            aria-label="Edit line item"
-          >
-            ✎
-          </button>
-          {isDraft && (
-            <form action={confirmAction} className="inline">
+        <td className="px-2 py-1.5">
+          <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+            <form action={moveUpAction} className="inline">
               <button
-                className="mr-2 text-sm text-neutral-400 hover:text-green-600"
-                title="Confirm"
-                aria-label="Confirm draft line item"
+                disabled={isFirst}
+                className="text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
+                title="Move up"
               >
-                ✓
+                ▲
               </button>
             </form>
-          )}
-          <form action={deleteAction} className="inline">
-            <button className="text-sm text-neutral-400 hover:text-red-600" title="Remove" aria-label="Remove line item">
-              ✕
+            <form action={moveDownAction} className="inline">
+              <button
+                disabled={isLast}
+                className="text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
+                title="Move down"
+              >
+                ▼
+              </button>
+            </form>
+            <button
+              onClick={() => setIsEditing(true)}
+              className="text-sm text-neutral-400 hover:text-neutral-700"
+              title="Edit"
+              aria-label="Edit line item"
+            >
+              ✎
             </button>
-          </form>
+            {isDraft && (
+              <form action={confirmAction} className="inline">
+                <button
+                  className="text-sm text-neutral-400 hover:text-green-600"
+                  title="Confirm"
+                  aria-label="Confirm draft line item"
+                >
+                  ✓
+                </button>
+              </form>
+            )}
+            <form action={deleteAction} className="inline">
+              <button className="text-sm text-neutral-400 hover:text-red-600" title="Remove" aria-label="Remove line item">
+                ✕
+              </button>
+            </form>
+          </div>
         </td>
       )}
     </tr>

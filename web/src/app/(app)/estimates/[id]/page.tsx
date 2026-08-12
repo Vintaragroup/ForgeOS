@@ -689,19 +689,19 @@ function LineItemsTable({
     <table className="w-full min-w-[38rem] text-sm">
       <thead>
         <tr className="text-left text-neutral-500">
-          <th className="pb-1 font-normal">Description</th>
-          <th className="pb-1 font-normal">Dept</th>
-          <th className="pb-1 font-normal">Type</th>
-          <th className="pb-1 text-right font-normal">Qty</th>
-          <th className="pb-1 text-right font-normal">Unit cost</th>
-          <th className="pb-1 text-right font-normal">Est. total</th>
+          <th className="px-2 pb-1.5 font-normal">Description</th>
+          <th className="px-2 pb-1.5 font-normal">Dept</th>
+          <th className="px-2 pb-1.5 font-normal">Type</th>
+          <th className="px-2 pb-1.5 text-right font-normal">Qty</th>
+          <th className="px-2 pb-1.5 text-right font-normal">Unit cost</th>
+          <th className="px-2 pb-1.5 text-right font-normal">Est. total</th>
           {version.isLocked && (
             <>
-              <th className="pb-1 text-right font-normal">Actual</th>
-              <th className="pb-1 text-right font-normal">Variance</th>
+              <th className="px-2 pb-1.5 text-right font-normal">Actual</th>
+              <th className="px-2 pb-1.5 text-right font-normal">Variance</th>
             </>
           )}
-          {!version.isLocked && <th></th>}
+          {!version.isLocked && <th className="px-2 pb-1.5"></th>}
         </tr>
       </thead>
       <tbody>
