@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { RateLimitError } from "openai";
 import { commitPricingImport } from "@/lib/pricing-import-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
 import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
@@ -81,6 +82,14 @@ export async function runScopeCoverageAnalysisAction(estimateId: string, version
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {
       throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable this.");
+    }
+    // Same shared scope-document-context.ts budget and ADVANCED_MODEL call
+    // as opportunities/[id]/ai-actions.ts's clarification-questions
+    // action -- equally exposed to this account's real 30,000 TPM org
+    // rate limit on a large multi-document RFP, so it gets the identical
+    // graceful handling.
+    if (err instanceof RateLimitError) {
+      throw new Error("OpenAI's rate limit was hit for this request -- wait a minute and try again.");
     }
     throw err;
   }

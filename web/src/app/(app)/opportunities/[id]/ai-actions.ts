@@ -6,6 +6,7 @@
 // plain-CRUD actions file.
 
 import { revalidatePath } from "next/cache";
+import { RateLimitError } from "openai";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
 import { runClarificationQuestionsAnalysis } from "@/lib/ai/clarification-questions-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
@@ -22,6 +23,14 @@ export async function runClarificationQuestionsAnalysisAction(opportunityId: str
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {
       throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable this.");
+    }
+    // Confirmed real, not theoretical: a large multi-document RFP can
+    // genuinely exceed this account's OpenAI org-level rate limit for a
+    // single request (see scope-document-context.ts's own comment on the
+    // 429 this hit in practice) -- surfaced as a clear, retryable message
+    // instead of a raw SDK error/500.
+    if (err instanceof RateLimitError) {
+      throw new Error("OpenAI's rate limit was hit for this request -- wait a minute and try again.");
     }
     throw err;
   }

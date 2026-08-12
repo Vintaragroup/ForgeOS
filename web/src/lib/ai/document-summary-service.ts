@@ -223,10 +223,16 @@ Also extract extractedFields: onboarding facts about the job itself (booth numbe
 Also classify suggestedDocumentType: what this document's content actually IS, independent of how it happens to be filed right now -- a vendor services agreement is a CONTRACT even if it was uploaded as a generic RFP attachment.`;
 
 // Truncated, not chunked -- this app has no RAG/embedding infra (see
-// chat-context-service.ts's same budget approach), and a single document's
-// text staying under this is true for every real sample in
-// data/RFP/superbowl.
-const MAX_INPUT_CHARS = 60_000;
+// chat-context-service.ts's same budget approach). This used to be
+// 60_000 on the (wrong) assumption that every real document stays under
+// it -- a real Super Bowl 2026 Vendor Services Agreement is actually
+// 84,125 characters, so the old cap silently dropped the last ~29% of
+// that contract from extractedText forever (every future reader --
+// Risk Flags, Key Dates, Scope Summary, chat, scope-coverage-service.ts,
+// clarification-questions-service.ts -- inherited the gap with no
+// indication anything was missing). BASIC_MODEL is cheap enough that a
+// much larger ceiling costs a fraction of a cent extra per document.
+const MAX_INPUT_CHARS = 150_000;
 
 export async function summarizeDocument(documentId: string, userId: string | null = null) {
   const { document, bytes } = await getDocumentBytes(documentId);
