@@ -554,6 +554,16 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         return doc ? [{ ...q, doc }] : [];
       })
     : [];
+  // Split, not filtered -- a single AI pass silently dropping every
+  // candidate it wasn't fully confident about turned out to be the real
+  // bug (see clarification-questions-service.ts's own comment): about
+  // half of what got dropped in a real audit was genuinely worth a
+  // human's look, not noise. WORTH_REVIEWING candidates are still shown,
+  // just in a clearly secondary section -- the estimator, who has real
+  // contract context the model doesn't, makes the final call instead of
+  // a single unsupervised model guess.
+  const recommendedQuestions = clarificationQuestionsWithDocs.filter((q) => q.confidence === "RECOMMENDED");
+  const worthReviewingQuestions = clarificationQuestionsWithDocs.filter((q) => q.confidence !== "RECOMMENDED");
   // Best-effort: surfaces the submission-questions deadline next to the
   // trigger button without duplicating ProjectBriefCard's own (more
   // complete) key-date extraction below -- dateType has no distinct
@@ -566,6 +576,39 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   const bidderQuestionsDeadline = analyzedForDeadline
     .flatMap((d) => d.extractedSummary.keyDates)
     .find((kd) => (kd.dateType ?? "MILESTONE") === "DEADLINE" && /question/i.test(kd.label));
+
+  // Shared between the recommended and worth-reviewing lists below --
+  // same row shape, only the color/emphasis differs by section, not the
+  // structure, so it's one function rather than two near-duplicate maps.
+  // opportunityId captured as a local, not read as opportunity.id inside
+  // the closure below -- TS narrowing from the earlier `if (!opportunity)
+  // notFound()` guard doesn't cross into a nested function body.
+  const opportunityId = opportunity.id;
+  function renderClarificationQuestion(
+    q: (typeof clarificationQuestionsWithDocs)[number],
+    idPrefix: string,
+    tone: "amber" | "neutral",
+  ) {
+    const href = citationHref(opportunityId, q.doc, q, `/opportunities/${opportunityId}#${idPrefix}`);
+    const bg = tone === "amber" ? "bg-amber-50" : "bg-neutral-50";
+    const text = tone === "amber" ? "text-amber-900" : "text-neutral-800";
+    const subtext = tone === "amber" ? "text-amber-700" : "text-neutral-500";
+    return (
+      <li key={idPrefix} id={idPrefix} className={`flex flex-col gap-1 rounded-md ${bg} px-3 py-2`}>
+        <div className="flex items-start justify-between gap-3">
+          <span className={text}>{q.question}</span>
+          {href ? (
+            <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
+              {q.doc.filename} →
+            </Link>
+          ) : (
+            <span className="shrink-0 text-xs text-neutral-400">{q.doc.filename}</span>
+          )}
+        </div>
+        <span className={`text-xs ${subtext}`}>Why: {q.rationale}</span>
+      </li>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-8">
@@ -853,35 +896,28 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
               {clarificationQuestionsWithDocs.length === 0 ? (
                 <p className="text-sm text-neutral-500">No genuine gaps found — this RFP looks complete.</p>
               ) : (
-                <ul className="flex flex-col gap-3 text-sm">
-                  {clarificationQuestionsWithDocs.map((q, i) => {
-                    const href = citationHref(
-                      opportunity.id,
-                      q.doc,
-                      q,
-                      `/opportunities/${opportunity.id}#clarification-question-${i}`,
-                    );
-                    return (
-                      <li
-                        key={i}
-                        id={`clarification-question-${i}`}
-                        className="flex flex-col gap-1 rounded-md bg-amber-50 px-3 py-2"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-amber-900">{q.question}</span>
-                          {href ? (
-                            <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
-                              {q.doc.filename} →
-                            </Link>
-                          ) : (
-                            <span className="shrink-0 text-xs text-neutral-400">{q.doc.filename}</span>
-                          )}
-                        </div>
-                        <span className="text-xs text-amber-700">Why: {q.rationale}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <>
+                  {recommendedQuestions.length > 0 && (
+                    <ul className="flex flex-col gap-3 text-sm">
+                      {recommendedQuestions.map((q, i) =>
+                        renderClarificationQuestion(q, `clarification-question-recommended-${i}`, "amber"),
+                      )}
+                    </ul>
+                  )}
+                  {worthReviewingQuestions.length > 0 && (
+                    <div className={recommendedQuestions.length > 0 ? "mt-4" : undefined}>
+                      <p className="mb-2 text-xs text-neutral-500">
+                        Worth reviewing — plausible, but less certain than the above. Use your own judgment on
+                        whether these are worth sending.
+                      </p>
+                      <ul className="flex flex-col gap-3 text-sm">
+                        {worthReviewingQuestions.map((q, i) =>
+                          renderClarificationQuestion(q, `clarification-question-review-${i}`, "neutral"),
+                        )}
+                      </ul>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}

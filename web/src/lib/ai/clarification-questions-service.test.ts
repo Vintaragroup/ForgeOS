@@ -102,12 +102,14 @@ describe("resolveClarificationQuestions", () => {
         rationale: "Matters for real",
         sourceQuote: "installation labor",
         documentFilename: document.filename,
+        confidence: "RECOMMENDED",
       },
       {
         question: "Hallucinated question",
         rationale: "n/a",
         sourceQuote: "anything",
         documentFilename: "Nonexistent Document.pdf",
+        confidence: "RECOMMENDED",
       },
     ];
     const questions = await resolveClarificationQuestions(rawQuestions, [document]);
@@ -128,6 +130,7 @@ describe("resolveClarificationQuestions", () => {
           rationale: "Ambiguous boundary between client and contractor labor.",
           sourceQuote: "installation labor",
           documentFilename: document.filename,
+          confidence: "WORTH_REVIEWING",
         },
       ],
       [document],
@@ -136,6 +139,7 @@ describe("resolveClarificationQuestions", () => {
     expect(questions[0].sourceQuote).toBe("installation labor");
     expect(questions[0].rationale).toBe("Ambiguous boundary between client and contractor labor.");
     expect(questions[0].pageNumber).toBeNull();
+    expect(questions[0].confidence).toBe("WORTH_REVIEWING");
   });
 
   it("computes a real page number for a PDF source, from the PDF's own per-page text", async () => {
@@ -174,6 +178,7 @@ describe("resolveClarificationQuestions", () => {
           rationale: "Real rationale",
           sourceQuote: realQuote,
           documentFilename: "RFP.pdf",
+          confidence: "RECOMMENDED",
         },
       ],
       [updated],
@@ -192,6 +197,7 @@ describe("CLARIFICATION_SCHEMA", () => {
       "rationale",
       "sourceQuote",
       "documentFilename",
+      "confidence",
     ]);
     expect(CLARIFICATION_SCHEMA.schema.properties.questions.items.additionalProperties).toBe(false);
   });
