@@ -5,7 +5,7 @@ import {
   CLARIFICATION_SCHEMA,
   resolveClarificationQuestions,
   runClarificationQuestionsAnalysis,
-  type RawClarificationQuestion,
+  type RawClarificationFinding,
 } from "@/lib/ai/clarification-questions-service";
 
 afterEach(async () => {
@@ -92,47 +92,57 @@ describe("runClarificationQuestionsAnalysis", () => {
 });
 
 describe("resolveClarificationQuestions", () => {
-  it("drops a question whose documentFilename doesn't match any document actually sent -- a hallucination guard", async () => {
+  it("skips an EXCLUDE verdict entirely, regardless of question/rationale being present", async () => {
     const { opportunity } = await makeOpportunity();
     const document = await makeScopeDocument(opportunity.id, "Provide booth construction and installation labor.");
+    const candidates = [{ id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor" }];
 
-    const rawQuestions: RawClarificationQuestion[] = [
-      {
-        question: "Real question",
-        rationale: "Matters for real",
-        sourceQuote: "installation labor",
-        documentFilename: document.filename,
-        confidence: "RECOMMENDED",
-      },
-      {
-        question: "Hallucinated question",
-        rationale: "n/a",
-        sourceQuote: "anything",
-        documentFilename: "Nonexistent Document.pdf",
-        confidence: "RECOMMENDED",
-      },
-    ];
-    const questions = await resolveClarificationQuestions(rawQuestions, [document]);
+    const questions = await resolveClarificationQuestions(
+      [{ candidateId: "G1", verdict: "EXCLUDE", question: null, rationale: null }],
+      candidates,
+      [],
+      [document],
+    );
+
+    expect(questions).toHaveLength(0);
+  });
+
+  it("drops a candidateId that doesn't match any given candidate -- a hallucination guard", async () => {
+    const { opportunity } = await makeOpportunity();
+    const document = await makeScopeDocument(opportunity.id, "Provide booth construction and installation labor.");
+    const candidates = [{ id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor" }];
+
+    const questions = await resolveClarificationQuestions(
+      [
+        { candidateId: "G1", verdict: "RECOMMENDED", question: "Real question", rationale: "Matters for real" },
+        { candidateId: "G99", verdict: "RECOMMENDED", question: "Hallucinated question", rationale: "n/a" },
+      ],
+      candidates,
+      [],
+      [document],
+    );
 
     expect(questions).toHaveLength(1);
     expect(questions[0].question).toBe("Real question");
     expect(questions[0].documentId).toBe(document.id);
   });
 
-  it("resolves the quote against real extracted text, carries the rationale through, and leaves pageNumber null for a non-PDF source", async () => {
+  it("resolves a candidate's quote from server-known candidate data, carries confidence and rationale through, leaves pageNumber null for a non-PDF source", async () => {
     const { opportunity } = await makeOpportunity();
     const document = await makeScopeDocument(opportunity.id, "Provide booth construction and installation labor.");
+    const candidates = [{ id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor" }];
 
     const questions = await resolveClarificationQuestions(
       [
         {
+          candidateId: "G1",
+          verdict: "WORTH_REVIEWING",
           question: "What is the installation labor scope exactly?",
           rationale: "Ambiguous boundary between client and contractor labor.",
-          sourceQuote: "installation labor",
-          documentFilename: document.filename,
-          confidence: "WORTH_REVIEWING",
         },
       ],
+      candidates,
+      [],
       [document],
     );
 
@@ -170,35 +180,80 @@ describe("resolveClarificationQuestions", () => {
       data: { extractionStatus: "COMPLETE", extractedText: pages.join("\n") },
     });
     const updated = await db.document.findUniqueOrThrow({ where: { id: document.id } });
+    const candidates = [{ id: "G1", filename: "RFP.pdf", text: "Some gap", sourceQuote: realQuote }];
 
     const questions = await resolveClarificationQuestions(
-      [
-        {
-          question: "Real question",
-          rationale: "Real rationale",
-          sourceQuote: realQuote,
-          documentFilename: "RFP.pdf",
-          confidence: "RECOMMENDED",
-        },
-      ],
+      [{ candidateId: "G1", verdict: "RECOMMENDED", question: "Real question", rationale: "Real rationale" }],
+      candidates,
+      [],
       [updated],
     );
 
     expect(questions[0].pageNumber).toBe(targetPageIndex + 1);
     expect(questions[0].sourceQuote).toBe(realQuote);
   });
+
+  it("also resolves additionalFindings (freeform, cross-document contradictions), independent of candidateReview", async () => {
+    const { opportunity } = await makeOpportunity();
+    const document = await makeScopeDocument(opportunity.id, "Provide booth construction and installation labor.");
+
+    const findings: RawClarificationFinding[] = [
+      {
+        question: "Document A says 20x20, Document B says 10x30 -- which is correct?",
+        rationale: "Contradiction between two documents.",
+        sourceQuote: "installation labor",
+        documentFilename: document.filename,
+        confidence: "RECOMMENDED",
+      },
+    ];
+    const questions = await resolveClarificationQuestions([], [], findings, [document]);
+
+    expect(questions).toHaveLength(1);
+    expect(questions[0].confidence).toBe("RECOMMENDED");
+    expect(questions[0].sourceQuote).toBe("installation labor");
+  });
+
+  it("drops an additionalFinding whose documentFilename doesn't match any document actually sent", async () => {
+    const { opportunity } = await makeOpportunity();
+    const document = await makeScopeDocument(opportunity.id, "Provide booth construction and installation labor.");
+
+    const findings: RawClarificationFinding[] = [
+      {
+        question: "Hallucinated finding",
+        rationale: "n/a",
+        sourceQuote: "anything",
+        documentFilename: "Nonexistent Document.pdf",
+        confidence: "RECOMMENDED",
+      },
+    ];
+    const questions = await resolveClarificationQuestions([], [], findings, [document]);
+
+    expect(questions).toHaveLength(0);
+  });
 });
 
 describe("CLARIFICATION_SCHEMA", () => {
-  it("is a strict JSON schema with every question field required -- proves the shape is actually wired into the request, not just documented in the type", () => {
+  it("is a strict JSON schema requiring a verdict for every candidate field -- proves the checklist shape is actually wired into the request, not just documented in the type", () => {
     expect(CLARIFICATION_SCHEMA.strict).toBe(true);
-    expect(CLARIFICATION_SCHEMA.schema.properties.questions.items.required).toEqual([
+    expect(CLARIFICATION_SCHEMA.schema.properties.candidateReview.items.required).toEqual([
+      "candidateId",
+      "verdict",
+      "question",
+      "rationale",
+    ]);
+    expect(CLARIFICATION_SCHEMA.schema.properties.candidateReview.items.properties.verdict.enum).toEqual([
+      "EXCLUDE",
+      "RECOMMENDED",
+      "WORTH_REVIEWING",
+    ]);
+    expect(CLARIFICATION_SCHEMA.schema.properties.additionalFindings.items.required).toEqual([
       "question",
       "rationale",
       "sourceQuote",
       "documentFilename",
       "confidence",
     ]);
-    expect(CLARIFICATION_SCHEMA.schema.properties.questions.items.additionalProperties).toBe(false);
+    expect(CLARIFICATION_SCHEMA.schema.properties.candidateReview.items.additionalProperties).toBe(false);
+    expect(CLARIFICATION_SCHEMA.schema.properties.additionalFindings.items.additionalProperties).toBe(false);
   });
 });
