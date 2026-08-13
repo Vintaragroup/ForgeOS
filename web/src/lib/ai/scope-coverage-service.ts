@@ -167,6 +167,11 @@ export async function runScopeCoverageAnalysis(estimateVersionId: string, userId
 
   const completion = await client.chat.completions.create({
     model: ADVANCED_MODEL,
+    // Low, not zero -- structured extraction/judgment, not creative
+    // writing, so there's no upside to the API default's high randomness
+    // here. See clarification-questions-service.ts's own comment for the
+    // measured run-to-run variance this addresses.
+    temperature: 0.2,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       {

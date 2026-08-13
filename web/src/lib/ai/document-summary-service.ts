@@ -294,6 +294,15 @@ export async function summarizeDocument(documentId: string, userId: string | nul
   try {
     const completion = await client.chat.completions.create({
       model: BASIC_MODEL,
+      // Low, not zero -- this is exhaustive extraction (every key date,
+      // scope bullet, candidate gap actually present), not creative
+      // writing, so the API default's high randomness only costs
+      // completeness here. See clarification-questions-service.ts's own
+      // comment for the measured run-to-run variance this addresses --
+      // candidateGaps in particular feeds a downstream feature that's
+      // sensitive to a document's extraction being thorough every time,
+      // not just on a lucky sample.
+      temperature: 0.2,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: `Document: ${document.filename}\n\n${extraction.text.slice(0, MAX_INPUT_CHARS)}` },

@@ -98,22 +98,26 @@ export const CLARIFICATION_SCHEMA = {
 // and matters even more here -- a bad question costs a client's
 // confidence, a worse outcome than a missed one costs a second look at
 // the RFP.
-const SYSTEM_PROMPT = `You are a senior, experienced event/exhibit-industry estimator reviewing bidder-question candidates before submitting them to the client. Below, per document, is a candidate list of gaps or ambiguities already noted by a first-pass reviewer who read that ONE document in full -- each candidate includes a short verbatim quote showing where it came from. Your job is cross-document judgment the first pass couldn't do alone: read every document's candidates together, then decide which candidates actually rise to a genuine bidder question -- never restate anything ANY of the documents already answers (a candidate that looked open in one document is often answered in another), and never ask a generic procurement/administrative question with no bearing on scope, price, or execution.
+const SYSTEM_PROMPT = `You are a senior, experienced event/exhibit-industry estimator reviewing bidder-question candidates before submitting them to the client. You're given two compact views of the same document set, built by a first-pass reviewer who read each document in full:
+1. SCOPE SUMMARY BY DOCUMENT -- a bulleted description of what each document states, with a verbatim quote per bullet. Use this to cross-check facts BETWEEN documents: a genuine contradiction (different numbers, dates, or requirements for the same thing stated in two different documents) is a real gap worth a question even if neither document's own candidate list below flagged it -- the first pass only read one document at a time and couldn't see this, so finding it is now your job, not something to expect pre-flagged.
+2. CANDIDATE GAPS BY DOCUMENT -- specific ambiguities the first-pass reviewer already flagged within that ONE document alone (a missing unit, an unresolved responsibility, an internal inconsistency).
 
-Propose a question only when the candidates (read together, across all documents) leave a real, specific detail unresolved that a professional would need pinned down before confidently pricing or executing the work -- not just anything that was flagged as a candidate. This covers (not limited to):
-- A contradiction between two sections or documents (different numbers, dates, or requirements for the same thing).
+Your job is the cross-document judgment neither input alone provides: read everything together, then decide what actually rises to a genuine bidder question -- never restate anything ANY of the documents already answers (a candidate that looked open in one document is often answered, or contradicted, in another), and never ask a generic procurement/administrative question with no bearing on scope, price, or execution.
+
+Propose a question only when the material above (read together, across all documents) leaves a real, specific detail unresolved that a professional would need pinned down before confidently pricing or executing the work. This covers (not limited to):
+- A contradiction between two sections or documents (different numbers, dates, or requirements for the same thing) -- found by comparing the scope summary bullets across documents, not just from a pre-flagged candidate.
 - A missing technical parameter, quantity, or specification that materially affects pricing or risk (e.g. "temperature-controlled" with no target range, a load rating with no units, a compliance requirement with no referenced standard/code).
 - An unresolved responsibility -- unclear whether the client or the contractor owns a component, a permit, a piece of installation/removal work, or a logistics requirement (disposal, storage, security, etc.).
 - A real discrepancy between the drawings/bid set and the written scope of work.
 - Any other concrete aspect of the project that lacks the detail needed to bid or execute it with confidence.
 
-Never propose a question about: something already answered anywhere in the provided documents, or a purely administrative/procedural detail with no bearing on scope, price, or execution (submission format, who to contact, deadline logistics). When genuinely unsure whether something counts as a real gap versus routine administrative boilerplate, lean toward including it if it could plausibly change a number in the bid -- err toward the side that respects the reader's judgment to disregard a borderline one, not toward silently dropping a real gap. An empty list is still the correct, valuable answer for a well-written RFP with no real gaps -- not a failure to find something. A false alarm here costs a reviewer's confidence in this feature (and, if sent, the client's confidence in the bidder) more than a missed one costs a second look at the RFP.
+Never propose a question about: something already answered anywhere in the provided material, a blank/unfilled field in what is clearly an unexecuted contract template (those get negotiated after award, not during bidding), or a purely administrative/procedural detail with no bearing on scope, price, or execution (submission format, who to contact, deadline logistics). When genuinely unsure whether something counts as a real gap versus routine administrative boilerplate, lean toward including it if it could plausibly change a number in the bid -- err toward the side that respects the reader's judgment to disregard a borderline one, not toward silently dropping a real gap. An empty list is still the correct, valuable answer for a well-written RFP with no real gaps -- not a failure to find something. A false alarm here costs a reviewer's confidence in this feature (and, if sent, the client's confidence in the bidder) more than a missed one costs a second look at the RFP.
 
 For each question:
 - question: the exact text to send to the client -- professional, specific, never revealing that an AI wrote it.
 - rationale: one sentence, for the estimator's own use only, explaining why this matters.
-- sourceQuote: copy the exact quote text given with the candidate you're using -- do not alter, shorten, or paraphrase it.
-- documentFilename: the exact filename (from the "Document:" header) that candidate came from.`;
+- sourceQuote: copy the exact quote text given alongside the bullet you're using -- do not alter, shorten, or paraphrase it.
+- documentFilename: the exact filename (from the "Document:" header) that bullet came from.`;
 
 // Separated from runClarificationQuestionsAnalysis below so it's directly
 // testable without a live OpenAI call -- same reasoning as
@@ -163,12 +167,25 @@ export async function runClarificationQuestionsAnalysis(opportunityId: string, u
   // proposeLineItemsFromScope / runScopeCoverageAnalysis.
   const client = getOpenAiClient();
 
-  // Compact candidate-gap bullets, not raw text -- each was extracted by
-  // document-summary-service.ts's cheap model reading that document's
-  // FULL text at Analyze time (see its own candidateGaps field). A
-  // document analyzed before that field existed has none yet; re-analyze
-  // it to backfill rather than falling back to raw text here.
-  const documentsBlock = buildBulletsBlock(
+  // Compact bullets, not raw text -- both were extracted by
+  // document-summary-service.ts's cheap model reading each document's
+  // FULL text at Analyze time (see its own scopeSummary/candidateGaps
+  // fields). candidateGaps alone can only catch a gap ONE document
+  // flagged about itself -- a genuine cross-document contradiction
+  // (different numbers/dates for the same requirement in two documents)
+  // was never visible to that per-document first pass, so scopeSummary
+  // is included too, giving this cross-document reasoning step enough
+  // material to actually compare documents against each other, not just
+  // curate a pre-flagged list. A document analyzed before these fields
+  // existed has none yet; re-analyze it to backfill rather than falling
+  // back to raw text here.
+  const scopeSummaryBlock = buildBulletsBlock(
+    scopeDocuments.map((d) => ({
+      filename: d.filename,
+      bullets: (d.extractedSummary as unknown as DocumentSummary | null)?.scopeSummary ?? [],
+    })),
+  );
+  const candidateGapsBlock = buildBulletsBlock(
     scopeDocuments.map((d) => ({
       filename: d.filename,
       bullets: (d.extractedSummary as unknown as DocumentSummary | null)?.candidateGaps ?? [],
@@ -177,9 +194,19 @@ export async function runClarificationQuestionsAnalysis(opportunityId: string, u
 
   const completion = await client.chat.completions.create({
     model: ADVANCED_MODEL,
+    // Low, not zero -- this is a structured-extraction/judgment task, not
+    // creative writing, so there's no upside to the API default's high
+    // randomness here. Confirmed the variance was real: three identical
+    // re-runs against the same real RFP produced 5, then 4, then 3
+    // questions with no input change. A low temperature won't make every
+    // run identical, but cuts the sampling noise that was doing that.
+    temperature: 0.2,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: `CANDIDATE GAPS BY DOCUMENT:\n\n${documentsBlock}` },
+      {
+        role: "user",
+        content: `SCOPE SUMMARY BY DOCUMENT:\n\n${scopeSummaryBlock}\n\nCANDIDATE GAPS BY DOCUMENT:\n\n${candidateGapsBlock}`,
+      },
     ],
     response_format: { type: "json_schema", json_schema: CLARIFICATION_SCHEMA },
   });
