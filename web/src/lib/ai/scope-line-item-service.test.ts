@@ -4,8 +4,8 @@ import { db } from "@/lib/db";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import {
+  buildProposalSchema,
   commitScopeLineItems,
-  PROPOSAL_SCHEMA,
   proposeLineItemsFromScope,
   SCOPE_CATEGORIES,
   type ProposedLineItem,
@@ -227,8 +227,9 @@ describe("commitScopeLineItems", () => {
     // Proves the enum is actually wired into the request schema (strict:
     // true), not just documented in the type -- a category value outside
     // this list fails OpenAI's schema validation before it ever comes back.
-    expect(PROPOSAL_SCHEMA.strict).toBe(true);
-    expect(PROPOSAL_SCHEMA.schema.properties.items.items.properties.category.enum).toEqual(SCOPE_CATEGORIES);
+    const schema = buildProposalSchema([]);
+    expect(schema.strict).toBe(true);
+    expect(schema.schema.properties.items.items.properties.category.enum).toEqual(SCOPE_CATEGORIES);
   });
 
   it("groups items into one section when two proposal runs land on the same fixed category, even with different descriptions", async () => {

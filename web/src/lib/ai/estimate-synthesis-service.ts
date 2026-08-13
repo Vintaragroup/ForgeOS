@@ -37,8 +37,23 @@ export async function buildEstimateFromAllDocuments(
   const imported: BuildEstimateResult["imported"] = [];
   const skipped: BuildEstimateResult["skipped"] = [];
 
+  // Which real project (Estimate) this run is building for -- documents
+  // manually tagged to a DIFFERENT project's estimate are excluded below
+  // entirely; untagged/shared documents stay in and get filtered at the
+  // item level instead (proposeLineItemsFromScope/commitScopeLineItems).
+  // Without this, calling this function for a second Estimate on the same
+  // Opportunity reprocessed the exact same document set already used for
+  // the first, producing near-identical, cross-project-contaminated
+  // results -- a real bug confirmed live against the Full Swing
+  // Baseball/PGA Orlando opportunity.
+  const { estimateId: targetEstimateId } = await db.estimateVersion.findUniqueOrThrow({
+    where: { id: estimateVersionId },
+    select: { estimateId: true },
+  });
+  const notOtherProject = { OR: [{ estimateId: null }, { estimateId: targetEstimateId }] };
+
   const pricingDocs = await db.document.findMany({
-    where: { opportunityId, deletedAt: null, documentType: "PRICING_SCHEDULE" },
+    where: { opportunityId, deletedAt: null, documentType: "PRICING_SCHEDULE", ...notOtherProject },
     orderBy: { createdAt: "asc" },
   });
   for (const doc of pricingDocs) {
@@ -62,6 +77,7 @@ export async function buildEstimateFromAllDocuments(
       opportunityId,
       deletedAt: null,
       documentType: { notIn: ["PRICING_SCHEDULE", "DRAWING"] },
+      ...notOtherProject,
     },
     orderBy: { createdAt: "asc" },
   });

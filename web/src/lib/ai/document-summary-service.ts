@@ -166,7 +166,7 @@ const SOURCE_QUOTE_DESCRIPTION =
 // once two projects exist, so multi-project opportunities skip
 // auto-populating them entirely instead (see opportunity-service.ts's
 // applyExtractedFieldsToOpportunity guard).
-function withProjectField<
+export function withProjectField<
   P extends Record<string, unknown>,
   R extends readonly string[],
 >(itemSchema: { properties: P; required: R }, projectNames: string[]): { properties: P; required: readonly string[] } {
