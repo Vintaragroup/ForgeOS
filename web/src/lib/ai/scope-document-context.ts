@@ -11,24 +11,64 @@
 import { db } from "@/lib/db";
 
 // Pricing-schedule rows already become line items mechanically
-// (pricing-import-service.ts), and drawings go through a separate vision
-// pipeline with no extractedText at all -- neither belongs in a text-based
-// scope analysis. Same document set as the estimate page's Risk &
-// Compliance Flags / "Propose items from Scope of Work". Deliberately
-// narrower than ProjectBriefCard's own document filter (opportunities/
-// [id]/page.tsx), which intentionally includes drawings for its
-// Key Dates/Risk Flags display -- reusing that broader filter here would
-// crash on a null extractedText.
+// (pricing-import-service.ts) -- the only type that never belongs in a
+// scope analysis. DRAWING and MEETING_NOTES used to be excluded too
+// (drawings have no extractedText; meeting notes didn't exist as a
+// type), but both now produce the same compact scopeSummary/candidateGaps
+// bullets every other document type does (drawing-summary-service.ts's
+// vision pipeline, meeting-notes-summary-service.ts's transcript
+// pipeline) -- neither Scope Coverage nor Clarification Questions needs
+// raw extractedText anymore (see buildBulletsBlock below), so there's no
+// more reason to exclude them. resolveClarificationQuestions/
+// resolveCoverageGaps already tolerate a null extractedText gracefully
+// for drawing-sourced facts; the same tolerance now also covers meeting-
+// notes facts.
 export async function getScopeDocuments(opportunityId: string) {
   return db.document.findMany({
     where: {
       opportunityId,
       deletedAt: null,
       extractionStatus: "COMPLETE",
-      documentType: { notIn: ["PRICING_SCHEDULE", "DRAWING"] },
+      documentType: { notIn: ["PRICING_SCHEDULE"] },
     },
     orderBy: { createdAt: "desc" },
   });
+}
+
+// The multi-project building block: real Estimate id+name pairs for an
+// Opportunity, but ONLY when there are 2+ of them -- a single-estimate
+// Opportunity (the overwhelming common case) gets an empty array back,
+// which every extraction schema treats as "don't ask for project
+// classification at all," not "classify against one project." Keeping
+// this check here (not "return whatever exists") is what makes the
+// whole multi-project feature opt-in and free for every other
+// Opportunity in the app.
+export interface ProjectContext {
+  estimates: { id: string; name: string }[];
+}
+
+export async function getProjectContext(opportunityId: string): Promise<ProjectContext> {
+  const estimates = await db.estimate.findMany({
+    where: { opportunityId, deletedAt: null, name: { not: null } },
+    select: { id: true, name: true },
+  });
+  const named = estimates.filter((e): e is { id: string; name: string } => e.name !== null);
+  return { estimates: named.length >= 2 ? named : [] };
+}
+
+// Resolves a model-returned project label back to a real Estimate id --
+// never trusted raw, same "resolve against known truth" discipline this
+// session already applies to hallucinated filenames and candidate ids
+// (see clarification-questions-service.ts). A label that doesn't match
+// any real Estimate name (hallucinated, garbled, or the literal
+// "SHARED") falls back to null -- shared/unclassified -- rather than
+// erroring, so a bad classification degrades safely instead of losing
+// the fact entirely.
+export function resolveProjectTag(rawProject: string | null | undefined, context: ProjectContext): string | null {
+  if (!rawProject || context.estimates.length === 0) return null;
+  const normalized = rawProject.trim().toLowerCase();
+  const match = context.estimates.find((e) => e.name.trim().toLowerCase() === normalized);
+  return match?.id ?? null;
 }
 
 // A previous version of this file sent raw extractedText here, bounded
@@ -53,6 +93,23 @@ export async function getScopeDocuments(opportunityId: string) {
 export interface SummaryBullet {
   text: string;
   sourceQuote: string;
+  // Optional -- an older stored summary or a single-estimate Opportunity
+  // simply won't have this. undefined and null both mean the same thing
+  // (shared/unclassified) wherever this is read.
+  estimateId?: string | null;
+}
+
+// Keeps a bullet if it's shared/unclassified OR tagged to the estimate
+// actually being analyzed -- drops anything tagged to the OTHER
+// project. Applied before buildBulletsBlock for any estimate-scoped
+// caller (Scope Coverage, which is inherently per-estimate already); a
+// caller with no particular estimate in mind (Clarification Questions,
+// which stays opportunity-wide) skips this and sees every bullet.
+export function filterBulletsForEstimate<T extends { estimateId?: string | null }>(
+  bullets: T[],
+  targetEstimateId: string,
+): T[] {
+  return bullets.filter((b) => b.estimateId == null || b.estimateId === targetEstimateId);
 }
 
 export function buildBulletsBlock(documents: { filename: string; bullets: SummaryBullet[] }[]): string {

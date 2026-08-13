@@ -14,7 +14,7 @@ import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MI
 import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { getDocumentBytes } from "@/lib/document-service";
-import { getScopeDocuments, buildBulletsBlock } from "@/lib/ai/scope-document-context";
+import { getScopeDocuments, buildBulletsBlock, filterBulletsForEstimate } from "@/lib/ai/scope-document-context";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 
 export interface CoverageGap {
@@ -158,10 +158,20 @@ export async function runScopeCoverageAnalysis(estimateVersionId: string, userId
   // FULL text at Analyze time (see its own scopeSummary field). A
   // document analyzed before that field existed has none yet; re-analyze
   // it to backfill rather than falling back to raw text here.
+  //
+  // filterBulletsForEstimate drops any bullet tagged to a DIFFERENT
+  // project's Estimate -- only meaningful once the Opportunity has 2+
+  // named Estimates (see scope-document-context.ts's getProjectContext);
+  // otherwise every bullet is untagged (estimateId undefined) and passes
+  // through unchanged, so this is a no-op for the common single-estimate
+  // case.
   const documentsBlock = buildBulletsBlock(
     scopeDocuments.map((d) => ({
       filename: d.filename,
-      bullets: (d.extractedSummary as unknown as DocumentSummary | null)?.scopeSummary ?? [],
+      bullets: filterBulletsForEstimate(
+        (d.extractedSummary as unknown as DocumentSummary | null)?.scopeSummary ?? [],
+        version.estimateId,
+      ),
     })),
   );
 

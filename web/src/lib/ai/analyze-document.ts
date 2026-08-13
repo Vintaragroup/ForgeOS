@@ -1,12 +1,15 @@
 // Type-based dispatch point for "Analyze" -- the one place that decides
-// whether a document gets the text summarizer or the vision-based drawing
-// summarizer, so document-summary-service.ts and drawing-summary-service.ts
-// stay one-directional (neither imports the other) and every call site
-// (documents/actions.ts today, anything else later) branches the same way.
+// whether a document gets the text summarizer, the vision-based drawing
+// summarizer, or the meeting-notes summarizer, so document-summary-
+// service.ts, drawing-summary-service.ts, and meeting-notes-summary-
+// service.ts stay one-directional (none imports another) and every call
+// site (documents/actions.ts today, anything else later) branches the
+// same way.
 
 import { db } from "@/lib/db";
 import { summarizeDocument, type DocumentSummary } from "@/lib/ai/document-summary-service";
 import { summarizeDrawing } from "@/lib/ai/drawing-summary-service";
+import { summarizeMeetingNotes } from "@/lib/ai/meeting-notes-summary-service";
 import { applyExtractedFieldsToOpportunity } from "@/lib/opportunity-service";
 
 export async function analyzeDocument(documentId: string, userId: string | null = null) {
@@ -15,7 +18,11 @@ export async function analyzeDocument(documentId: string, userId: string | null 
     select: { documentType: true, opportunityId: true },
   });
   const result =
-    documentType === "DRAWING" ? await summarizeDrawing(documentId, userId) : await summarizeDocument(documentId, userId);
+    documentType === "DRAWING"
+      ? await summarizeDrawing(documentId, userId)
+      : documentType === "MEETING_NOTES"
+        ? await summarizeMeetingNotes(documentId, userId)
+        : await summarizeDocument(documentId, userId);
 
   // Only summarizeDocument (never summarizeDrawing) ever populates
   // extractedFields -- see document-summary-service.ts. A failed/

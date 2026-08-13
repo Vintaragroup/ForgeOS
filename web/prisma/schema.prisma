@@ -374,6 +374,13 @@ enum DocumentType {
   DRAWING
   CONTRACT
   SCHEDULE
+  // Meeting transcripts/recaps/emails -- distinct from RFP/SCOPE_OF_WORK
+  // because the content genuinely needs different handling: a transcript
+  // mixes real scope facts with off-topic chatter (internal tooling
+  // discussion, mentions of an unrelated client/project) that a generic
+  // summarizer would happily extract as if it were scope. See
+  // meeting-notes-summary-service.ts.
+  MEETING_NOTES
   OTHER
 }
 
@@ -397,6 +404,18 @@ model Document {
   sizeBytes    Int
   storageKey   String
   documentType DocumentType
+
+  // Optional manual hint for a multi-project Opportunity (two or more
+  // Estimates) -- set on a document that's cleanly single-project (e.g.
+  // a rendering package for one specific exhibit) so its facts don't
+  // need AI classification at all: every extracted item inherits this
+  // tag directly. Left null for a document that genuinely discusses
+  // multiple projects (a meeting transcript) -- those get classified at
+  // the individual-fact level instead (see document-summary-service.ts's
+  // KeyDateFact/CitedText estimateId field). Meaningless and ignored for
+  // a single-estimate Opportunity, which is still the common case.
+  estimateId String?
+  estimate   Estimate? @relation(fields: [estimateId], references: [id])
 
   extractionStatus  ExtractionStatus @default(PENDING)
   extractedText     String?          @db.Text
@@ -446,6 +465,14 @@ model Estimate {
   opportunityId String
   opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
 
+  // Null for the common single-estimate Opportunity (nothing to
+  // distinguish it from). Set once an Opportunity has multiple Estimates
+  // in play at once (e.g. two separate exhibits for one client) so each
+  // one is identifiable in the UI and usable as a project label for AI
+  // extraction -- see document-summary-service.ts's estimateId
+  // resolution and opportunities/[id]/page.tsx's grouped Project Brief.
+  name String?
+
   budget Decimal?       @db.Decimal(12, 2)
   status EstimateStatus @default(DRAFT)
 
@@ -463,6 +490,7 @@ model Estimate {
   versions     EstimateVersion[]
   changeOrders ChangeOrder[]
   attachments  Attachment[]
+  documents    Document[]
 
   @@map("estimates")
 }

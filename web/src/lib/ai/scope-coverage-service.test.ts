@@ -68,7 +68,7 @@ describe("runScopeCoverageAnalysis", () => {
     await expect(runScopeCoverageAnalysis(version.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
   });
 
-  it("ignores a PRICING_SCHEDULE or DRAWING document -- neither counts as a scope document", async () => {
+  it("ignores a PRICING_SCHEDULE document -- pricing rows already become line items mechanically, not scope text", async () => {
     const { version, opportunity } = await makeVersion();
     await db.document.create({
       data: {
@@ -81,6 +81,12 @@ describe("runScopeCoverageAnalysis", () => {
         extractionStatus: "COMPLETE",
       },
     });
+
+    await expect(runScopeCoverageAnalysis(version.id)).rejects.toThrow(/No analyzed scope documents/);
+  });
+
+  it("counts a DRAWING document as a scope document -- its vision-derived scopeSummary bullets are just as usable as text-extracted ones", async () => {
+    const { version, opportunity } = await makeVersion();
     await db.document.create({
       data: {
         opportunityId: opportunity.id,
@@ -90,10 +96,13 @@ describe("runScopeCoverageAnalysis", () => {
         storageKey: "test-key",
         documentType: "DRAWING",
         extractionStatus: "COMPLETE",
+        extractedSummary: { scopeSummary: [{ text: "6-inch black base", sourceQuote: "", pageNumber: 1 }] },
       },
     });
 
-    await expect(runScopeCoverageAnalysis(version.id)).rejects.toThrow(/No analyzed scope documents/);
+    // Reaches the AiNotConfiguredError guard, not "No analyzed scope
+    // documents" -- proves the DRAWING document was actually picked up.
+    await expect(runScopeCoverageAnalysis(version.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
   });
 });
 

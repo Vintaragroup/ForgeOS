@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
-import { deleteDocument, updateDocumentType, uploadDocument } from "@/lib/document-service";
+import { assignDocumentEstimate, deleteDocument, updateDocumentType, uploadDocument } from "@/lib/document-service";
 import { analyzeDocument } from "@/lib/ai/analyze-document";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import type { DocumentType } from "@/generated/prisma/enums";
@@ -40,6 +40,16 @@ export async function updateDocumentTypeAction(opportunityId: string, documentId
   await requireOpportunityAccess(opportunityId);
   const documentType = String(formData.get("documentType") ?? "") as DocumentType;
   await updateDocumentType(documentId, documentType);
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+// Manual per-document project hint, shown only once an Opportunity has
+// 2+ named Estimates -- see Document.estimateId's own schema comment.
+// Empty string means "let AI classify," stored as null.
+export async function assignDocumentEstimateAction(opportunityId: string, documentId: string, formData: FormData) {
+  await requireOpportunityAccess(opportunityId);
+  const rawEstimateId = String(formData.get("estimateId") ?? "").trim();
+  await assignDocumentEstimate(documentId, rawEstimateId || null);
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 

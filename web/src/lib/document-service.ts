@@ -105,3 +105,22 @@ export async function updateDocumentType(documentId: string, documentType: Docum
     },
   });
 }
+
+// Same reset posture as updateDocumentType above -- whatever was already
+// extracted was classified (or not) under the OLD estimate assignment,
+// so it's stale the moment that assignment changes, not just cosmetically
+// out of date. estimateId null clears a manual tag, reverting the
+// document back to AI classification at fact level (see document-
+// summary-service.ts's own estimateId resolution).
+export async function assignDocumentEstimate(documentId: string, estimateId: string | null) {
+  return db.document.update({
+    where: { id: documentId },
+    data: {
+      estimateId,
+      extractionStatus: "PENDING",
+      extractedText: null,
+      extractedSummary: Prisma.DbNull,
+      proposedLineItems: Prisma.DbNull,
+    },
+  });
+}

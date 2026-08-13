@@ -140,8 +140,16 @@ export async function pageImages(mimeType: string, bytes: Buffer): Promise<strin
 // pageNumber is model-reported here, unlike text documents' locateQuotePage
 // text search -- there's no extracted text layer to verify it against, so
 // this is a real (accepted) trust reduction versus the text-document path.
-function withEmptyQuote<T extends { pageNumber: number }>(items: T[]): (T & { sourceQuote: string })[] {
-  return items.map((item) => ({ ...item, sourceQuote: "" }));
+// estimateId inherits the document's own manual tag directly (a rendering
+// package is always cleanly single-project, unlike a meeting transcript)
+// -- no vision-based project classification here, just server-known
+// truth carried through, same "resolve against known truth" discipline
+// as document-summary-service.ts.
+function withEmptyQuote<T extends { pageNumber: number }>(
+  items: T[],
+  estimateId: string | null,
+): (T & { sourceQuote: string; estimateId: string | null })[] {
+  return items.map((item) => ({ ...item, sourceQuote: "", estimateId }));
 }
 
 export async function summarizeDrawing(documentId: string, userId: string | null = null) {
@@ -164,6 +172,15 @@ export async function summarizeDrawing(documentId: string, userId: string | null
 
     const completion = await client.chat.completions.create({
       model: ADVANCED_MODEL,
+      // Low, not zero -- exhaustive extraction, not creative writing, so
+      // there's no upside to the API default's high randomness. This was
+      // the one AI call in the app that never got this pinned when the
+      // other three (document-summary-service.ts, scope-coverage-
+      // service.ts, clarification-questions-service.ts) did earlier --
+      // confirmed the gap was real, not just theoretical, by a live
+      // re-run against the exact same page images going from 9 real
+      // extracted facts to 0.
+      temperature: 0.2,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         {
@@ -197,9 +214,9 @@ export async function summarizeDrawing(documentId: string, userId: string | null
       eventOrProjectName: parsed.eventOrProjectName,
       venue: parsed.venue,
       submissionDeadline: parsed.submissionDeadline,
-      keyDates: withEmptyQuote(parsed.keyDates),
-      scopeSummary: withEmptyQuote(parsed.scopeSummary),
-      riskFlags: withEmptyQuote(parsed.riskFlags),
+      keyDates: withEmptyQuote(parsed.keyDates, document.estimateId),
+      scopeSummary: withEmptyQuote(parsed.scopeSummary, document.estimateId),
+      riskFlags: withEmptyQuote(parsed.riskFlags, document.estimateId),
     };
 
     return db.document.update({

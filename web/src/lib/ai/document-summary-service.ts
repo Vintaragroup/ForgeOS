@@ -16,8 +16,9 @@ import {
   resolveHighlightableQuote,
   PDF_MIME,
 } from "@/lib/ai/text-extraction";
-import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { ADVANCED_MODEL, BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
+import { getProjectContext, resolveProjectTag } from "@/lib/ai/scope-document-context";
 
 // pageNumber is never asked of the model -- it's computed afterward by
 // searching the PDF's own per-page text for sourceQuote (see
@@ -34,17 +35,28 @@ import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 // dates otherwise.
 export type KeyDateType = "DEADLINE" | "MILESTONE" | "INFORMATIONAL";
 
+// estimateId is optional (not just nullable) so an already-stored
+// summary from before multi-project support still parses cleanly --
+// `undefined` is treated identically to an explicit `null` everywhere
+// this is read (both mean "shared/unclassified," visible regardless of
+// which Estimate is asking). Only ever meaningful once an Opportunity
+// has 2+ Estimates -- resolved server-side against real Estimate rows,
+// never trusted raw from a model response, same discipline as every
+// other id this session resolves rather than accepts on faith. See
+// resolveEstimateProjectTag in scope-document-context.ts.
 export interface KeyDateFact {
   label: string;
   date: string;
   dateType: KeyDateType;
   sourceQuote: string;
   pageNumber: number | null;
+  estimateId?: string | null;
 }
 export interface CitedText {
   text: string;
   sourceQuote: string;
   pageNumber: number | null;
+  estimateId?: string | null;
 }
 
 // Onboarding fields (opportunities/[id]/page.tsx's ProjectTypeFields) that
@@ -120,20 +132,23 @@ export const SUGGESTABLE_DOCUMENT_TYPES = [
   "CONTRACT",
   "SCHEDULE",
   "DRAWING",
+  "MEETING_NOTES",
   "OTHER",
 ] as const;
 export type SuggestableDocumentType = (typeof SUGGESTABLE_DOCUMENT_TYPES)[number];
 
 // What OpenAI actually returns -- pageNumber added in a pass afterward,
-// so it's absent from both the schema and this intermediate type.
+// so it's absent from both the schema and this intermediate type. project
+// is only ever present when the request schema asked for it (2+ named
+// Estimates on this opportunity) -- see buildSummarySchema.
 type DocumentSummaryFromAI = {
   eventOrProjectName: string | null;
   venue: string | null;
   submissionDeadline: string | null;
-  keyDates: { label: string; date: string; dateType: KeyDateType; sourceQuote: string }[];
-  scopeSummary: { text: string; sourceQuote: string }[];
-  riskFlags: { text: string; sourceQuote: string }[];
-  candidateGaps: { text: string; sourceQuote: string }[];
+  keyDates: { label: string; date: string; dateType: KeyDateType; sourceQuote: string; project?: string }[];
+  scopeSummary: { text: string; sourceQuote: string; project?: string }[];
+  riskFlags: { text: string; sourceQuote: string; project?: string }[];
+  candidateGaps: { text: string; sourceQuote: string; project?: string }[];
   extractedFields: { field: ExtractableOpportunityField; value: string; sourceQuote: string }[];
   suggestedDocumentType: SuggestableDocumentType;
 };
@@ -141,108 +156,159 @@ type DocumentSummaryFromAI = {
 const SOURCE_QUOTE_DESCRIPTION =
   "A short (under 150 characters) quote copied EXACTLY, character-for-character, from the document text above, showing where this fact is stated. Never paraphrase or summarize the quote itself.";
 
-const SUMMARY_SCHEMA = {
-  name: "document_summary",
-  strict: true,
-  schema: {
-    type: "object",
-    additionalProperties: false,
+// Splices a `project` property into an item schema's properties/required
+// -- only when this opportunity actually has 2+ named Estimates.
+// projectNames.length === 0 (the overwhelming common, single-estimate
+// case) returns the item schema completely unchanged: no extra property,
+// no extra required field, no extra token cost for every analysis this
+// app runs. Not applied to extractedFields -- those are single Opportunity-
+// level columns (eventStartDate, boothNumber, ...), inherently ambiguous
+// once two projects exist, so multi-project opportunities skip
+// auto-populating them entirely instead (see opportunity-service.ts's
+// applyExtractedFieldsToOpportunity guard).
+function withProjectField<
+  P extends Record<string, unknown>,
+  R extends readonly string[],
+>(itemSchema: { properties: P; required: R }, projectNames: string[]): { properties: P; required: readonly string[] } {
+  if (projectNames.length === 0) return itemSchema;
+  return {
     properties: {
-      eventOrProjectName: { type: ["string", "null"] },
-      venue: { type: ["string", "null"] },
-      submissionDeadline: { type: ["string", "null"], description: "Free-text date, as written in the source." },
-      keyDates: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            label: { type: "string" },
-            date: { type: "string" },
-            dateType: {
-              type: "string",
-              enum: ["DEADLINE", "MILESTONE", "INFORMATIONAL"],
-              description:
-                "From the READER's point of view (the contractor/bidder, not the client who wrote this document). " +
-                "DEADLINE: the reader must submit, respond, or deliver something by this date -- a hard cutoff for outbound action (e.g. 'Bidder Questions Due', 'Tender Submission Due', 'Dismantle Complete'). " +
-                "MILESTONE: a fixed date or window in the event itself, worth tracking for planning, but the reader isn't required to act or submit anything by it (e.g. 'Potential Site Visit', 'Opening Night', 'Game Day', an install date). " +
-                "INFORMATIONAL: states something the CLIENT already did or will do -- not an action item for the reader at all (e.g. 'RFP Sent', 'Answers to Bidders' Questions Sent', an award notification date).",
-            },
-            sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
-          },
-          required: ["label", "date", "dateType", "sourceQuote"],
-        },
-      },
-      scopeSummary: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            text: { type: "string" },
-            sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
-          },
-          required: ["text", "sourceQuote"],
-        },
-      },
-      riskFlags: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            text: { type: "string", description: "Contract/compliance risk worth a human's attention -- liquidated damages, insurance minimums, credentialing deadlines, etc." },
-            sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
-          },
-          required: ["text", "sourceQuote"],
-        },
-      },
-      candidateGaps: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            text: {
-              type: "string",
-              description:
-                "A specific spec, parameter, quantity, or responsibility that THIS document alone leaves incomplete, unitless, or ambiguous -- e.g. a requirement with no target range or units, a responsibility with no named owner, two parts of this same document stating different numbers for the same thing. Not a paraphrase of the whole document, and not something this document already answers elsewhere in its own text.",
-            },
-            sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
-          },
-          required: ["text", "sourceQuote"],
-        },
-      },
-      extractedFields: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            field: {
-              type: "string",
-              enum: EXTRACTABLE_OPPORTUNITY_FIELDS,
-              description:
-                "boothNumber: the exhibitor's assigned booth number. boothSize: booth footprint as written, e.g. '20x20' or '10 x 30'. shipDate: when materials/freight must ship or arrive at the show, distinct from any move-in date. eventStartDate/eventEndDate: the show or event's own open-to-public dates, distinct from installation/move-in and dismantle/move-out dates. siteAddress: a physical jobsite address for non-show work (e.g. a permanent install or on-site build), not a show venue name.",
-            },
-            value: { type: "string", description: "The fact as written in the source -- dates as free text, not reformatted." },
-            sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
-          },
-          required: ["field", "value", "sourceQuote"],
-        },
-      },
-      suggestedDocumentType: {
+      ...itemSchema.properties,
+      project: {
         type: "string",
-        enum: SUGGESTABLE_DOCUMENT_TYPES,
         description:
-          "The document TYPE this content actually reads as, regardless of how it's currently filed. RFP: an invitation/instructions to bid. SCOPE_OF_WORK: describes the deliverables/work to be done. CONTRACT: a services agreement, terms and conditions, or legal agreement. SCHEDULE: primarily a timeline, event schedule, or list of dates. DRAWING: primarily dimensions/technical drawing callouts (rare for a text document -- most drawings are images). OTHER: none of the above fit well.",
+          `Which project this belongs to. Respond with EXACTLY one of: ${projectNames.map((n) => JSON.stringify(n)).join(", ")} -- or "SHARED" if it genuinely applies to more than one of these.`,
       },
     },
-    required: ["eventOrProjectName", "venue", "submissionDeadline", "keyDates", "scopeSummary", "riskFlags", "candidateGaps", "extractedFields", "suggestedDocumentType"],
-  },
-} as const;
+    required: [...itemSchema.required, "project"],
+  };
+}
 
-const SYSTEM_PROMPT = `You analyze RFP and client-supplied project documents for a contractor whose work spans tradeshow exhibits, standalone events, exhibitor I&D/labor contracting, and specialized/experiential builds -- not every document is about a booth. Extract only facts stated in the document -- never infer or guess a date, name, or figure that isn't written there. If something isn't present, use null or an empty array. Keep scopeSummary and riskFlags as short, specific bullet points, not paragraphs. For every key date, scope item, risk flag, and extracted field, include sourceQuote: a short verbatim quote copied exactly from the document showing where that fact came from -- this is used to jump a reader straight to it, so it must be an exact substring of the source text, not a paraphrase.
+function buildSummarySchema(projectNames: string[]) {
+  return {
+    name: "document_summary",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        eventOrProjectName: { type: ["string", "null"] },
+        venue: { type: ["string", "null"] },
+        submissionDeadline: { type: ["string", "null"], description: "Free-text date, as written in the source." },
+        keyDates: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            ...withProjectField(
+              {
+                properties: {
+                  label: { type: "string" },
+                  date: { type: "string" },
+                  dateType: {
+                    type: "string",
+                    enum: ["DEADLINE", "MILESTONE", "INFORMATIONAL"],
+                    description:
+                      "From the READER's point of view (the contractor/bidder, not the client who wrote this document). " +
+                      "DEADLINE: the reader must submit, respond, or deliver something by this date -- a hard cutoff for outbound action (e.g. 'Bidder Questions Due', 'Tender Submission Due', 'Dismantle Complete'). " +
+                      "MILESTONE: a fixed date or window in the event itself, worth tracking for planning, but the reader isn't required to act or submit anything by it (e.g. 'Potential Site Visit', 'Opening Night', 'Game Day', an install date). " +
+                      "INFORMATIONAL: states something the CLIENT already did or will do -- not an action item for the reader at all (e.g. 'RFP Sent', 'Answers to Bidders' Questions Sent', an award notification date).",
+                  },
+                  sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+                },
+                required: ["label", "date", "dateType", "sourceQuote"],
+              },
+              projectNames,
+            ),
+          },
+        },
+        scopeSummary: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            ...withProjectField(
+              {
+                properties: {
+                  text: { type: "string" },
+                  sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+                },
+                required: ["text", "sourceQuote"],
+              },
+              projectNames,
+            ),
+          },
+        },
+        riskFlags: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            ...withProjectField(
+              {
+                properties: {
+                  text: { type: "string", description: "Contract/compliance risk worth a human's attention -- liquidated damages, insurance minimums, credentialing deadlines, etc." },
+                  sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+                },
+                required: ["text", "sourceQuote"],
+              },
+              projectNames,
+            ),
+          },
+        },
+        candidateGaps: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            ...withProjectField(
+              {
+                properties: {
+                  text: {
+                    type: "string",
+                    description:
+                      "A specific spec, parameter, quantity, or responsibility that THIS document alone leaves incomplete, unitless, or ambiguous -- e.g. a requirement with no target range or units, a responsibility with no named owner, two parts of this same document stating different numbers for the same thing. Not a paraphrase of the whole document, and not something this document already answers elsewhere in its own text.",
+                  },
+                  sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+                },
+                required: ["text", "sourceQuote"],
+              },
+              projectNames,
+            ),
+          },
+        },
+        extractedFields: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              field: {
+                type: "string",
+                enum: EXTRACTABLE_OPPORTUNITY_FIELDS,
+                description:
+                  "boothNumber: the exhibitor's assigned booth number. boothSize: booth footprint as written, e.g. '20x20' or '10 x 30'. shipDate: when materials/freight must ship or arrive at the show, distinct from any move-in date. eventStartDate/eventEndDate: the show or event's own open-to-public dates, distinct from installation/move-in and dismantle/move-out dates. siteAddress: a physical jobsite address for non-show work (e.g. a permanent install or on-site build), not a show venue name.",
+              },
+              value: { type: "string", description: "The fact as written in the source -- dates as free text, not reformatted." },
+              sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+            },
+            required: ["field", "value", "sourceQuote"],
+          },
+        },
+        suggestedDocumentType: {
+          type: "string",
+          enum: SUGGESTABLE_DOCUMENT_TYPES,
+          description:
+            "The document TYPE this content actually reads as, regardless of how it's currently filed. RFP: an invitation/instructions to bid. SCOPE_OF_WORK: describes the deliverables/work to be done. CONTRACT: a services agreement, terms and conditions, or legal agreement. SCHEDULE: primarily a timeline, event schedule, or list of dates. DRAWING: primarily dimensions/technical drawing callouts (rare for a text document -- most drawings are images). MEETING_NOTES: a meeting transcript, recap, or email thread -- conversational or narrative, not a formal deliverable. OTHER: none of the above fit well.",
+        },
+      },
+      required: ["eventOrProjectName", "venue", "submissionDeadline", "keyDates", "scopeSummary", "riskFlags", "candidateGaps", "extractedFields", "suggestedDocumentType"],
+    },
+  };
+}
+
+function buildSystemPrompt(projectNames: string[]): string {
+  const base = `You analyze RFP and client-supplied project documents for a contractor whose work spans tradeshow exhibits, standalone events, exhibitor I&D/labor contracting, and specialized/experiential builds -- not every document is about a booth. Extract only facts stated in the document -- never infer or guess a date, name, or figure that isn't written there. If something isn't present, use null or an empty array. Keep scopeSummary and riskFlags as short, specific bullet points, not paragraphs. For every key date, scope item, risk flag, and extracted field, include sourceQuote: a short verbatim quote copied exactly from the document showing where that fact came from -- this is used to jump a reader straight to it, so it must be an exact substring of the source text, not a paraphrase.
 
 For every key date, also classify dateType from the READER's point of view, not the document author's: a date is only a DEADLINE if the reader (the bidder/contractor) must submit, respond, or deliver something by it. "RFP Sent" or "Answers to Bidders' Questions Sent" are INFORMATIONAL -- they're facts about what the client already did, not something the reader owes anyone. "Potential Site Visit" or "Opening Night" are MILESTONE -- fixed points in the event worth planning around, but nothing is due from the reader that day. "Bidder Questions Due" or "Tender Submission Due" are DEADLINE -- the reader must act by then. Get this classification right; a Dashboard view uses it to decide what actually belongs in a deadlines list versus a timeline.
 
@@ -251,6 +317,14 @@ Also extract candidateGaps: specific things stated in THIS document alone that a
 Also extract extractedFields: onboarding facts about the job itself (booth number, booth size, ship date, event start/end dates, jobsite address) whenever the document states them plainly -- these get proposed to a human as suggestions to accept or ignore, never applied automatically, so extract anything genuinely stated even if you're not certain it's the final value.
 
 Also classify suggestedDocumentType: what this document's content actually IS, independent of how it happens to be filed right now -- a vendor services agreement is a CONTRACT even if it was uploaded as a generic RFP attachment.`;
+
+  if (projectNames.length === 0) return base;
+
+  return (
+    base +
+    `\n\nThis client relationship covers multiple separate projects: ${projectNames.map((n) => `"${n}"`).join(", ")}. For every key date, scope item, risk flag, and candidate gap, classify which one it belongs to using the project field on that item -- respond with the exact project name it's about, or "SHARED" only if it genuinely applies to more than one (e.g. a general billing/contact fact). Get this right: a wrong attribution makes one project's estimate look like it's missing something the other project actually needed, or vice versa.`
+  );
+}
 
 // Truncated, not chunked -- this app has no RAG/embedding infra (see
 // chat-context-service.ts's same budget approach). This used to be
@@ -291,9 +365,27 @@ export async function summarizeDocument(documentId: string, userId: string | nul
     data: { extractionStatus: "PROCESSING", extractedText: extraction.text.slice(0, MAX_INPUT_CHARS) },
   });
 
+  // A manually-tagged document (see Document.estimateId) already has a
+  // known answer -- skip asking the model to classify at all, both to
+  // save tokens and because a human-confirmed tag beats an AI guess.
+  // Only a genuinely untagged document, on an Opportunity with 2+ named
+  // Estimates, gets project classification requested per-item.
+  const projectContext = document.estimateId ? { estimates: [] } : await getProjectContext(document.opportunityId);
+  const projectNames = projectContext.estimates.map((e) => e.name);
+  // Correctly attributing a fact to one of two real projects is a
+  // judgment call (surrounding context, not keyword matching), the same
+  // class of cross-topic reasoning Scope Coverage/Clarification
+  // Questions reserve ADVANCED_MODEL for -- confirmed necessary by a
+  // real test where BASIC_MODEL misattributed unambiguous content
+  // between two projects (see meeting-notes-summary-service.ts's own
+  // comment for the specific case). Single-project extraction (the
+  // common case, projectNames empty) stays on BASIC_MODEL -- nothing to
+  // misclassify when there's only one project.
+  const model = projectNames.length > 0 ? ADVANCED_MODEL : BASIC_MODEL;
+
   try {
     const completion = await client.chat.completions.create({
-      model: BASIC_MODEL,
+      model,
       // Low, not zero -- this is exhaustive extraction (every key date,
       // scope bullet, candidate gap actually present), not creative
       // writing, so the API default's high randomness only costs
@@ -304,16 +396,16 @@ export async function summarizeDocument(documentId: string, userId: string | nul
       // not just on a lucky sample.
       temperature: 0.2,
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: buildSystemPrompt(projectNames) },
         { role: "user", content: `Document: ${document.filename}\n\n${extraction.text.slice(0, MAX_INPUT_CHARS)}` },
       ],
-      response_format: { type: "json_schema", json_schema: SUMMARY_SCHEMA },
+      response_format: { type: "json_schema", json_schema: buildSummarySchema(projectNames) },
     });
 
     await recordAiUsage({
       userId,
       feature: "DOCUMENT_SUMMARY",
-      model: BASIC_MODEL,
+      model,
       usage: completion.usage,
       documentId,
       opportunityId: document.opportunityId,
@@ -340,14 +432,32 @@ export async function summarizeDocument(documentId: string, userId: string | nul
         return { ...item, sourceQuote, pageNumber: pageTexts ? locateQuotePage(pageTexts, sourceQuote) : null };
       });
 
+    // Same as withPage, but also resolves each item's model-reported
+    // `project` string (present only when projectNames was non-empty)
+    // against real Estimate rows -- see resolveProjectTag. A manually-
+    // tagged document never asked for `project` in the first place, so
+    // every item just inherits document.estimateId directly.
+    const withPageAndEstimate = <T extends { sourceQuote: string; project?: string }>(
+      items: T[],
+    ): (Omit<T, "project"> & { pageNumber: number | null; estimateId: string | null })[] =>
+      items.map(({ project, ...rest }) => {
+        const sourceQuote = resolveHighlightableQuote(extraction.text, rest.sourceQuote);
+        return {
+          ...rest,
+          sourceQuote,
+          pageNumber: pageTexts ? locateQuotePage(pageTexts, sourceQuote) : null,
+          estimateId: document.estimateId ?? resolveProjectTag(project, projectContext),
+        };
+      });
+
     const summary: DocumentSummary = {
       eventOrProjectName: parsed.eventOrProjectName,
       venue: parsed.venue,
       submissionDeadline: parsed.submissionDeadline,
-      keyDates: withPage(parsed.keyDates),
-      scopeSummary: withPage(parsed.scopeSummary),
-      riskFlags: withPage(parsed.riskFlags),
-      candidateGaps: withPage(parsed.candidateGaps),
+      keyDates: withPageAndEstimate(parsed.keyDates),
+      scopeSummary: withPageAndEstimate(parsed.scopeSummary),
+      riskFlags: withPageAndEstimate(parsed.riskFlags),
+      candidateGaps: withPageAndEstimate(parsed.candidateGaps),
       extractedFields: withPage(parsed.extractedFields),
       suggestedDocumentType: parsed.suggestedDocumentType,
     };

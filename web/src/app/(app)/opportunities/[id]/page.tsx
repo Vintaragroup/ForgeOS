@@ -11,7 +11,13 @@ import {
   updateOpportunity,
 } from "../actions";
 import { buildEstimateFromDocumentsAction, convertToEstimate, convertToProject } from "../convert-actions";
-import { analyzeDocumentAction, deleteDocumentAction, updateDocumentTypeAction, uploadDocumentAction } from "./documents/actions";
+import {
+  analyzeDocumentAction,
+  assignDocumentEstimateAction,
+  deleteDocumentAction,
+  updateDocumentTypeAction,
+  uploadDocumentAction,
+} from "./documents/actions";
 import { runClarificationQuestionsAnalysisAction } from "./ai-actions";
 import type { ClarificationQuestion } from "@/lib/ai/clarification-questions-service";
 import { listDocuments } from "@/lib/document-service";
@@ -44,6 +50,7 @@ const DOCUMENT_TYPE_OPTIONS = [
   { value: "DRAWING", label: "Drawing / CAD export" },
   { value: "CONTRACT", label: "Contract" },
   { value: "SCHEDULE", label: "Schedule" },
+  { value: "MEETING_NOTES", label: "Meeting notes / transcript" },
   { value: "OTHER", label: "Other" },
 ];
 
@@ -147,10 +154,16 @@ function CitationLink({
 // Documents analyzed before scope/risk items carried their own citation
 // (sourceQuote/pageNumber) stored these as plain strings -- normalize old
 // and new shapes together rather than forcing a re-analysis of every
-// historical document just to read it without a blank line.
-function normalizeCitedText(item: unknown): { text: string; sourceQuote: string; pageNumber: number | null } {
+// historical document just to read it without a blank line. estimateId
+// carried through (not dropped) so multi-project grouping below can use
+// it -- undefined/missing (an older summary, or a single-project
+// Opportunity) means shared/unclassified, same convention as everywhere
+// else this field is read.
+function normalizeCitedText(
+  item: unknown,
+): { text: string; sourceQuote: string; pageNumber: number | null; estimateId?: string | null } {
   if (typeof item === "string") return { text: item, sourceQuote: "", pageNumber: null };
-  return item as { text: string; sourceQuote: string; pageNumber: number | null };
+  return item as { text: string; sourceQuote: string; pageNumber: number | null; estimateId?: string | null };
 }
 
 const KEY_DATE_GROUPS: { dateType: "DEADLINE" | "MILESTONE" | "INFORMATIONAL"; label: string; className: string }[] = [
@@ -165,9 +178,16 @@ const KEY_DATE_GROUPS: { dateType: "DEADLINE" | "MILESTONE" | "INFORMATIONAL"; l
 function ProjectBriefCard({
   opportunityId,
   documents,
+  namedEstimates,
 }: {
   opportunityId: string;
   documents: { id: string; filename: string; mimeType: string; extractionStatus: string; extractedSummary: unknown }[];
+  // Empty for the common single-project Opportunity -- the whole card
+  // renders exactly as it did before this field existed. 2+ entries
+  // split every section below into one sub-section per project plus a
+  // "Shared / General" catch-all, using each item's own estimateId (see
+  // document-summary-service.ts's resolution).
+  namedEstimates: { id: string; name: string }[];
 }) {
   const analyzed = documents.filter(
     (d) => d.extractionStatus === "COMPLETE" && d.extractedSummary,
@@ -185,7 +205,7 @@ function ProjectBriefCard({
   // wins. Sorted chronologically after, since documents rarely list their
   // own dates in date order, let alone two documents combined.
   const seenKeyDates = new Set<string>();
-  const keyDates = analyzed
+  const allKeyDates = analyzed
     .flatMap((d) => d.extractedSummary.keyDates.map((kd) => ({ ...kd, doc: d })))
     .filter((kd) => {
       const parsed = parseFreeTextDate(kd.date);
@@ -202,17 +222,40 @@ function ProjectBriefCard({
       if (!dateB) return -1;
       return dateA.getTime() - dateB.getTime();
     });
-  const keyDateGroups = KEY_DATE_GROUPS.map((group) => ({
-    ...group,
-    items: keyDates.filter((kd) => (kd.dateType ?? "MILESTONE") === group.dateType),
-  })).filter((group) => group.items.length > 0);
 
-  const scopeSummary = analyzed.flatMap((d) =>
+  const allScopeSummary = analyzed.flatMap((d) =>
     d.extractedSummary.scopeSummary.map((s) => ({ ...normalizeCitedText(s), doc: d })),
   );
-  const riskFlags = analyzed.flatMap((d) =>
+  const allRiskFlags = analyzed.flatMap((d) =>
     d.extractedSummary.riskFlags.map((r) => ({ ...normalizeCitedText(r), doc: d })),
   );
+
+  const isMultiProject = namedEstimates.length >= 2;
+  interface Bucket {
+    key: string;
+    label: string | null;
+    keyDates: typeof allKeyDates;
+    scopeSummary: typeof allScopeSummary;
+    riskFlags: typeof allRiskFlags;
+  }
+  const buckets: Bucket[] = isMultiProject
+    ? [
+        ...namedEstimates.map((e) => ({
+          key: e.id,
+          label: e.name,
+          keyDates: allKeyDates.filter((kd) => kd.estimateId === e.id),
+          scopeSummary: allScopeSummary.filter((s) => s.estimateId === e.id),
+          riskFlags: allRiskFlags.filter((r) => r.estimateId === e.id),
+        })),
+        {
+          key: "shared",
+          label: "Shared / General",
+          keyDates: allKeyDates.filter((kd) => kd.estimateId == null),
+          scopeSummary: allScopeSummary.filter((s) => s.estimateId == null),
+          riskFlags: allRiskFlags.filter((r) => r.estimateId == null),
+        },
+      ].filter((b) => b.keyDates.length + b.scopeSummary.length + b.riskFlags.length > 0)
+    : [{ key: "all", label: null, keyDates: allKeyDates, scopeSummary: allScopeSummary, riskFlags: allRiskFlags }];
 
   return (
     <CollapsibleSection title="Project brief">
@@ -236,87 +279,118 @@ function ProjectBriefCard({
         </div>
       </div>
 
-      {keyDateGroups.length > 0 && (
-        <div className="mb-4">
-          <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Key dates</h3>
-          <div className="flex flex-col gap-3">
-            {keyDateGroups.map((group) => (
-              <div key={group.dateType}>
-                <div className={`mb-1 text-xs font-semibold ${group.className}`}>
-                  {group.label} <span className="font-normal text-neutral-400">({group.items.length})</span>
+      {buckets.map((bucket, bucketIndex) => {
+        const idPrefix = bucket.key === "all" ? "" : `${bucket.key}-`;
+        const keyDateGroups = KEY_DATE_GROUPS.map((group) => ({
+          ...group,
+          items: bucket.keyDates.filter((kd) => (kd.dateType ?? "MILESTONE") === group.dateType),
+        })).filter((group) => group.items.length > 0);
+
+        return (
+          <div
+            key={bucket.key}
+            className={isMultiProject && bucketIndex > 0 ? "mt-6 border-t border-neutral-200 pt-4" : undefined}
+          >
+            {bucket.label && <h3 className="mb-3 text-sm font-semibold text-neutral-700">{bucket.label}</h3>}
+
+            {keyDateGroups.length > 0 && (
+              <div className="mb-4">
+                <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Key dates</h4>
+                <div className="flex flex-col gap-3">
+                  {keyDateGroups.map((group) => (
+                    <div key={group.dateType}>
+                      <div className={`mb-1 text-xs font-semibold ${group.className}`}>
+                        {group.label} <span className="font-normal text-neutral-400">({group.items.length})</span>
+                      </div>
+                      <ul className="flex flex-col gap-1 text-sm">
+                        {group.items.map((kd, i) => (
+                          <li
+                            key={i}
+                            id={`key-date-${idPrefix}${group.dateType}-${i}`}
+                            className="flex items-center justify-between gap-3"
+                          >
+                            <span>
+                              {kd.label} <span className="text-neutral-500">— {kd.date}</span>
+                            </span>
+                            <CitationLink
+                              href={citationHref(
+                                opportunityId,
+                                kd.doc,
+                                kd,
+                                `/opportunities/${opportunityId}#key-date-${idPrefix}${group.dateType}-${i}`,
+                              )}
+                              source={kd.doc.filename}
+                              page={kd.pageNumber}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
                 </div>
-                <ul className="flex flex-col gap-1 text-sm">
-                  {group.items.map((kd, i) => (
-                    <li
-                      key={i}
-                      id={`key-date-${group.dateType}-${i}`}
-                      className="flex items-center justify-between gap-3"
-                    >
-                      <span>
-                        {kd.label} <span className="text-neutral-500">— {kd.date}</span>
+              </div>
+            )}
+
+            {bucket.scopeSummary.length > 0 && (
+              <div className="mb-4">
+                <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Scope</h4>
+                <ul className="flex flex-col gap-1.5 text-sm">
+                  {bucket.scopeSummary.map((s, i) => (
+                    <li key={i} id={`scope-summary-${idPrefix}${i}`} className="flex items-start justify-between gap-3">
+                      <span className="flex gap-2">
+                        <span className="text-neutral-300">•</span>
+                        <span>{s.text}</span>
                       </span>
                       <CitationLink
                         href={citationHref(
                           opportunityId,
-                          kd.doc,
-                          kd,
-                          `/opportunities/${opportunityId}#key-date-${group.dateType}-${i}`,
+                          s.doc,
+                          s,
+                          `/opportunities/${opportunityId}#scope-summary-${idPrefix}${i}`,
                         )}
-                        source={kd.doc.filename}
-                        page={kd.pageNumber}
+                        source={s.doc.filename}
+                        page={s.pageNumber}
                       />
                     </li>
                   ))}
                 </ul>
               </div>
-            ))}
+            )}
+
+            {bucket.riskFlags.length > 0 && (
+              <div>
+                <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                  Risk &amp; compliance flags
+                </h4>
+                <ul className="flex flex-col gap-1.5 text-sm">
+                  {bucket.riskFlags.map((r, i) => (
+                    <li
+                      key={i}
+                      id={`brief-risk-flag-${idPrefix}${i}`}
+                      className="flex items-start justify-between gap-3 text-amber-900"
+                    >
+                      <span className="flex gap-2">
+                        <span>⚠</span>
+                        <span>{r.text}</span>
+                      </span>
+                      <CitationLink
+                        href={citationHref(
+                          opportunityId,
+                          r.doc,
+                          r,
+                          `/opportunities/${opportunityId}#brief-risk-flag-${idPrefix}${i}`,
+                        )}
+                        source={r.doc.filename}
+                        page={r.pageNumber}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
-        </div>
-      )}
-
-      {scopeSummary.length > 0 && (
-        <div className="mb-4">
-          <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Scope</h3>
-          <ul className="flex flex-col gap-1.5 text-sm">
-            {scopeSummary.map((s, i) => (
-              <li key={i} id={`scope-summary-${i}`} className="flex items-start justify-between gap-3">
-                <span className="flex gap-2">
-                  <span className="text-neutral-300">•</span>
-                  <span>{s.text}</span>
-                </span>
-                <CitationLink
-                  href={citationHref(opportunityId, s.doc, s, `/opportunities/${opportunityId}#scope-summary-${i}`)}
-                  source={s.doc.filename}
-                  page={s.pageNumber}
-                />
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {riskFlags.length > 0 && (
-        <div>
-          <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-            Risk &amp; compliance flags
-          </h3>
-          <ul className="flex flex-col gap-1.5 text-sm">
-            {riskFlags.map((r, i) => (
-              <li key={i} id={`brief-risk-flag-${i}`} className="flex items-start justify-between gap-3 text-amber-900">
-                <span className="flex gap-2">
-                  <span>⚠</span>
-                  <span>{r.text}</span>
-                </span>
-                <CitationLink
-                  href={citationHref(opportunityId, r.doc, r, `/opportunities/${opportunityId}#brief-risk-flag-${i}`)}
-                  source={r.doc.filename}
-                  page={r.pageNumber}
-                />
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+        );
+      })}
     </CollapsibleSection>
   );
 }
@@ -529,6 +603,15 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   // button appears for it here, and nothing pointed at where its real
   // next step actually lives.
   const estimateId = opportunity.estimates[0]?.id;
+  // Same 2+ named Estimates threshold scope-document-context.ts's
+  // getProjectContext uses -- multi-project UI (per-document assignment,
+  // grouped Project Brief/Clarification Questions) only appears once
+  // this is genuinely non-empty, so a single-estimate Opportunity (the
+  // common case) sees no extra UI at all.
+  const namedEstimates = opportunity.estimates.filter(
+    (e): e is typeof e & { name: string } => e.name !== null && e.name !== "",
+  );
+  const isMultiProject = namedEstimates.length >= 2;
 
   const [companies, users, contacts, documents, chatMessages, taxRates] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -556,10 +639,11 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     : null;
 
   // Same document-eligibility rule as clarification-questions-service.ts's
-  // getScopeDocuments (scope-document-context.ts) -- pricing schedules and
-  // drawings never have real scope text to review.
+  // getScopeDocuments (scope-document-context.ts) -- only pricing
+  // schedules are excluded now; DRAWING and MEETING_NOTES both produce
+  // real scopeSummary/candidateGaps bullets just like a text document.
   const hasScopeDocuments = documents.some(
-    (d) => d.extractionStatus === "COMPLETE" && !["PRICING_SCHEDULE", "DRAWING"].includes(d.documentType),
+    (d) => d.extractionStatus === "COMPLETE" && d.documentType !== "PRICING_SCHEDULE",
   );
   const runClarificationQuestionsWithId = runClarificationQuestionsAnalysisAction.bind(null, opportunity.id);
   const clarificationQuestions = opportunity.clarificationQuestions as unknown as {
@@ -586,6 +670,33 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   // a single unsupervised model guess.
   const recommendedQuestions = clarificationQuestionsWithDocs.filter((q) => q.confidence === "RECOMMENDED");
   const worthReviewingQuestions = clarificationQuestionsWithDocs.filter((q) => q.confidence !== "RECOMMENDED");
+  // Same bucketing shape as ProjectBriefCard -- one section per named
+  // Estimate plus a "Shared / General" catch-all, only once 2+ Estimates
+  // exist. A question's estimateId is inherited from its source
+  // candidate, already resolved at Analyze time (see clarification-
+  // questions-service.ts) -- no new classification happens here.
+  interface ClarificationBucket {
+    key: string;
+    label: string | null;
+    recommended: typeof recommendedQuestions;
+    worthReviewing: typeof worthReviewingQuestions;
+  }
+  const clarificationBuckets: ClarificationBucket[] = isMultiProject
+    ? [
+        ...namedEstimates.map((e) => ({
+          key: e.id,
+          label: e.name,
+          recommended: recommendedQuestions.filter((q) => q.estimateId === e.id),
+          worthReviewing: worthReviewingQuestions.filter((q) => q.estimateId === e.id),
+        })),
+        {
+          key: "shared",
+          label: "Shared / General",
+          recommended: recommendedQuestions.filter((q) => q.estimateId == null),
+          worthReviewing: worthReviewingQuestions.filter((q) => q.estimateId == null),
+        },
+      ].filter((b) => b.recommended.length + b.worthReviewing.length > 0)
+    : [{ key: "all", label: null, recommended: recommendedQuestions, worthReviewing: worthReviewingQuestions }];
   // Best-effort: surfaces the submission-questions deadline next to the
   // trigger button without duplicating ProjectBriefCard's own (more
   // complete) key-date extraction below -- dateType has no distinct
@@ -861,7 +972,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             {opportunity.estimates.map((e) => (
               <li key={e.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
                 <span>
-                  Estimate {e.id.slice(0, 8)} — {e.status}
+                  {e.name ?? `Estimate ${e.id.slice(0, 8)}`} — {e.status}
                   {e.taxRate ? ` · ${taxRateLabel(e.taxRate)}` : ""}
                 </span>
                 <Link href={`/estimates/${e.id}`} className="text-neutral-900 hover:underline">
@@ -871,8 +982,19 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             ))}
           </ul>
         )}
-        <div className="flex flex-wrap gap-3">
-          <form action={convertWithId}>
+        <div className="flex flex-wrap items-end gap-3">
+          <form action={convertWithId} className="flex flex-wrap items-end gap-3">
+            <div className="min-w-[14rem]">
+              <Field
+                label="Name (optional)"
+                name="name"
+                placeholder={
+                  opportunity.estimates.length > 0
+                    ? "e.g. Full Swing PGA -- separate exhibit, same client"
+                    : undefined
+                }
+              />
+            </div>
             <Button variant="secondary">Convert to estimate</Button>
           </form>
           {buildEstimateWithIds && (
@@ -910,6 +1032,29 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <ExtractionStatusChip status={doc.extractionStatus} documentType={doc.documentType} />
+                  {isMultiProject && (
+                    <form
+                      action={assignDocumentEstimateAction.bind(null, opportunity.id, doc.id)}
+                      className="flex items-center gap-1"
+                    >
+                      <select
+                        name="estimateId"
+                        defaultValue={doc.estimateId ?? ""}
+                        title="Which project this document is about -- left as 'AI classifies' for a document that discusses more than one (e.g. a meeting transcript)."
+                        className="rounded-md border border-neutral-300 px-2 py-1 text-xs outline-none focus:border-neutral-500"
+                      >
+                        <option value="">— AI classifies —</option>
+                        {namedEstimates.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button type="submit" className="text-xs text-brand-navy hover:underline">
+                        Set
+                      </button>
+                    </form>
+                  )}
                   {doc.documentType === "PRICING_SCHEDULE" && estimateId && (
                     <Link href={`/estimates/${estimateId}`} className="text-xs text-brand-navy hover:underline">
                       Import on Estimate page →
@@ -993,7 +1138,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         <DocumentUploadForm action={uploadDocumentWithId} documentTypeOptions={DOCUMENT_TYPE_OPTIONS} />
       </CollapsibleSection>
 
-      <ProjectBriefCard opportunityId={opportunity.id} documents={documents} />
+      <ProjectBriefCard opportunityId={opportunity.id} documents={documents} namedEstimates={namedEstimates} />
 
       {hasScopeDocuments && (
         <CollapsibleSection title="Clarification questions" id="clarification-questions">
@@ -1023,28 +1168,34 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
               {clarificationQuestionsWithDocs.length === 0 ? (
                 <p className="text-sm text-neutral-500">No genuine gaps found — this RFP looks complete.</p>
               ) : (
-                <>
-                  {recommendedQuestions.length > 0 && (
-                    <ul className="flex flex-col gap-3 text-sm">
-                      {recommendedQuestions.map((q, i) =>
-                        renderClarificationQuestion(q, `clarification-question-recommended-${i}`, "amber"),
-                      )}
-                    </ul>
-                  )}
-                  {worthReviewingQuestions.length > 0 && (
-                    <div className={recommendedQuestions.length > 0 ? "mt-4" : undefined}>
-                      <p className="mb-2 text-xs text-neutral-500">
-                        Worth reviewing — plausible, but less certain than the above. Use your own judgment on
-                        whether these are worth sending.
-                      </p>
+                clarificationBuckets.map((bucket, bucketIndex) => (
+                  <div
+                    key={bucket.key}
+                    className={isMultiProject && bucketIndex > 0 ? "mt-6 border-t border-neutral-200 pt-4" : undefined}
+                  >
+                    {bucket.label && <h3 className="mb-3 text-sm font-semibold text-neutral-700">{bucket.label}</h3>}
+                    {bucket.recommended.length > 0 && (
                       <ul className="flex flex-col gap-3 text-sm">
-                        {worthReviewingQuestions.map((q, i) =>
-                          renderClarificationQuestion(q, `clarification-question-review-${i}`, "neutral"),
+                        {bucket.recommended.map((q, i) =>
+                          renderClarificationQuestion(q, `clarification-question-recommended-${bucket.key}-${i}`, "amber"),
                         )}
                       </ul>
-                    </div>
-                  )}
-                </>
+                    )}
+                    {bucket.worthReviewing.length > 0 && (
+                      <div className={bucket.recommended.length > 0 ? "mt-4" : undefined}>
+                        <p className="mb-2 text-xs text-neutral-500">
+                          Worth reviewing — plausible, but less certain than the above. Use your own judgment on
+                          whether these are worth sending.
+                        </p>
+                        <ul className="flex flex-col gap-3 text-sm">
+                          {bucket.worthReviewing.map((q, i) =>
+                            renderClarificationQuestion(q, `clarification-question-review-${bucket.key}-${i}`, "neutral"),
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                ))
               )}
             </div>
           )}

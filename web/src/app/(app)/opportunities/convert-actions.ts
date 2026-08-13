@@ -24,9 +24,10 @@ import { redirect } from "next/navigation";
  * event) lives in src/lib/opportunity-service.ts, kept separate so it's
  * testable without fighting Server Action-only APIs like redirect().
  */
-export async function convertToEstimate(opportunityId: string) {
+export async function convertToEstimate(opportunityId: string, formData: FormData) {
   await requireOpportunityAccess(opportunityId);
-  await convertOpportunityToEstimate(opportunityId);
+  const rawName = String(formData.get("name") ?? "").trim();
+  await convertOpportunityToEstimate(opportunityId, rawName || null);
 
   revalidatePath("/opportunities");
   revalidatePath(`/opportunities/${opportunityId}`);

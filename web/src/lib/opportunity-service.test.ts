@@ -194,4 +194,25 @@ describe("applyExtractedFieldsToOpportunity", () => {
     const updated = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
     expect(updated.boothNumber).toBeNull();
   });
+
+  it("skips auto-apply entirely once the opportunity has 2+ named estimates -- which project's booth number would this even be?", async () => {
+    const opportunity = await makeOpportunity();
+    await db.estimate.create({ data: { opportunityId: opportunity.id, name: "Full Swing Baseball" } });
+    await db.estimate.create({ data: { opportunityId: opportunity.id, name: "Full Swing PGA" } });
+
+    await applyExtractedFieldsToOpportunity(opportunity.id, [{ field: "boothNumber", value: "1234" }]);
+
+    const updated = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
+    expect(updated.boothNumber).toBeNull();
+  });
+
+  it("still applies normally with only one named estimate -- the guard is specifically about 2+", async () => {
+    const opportunity = await makeOpportunity();
+    await db.estimate.create({ data: { opportunityId: opportunity.id, name: "Only One" } });
+
+    await applyExtractedFieldsToOpportunity(opportunity.id, [{ field: "boothNumber", value: "1234" }]);
+
+    const updated = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
+    expect(updated.boothNumber).toBe("1234");
+  });
 });

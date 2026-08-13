@@ -62,7 +62,7 @@ describe("runClarificationQuestionsAnalysis", () => {
     await expect(runClarificationQuestionsAnalysis(opportunity.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
   });
 
-  it("ignores a PRICING_SCHEDULE or DRAWING document -- neither counts as a scope document", async () => {
+  it("ignores a PRICING_SCHEDULE document -- pricing rows already become line items mechanically, not scope text", async () => {
     const { opportunity } = await makeOpportunity();
     await db.document.create({
       data: {
@@ -75,6 +75,12 @@ describe("runClarificationQuestionsAnalysis", () => {
         extractionStatus: "COMPLETE",
       },
     });
+
+    await expect(runClarificationQuestionsAnalysis(opportunity.id)).rejects.toThrow(/No analyzed scope documents/);
+  });
+
+  it("counts a DRAWING document as a scope document -- its vision-derived candidateGaps are just as usable", async () => {
+    const { opportunity } = await makeOpportunity();
     await db.document.create({
       data: {
         opportunityId: opportunity.id,
@@ -84,10 +90,13 @@ describe("runClarificationQuestionsAnalysis", () => {
         storageKey: "test-key",
         documentType: "DRAWING",
         extractionStatus: "COMPLETE",
+        extractedSummary: { candidateGaps: [{ text: "Unclear rigging load", sourceQuote: "", pageNumber: 1 }] },
       },
     });
 
-    await expect(runClarificationQuestionsAnalysis(opportunity.id)).rejects.toThrow(/No analyzed scope documents/);
+    // Reaches the AiNotConfiguredError guard, not "No analyzed scope
+    // documents" -- proves the DRAWING document was actually picked up.
+    await expect(runClarificationQuestionsAnalysis(opportunity.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
   });
 });
 
@@ -95,7 +104,7 @@ describe("resolveClarificationQuestions", () => {
   it("skips an EXCLUDE verdict entirely, regardless of question/rationale being present", async () => {
     const { opportunity } = await makeOpportunity();
     const document = await makeScopeDocument(opportunity.id, "Provide booth construction and installation labor.");
-    const candidates = [{ id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor" }];
+    const candidates = [{ id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor", estimateId: null }];
 
     const questions = await resolveClarificationQuestions(
       [{ candidateId: "G1", verdict: "EXCLUDE", question: null, rationale: null }],
@@ -110,7 +119,7 @@ describe("resolveClarificationQuestions", () => {
   it("drops a candidateId that doesn't match any given candidate -- a hallucination guard", async () => {
     const { opportunity } = await makeOpportunity();
     const document = await makeScopeDocument(opportunity.id, "Provide booth construction and installation labor.");
-    const candidates = [{ id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor" }];
+    const candidates = [{ id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor", estimateId: null }];
 
     const questions = await resolveClarificationQuestions(
       [
@@ -130,7 +139,7 @@ describe("resolveClarificationQuestions", () => {
   it("resolves a candidate's quote from server-known candidate data, carries confidence and rationale through, leaves pageNumber null for a non-PDF source", async () => {
     const { opportunity } = await makeOpportunity();
     const document = await makeScopeDocument(opportunity.id, "Provide booth construction and installation labor.");
-    const candidates = [{ id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor" }];
+    const candidates = [{ id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor", estimateId: null }];
 
     const questions = await resolveClarificationQuestions(
       [
@@ -180,7 +189,7 @@ describe("resolveClarificationQuestions", () => {
       data: { extractionStatus: "COMPLETE", extractedText: pages.join("\n") },
     });
     const updated = await db.document.findUniqueOrThrow({ where: { id: document.id } });
-    const candidates = [{ id: "G1", filename: "RFP.pdf", text: "Some gap", sourceQuote: realQuote }];
+    const candidates = [{ id: "G1", filename: "RFP.pdf", text: "Some gap", sourceQuote: realQuote, estimateId: null }];
 
     const questions = await resolveClarificationQuestions(
       [{ candidateId: "G1", verdict: "RECOMMENDED", question: "Real question", rationale: "Real rationale" }],
@@ -211,6 +220,27 @@ describe("resolveClarificationQuestions", () => {
     expect(questions).toHaveLength(1);
     expect(questions[0].confidence).toBe("RECOMMENDED");
     expect(questions[0].sourceQuote).toBe("installation labor");
+    // A cross-document finding is discovered at this stage, not
+    // pre-tagged like a numbered candidate -- shared/unclassified rather
+    // than guessed.
+    expect(questions[0].estimateId).toBeNull();
+  });
+
+  it("carries a candidate's already-resolved estimateId through to the final question, without re-classifying", async () => {
+    const { opportunity } = await makeOpportunity();
+    const document = await makeScopeDocument(opportunity.id, "Provide booth construction and installation labor.");
+    const candidates = [
+      { id: "G1", filename: document.filename, text: "Labor scope unclear", sourceQuote: "installation labor", estimateId: "est-baseball" },
+    ];
+
+    const questions = await resolveClarificationQuestions(
+      [{ candidateId: "G1", verdict: "RECOMMENDED", question: "Real question", rationale: "Matters" }],
+      candidates,
+      [],
+      [document],
+    );
+
+    expect(questions[0].estimateId).toBe("est-baseball");
   });
 
   it("drops an additionalFinding whose documentFilename doesn't match any document actually sent", async () => {

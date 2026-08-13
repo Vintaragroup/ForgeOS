@@ -44,7 +44,7 @@ export async function changeOpportunityStage(
   return updated;
 }
 
-export async function convertOpportunityToEstimate(opportunityId: string) {
+export async function convertOpportunityToEstimate(opportunityId: string, name: string | null = null) {
   const opportunity = await db.opportunity.findUniqueOrThrow({
     where: { id: opportunityId },
   });
@@ -53,7 +53,10 @@ export async function convertOpportunityToEstimate(opportunityId: string) {
     // Inherits the opportunity's tax jurisdiction (itself possibly
     // inherited from the company) as a starting default -- the estimate
     // detail page's own "Tax jurisdiction" picker can still override it.
-    db.estimate.create({ data: { opportunityId, taxRateId: opportunity.taxRateId } }),
+    // name is null for the common single-estimate case (nothing to
+    // distinguish it from) -- only meaningful once an Opportunity has
+    // multiple Estimates, see Estimate.name's own schema comment.
+    db.estimate.create({ data: { opportunityId, taxRateId: opportunity.taxRateId, name } }),
     db.opportunity.update({
       where: { id: opportunityId },
       data: { stage: "ESTIMATING" },
@@ -114,6 +117,19 @@ export async function applyExtractedFieldsToOpportunity(
   extractedFields: { field: ExtractableOpportunityField; value: string }[],
 ): Promise<void> {
   if (extractedFields.length === 0) return;
+
+  // These are single Opportunity-level columns -- genuinely ambiguous
+  // once the Opportunity has multiple projects in play (which booth
+  // number? which event date?). The existing "only fill an empty field"
+  // rule already provides partial protection, but doesn't stop the
+  // FIRST project's document from incorrectly populating a field that
+  // doesn't apply project-wide. Skip auto-apply entirely rather than
+  // guess -- same 2+ named Estimates threshold scope-document-context.ts's
+  // getProjectContext uses to decide multi-project is actually active.
+  const estimateCount = await db.estimate.count({
+    where: { opportunityId, deletedAt: null, name: { not: null } },
+  });
+  if (estimateCount >= 2) return;
 
   const opportunity = await db.opportunity.findUniqueOrThrow({
     where: { id: opportunityId },

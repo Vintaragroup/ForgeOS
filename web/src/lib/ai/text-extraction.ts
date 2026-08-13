@@ -13,6 +13,7 @@ export type ExtractionResult =
 export const PDF_MIME = "application/pdf";
 export const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+export const TEXT_MIME = "text/plain";
 
 export async function extractDocumentText(
   documentType: DocumentType,
@@ -51,6 +52,17 @@ export async function extractDocumentText(
       return { status: "UNSUPPORTED", reason: "No extractable text found in this document." };
     }
     return { status: "COMPLETE", text: result.value };
+  }
+
+  // Meeting transcripts/recaps routinely arrive as plain .txt exports
+  // (e.g. an auto-generated call-transcription download) -- no parsing
+  // needed, just a raw decode.
+  if (mimeType === TEXT_MIME) {
+    const text = bytes.toString("utf-8");
+    if (!text.trim()) {
+      return { status: "UNSUPPORTED", reason: "This text file is empty." };
+    }
+    return { status: "COMPLETE", text };
   }
 
   return { status: "UNSUPPORTED", reason: `Unsupported file type for text extraction: ${mimeType}` };

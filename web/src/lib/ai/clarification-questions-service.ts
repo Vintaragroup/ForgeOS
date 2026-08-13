@@ -46,6 +46,13 @@ export interface ClarificationQuestion {
   // Named to match citationHref's `fact` param directly (see citation.ts).
   pageNumber: number | null;
   confidence: ClarificationConfidence;
+  // Inherited directly from the candidate's already-resolved tag (see
+  // document-summary-service.ts) -- no new classification happens at
+  // this stage, since the candidate was already tagged once at Analyze
+  // time. null for a question sourced from additionalFindings (a
+  // genuinely new cross-document contradiction, not pre-tagged) --
+  // shown as shared/unclassified rather than guessed.
+  estimateId: string | null;
 }
 
 // One numbered reference per document's candidateGaps entry, built
@@ -66,6 +73,10 @@ interface NumberedCandidate {
   filename: string;
   text: string;
   sourceQuote: string;
+  // Already resolved once, at Analyze time (document-summary-service.ts)
+  // -- carried through here, not re-classified. No new AI call needed to
+  // know which project a candidate belongs to.
+  estimateId: string | null;
 }
 
 interface RawCandidateVerdict {
@@ -217,6 +228,7 @@ export async function resolveClarificationQuestions(
       documentId: doc.id,
       pageNumber: pageTexts ? locateQuotePage(pageTexts, sourceQuote) : null,
       confidence: entry.verdict,
+      estimateId: candidate.estimateId,
     });
   }
 
@@ -232,6 +244,14 @@ export async function resolveClarificationQuestions(
       documentId: doc.id,
       pageNumber: pageTexts ? locateQuotePage(pageTexts, sourceQuote) : null,
       confidence: finding.confidence,
+      // additionalFindings are genuinely new cross-document
+      // contradictions discovered at THIS stage, not pre-tagged like a
+      // numbered candidate -- shown as shared/unclassified rather than
+      // guessed. A real gap in coverage if this path fires often; it's
+      // documented as "usually empty" by design (see SYSTEM_PROMPT),
+      // so left unresolved for now rather than adding a second
+      // classification pass for a rare case.
+      estimateId: null,
     });
   }
 
@@ -266,7 +286,13 @@ export async function runClarificationQuestionsAnalysis(opportunityId: string, u
     const gaps = (d.extractedSummary as unknown as DocumentSummary | null)?.candidateGaps ?? [];
     return gaps.map((g) => {
       candidateCounter += 1;
-      return { id: `G${candidateCounter}`, filename: d.filename, text: g.text, sourceQuote: g.sourceQuote };
+      return {
+        id: `G${candidateCounter}`,
+        filename: d.filename,
+        text: g.text,
+        sourceQuote: g.sourceQuote,
+        estimateId: g.estimateId ?? null,
+      };
     });
   });
   const candidateListBlock =
