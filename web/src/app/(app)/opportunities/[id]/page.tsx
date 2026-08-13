@@ -35,6 +35,7 @@ import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
 import { DocumentUploadForm } from "@/components/document-upload-form";
 import { ProjectTypeFields, ProjectTypeFieldsView } from "@/components/project-type-fields";
+import { CLOSE_REASON_LABELS, StageChangeFields } from "@/components/stage-change-fields";
 
 const DOCUMENT_TYPE_OPTIONS = [
   { value: "RFP", label: "RFP" },
@@ -456,15 +457,6 @@ function OpportunityFieldSuggestions({
   );
 }
 
-const STAGE_OPTIONS = [
-  { value: "NEW", label: "New" },
-  { value: "CONTACTED", label: "Contacted" },
-  { value: "QUALIFIED", label: "Qualified" },
-  { value: "ESTIMATING", label: "Estimating" },
-  { value: "WON", label: "Won" },
-  { value: "LOST", label: "Lost" },
-];
-
 function StageChip({ stage }: { stage: string }) {
   switch (stage) {
     case "WON":
@@ -710,22 +702,15 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
 
       <CollapsibleSection title="Stage">
         <form action={changeStageWithId} className="flex flex-wrap items-end gap-3">
-          <SelectField
-            // Forces React to remount this uncontrolled select whenever the
-            // server-side stage changes -- otherwise the DOM node is reused
-            // across the Server Action's re-render and keeps showing the
-            // pre-submit value until a hard navigation.
-            key={opportunity.stage}
-            label="Move to"
-            name="stage"
-            defaultValue={opportunity.stage}
-            options={STAGE_OPTIONS}
-          />
-          <div className="flex-1 min-w-[12rem]">
-            <Field label="Note (optional)" name="note" />
-          </div>
+          <StageChangeFields key={opportunity.stage} defaultStage={opportunity.stage} />
           <Button>Update stage</Button>
         </form>
+        {(opportunity.stage === "WON" || opportunity.stage === "LOST") && opportunity.closeReason && (
+          <p className="mt-4 text-sm text-neutral-600">
+            <span className="font-medium">Closed reason:</span> {CLOSE_REASON_LABELS[opportunity.closeReason]}
+            {opportunity.closeReasonDetail ? ` — ${opportunity.closeReasonDetail}` : ""}
+          </p>
+        )}
         {opportunity.stageEvents.length > 0 && (
           <ul className="mt-4 flex flex-col gap-1 border-t border-neutral-200 pt-4 text-sm text-neutral-500">
             {opportunity.stageEvents.map((e) => (

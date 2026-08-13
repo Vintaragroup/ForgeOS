@@ -5,6 +5,7 @@ import { getAdminAnalytics } from "@/lib/admin-analytics";
 import { getCurrentUser } from "@/lib/auth";
 import { recordDeadlineActionAction } from "./dashboard-actions";
 import { Button, Card, LinkButton, Notice, PageHeader, Stat, StatusChip } from "@/components/ui";
+import { CLOSE_REASON_LABELS } from "@/components/stage-change-fields";
 
 export const dynamic = "force-dynamic";
 
@@ -104,10 +105,21 @@ export default async function DashboardPage() {
           ))}
         </div>
         {adminStats && (
-          <p className="mt-2 text-sm text-neutral-500">
-            Win rate: {fmtPct(adminStats.pipeline.winRatePct)} ({adminStats.pipeline.closedCount} closed
-            opportunit{adminStats.pipeline.closedCount === 1 ? "y" : "ies"})
-          </p>
+          <>
+            <p className="mt-2 text-sm text-neutral-500">
+              Win rate: {fmtPct(adminStats.pipeline.winRatePct)} ({adminStats.pipeline.closedCount} closed
+              opportunit{adminStats.pipeline.closedCount === 1 ? "y" : "ies"})
+            </p>
+            {Object.keys(adminStats.pipeline.lostReasonCounts).length > 0 && (
+              <p className="mt-1 text-sm text-neutral-500">
+                Lost to:{" "}
+                {Object.entries(adminStats.pipeline.lostReasonCounts)
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([reason, count]) => `${CLOSE_REASON_LABELS[reason] ?? reason} (${count})`)
+                  .join(", ")}
+              </p>
+            )}
+          </>
         )}
       </div>
 

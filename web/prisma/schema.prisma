@@ -42,6 +42,23 @@ enum OpportunityStage {
   LOST
 }
 
+// Captured at the moment an Opportunity moves to WON or LOST -- the one
+// piece of context that's impossible to reconstruct after the fact once
+// a deal is closed and everyone's moved on. Shared between both outcomes
+// rather than two separate enums since most reasons genuinely apply to
+// either side of the same axis (e.g. PRICE: won or lost on price is the
+// same underlying fact, just a different sign).
+enum CloseReason {
+  PRICE
+  TIMELINE
+  SCOPE_FIT
+  COMPETITOR
+  BUDGET_CANCELLED
+  NO_RESPONSE
+  RELATIONSHIP
+  OTHER
+}
+
 enum EstimateStatus {
   DRAFT
   IN_PROGRESS
@@ -214,6 +231,16 @@ model Opportunity {
   // (e.g. a client based in Chicago exhibiting at a show in Orlando).
   taxRateId String?
   taxRate   TaxRate? @relation(fields: [taxRateId], references: [id])
+
+  // Set by changeOpportunityStage (opportunity-service.ts) only at the
+  // moment stage becomes WON or LOST, and cleared if it ever moves away
+  // from either -- a stale reason attached to a reopened deal would be
+  // actively misleading, not just unused. One reason per opportunity, not
+  // per StageChangeEvent: a deal closes once in the common case, and
+  // admin-analytics.ts's breakdown wants a direct groupBy here, not a
+  // join through stage-change history to find "the" closing event.
+  closeReason       CloseReason?
+  closeReasonDetail String?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

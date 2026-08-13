@@ -5,7 +5,7 @@
 // the actual logic out here is what makes it testable at all.
 
 import { db } from "@/lib/db";
-import { OpportunityStage } from "@/generated/prisma/enums";
+import { OpportunityStage, type CloseReason } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import type { ExtractableOpportunityField } from "@/lib/ai/document-summary-service";
@@ -15,11 +15,27 @@ export async function changeOpportunityStage(
   id: string,
   toStage: OpportunityStage,
   note: string | null,
+  closeReason: CloseReason | null = null,
+  closeReasonDetail: string | null = null,
 ) {
   const current = await db.opportunity.findUniqueOrThrow({ where: { id } });
 
+  // closeReason only ever means something at the moment a deal actually
+  // closes -- a value passed in for any other target stage is ignored,
+  // and moving AWAY from WON/LOST back into an active stage (reopening a
+  // deal) clears whatever reason was recorded, since it would otherwise
+  // sit there describing an outcome that's no longer true.
+  const isClosing = toStage === "WON" || toStage === "LOST";
+
   const [updated] = await db.$transaction([
-    db.opportunity.update({ where: { id }, data: { stage: toStage } }),
+    db.opportunity.update({
+      where: { id },
+      data: {
+        stage: toStage,
+        closeReason: isClosing ? closeReason : null,
+        closeReasonDetail: isClosing ? closeReasonDetail : null,
+      },
+    }),
     db.stageChangeEvent.create({
       data: { opportunityId: id, fromStage: current.stage, toStage, note },
     }),

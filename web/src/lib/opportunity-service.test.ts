@@ -70,6 +70,42 @@ describe("changeOpportunityStage", () => {
       changeOpportunityStage("does-not-exist", "CONTACTED", null),
     ).rejects.toThrow();
   });
+
+  it("records closeReason/closeReasonDetail when moving to LOST", async () => {
+    const opportunity = await makeOpportunity();
+
+    const updated = await changeOpportunityStage(opportunity.id, "LOST", null, "PRICE", "Client went with a cheaper bid");
+
+    expect(updated.closeReason).toBe("PRICE");
+    expect(updated.closeReasonDetail).toBe("Client went with a cheaper bid");
+  });
+
+  it("records closeReason when moving to WON", async () => {
+    const opportunity = await makeOpportunity();
+
+    const updated = await changeOpportunityStage(opportunity.id, "WON", null, "RELATIONSHIP", null);
+
+    expect(updated.closeReason).toBe("RELATIONSHIP");
+  });
+
+  it("ignores a closeReason passed for a non-closing stage", async () => {
+    const opportunity = await makeOpportunity();
+
+    const updated = await changeOpportunityStage(opportunity.id, "CONTACTED", null, "PRICE", "should be ignored");
+
+    expect(updated.closeReason).toBeNull();
+    expect(updated.closeReasonDetail).toBeNull();
+  });
+
+  it("clears closeReason when a closed deal is reopened to an active stage", async () => {
+    const opportunity = await makeOpportunity();
+    await changeOpportunityStage(opportunity.id, "LOST", null, "COMPETITOR", "Lost to Acme Corp");
+
+    const reopened = await changeOpportunityStage(opportunity.id, "QUALIFIED", "reopening -- client came back", null, null);
+
+    expect(reopened.closeReason).toBeNull();
+    expect(reopened.closeReasonDetail).toBeNull();
+  });
 });
 
 describe("convertOpportunityToEstimate", () => {

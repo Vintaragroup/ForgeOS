@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { OpportunityStage, ProjectType, BoothType, BoothSpace } from "@/generated/prisma/enums";
+import { OpportunityStage, ProjectType, BoothType, BoothSpace, type CloseReason } from "@/generated/prisma/enums";
 import { changeOpportunityStage } from "@/lib/opportunity-service";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
 import { EXTRACTABLE_OPPORTUNITY_FIELDS, type ExtractableOpportunityField } from "@/lib/ai/document-summary-service";
@@ -156,8 +156,13 @@ export async function changeStage(id: string, formData: FormData) {
 
   const toStage = String(formData.get("stage")) as OpportunityStage;
   const note = emptyToNull(formData.get("note"));
+  // Only meaningful when toStage is WON/LOST -- changeOpportunityStage
+  // itself ignores these for any other target stage, so no branching
+  // needed here.
+  const closeReason = emptyToNull(formData.get("closeReason")) as CloseReason | null;
+  const closeReasonDetail = emptyToNull(formData.get("closeReasonDetail"));
 
-  await changeOpportunityStage(id, toStage, note);
+  await changeOpportunityStage(id, toStage, note, closeReason, closeReasonDetail);
 
   revalidatePath("/opportunities");
   revalidatePath(`/opportunities/${id}`);

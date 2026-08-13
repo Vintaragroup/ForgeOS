@@ -10,6 +10,7 @@ import { getOrgAiUsageSummary } from "@/lib/ai/ai-usage-service";
 export async function getAdminAnalytics() {
   const [
     stageGroups,
+    lostReasonGroups,
     versionsCurrent,
     versionsLocked,
     versionsApproved,
@@ -21,6 +22,15 @@ export async function getAdminAnalytics() {
     aiUsage,
   ] = await Promise.all([
     db.opportunity.groupBy({ by: ["stage"], where: { deletedAt: null }, _count: { _all: true } }),
+    // LOST specifically, not WON+LOST together -- this is the
+    // actionable half (why are we losing deals), and closeReason is
+    // null for every pre-migration LOST opportunity, so counts here
+    // only reflect deals closed after this feature shipped.
+    db.opportunity.groupBy({
+      by: ["closeReason"],
+      where: { deletedAt: null, stage: "LOST", closeReason: { not: null } },
+      _count: { _all: true },
+    }),
     db.estimateVersion.count({ where: { isCurrent: true } }),
     db.estimateVersion.count({ where: { isCurrent: true, isLocked: true } }),
     db.estimateVersion.count({ where: { isCurrent: true, isApproved: true } }),
@@ -48,6 +58,10 @@ export async function getAdminAnalytics() {
   const lost = stageCounts.LOST ?? 0;
   const closed = won + lost;
 
+  const lostReasonCounts = Object.fromEntries(
+    lostReasonGroups.map((g) => [g.closeReason, g._count._all]),
+  ) as Record<string, number>;
+
   const roleCounts = Object.fromEntries(
     roleGroups.map((g) => [g.systemRole, g._count._all]),
   ) as Record<string, number>;
@@ -61,6 +75,7 @@ export async function getAdminAnalytics() {
       byStage: stageCounts,
       winRatePct: closed > 0 ? (won / closed) * 100 : null,
       closedCount: closed,
+      lostReasonCounts,
     },
     estimates: {
       current: versionsCurrent,
