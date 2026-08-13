@@ -18,7 +18,8 @@ import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MI
 import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { getDocumentBytes } from "@/lib/document-service";
-import { getScopeDocuments, buildScopeDocumentsBlock } from "@/lib/ai/scope-document-context";
+import { getScopeDocuments, buildBulletsBlock } from "@/lib/ai/scope-document-context";
+import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 
 export interface ClarificationQuestion {
   // Exact client-ready text -- phrased to send as-is, never revealing an
@@ -48,7 +49,7 @@ const QUESTION_DESCRIPTION =
 const RATIONALE_DESCRIPTION =
   "One sentence, for the estimator's own internal use only (never sent to the client), explaining why this gap or ambiguity matters.";
 const SOURCE_QUOTE_DESCRIPTION =
-  "A short (under 150 characters) quote copied EXACTLY, character-for-character, from that document's text above, showing where this gap or ambiguity is. Never paraphrase or summarize the quote itself.";
+  "Copy the quote text given alongside the candidate you're using, EXACTLY as given. Never paraphrase, shorten, or summarize it.";
 
 export const CLARIFICATION_SCHEMA = {
   name: "rfp_clarification_questions",
@@ -97,11 +98,9 @@ export const CLARIFICATION_SCHEMA = {
 // and matters even more here -- a bad question costs a client's
 // confidence, a worse outcome than a missed one costs a second look at
 // the RFP.
-const SYSTEM_PROMPT = `You are a senior, experienced event/exhibit-industry estimator reviewing an RFP and its scope-of-work documents before submitting bidder questions. Find genuine gaps or ambiguities that would make a seasoned professional pause -- never restate anything the documents already answer, and never ask a generic procurement/administrative question with no bearing on scope, price, or execution.
+const SYSTEM_PROMPT = `You are a senior, experienced event/exhibit-industry estimator reviewing bidder-question candidates before submitting them to the client. Below, per document, is a candidate list of gaps or ambiguities already noted by a first-pass reviewer who read that ONE document in full -- each candidate includes a short verbatim quote showing where it came from. Your job is cross-document judgment the first pass couldn't do alone: read every document's candidates together, then decide which candidates actually rise to a genuine bidder question -- never restate anything ANY of the documents already answers (a candidate that looked open in one document is often answered in another), and never ask a generic procurement/administrative question with no bearing on scope, price, or execution.
 
-Read every document provided in full before proposing any question -- a fact stated in one document often answers a question that looks open in another.
-
-Propose a question whenever the documents leave a real, specific detail unresolved that a professional would need pinned down before confidently pricing or executing the work -- not just anything that reads as vague. This covers (not limited to):
+Propose a question only when the candidates (read together, across all documents) leave a real, specific detail unresolved that a professional would need pinned down before confidently pricing or executing the work -- not just anything that was flagged as a candidate. This covers (not limited to):
 - A contradiction between two sections or documents (different numbers, dates, or requirements for the same thing).
 - A missing technical parameter, quantity, or specification that materially affects pricing or risk (e.g. "temperature-controlled" with no target range, a load rating with no units, a compliance requirement with no referenced standard/code).
 - An unresolved responsibility -- unclear whether the client or the contractor owns a component, a permit, a piece of installation/removal work, or a logistics requirement (disposal, storage, security, etc.).
@@ -113,8 +112,8 @@ Never propose a question about: something already answered anywhere in the provi
 For each question:
 - question: the exact text to send to the client -- professional, specific, never revealing that an AI wrote it.
 - rationale: one sentence, for the estimator's own use only, explaining why this matters.
-- sourceQuote: a short verbatim quote from the document proving where the gap or ambiguity is -- an exact substring, never a paraphrase.
-- documentFilename: the exact filename (from the "Document:" header) this quote came from.`;
+- sourceQuote: copy the exact quote text given with the candidate you're using -- do not alter, shorten, or paraphrase it.
+- documentFilename: the exact filename (from the "Document:" header) that candidate came from.`;
 
 // Separated from runClarificationQuestionsAnalysis below so it's directly
 // testable without a live OpenAI call -- same reasoning as
@@ -164,15 +163,23 @@ export async function runClarificationQuestionsAnalysis(opportunityId: string, u
   // proposeLineItemsFromScope / runScopeCoverageAnalysis.
   const client = getOpenAiClient();
 
-  const documentsBlock = buildScopeDocumentsBlock(
-    scopeDocuments.map((d) => ({ filename: d.filename, extractedText: d.extractedText! })),
+  // Compact candidate-gap bullets, not raw text -- each was extracted by
+  // document-summary-service.ts's cheap model reading that document's
+  // FULL text at Analyze time (see its own candidateGaps field). A
+  // document analyzed before that field existed has none yet; re-analyze
+  // it to backfill rather than falling back to raw text here.
+  const documentsBlock = buildBulletsBlock(
+    scopeDocuments.map((d) => ({
+      filename: d.filename,
+      bullets: (d.extractedSummary as unknown as DocumentSummary | null)?.candidateGaps ?? [],
+    })),
   );
 
   const completion = await client.chat.completions.create({
     model: ADVANCED_MODEL,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: `SCOPE DOCUMENTS:\n\n${documentsBlock}` },
+      { role: "user", content: `CANDIDATE GAPS BY DOCUMENT:\n\n${documentsBlock}` },
     ],
     response_format: { type: "json_schema", json_schema: CLARIFICATION_SCHEMA },
   });

@@ -14,7 +14,8 @@ import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MI
 import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { getDocumentBytes } from "@/lib/document-service";
-import { getScopeDocuments, buildScopeDocumentsBlock } from "@/lib/ai/scope-document-context";
+import { getScopeDocuments, buildBulletsBlock } from "@/lib/ai/scope-document-context";
+import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 
 export interface CoverageGap {
   requirement: string;
@@ -42,7 +43,7 @@ export interface RawCoverageGap {
 const REQUIREMENT_DESCRIPTION =
   "A concise (under 200 characters) description, in your own words, of the specific scope requirement or deliverable that does not appear to be priced anywhere in the current line items.";
 const SOURCE_QUOTE_DESCRIPTION =
-  "A short (under 150 characters) quote copied EXACTLY, character-for-character, from that document's text above, showing where this requirement is stated. Never paraphrase or summarize the quote itself.";
+  "Copy the quote text given alongside the bullet you're using, EXACTLY as given. Never paraphrase, shorten, or summarize it.";
 
 export const COVERAGE_SCHEMA = {
   name: "scope_coverage_gaps",
@@ -72,14 +73,14 @@ export const COVERAGE_SCHEMA = {
   },
 } as const;
 
-const SYSTEM_PROMPT = `You compare a Scope of Work / RFP document against a contractor's current list of priced line items for the same job, and flag any concrete deliverable or requirement stated in the document that does not appear to be covered by ANY of the current line items.
+const SYSTEM_PROMPT = `Below, per document, is a bulleted scope summary already extracted from a Scope of Work / RFP document by a first-pass reviewer who read that document in full -- each bullet is a stated deliverable or requirement, with a short verbatim quote showing where it came from. Compare these bullets against a contractor's current list of priced line items for the same job, and flag any bullet describing a concrete deliverable or requirement that does not appear to be covered by ANY of the current line items.
 
-Only flag genuine gaps in scope coverage -- concrete work, materials, or deliverables the document asks for that you cannot find a reasonably matching line item for. Do not flag: administrative/legal/insurance/payment-terms clauses, anything already covered even if worded differently than the document (e.g. a line item "Booth fabrication" covers a requirement for "construct exhibit structure"), or vague scope-summary language that isn't itself a distinct deliverable. When in doubt, do not flag it -- returning an empty array is the correct, useful answer for a document whose scope is already fully covered; a false alarm costs a reviewer's trust in this feature more than a missed one costs a second look at the RFP.
+Only flag genuine gaps in scope coverage -- concrete work, materials, or deliverables a bullet asks for that you cannot find a reasonably matching line item for. Do not flag: administrative/legal/insurance/payment-terms clauses, anything already covered even if worded differently than the bullet (e.g. a line item "Booth fabrication" covers a requirement for "construct exhibit structure"), or vague scope-summary language that isn't itself a distinct deliverable. When in doubt, do not flag it -- returning an empty array is the correct, useful answer for a document whose scope is already fully covered; a false alarm costs a reviewer's trust in this feature more than a missed one costs a second look at the RFP.
 
 For each gap:
 - requirement: a concise description, in your own words, of the specific uncovered requirement.
-- sourceQuote: a short verbatim quote from the document proving the document actually asked for this -- an exact substring, never a paraphrase.
-- documentFilename: the exact filename (from the "Document:" header) this quote came from.`;
+- sourceQuote: copy the exact quote text given alongside the bullet you're using -- do not alter, shorten, or paraphrase it.
+- documentFilename: the exact filename (from the "Document:" header) that bullet came from.`;
 
 function buildLineItemsBlock(
   sections: { name: string; lineItems: { description: string; qty: Prisma.Decimal; unit: string | null; category: string | null }[] }[],
@@ -152,8 +153,16 @@ export async function runScopeCoverageAnalysis(estimateVersionId: string, userId
 
   const allLineItems = version.sections.flatMap((s) => s.lineItems);
   const lineItemsBlock = buildLineItemsBlock(version.sections);
-  const documentsBlock = buildScopeDocumentsBlock(
-    scopeDocuments.map((d) => ({ filename: d.filename, extractedText: d.extractedText! })),
+  // Compact scope bullets, not raw text -- each was extracted by
+  // document-summary-service.ts's cheap model reading that document's
+  // FULL text at Analyze time (see its own scopeSummary field). A
+  // document analyzed before that field existed has none yet; re-analyze
+  // it to backfill rather than falling back to raw text here.
+  const documentsBlock = buildBulletsBlock(
+    scopeDocuments.map((d) => ({
+      filename: d.filename,
+      bullets: (d.extractedSummary as unknown as DocumentSummary | null)?.scopeSummary ?? [],
+    })),
   );
 
   const completion = await client.chat.completions.create({
@@ -162,7 +171,7 @@ export async function runScopeCoverageAnalysis(estimateVersionId: string, userId
       { role: "system", content: SYSTEM_PROMPT },
       {
         role: "user",
-        content: `CURRENT LINE ITEMS:\n${lineItemsBlock}\n\nSCOPE DOCUMENTS:\n\n${documentsBlock}`,
+        content: `CURRENT LINE ITEMS:\n${lineItemsBlock}\n\nSCOPE BULLETS BY DOCUMENT:\n\n${documentsBlock}`,
       },
     ],
     response_format: { type: "json_schema", json_schema: COVERAGE_SCHEMA },
