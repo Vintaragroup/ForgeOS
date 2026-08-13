@@ -162,6 +162,27 @@ export function Field({
   );
 }
 
+// Read-only counterpart to Field/SelectField -- same label-above-value
+// shape and spacing, so a section can switch between a display view and
+// its edit form (opportunities/[id]/page.tsx's Details card) without the
+// layout jumping. An empty value shows as an em dash, not a blank
+// line, so a genuinely-unset field still reads as "answered: nothing
+// yet" rather than looking like a rendering gap.
+export function ReadOnlyField({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-sm font-medium text-neutral-700">{label}</span>
+      <span className="text-sm text-neutral-900">
+        {value === null || value === undefined || value === "" ? (
+          <span className="text-neutral-400">—</span>
+        ) : (
+          value
+        )}
+      </span>
+    </div>
+  );
+}
+
 export function TextareaField({
   label,
   name,

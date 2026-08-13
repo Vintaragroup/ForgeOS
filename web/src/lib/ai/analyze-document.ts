@@ -5,13 +5,27 @@
 // (documents/actions.ts today, anything else later) branches the same way.
 
 import { db } from "@/lib/db";
-import { summarizeDocument } from "@/lib/ai/document-summary-service";
+import { summarizeDocument, type DocumentSummary } from "@/lib/ai/document-summary-service";
 import { summarizeDrawing } from "@/lib/ai/drawing-summary-service";
+import { applyExtractedFieldsToOpportunity } from "@/lib/opportunity-service";
 
 export async function analyzeDocument(documentId: string, userId: string | null = null) {
-  const { documentType } = await db.document.findUniqueOrThrow({
+  const { documentType, opportunityId } = await db.document.findUniqueOrThrow({
     where: { id: documentId },
-    select: { documentType: true },
+    select: { documentType: true, opportunityId: true },
   });
-  return documentType === "DRAWING" ? summarizeDrawing(documentId, userId) : summarizeDocument(documentId, userId);
+  const result =
+    documentType === "DRAWING" ? await summarizeDrawing(documentId, userId) : await summarizeDocument(documentId, userId);
+
+  // Only summarizeDocument (never summarizeDrawing) ever populates
+  // extractedFields -- see document-summary-service.ts. A failed/
+  // unsupported analysis leaves extractedSummary as whatever it was
+  // before (null on a first attempt), so this is a no-op in that case,
+  // not an error.
+  const summary = result.extractedSummary as unknown as DocumentSummary | null;
+  if (summary?.extractedFields?.length) {
+    await applyExtractedFieldsToOpportunity(opportunityId, summary.extractedFields);
+  }
+
+  return result;
 }

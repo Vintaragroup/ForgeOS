@@ -1,6 +1,10 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { changeOpportunityStage, convertOpportunityToEstimate } from "@/lib/opportunity-service";
+import {
+  applyExtractedFieldsToOpportunity,
+  changeOpportunityStage,
+  convertOpportunityToEstimate,
+} from "@/lib/opportunity-service";
 
 async function makeOpportunity() {
   const company = await db.company.create({ data: { name: "Test Co" } });
@@ -108,5 +112,50 @@ describe("convertOpportunityToEstimate", () => {
 
     const estimates = await db.estimate.findMany({ where: { opportunityId: opportunity.id } });
     expect(estimates).toHaveLength(2);
+  });
+});
+
+describe("applyExtractedFieldsToOpportunity", () => {
+  it("fills empty fields from extracted values, including parsing a free-text date", async () => {
+    const opportunity = await makeOpportunity();
+
+    await applyExtractedFieldsToOpportunity(opportunity.id, [
+      { field: "boothNumber", value: "1234" },
+      { field: "boothSize", value: "20x20" },
+      { field: "eventStartDate", value: "March 5, 2027" },
+    ]);
+
+    const updated = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
+    expect(updated.boothNumber).toBe("1234");
+    expect(updated.boothSize).toBe("20x20");
+    expect(updated.eventStartDate?.toISOString().slice(0, 10)).toBe("2027-03-05");
+  });
+
+  it("never overwrites a field that's already set, even with a different extracted value", async () => {
+    const opportunity = await makeOpportunity();
+    await db.opportunity.update({ where: { id: opportunity.id }, data: { boothNumber: "already set by hand" } });
+
+    await applyExtractedFieldsToOpportunity(opportunity.id, [{ field: "boothNumber", value: "9999" }]);
+
+    const updated = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
+    expect(updated.boothNumber).toBe("already set by hand");
+  });
+
+  it("ignores an unparseable date rather than writing garbage", async () => {
+    const opportunity = await makeOpportunity();
+
+    await applyExtractedFieldsToOpportunity(opportunity.id, [{ field: "shipDate", value: "not a real date" }]);
+
+    const updated = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
+    expect(updated.shipDate).toBeNull();
+  });
+
+  it("is a no-op for an empty extractedFields array -- no query, no write", async () => {
+    const opportunity = await makeOpportunity();
+
+    await applyExtractedFieldsToOpportunity(opportunity.id, []);
+
+    const updated = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
+    expect(updated.boothNumber).toBeNull();
   });
 });

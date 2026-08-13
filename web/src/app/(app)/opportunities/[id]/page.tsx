@@ -24,11 +24,11 @@ import {
 import { citationHref, linkifyDocumentMentions, parseFreeTextDate } from "@/lib/citation";
 import { XLSX_MIME } from "@/lib/ai/text-extraction";
 import { taxRateLabel, taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
-import { Button, CollapsibleSection, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
+import { Button, CollapsibleSection, Field, PageHeader, ReadOnlyField, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
 import { DocumentUploadForm } from "@/components/document-upload-form";
-import { ProjectTypeFields } from "@/components/project-type-fields";
+import { ProjectTypeFields, ProjectTypeFieldsView } from "@/components/project-type-fields";
 
 const DOCUMENT_TYPE_OPTIONS = [
   { value: "RFP", label: "RFP" },
@@ -481,6 +481,16 @@ function fmtDate(d: Date | null): string {
 
 export default async function OpportunityDetailPage(props: PageProps<"/opportunities/[id]">) {
   const { id } = await props.params;
+  const { editDetails: editDetailsParam } = await props.searchParams;
+  // Same query-param toggle convention as estimates/[id]/page.tsx's
+  // importDocumentId/proposeDocumentId -- a plain server-rendered view
+  // vs. edit split needs no client state, just which panel a link
+  // navigates to. Details defaults to the read-only view (matching "this
+  // should be information that's been entered, with an edit button");
+  // updateOpportunity's own redirect back to the bare /opportunities/[id]
+  // URL after Save is what returns here to view mode, no extra code
+  // needed for that half of the round trip.
+  const isEditingDetails = (Array.isArray(editDetailsParam) ? editDetailsParam[0] : editDetailsParam) === "1";
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
@@ -655,66 +665,123 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       </CollapsibleSection>
 
       <CollapsibleSection title="Details">
-        <form action={updateWithId} className="flex flex-col gap-4">
-          <SelectField
-            label="Company"
-            name="companyId"
-            defaultValue={opportunity.companyId}
-            required
-            options={companies.map((c) => ({ value: c.id, label: c.name }))}
-          />
-          <Field label="Show name" name="showName" defaultValue={opportunity.showName} required />
-          <ProjectTypeFields
-            defaults={{
-              projectType: opportunity.projectType,
-              boothNumber: opportunity.boothNumber ?? "",
-              boothSize: opportunity.boothSize ?? "",
-              boothSpace: opportunity.boothSpace ?? "",
-              boothType: opportunity.boothType ?? "",
-              shipDate: fmtDate(opportunity.shipDate),
-              venue: opportunity.venue ?? "",
-              eventStartDate: fmtDate(opportunity.eventStartDate),
-              eventEndDate: fmtDate(opportunity.eventEndDate),
-              siteAddress: opportunity.siteAddress ?? "",
-              projectDetails: opportunity.projectDetails ?? "",
-            }}
-          />
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Target move-in" name="targetMoveIn" type="date" defaultValue={fmtDate(opportunity.targetMoveIn)} />
-            <Field label="Target move-out" name="targetMoveOut" type="date" defaultValue={fmtDate(opportunity.targetMoveOut)} />
-          </div>
-          <SelectField
-            label="Primary contact"
-            name="primaryContactId"
-            defaultValue={opportunity.primaryContactId ?? ""}
-            options={[
-              { value: "", label: "— none —" },
-              ...contacts.map((c) => ({ value: c.id, label: c.name })),
-            ]}
-          />
-          <SelectField
-            label="Owner"
-            name="ownerId"
-            defaultValue={opportunity.ownerId ?? ""}
-            options={[
-              { value: "", label: "— unassigned —" },
-              ...users.map((u) => ({ value: u.id, label: u.name })),
-            ]}
-          />
-          <SelectField
-            label="Tax jurisdiction"
-            name="taxRateId"
-            defaultValue={opportunity.taxRateId ?? ""}
-            options={[
-              { value: "", label: "— none —" },
-              ...taxRates.map((t) => ({ value: t.id, label: taxRateOptionLabel(t) })),
-            ]}
-          />
-          <div>
-            <Button>Save changes</Button>
-          </div>
-        </form>
-        <OpportunityFieldSuggestions opportunityId={opportunity.id} opportunity={opportunity} documents={documents} />
+        {isEditingDetails ? (
+          <>
+            <form action={updateWithId} className="flex flex-col gap-4">
+              <SelectField
+                label="Company"
+                name="companyId"
+                defaultValue={opportunity.companyId}
+                required
+                options={companies.map((c) => ({ value: c.id, label: c.name }))}
+              />
+              <Field label="Show name" name="showName" defaultValue={opportunity.showName} required />
+              <ProjectTypeFields
+                defaults={{
+                  projectType: opportunity.projectType,
+                  boothNumber: opportunity.boothNumber ?? "",
+                  boothSize: opportunity.boothSize ?? "",
+                  boothSpace: opportunity.boothSpace ?? "",
+                  boothType: opportunity.boothType ?? "",
+                  shipDate: fmtDate(opportunity.shipDate),
+                  venue: opportunity.venue ?? "",
+                  eventStartDate: fmtDate(opportunity.eventStartDate),
+                  eventEndDate: fmtDate(opportunity.eventEndDate),
+                  siteAddress: opportunity.siteAddress ?? "",
+                  projectDetails: opportunity.projectDetails ?? "",
+                }}
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Target move-in" name="targetMoveIn" type="date" defaultValue={fmtDate(opportunity.targetMoveIn)} />
+                <Field label="Target move-out" name="targetMoveOut" type="date" defaultValue={fmtDate(opportunity.targetMoveOut)} />
+              </div>
+              <SelectField
+                label="Primary contact"
+                name="primaryContactId"
+                defaultValue={opportunity.primaryContactId ?? ""}
+                options={[
+                  { value: "", label: "— none —" },
+                  ...contacts.map((c) => ({ value: c.id, label: c.name })),
+                ]}
+              />
+              <SelectField
+                label="Owner"
+                name="ownerId"
+                defaultValue={opportunity.ownerId ?? ""}
+                options={[
+                  { value: "", label: "— unassigned —" },
+                  ...users.map((u) => ({ value: u.id, label: u.name })),
+                ]}
+              />
+              <SelectField
+                label="Tax jurisdiction"
+                name="taxRateId"
+                defaultValue={opportunity.taxRateId ?? ""}
+                options={[
+                  { value: "", label: "— none —" },
+                  ...taxRates.map((t) => ({ value: t.id, label: taxRateOptionLabel(t) })),
+                ]}
+              />
+              <div className="flex gap-3">
+                <Button>Save changes</Button>
+                <Link
+                  href={`/opportunities/${opportunity.id}`}
+                  className="inline-flex items-center rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  Cancel
+                </Link>
+              </div>
+            </form>
+            <OpportunityFieldSuggestions opportunityId={opportunity.id} opportunity={opportunity} documents={documents} />
+          </>
+        ) : (
+          <>
+            <div className="flex flex-col gap-4">
+              <ReadOnlyField label="Company" value={opportunity.company.name} />
+              <ReadOnlyField label="Show name" value={opportunity.showName} />
+              <ProjectTypeFieldsView
+                values={{
+                  projectType: opportunity.projectType,
+                  boothNumber: opportunity.boothNumber ?? "",
+                  boothSize: opportunity.boothSize ?? "",
+                  boothSpace: opportunity.boothSpace ?? "",
+                  boothType: opportunity.boothType ?? "",
+                  shipDate: fmtDate(opportunity.shipDate),
+                  venue: opportunity.venue ?? "",
+                  eventStartDate: fmtDate(opportunity.eventStartDate),
+                  eventEndDate: fmtDate(opportunity.eventEndDate),
+                  siteAddress: opportunity.siteAddress ?? "",
+                  projectDetails: opportunity.projectDetails ?? "",
+                }}
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <ReadOnlyField label="Target move-in" value={fmtDate(opportunity.targetMoveIn)} />
+                <ReadOnlyField label="Target move-out" value={fmtDate(opportunity.targetMoveOut)} />
+              </div>
+              <ReadOnlyField
+                label="Primary contact"
+                value={contacts.find((c) => c.id === opportunity.primaryContactId)?.name}
+              />
+              <ReadOnlyField label="Owner" value={users.find((u) => u.id === opportunity.ownerId)?.name} />
+              <ReadOnlyField
+                label="Tax jurisdiction"
+                value={(() => {
+                  const matchedTaxRate = taxRates.find((t) => t.id === opportunity.taxRateId);
+                  return matchedTaxRate ? taxRateOptionLabel(matchedTaxRate) : undefined;
+                })()}
+              />
+              <div>
+                <Link
+                  href={`/opportunities/${opportunity.id}?editDetails=1`}
+                  className="inline-flex items-center rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  Edit
+                </Link>
+              </div>
+            </div>
+            <OpportunityFieldSuggestions opportunityId={opportunity.id} opportunity={opportunity} documents={documents} />
+          </>
+        )}
         <ConfirmForm
           action={deleteWithId}
           confirmMessage="Delete this opportunity? This can't be undone."

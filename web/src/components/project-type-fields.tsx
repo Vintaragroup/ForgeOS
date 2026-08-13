@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Field, SelectField, TextareaField } from "@/components/ui";
+import { Field, ReadOnlyField, SelectField, TextareaField } from "@/components/ui";
 
 // The fifth client component in this app (see document-upload-form.tsx's
 // header comment on the fourth) -- selecting a project type needs to
@@ -110,6 +110,47 @@ export function ProjectTypeFields({ defaults }: { defaults: ProjectTypeFieldDefa
             hint="Fill in what you know now -- most of the detail for this type usually comes from AI reading uploaded RFPs, meeting notes, or email chains once they're attached below."
             rows={4}
           />
+        </>
+      )}
+    </>
+  );
+}
+
+function optionLabel(options: { value: string; label: string }[], value: string): string {
+  return options.find((o) => o.value === value)?.label ?? "";
+}
+
+// Read-only counterpart to ProjectTypeFields above -- same field-group
+// visibility rules (SHOWS_BOOTH_NUMBER/DIMENSIONS/SITE_FIELDS) and the
+// same option-label lookups, so the Details card's view mode shows
+// "Island" rather than the raw "ISLAND" enum value a plain ReadOnlyField
+// would otherwise display.
+export function ProjectTypeFieldsView({ values }: { values: ProjectTypeFieldDefaults }) {
+  return (
+    <>
+      <ReadOnlyField label="Project type" value={optionLabel(PROJECT_TYPE_OPTIONS, values.projectType)} />
+      <div className="grid grid-cols-3 gap-4">
+        <ReadOnlyField label="Venue / location" value={values.venue} />
+        <ReadOnlyField label="Event start date" value={values.eventStartDate} />
+        <ReadOnlyField label="Event end date" value={values.eventEndDate} />
+      </div>
+      {SHOWS_BOOTH_NUMBER.has(values.projectType) && (
+        <div className="grid grid-cols-2 gap-4">
+          <ReadOnlyField label="Booth number" value={values.boothNumber} />
+          <ReadOnlyField label="Booth type" value={optionLabel(BOOTH_TYPE_OPTIONS, values.boothType)} />
+        </div>
+      )}
+      {SHOWS_BOOTH_DIMENSIONS.has(values.projectType) && (
+        <div className="grid grid-cols-3 gap-4">
+          <ReadOnlyField label="Booth size" value={values.boothSize} />
+          <ReadOnlyField label="Booth space" value={optionLabel(BOOTH_SPACE_OPTIONS, values.boothSpace)} />
+          <ReadOnlyField label="Ship date" value={values.shipDate} />
+        </div>
+      )}
+      {SHOWS_SITE_FIELDS.has(values.projectType) && (
+        <>
+          <ReadOnlyField label="Site address" value={values.siteAddress} />
+          <ReadOnlyField label="Project details" value={values.projectDetails} />
         </>
       )}
     </>
