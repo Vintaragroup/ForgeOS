@@ -24,6 +24,12 @@ import {
 import { citationHref, linkifyDocumentMentions, parseFreeTextDate } from "@/lib/citation";
 import { XLSX_MIME } from "@/lib/ai/text-extraction";
 import { taxRateLabel, taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
+import {
+  buildDealChecklist,
+  daysInStage,
+  STAGE_AGE_CRITICAL_DAYS,
+  STAGE_AGE_WARNING_DAYS,
+} from "@/lib/deal-checklist";
 import { Button, CollapsibleSection, Field, PageHeader, ReadOnlyField, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
@@ -498,7 +504,21 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     where: { id, deletedAt: null },
     include: {
       company: true,
-      estimates: { orderBy: { createdAt: "desc" }, include: { taxRate: true } },
+      estimates: {
+        orderBy: { createdAt: "desc" },
+        include: {
+          taxRate: true,
+          // Only the current version, and only its proposals -- the Deal
+          // Checklist card below (buildDealChecklist) only ever needs
+          // "where does the LATEST version of the LATEST estimate
+          // actually stand," not full version/proposal history.
+          versions: {
+            where: { isCurrent: true },
+            take: 1,
+            include: { proposals: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } } },
+          },
+        },
+      },
       projects: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
       stageEvents: { orderBy: { changedAt: "desc" } },
       collaborators: { select: { userId: true } },
@@ -587,6 +607,36 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     .flatMap((d) => d.extractedSummary.keyDates)
     .find((kd) => (kd.dateType ?? "MILESTONE") === "DEADLINE" && /question/i.test(kd.label));
 
+  // "What's next to close this deal" -- entirely derived from data this
+  // page already fetched for other cards (documents, the current estimate
+  // version, its proposals), so this adds no new query and can never go
+  // stale. See deal-checklist.ts for the actual step-by-step logic.
+  const currentEstimateVersion = opportunity.estimates[0]?.versions[0] ?? null;
+  const dealChecklist = buildDealChecklist({
+    opportunityId: opportunity.id,
+    stage: opportunity.stage,
+    primaryContactId: opportunity.primaryContactId,
+    ownerId: opportunity.ownerId,
+    pendingFieldSuggestionCount: getFieldSuggestions(opportunity, documents).length,
+    documentsNeedingAnalysisCount: documents.filter(
+      (d) => d.documentType !== "PRICING_SCHEDULE" && (d.extractionStatus === "PENDING" || d.extractionStatus === "FAILED"),
+    ).length,
+    hasScopeDocuments,
+    recommendedClarificationQuestionCount: recommendedQuestions.length,
+    bidderQuestionsDeadlineLabel: bidderQuestionsDeadline?.date ?? null,
+    estimateId: estimateId ?? null,
+    currentVersion: currentEstimateVersion
+      ? { isLocked: currentEstimateVersion.isLocked, isApproved: currentEstimateVersion.isApproved }
+      : null,
+    currentVersionProposals: currentEstimateVersion?.proposals ?? [],
+    projectCount: opportunity.projects.length,
+  });
+  // Most recent stage change, falling back to the opportunity's own
+  // creation -- stageEvents is already fetched ordered changedAt desc.
+  const stageAgeDays = ["WON", "LOST"].includes(opportunity.stage)
+    ? null
+    : daysInStage(opportunity.stageEvents[0]?.changedAt ?? opportunity.createdAt);
+
   // Shared between the recommended and worth-reviewing lists below --
   // same row shape, only the color/emphasis differs by section, not the
   // structure, so it's one function rather than two near-duplicate maps.
@@ -629,9 +679,34 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           <>
             {opportunity.showName}
             <StageChip stage={opportunity.stage} />
+            {stageAgeDays !== null && stageAgeDays >= STAGE_AGE_WARNING_DAYS && (
+              <StatusChip tone={stageAgeDays >= STAGE_AGE_CRITICAL_DAYS ? "critical" : "warning"}>
+                {stageAgeDays} days in stage
+              </StatusChip>
+            )}
           </>
         }
       />
+
+      {dealChecklist.length > 0 && (
+        <CollapsibleSection title="Next steps to close this deal">
+          <ul className="flex flex-col gap-2 text-sm">
+            {dealChecklist.map((item) => (
+              <li
+                key={item.id}
+                className={`flex items-center justify-between gap-3 rounded-md px-3 py-2 ${
+                  item.urgent ? "bg-red-50" : "bg-neutral-50"
+                }`}
+              >
+                <span className={item.urgent ? "text-red-800" : "text-neutral-800"}>{item.label}</span>
+                <Link href={item.href} className="shrink-0 text-xs font-medium text-brand-navy hover:underline">
+                  Go →
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </CollapsibleSection>
+      )}
 
       <CollapsibleSection title="Stage">
         <form action={changeStageWithId} className="flex flex-wrap items-end gap-3">
@@ -664,7 +739,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         )}
       </CollapsibleSection>
 
-      <CollapsibleSection title="Details">
+      <CollapsibleSection title="Details" id="details">
         {isEditingDetails ? (
           <>
             <form action={updateWithId} className="flex flex-col gap-4">
@@ -791,7 +866,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         </ConfirmForm>
       </CollapsibleSection>
 
-      <CollapsibleSection title="Estimates">
+      <CollapsibleSection title="Estimates" id="estimates">
         {opportunity.estimates.length === 0 ? (
           <p className="mb-4 text-sm text-neutral-500">
             No estimate started yet. Converting pre-fills job details from this opportunity.
@@ -823,7 +898,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         </div>
       </CollapsibleSection>
 
-      <CollapsibleSection title="Documents">
+      <CollapsibleSection title="Documents" id="documents">
         <p className="mb-4 text-sm text-neutral-500">
           RFP packages, scope of work, drawings, contracts — anything client-supplied. Uploaded
           documents can seed draft estimate line items and answer questions in chat.
@@ -936,7 +1011,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       <ProjectBriefCard opportunityId={opportunity.id} documents={documents} />
 
       {hasScopeDocuments && (
-        <CollapsibleSection title="Clarification questions">
+        <CollapsibleSection title="Clarification questions" id="clarification-questions">
           <p className="mb-4 text-sm text-neutral-500">
             Reviews this RFP&apos;s scope documents for genuine ambiguities or gaps worth asking the client
             about — calibrated to a seasoned professional&apos;s judgment, not just anything that looks
@@ -992,7 +1067,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       )}
 
       {opportunity.stage === "WON" && (
-        <CollapsibleSection title="Project">
+        <CollapsibleSection title="Project" id="project">
           {opportunity.projects.length === 0 ? (
             <>
               <p className="mb-4 text-sm text-neutral-500">

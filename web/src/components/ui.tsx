@@ -87,14 +87,20 @@ export function CollapsibleSection({
   defaultOpen = true,
   children,
   className = "",
+  id,
 }: {
   title: ReactNode;
   defaultOpen?: boolean;
   children: ReactNode;
   className?: string;
+  // Lets a link elsewhere on the page (the Deal Checklist card) jump
+  // straight to a section via #id -- optional since most callers have no
+  // need to be linked to directly.
+  id?: string;
 }) {
   return (
     <details
+      id={id}
       open={defaultOpen}
       className={`group rounded-lg border border-neutral-200 bg-white ${className}`}
     >
