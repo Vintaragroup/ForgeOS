@@ -690,6 +690,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                           {estimateNameById.size > 0 && (
                             <td className="px-2 py-1 text-neutral-500">
                               {item.estimateId ? (estimateNameById.get(item.estimateId) ?? "Unknown estimate") : "Shared"}
+                              {item.classificationUncertain && (
+                                <span
+                                  className="ml-1 text-amber-600"
+                                  title="A second, independent AI pass disagreed with this classification -- verify carefully before committing."
+                                >
+                                  ⚠
+                                </span>
+                              )}
                             </td>
                           )}
                         </tr>

@@ -20,7 +20,12 @@ import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { getDocumentBytes } from "@/lib/document-service";
 import { withProjectField } from "@/lib/ai/document-summary-service";
-import { filterBulletsForEstimate, getProjectContext, resolveProjectTag } from "@/lib/ai/scope-document-context";
+import {
+  filterBulletsForEstimate,
+  getProjectContext,
+  resolveProjectTag,
+  type ProjectContext,
+} from "@/lib/ai/scope-document-context";
 import {
   CUSTOM_BUILD_CATEGORY_KEY,
   inferCategoryFromDescription,
@@ -74,6 +79,15 @@ export interface ProposedLineItem {
   // trusted directly instead of computed via locateQuotePage. Absent (not
   // just null) for every text-sourced item.
   pageNumber?: number | null;
+  // Set only in multi-project mode, after a second independent
+  // classification pass disagrees with the first (see
+  // flagUncertainClassifications). Purely advisory -- estimateId above
+  // stays whatever the first pass resolved; there's no principled way to
+  // know which of two disagreeing runs is "more correct," only that a
+  // human should look at this one before committing it. Never persisted
+  // onto the committed LineItem -- this is the before-commit catch, the
+  // audit tool (line-item-audit-service.ts) remains the after-commit net.
+  classificationUncertain?: boolean;
 }
 
 // What OpenAI actually returns -- project is only present when the
@@ -132,8 +146,26 @@ export function buildProposalSchema(projectNames: string[]) {
   } as const;
 }
 
-function buildSystemPrompt(projectNames: string[]): string {
-  const base = `You read a Scope of Work / RFP document for an event/exhibit contractor and propose a list of distinct, biddable line items a contractor would need to price to build a complete quote -- the granularity a real pricing schedule would use (e.g. "Booth structure fabrication", "Graphics production", "Installation labor"), not one item paraphrasing the entire scope.
+// isTranscript branches the framing for MEETING_NOTES documents -- a real,
+// confirmed bug otherwise: the default framing assumes a formal
+// deliverable, and a raw meeting transcript (casual dialogue,
+// introductions, a real case of the team discussing the estimating
+// platform itself rather than the job) made the model return an EMPTY
+// items array for a document that, read directly, has 16 real biddable
+// items in it. Live-tested against that exact document/model: 0 items
+// with the generic framing, 16 with this one, nothing else changed.
+// Mirrors meeting-notes-summary-service.ts's own already-proven framing
+// for the identical document-type/noise problem.
+export function buildSystemPrompt(projectNames: string[], isTranscript: boolean): string {
+  const documentDescription = isTranscript
+    ? "a meeting transcript, recap, or email thread"
+    : "a Scope of Work / RFP document";
+
+  const transcriptGuidance = isTranscript
+    ? `\n\nThis is a raw meeting transcript, not a formal deliverable -- it mixes real, price-relevant scope discussion with casual conversation, introductions, and (a real, confirmed case) the team discussing the estimating platform/software itself rather than the job being estimated. Sift through the noise: extract genuine scope items wherever they appear in the transcript, and ignore administrative chatter, introductions, and platform/tooling discussion entirely -- don't let noise elsewhere in the document cause you to return nothing when real scope items are present elsewhere in it.`
+    : "";
+
+  const base = `You read ${documentDescription} for an event/exhibit contractor and propose a list of distinct, biddable line items a contractor would need to price to build a complete quote -- the granularity a real pricing schedule would use (e.g. "Booth structure fabrication", "Graphics production", "Installation labor"), not one item paraphrasing the entire scope.
 
 For each item:
 - qty: the quantity actually stated in the text if there is one (a count, square footage, linear footage, day count, etc.). If no quantity is stated, use 1 and set qtyIsExplicit to false -- 1 is a placeholder meaning "this item exists, quantity unknown," never a guess at a real number.
@@ -141,9 +173,9 @@ For each item:
 - unit: a sensible unit for this item (EA, SQFT, LF, HR, LOT) -- infer from context if the document doesn't state one.
 - lineType: MATERIAL for goods/fabrication, LABOR for installation/labor-only work, FEE for flat fees/rentals/services.
 - category: which section this item belongs to.
-- sourceQuote: a short verbatim quote copied EXACTLY from the document showing where this item comes from -- an exact substring of the source text, never a paraphrase.
+- sourceQuote: a short verbatim quote copied EXACTLY from the document showing where this item comes from -- an exact substring of the source text, never a paraphrase.${transcriptGuidance}
 
-Only propose items that describe actual work or goods to be provided -- skip administrative, legal, or process clauses entirely. If the document has no concrete scope of deliverables, return an empty items array rather than inventing something.
+Only propose items that describe actual work or goods to be provided -- skip administrative, legal, or process clauses entirely. If the document has no concrete scope of deliverables${isTranscript ? " anywhere in it" : ""}, return an empty items array rather than inventing something.
 
 category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closest fit rather than inventing a new name -- use "Other" only when nothing on the list is a reasonable match. Always use this fixed list, even if a previous run on the same document used different wording.`;
 
@@ -153,6 +185,73 @@ category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closes
     base +
     `\n\nThis client relationship covers multiple separate projects: ${projectNames.map((n) => `"${n}"`).join(", ")}. Classify which one each proposed item belongs to using the project field -- respond with the exact project name it's for, or "SHARED" only if it genuinely applies to more than one (e.g. a general project-management fee). Get this right: a wrong attribution puts one project's cost in the other project's estimate.`
   );
+}
+
+// A second, independent classification pass -- catches the residual risk
+// the audit tool (line-item-audit-service.ts) can't: a classification
+// that's wrong but internally self-consistent, not drift from a later
+// retag. Deliberately NOT a full re-extraction (smaller output, and
+// avoids the "did the two runs even extract the same items" matching
+// problem) -- it's handed the already-extracted item descriptions and
+// asked to classify each one again from scratch, with the same full
+// document context project attribution actually needs (see every other
+// comment on this in the file), but never shown its own first answer, to
+// avoid anchoring on it.
+function buildReclassificationSchema(projectNames: string[]) {
+  return {
+    name: "project_reclassification",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        classifications: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              description: { type: "string", description: "Copied EXACTLY from the item list above -- used to match this classification back to the right item." },
+              project: {
+                type: "string",
+                description: `Which project this item belongs to. Respond with EXACTLY one of: ${projectNames.map((n) => JSON.stringify(n)).join(", ")} -- or "SHARED" if it genuinely applies to more than one.`,
+              },
+            },
+            required: ["description", "project"],
+          },
+        },
+      },
+      required: ["classifications"],
+    },
+  } as const;
+}
+
+function buildReclassificationPrompt(projectNames: string[]): string {
+  return `You are independently classifying which project each of a list of already-identified line items belongs to, using the full document text below for context. This client relationship covers multiple separate projects: ${projectNames.map((n) => `"${n}"`).join(", ")}.
+
+For each item in the list you're given, read the document text and determine which project it belongs to from the surrounding context -- respond with the exact project name, or "SHARED" only if it genuinely applies to more than one. Classify every item in the list, in the same order, copying its description back exactly.`;
+}
+
+// Pure and separately testable from the OpenAI-calling glue on purpose --
+// this is the actual detection logic (matching + disagreement), and it
+// shouldn't need a live API key to verify it's correct. estimateId stays
+// whatever the first pass resolved either way; disagreement only adds a
+// visible "verify this one" flag; it never overrides anything. An item
+// missing from the second pass (shouldn't happen, same input list both
+// times) is left unflagged rather than guessed at.
+export function flagUncertainClassifications(
+  firstPass: ProposedLineItem[],
+  secondPassClassifications: { description: string; project: string }[],
+  context: ProjectContext,
+): ProposedLineItem[] {
+  const secondProjectByDescription = new Map(secondPassClassifications.map((c) => [c.description, c.project]));
+  return firstPass.map((item) => {
+    const secondProject = secondProjectByDescription.get(item.description);
+    if (secondProject === undefined) return item;
+    const secondEstimateId = resolveProjectTag(secondProject, context);
+    const firstEstimateId = item.estimateId ?? null;
+    return firstEstimateId === secondEstimateId ? item : { ...item, classificationUncertain: true };
+  });
 }
 
 // Same ceiling and reasoning as document-summary-service.ts's own
@@ -190,6 +289,8 @@ export async function proposeLineItemsFromScope(documentId: string, userId: stri
   // can tell belong to one specific project), while the exact same
   // multi-project prompt on ADVANCED_MODEL classified correctly.
   const model = projectNames.length > 0 ? ADVANCED_MODEL : BASIC_MODEL;
+  const isTranscript = document.documentType === "MEETING_NOTES";
+  const truncatedText = document.extractedText.slice(0, MAX_INPUT_CHARS);
 
   const completion = await client.chat.completions.create({
     model,
@@ -200,8 +301,8 @@ export async function proposeLineItemsFromScope(documentId: string, userId: stri
     // has -- the same gap found (and fixed) in drawing-summary-service.ts.
     temperature: 0.2,
     messages: [
-      { role: "system", content: buildSystemPrompt(projectNames) },
-      { role: "user", content: `Document: ${document.filename}\n\n${document.extractedText.slice(0, MAX_INPUT_CHARS)}` },
+      { role: "system", content: buildSystemPrompt(projectNames, isTranscript) },
+      { role: "user", content: `Document: ${document.filename}\n\n${truncatedText}` },
     ],
     response_format: { type: "json_schema", json_schema: buildProposalSchema(projectNames) },
   });
@@ -232,10 +333,57 @@ export async function proposeLineItemsFromScope(documentId: string, userId: stri
     estimateId: document.estimateId ?? resolveProjectTag(project, projectContext),
   }));
 
+  // Self-consistency re-check -- only when there's a real multi-project
+  // classification to doubt in the first place, and something was
+  // actually proposed. Roughly doubles this call's input-token cost, but
+  // only for multi-project mode (already the minority case) -- see
+  // flagUncertainClassifications for what this actually catches.
+  const finalItems =
+    projectNames.length > 0 && items.length > 0
+      ? await reclassifyForConsistency(client, document, truncatedText, items, projectContext, projectNames, userId)
+      : items;
+
   return db.document.update({
     where: { id: documentId },
-    data: { proposedLineItems: items as unknown as Prisma.InputJsonValue },
+    data: { proposedLineItems: finalItems as unknown as Prisma.InputJsonValue },
   });
+}
+
+async function reclassifyForConsistency(
+  client: ReturnType<typeof getOpenAiClient>,
+  document: { id: string; opportunityId: string },
+  truncatedText: string,
+  items: ProposedLineItem[],
+  projectContext: ProjectContext,
+  projectNames: string[],
+  userId: string | null,
+): Promise<ProposedLineItem[]> {
+  const completion = await client.chat.completions.create({
+    model: ADVANCED_MODEL,
+    temperature: 0.2,
+    messages: [
+      { role: "system", content: buildReclassificationPrompt(projectNames) },
+      {
+        role: "user",
+        content: `Document text:\n\n${truncatedText}\n\n---\n\nItems to classify:\n${items.map((i) => `- ${i.description}`).join("\n")}`,
+      },
+    ],
+    response_format: { type: "json_schema", json_schema: buildReclassificationSchema(projectNames) },
+  });
+
+  await recordAiUsage({
+    userId,
+    feature: "SCOPE_LINE_ITEMS",
+    model: ADVANCED_MODEL,
+    usage: completion.usage,
+    documentId: document.id,
+    opportunityId: document.opportunityId,
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) return items; // a transient hiccup on the re-check shouldn't lose the primary proposal
+  const parsed = JSON.parse(content) as { classifications: { description: string; project: string }[] };
+  return flagUncertainClassifications(items, parsed.classifications, projectContext);
 }
 
 // Creates one EstimateSection per distinct category (mirroring

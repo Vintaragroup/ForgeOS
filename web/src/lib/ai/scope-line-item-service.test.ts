@@ -5,11 +5,14 @@ import { createEstimateVersion } from "@/lib/estimate-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import {
   buildProposalSchema,
+  buildSystemPrompt,
   commitScopeLineItems,
+  flagUncertainClassifications,
   proposeLineItemsFromScope,
   SCOPE_CATEGORIES,
   type ProposedLineItem,
 } from "@/lib/ai/scope-line-item-service";
+import type { ProjectContext } from "@/lib/ai/scope-document-context";
 
 afterEach(async () => {
   await db.lineItem.deleteMany();
@@ -304,5 +307,77 @@ describe("commitScopeLineItems", () => {
     const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
     expect(sections).toHaveLength(1);
     expect(sections[0].name).toBe("Doors & Hardware");
+  });
+});
+
+describe("buildSystemPrompt", () => {
+  // The real bug this guards against: the generic framing made a real
+  // 73,764-character meeting transcript return zero items despite having
+  // 16 real biddable items in it -- confirmed live, the transcript-aware
+  // framing fixed it with nothing else changed. This test only proves the
+  // branch is wired, not the AI outcome (that needs a real key).
+  it("includes transcript-specific framing and noise-filtering guidance only when isTranscript is true", () => {
+    const withTranscript = buildSystemPrompt([], true);
+    const withoutTranscript = buildSystemPrompt([], false);
+
+    expect(withTranscript).toMatch(/meeting transcript, recap, or email thread/);
+    expect(withTranscript).toMatch(/estimating platform\/software itself/);
+    expect(withoutTranscript).not.toMatch(/meeting transcript, recap, or email thread/);
+    expect(withoutTranscript).not.toMatch(/estimating platform\/software itself/);
+    expect(withoutTranscript).toMatch(/Scope of Work \/ RFP document/);
+  });
+});
+
+describe("flagUncertainClassifications", () => {
+  const context: ProjectContext = {
+    estimates: [
+      { id: "estimate-a", name: "Project A" },
+      { id: "estimate-b", name: "Project B" },
+    ],
+  };
+  const baseItem: ProposedLineItem = {
+    description: "Booth structure fabrication",
+    qty: 1,
+    qtyIsExplicit: false,
+    unit: "LOT",
+    lineType: "MATERIAL",
+    category: "Booth Structure & Walls",
+    sourceQuote: "some quote",
+    estimateId: "estimate-a",
+  };
+
+  it("leaves an item unflagged when the second pass agrees with the first", () => {
+    const result = flagUncertainClassifications(
+      [baseItem],
+      [{ description: "Booth structure fabrication", project: "Project A" }],
+      context,
+    );
+    expect(result[0].classificationUncertain).toBeUndefined();
+  });
+
+  it("flags an item when the second pass resolves to a different estimate than the first", () => {
+    const result = flagUncertainClassifications(
+      [baseItem],
+      [{ description: "Booth structure fabrication", project: "Project B" }],
+      context,
+    );
+    expect(result[0].classificationUncertain).toBe(true);
+    // First pass stays authoritative -- flagging never overrides estimateId.
+    expect(result[0].estimateId).toBe("estimate-a");
+  });
+
+  it("flags an item when the second pass says SHARED but the first resolved to a specific project", () => {
+    const result = flagUncertainClassifications(
+      [baseItem],
+      [{ description: "Booth structure fabrication", project: "SHARED" }],
+      context,
+    );
+    expect(result[0].classificationUncertain).toBe(true);
+  });
+
+  it("leaves an item unflagged, not crashing, when it's missing from the second pass entirely", () => {
+    const result = flagUncertainClassifications([baseItem], [], context);
+    expect(result[0].classificationUncertain).toBeUndefined();
+    expect(result[0].estimateId).toBe("estimate-a");
   });
 });
