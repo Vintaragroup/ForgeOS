@@ -13,15 +13,92 @@ import { updateCutSheetLayoutAction } from "@/app/(app)/estimates/[id]/versions/
 // with pointer-drag state and live overlap/bounds validation layered on
 // top. Only ever rendered when the version is unlocked (cut-list/page.tsx
 // gates this the same way it gates every other mutating control).
+//
+// Smart guides + shift-drag (both added after the initial drag build):
+// grid-snap (GRID_SNAP) is the default, but a drag that lands within
+// SNAP_PIXELS of another part's or the sheet's own edge/center overrides
+// it and draws a guide line -- see computeAlignedPosition. "Snap to
+// corner" isn't a separate feature; it's just both axes matching a guide
+// at once. Holding Shift while dragging constrains movement to whichever
+// axis has moved further, matching Figma/PowerPoint's own convention.
 const DIAGRAM_MAX_WIDTH = 500;
 const DIAGRAM_MAX_HEIGHT = 380;
 // A real, physically meaningful snap -- fine enough to place a part
 // precisely, coarse enough that a shop worker cutting from the resulting
-// diagram isn't chasing hundredths of an inch.
+// diagram isn't chasing hundredths of an inch. Falls back to this on any
+// axis that doesn't land within SNAP_PIXELS of an alignment guide.
 const GRID_SNAP = 0.25;
+// A screen-pixel (not inch) threshold -- alignment "feel" should stay
+// consistent regardless of a sheet's real size, so this is converted to
+// inches via the current scale, not a fixed inch value that would feel
+// twitchy on a small remnant and unreachable on a full 48x96 sheet.
+const SNAP_PIXELS = 6;
 
 function snap(n: number): number {
   return Math.round(n / GRID_SNAP) * GRID_SNAP;
+}
+
+export interface Guide {
+  axis: "x" | "y";
+  position: number;
+}
+
+// One axis's worth of smart-guide matching: compares the dragged part's
+// own start/center/end against every candidate reference line, and (if
+// one is within threshold) returns both the resulting START coordinate
+// for that part AND the matched reference line itself, in one pass --
+// deriving them separately (as an earlier draft of this function did)
+// requires the two searches to agree, which is a real, avoidable way for
+// the guide line drawn on screen to silently mismatch the actual snapped
+// position.
+function bestAxisSnap(start: number, size: number, refs: number[], thresholdIn: number): { start: number; guide: number } | null {
+  let best: { delta: number; start: number; guide: number } | null = null;
+  for (const offset of [0, size / 2, size]) {
+    const edge = start + offset;
+    for (const ref of refs) {
+      const delta = Math.abs(edge - ref);
+      if (delta <= thresholdIn && (!best || delta < best.delta)) {
+        best = { delta, start: ref - offset, guide: ref };
+      }
+    }
+  }
+  return best ? { start: best.start, guide: best.guide } : null;
+}
+
+// Figma/PowerPoint-style smart guides: the dragged part's own left/
+// center/right (and top/center/bottom) edges are compared against every
+// OTHER part's matching edges plus the sheet's own bounds/center -- a
+// match within threshold overrides the plain grid-snap for that axis.
+// Two independent single-axis searches, not a combined one -- "snap to
+// corner" is just what happens when both axes happen to match at once,
+// not a separate code path.
+export function computeAlignedPosition(
+  candidateX: number,
+  candidateY: number,
+  width: number,
+  height: number,
+  otherParts: PlacedPart[],
+  sheetWidth: number,
+  sheetLength: number,
+  thresholdIn: number,
+): { x: number; y: number; guides: Guide[] } {
+  const refX = [0, sheetWidth / 2, sheetWidth];
+  const refY = [0, sheetLength / 2, sheetLength];
+  for (const p of otherParts) {
+    refX.push(p.x, p.x + p.width / 2, p.x + p.width);
+    refY.push(p.y, p.y + p.height / 2, p.y + p.height);
+  }
+
+  const guides: Guide[] = [];
+  const xSnap = bestAxisSnap(candidateX, width, refX, thresholdIn);
+  const x = xSnap ? xSnap.start : snap(candidateX);
+  if (xSnap) guides.push({ axis: "x", position: xSnap.guide });
+
+  const ySnap = bestAxisSnap(candidateY, height, refY, thresholdIn);
+  const y = ySnap ? ySnap.start : snap(candidateY);
+  if (ySnap) guides.push({ axis: "y", position: ySnap.guide });
+
+  return { x, y, guides };
 }
 
 export function CutSheetDiagramEditor({
@@ -60,6 +137,12 @@ export function CutSheetDiagramEditor({
   // regardless of React's render/commit timing, so the pointer handlers
   // read the drag target from here, never from state.
   const dragOrigin = useRef<{ index: number; pointerX: number; pointerY: number; partX: number; partY: number } | null>(null);
+  // Guides currently drawn during an active drag -- real React state
+  // (not folded into the ref above) because it needs to trigger a
+  // re-render on its own to actually show up, but it's only ever set
+  // alongside setParts inside the same handlePointerMove call, so both
+  // land in the same React 18+ batched re-render.
+  const [activeGuides, setActiveGuides] = useState<Guide[]>([]);
 
   const scale = Math.min(DIAGRAM_MAX_WIDTH / sheet.width, DIAGRAM_MAX_HEIGHT / sheet.length);
   const svgWidth = sheet.width * scale;
@@ -86,15 +169,42 @@ export function CutSheetDiagramEditor({
   function handlePointerMove(e: ReactPointerEvent<SVGSVGElement>) {
     const origin = dragOrigin.current;
     if (!origin) return;
-    const deltaXIn = (e.clientX - origin.pointerX) / scale;
-    const deltaYIn = (e.clientY - origin.pointerY) / scale;
-    const nextX = snap(origin.partX + deltaXIn);
-    const nextY = snap(origin.partY + deltaYIn);
-    setParts((prev) => prev.map((p, i) => (i === origin.index ? { ...p, x: nextX, y: nextY } : p)));
+    let deltaXIn = (e.clientX - origin.pointerX) / scale;
+    let deltaYIn = (e.clientY - origin.pointerY) / scale;
+
+    // Shift-drag: constrain to whichever axis has moved further from the
+    // drag's start, holding the other axis exactly at its starting value
+    // -- same constrain-drag convention as Figma/PowerPoint. The locked
+    // axis still isn't free to alignment-snap or grid-snap away from
+    // where the drag started; it just doesn't move at all.
+    if (e.shiftKey) {
+      if (Math.abs(deltaXIn) >= Math.abs(deltaYIn)) deltaYIn = 0;
+      else deltaXIn = 0;
+    }
+
+    const candidateX = origin.partX + deltaXIn;
+    const candidateY = origin.partY + deltaYIn;
+    const draggedPart = parts[origin.index];
+    const otherParts = parts.filter((_, i) => i !== origin.index);
+    const thresholdIn = SNAP_PIXELS / scale;
+    const { x, y, guides } = computeAlignedPosition(
+      candidateX,
+      candidateY,
+      draggedPart.width,
+      draggedPart.height,
+      otherParts,
+      sheet.width,
+      sheet.length,
+      thresholdIn,
+    );
+
+    setParts((prev) => prev.map((p, i) => (i === origin.index ? { ...p, x, y } : p)));
+    setActiveGuides(guides);
   }
 
   function handlePointerUp() {
     dragOrigin.current = null;
+    setActiveGuides([]);
   }
 
   function handleReset() {
@@ -166,6 +276,34 @@ export function CutSheetDiagramEditor({
             </g>
           );
         })}
+        {/* Smart guides -- drawn last so they render on top of every part,
+            same as every design tool's own alignment-guide layering. Only
+            present while actively dragging (handlePointerUp clears them). */}
+        {activeGuides.map((g, i) =>
+          g.axis === "x" ? (
+            <line
+              key={i}
+              x1={g.position}
+              y1={0}
+              x2={g.position}
+              y2={sheet.length}
+              stroke="#ec4899"
+              strokeWidth={0.04}
+              strokeDasharray="0.3,0.3"
+            />
+          ) : (
+            <line
+              key={i}
+              x1={0}
+              y1={g.position}
+              x2={sheet.width}
+              y2={g.position}
+              stroke="#ec4899"
+              strokeWidth={0.04}
+              strokeDasharray="0.3,0.3"
+            />
+          ),
+        )}
       </svg>
       <div className="flex min-h-[1.5rem] items-center gap-3 text-xs">
         {!valid && <span className="text-red-600">Overlapping or out-of-bounds parts (shown in red) can&apos;t be saved.</span>}
