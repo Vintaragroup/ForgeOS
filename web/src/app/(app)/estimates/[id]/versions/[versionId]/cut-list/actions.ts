@@ -14,6 +14,10 @@ import {
   type PlacedPart,
 } from "@/lib/cut-list-nesting-service";
 
+function readMode(formData: FormData): "cost" | "waste" {
+  return formData.get("mode") === "waste" ? "waste" : "cost";
+}
+
 function emptyToNull(value: FormDataEntryValue | null): string | null {
   const str = String(value ?? "").trim();
   return str === "" ? null : str;
@@ -99,7 +103,24 @@ export async function deleteCutListPartAction(estimateId: string, versionId: str
   let errorMessage: string | null = null;
   try {
     await assertUnlocked(versionId);
-    const part = await db.cutListPart.delete({ where: { id: partId } });
+    const part = await db.cutListPart.findUniqueOrThrow({ where: { id: partId } });
+
+    // Phase 8: a locked sheet (survives re-optimize, see
+    // clearStaleCutSheets) must never be silently invalidated by
+    // deleting a part it still references -- block instead, same "wrong
+    // answer is worse than a visible gap" posture the catalog-match
+    // scorer's own header comment argues for elsewhere in this app.
+    const lockedSheets = await db.cutSheet.findMany({
+      where: { estimateVersionId: versionId, materialId: part.materialId, locked: true },
+    });
+    const isOnLockedSheet = lockedSheets.some((s) =>
+      (s.layout as unknown as PlacedPart[]).some((p) => p.cutListPartId === partId),
+    );
+    if (isOnLockedSheet) {
+      throw new Error(`"${part.description}" is on a locked sheet -- unlock it first before deleting this part.`);
+    }
+
+    await db.cutListPart.delete({ where: { id: partId } });
     // Same staleness reasoning as addCutListPartAction -- confirmed
     // live: without this, the cut list summary kept showing a
     // material's old sheet count/cost/waste after its only part was
@@ -121,12 +142,12 @@ export async function deleteCutListPartAction(estimateId: string, versionId: str
 // Error, since buildFullEstimateFromDocumentsAction already established
 // that pattern for a materially identical case (an action whose outcome
 // is worth showing, not just success/fail).
-export async function optimizeMaterialAction(estimateId: string, versionId: string, materialId: string) {
+export async function optimizeMaterialAction(estimateId: string, versionId: string, materialId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
   let errorMessage: string | null = null;
   try {
     await assertUnlocked(versionId);
-    await optimizeNestingForMaterial(versionId, materialId);
+    await optimizeNestingForMaterial(versionId, materialId, readMode(formData));
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : String(err);
   }
@@ -134,13 +155,13 @@ export async function optimizeMaterialAction(estimateId: string, versionId: stri
   redirect(errorMessage ? errorRedirectPath(estimateId, versionId, errorMessage) : cutListPath(estimateId, versionId));
 }
 
-export async function optimizeAllMaterialsAction(estimateId: string, versionId: string) {
+export async function optimizeAllMaterialsAction(estimateId: string, versionId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
   let errorMessage: string | null = null;
   let result: Awaited<ReturnType<typeof optimizeNestingForVersion>> | null = null;
   try {
     await assertUnlocked(versionId);
-    result = await optimizeNestingForVersion(versionId);
+    result = await optimizeNestingForVersion(versionId, readMode(formData));
   } catch (err) {
     // optimizeNestingForVersion itself already catches a per-material
     // optimize failure into its own `skipped` list -- a throw reaching
@@ -200,4 +221,44 @@ export async function updateCutSheetLayoutAction(
   });
 
   revalidatePath(cutListPath(estimateId, versionId));
+}
+
+// Cut-list phase 8: toggles a single sheet's "pinned" state (CutList
+// Plus's own term) -- a locked sheet survives re-optimize untouched (see
+// clearStaleCutSheets) and always renders read-only regardless of the
+// version's own lock state. Gated by assertUnlocked same as every other
+// cut-list edit -- unlike toggleCutSheetCutAction below, this changes
+// how the cut list itself behaves, not just a production status flag.
+export async function toggleCutSheetLockAction(estimateId: string, versionId: string, materialId: string, sheetNumber: number) {
+  await requireEstimateAccess(estimateId);
+  let errorMessage: string | null = null;
+  try {
+    await assertUnlocked(versionId);
+    const sheet = await db.cutSheet.findFirst({ where: { estimateVersionId: versionId, materialId, sheetNumber } });
+    if (!sheet) throw new Error(`Sheet ${sheetNumber} not found -- it may have been re-optimized since this page loaded.`);
+    await db.cutSheet.update({ where: { id: sheet.id }, data: { locked: !sheet.locked } });
+  } catch (err) {
+    errorMessage = err instanceof Error ? err.message : String(err);
+  }
+  revalidatePath(cutListPath(estimateId, versionId));
+  redirect(errorMessage ? errorRedirectPath(estimateId, versionId, errorMessage) : cutListPath(estimateId, versionId));
+}
+
+// Shop-floor "this sheet was physically cut" confirmation -- deliberately
+// NOT gated by assertUnlocked, unlike every other action in this file.
+// Cutting happens BECAUSE an estimate version is locked/accepted;
+// blocking this once the version is locked would be backwards. This
+// never changes the layout/geometry, only records production progress.
+export async function toggleCutSheetCutAction(estimateId: string, versionId: string, materialId: string, sheetNumber: number) {
+  await requireEstimateAccess(estimateId);
+  let errorMessage: string | null = null;
+  try {
+    const sheet = await db.cutSheet.findFirst({ where: { estimateVersionId: versionId, materialId, sheetNumber } });
+    if (!sheet) throw new Error(`Sheet ${sheetNumber} not found -- it may have been re-optimized since this page loaded.`);
+    await db.cutSheet.update({ where: { id: sheet.id }, data: { cutAt: sheet.cutAt ? null : new Date() } });
+  } catch (err) {
+    errorMessage = err instanceof Error ? err.message : String(err);
+  }
+  revalidatePath(cutListPath(estimateId, versionId));
+  redirect(errorMessage ? errorRedirectPath(estimateId, versionId, errorMessage) : cutListPath(estimateId, versionId));
 }

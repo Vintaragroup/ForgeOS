@@ -1013,6 +1013,19 @@ model CutSheet {
   // optimizeNestingForMaterial), not left as a stale orphan.
   generatedRemnant MaterialRemnant? @relation("GeneratedRemnant")
 
+  // Cut-list phase 8: survives re-optimize untouched (see
+  // clearStaleCutSheets) -- CutList Plus's "pinned diagrams." A locked
+  // sheet also always renders read-only (CutSheetDiagram, not the drag
+  // editor), same as a locked EstimateVersion -- "locked" means
+  // "finalized," not "protected from the optimizer but still draggable."
+  locked Boolean @default(false)
+  // Shop-floor confirmation this sheet was physically cut -- a
+  // production action, deliberately NOT gated by EstimateVersion.isLocked
+  // the way every other cut-list mutation is: cutting happens BECAUSE an
+  // estimate is locked/accepted, gating it the same way would be
+  // backwards.
+  cutAt DateTime?
+
   createdAt DateTime @default(now())
 
   @@map("cut_sheets")

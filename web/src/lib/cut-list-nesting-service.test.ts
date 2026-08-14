@@ -497,7 +497,7 @@ describe("getCutListCostReport", () => {
   it("returns an empty report when nothing in this version has been optimized", async () => {
     const version = await makeVersion();
     const report = await getCutListCostReport(version.id);
-    expect(report).toEqual({ materials: [], totalCost: 0, totalSheetsUsed: 0 });
+    expect(report).toEqual({ materials: [], totalCost: 0, totalSheetsUsed: 0, totalSheetsCut: 0 });
   });
 });
 
@@ -655,5 +655,100 @@ describe("optimizeNestingForMaterial -- CutListSettings integration (Phase 7)", 
     const remnants = await db.materialRemnant.findMany({ where: { materialId: material.id } });
     expect(remnants).toHaveLength(1);
     expect(remnants[0].width.toNumber()).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("optimizeNestingForMaterial -- locked sheets + cost/waste mode (Phase 8)", () => {
+  it("leaves a locked sheet's layout byte-identical on re-optimize, and only packs the un-accounted-for quantity", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial({ stockWidth: 48, stockLength: 96, defaultKerf: 0 });
+    await makePart(version.id, material.id, { description: "Panel", width: 10, length: 10, qty: 3 });
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const sheetBefore = await db.cutSheet.findFirstOrThrow({ where: { estimateVersionId: version.id, materialId: material.id } });
+    expect((sheetBefore.layout as unknown[]).length).toBe(3);
+    await db.cutSheet.update({ where: { id: sheetBefore.id }, data: { locked: true } });
+
+    await makePart(version.id, material.id, { description: "Extra panel", width: 10, length: 10, qty: 1 });
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const sheetAfter = await db.cutSheet.findUniqueOrThrow({ where: { id: sheetBefore.id } });
+    expect(sheetAfter.layout).toEqual(sheetBefore.layout);
+    expect(sheetAfter.locked).toBe(true);
+
+    const allSheets = await db.cutSheet.findMany({
+      where: { estimateVersionId: version.id, materialId: material.id },
+      orderBy: { sheetNumber: "asc" },
+    });
+    expect(allSheets).toHaveLength(2);
+    // New sheet continues numbering after the locked sheet, not renumbered to 1.
+    expect(allSheets[1].sheetNumber).toBeGreaterThan(allSheets[0].sheetNumber);
+    // The new sheet holds only the 1 new instance, not a repack of all 4.
+    expect((allSheets[1].layout as unknown[]).length).toBe(1);
+  });
+
+  it("skips available remnants entirely in waste mode, even when one would fit", async () => {
+    const material = await makeSheetMaterial({ defaultKerf: 0 }); // 48x96
+    const versionA = await makeVersion();
+    await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
+    await optimizeNestingForMaterial(versionA.id, material.id);
+
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const versionB = await makeVersion();
+    await makePart(versionB.id, material.id, {
+      description: "Fits the remnant",
+      width: Math.max(1, remnant.width.toNumber() - 2),
+      length: Math.max(1, remnant.length.toNumber() - 2),
+    });
+
+    await optimizeNestingForMaterial(versionB.id, material.id, "waste");
+
+    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: versionB.id, materialId: material.id } });
+    expect(stored[0].consumedRemnantId).toBeNull();
+    const stillAvailable = await db.materialRemnant.findUniqueOrThrow({ where: { id: remnant.id } });
+    expect(stillAvailable.consumedAt).toBeNull();
+  });
+
+  it("still uses an available remnant in the default cost mode (regression check against the waste-mode test above)", async () => {
+    const material = await makeSheetMaterial({ defaultKerf: 0 });
+    const versionA = await makeVersion();
+    await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
+    await optimizeNestingForMaterial(versionA.id, material.id);
+
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const versionB = await makeVersion();
+    await makePart(versionB.id, material.id, {
+      description: "Fits the remnant",
+      width: Math.max(1, remnant.width.toNumber() - 2),
+      length: Math.max(1, remnant.length.toNumber() - 2),
+    });
+
+    await optimizeNestingForMaterial(versionB.id, material.id, "cost");
+
+    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: versionB.id, materialId: material.id } });
+    expect(stored[0].consumedRemnantId).toBe(remnant.id);
+  });
+});
+
+describe("clearStaleCutSheets -- locked sheets (Phase 8)", () => {
+  it("leaves a locked sheet, and what it consumed/generated, completely alone", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial({ defaultKerf: 0 });
+    await makePart(version.id, material.id, { description: "Panel", width: 10, length: 10 });
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const sheet = await db.cutSheet.findFirstOrThrow({ where: { estimateVersionId: version.id, materialId: material.id } });
+    const generatedRemnant = await db.materialRemnant.findFirst({ where: { generatedByCutSheetId: sheet.id } });
+    await db.cutSheet.update({ where: { id: sheet.id }, data: { locked: true } });
+
+    await clearStaleCutSheets(version.id, material.id);
+
+    const stillThere = await db.cutSheet.findUnique({ where: { id: sheet.id } });
+    expect(stillThere).not.toBeNull();
+    expect(stillThere?.locked).toBe(true);
+    if (generatedRemnant) {
+      const remnantStillThere = await db.materialRemnant.findUnique({ where: { id: generatedRemnant.id } });
+      expect(remnantStillThere).not.toBeNull();
+    }
   });
 });

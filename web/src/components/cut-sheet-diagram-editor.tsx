@@ -11,7 +11,11 @@ import {
 import { BRAND } from "@/lib/brand";
 import { noOverlap, type PlacedPart } from "@/lib/cut-sheet-geometry";
 import type { CutSheetDiagramData } from "@/lib/cut-list-nesting-service";
-import { updateCutSheetLayoutAction } from "@/app/(app)/estimates/[id]/versions/[versionId]/cut-list/actions";
+import {
+  updateCutSheetLayoutAction,
+  toggleCutSheetLockAction,
+  toggleCutSheetCutAction,
+} from "@/app/(app)/estimates/[id]/versions/[versionId]/cut-list/actions";
 
 // Cut-list phase 6, feature 5: drag-to-reposition editing of an already-
 // packed layout. Same per-sheet scale/labelFontSize math as
@@ -289,6 +293,17 @@ export function CutSheetDiagramEditor({
     });
   }
 
+  // Phase 8: plain <form action> toggles, same pattern cut-sheet-
+  // diagram.tsx uses -- form actions work fine inside a client component
+  // too, no need for onClick/startTransition just because this component
+  // already uses those elsewhere for the drag-save flow. This component
+  // only ever renders when BOTH the version and this sheet are unlocked
+  // (see cut-list/page.tsx's render branch), so there's no "Unlock"
+  // case to handle here -- locking flips this sheet over to the
+  // read-only CutSheetDiagram on the next render.
+  const toggleLockWithIds = toggleCutSheetLockAction.bind(null, estimateId, versionId, materialId, sheet.sheetNumber);
+  const toggleCutWithIds = toggleCutSheetCutAction.bind(null, estimateId, versionId, materialId, sheet.sheetNumber);
+
   return (
     <div className="flex flex-col items-center gap-2">
       <div className="flex w-full items-center justify-between text-xs text-neutral-500">
@@ -296,8 +311,21 @@ export function CutSheetDiagramEditor({
           Sheet {sheet.sheetNumber} of {sheetCount}
           {sheet.isRemnant && <span className="ml-2 font-semibold uppercase tracking-wide text-brand-tangerine">Remnant</span>}
         </span>
-        <span>
+        <span className="flex items-center gap-3">
           Stock: {sheet.width}&quot; x {sheet.length}&quot;
+          <form action={toggleLockWithIds}>
+            <button type="submit" className="rounded border border-neutral-300 px-2 py-0.5 hover:bg-neutral-50">
+              Lock
+            </button>
+          </form>
+          <form action={toggleCutWithIds}>
+            <button
+              type="submit"
+              className={`rounded border px-2 py-0.5 hover:bg-neutral-50 ${sheet.cutAt ? "border-green-300 text-green-700" : "border-neutral-300"}`}
+            >
+              {sheet.cutAt ? `Cut ✓ ${new Date(sheet.cutAt).toLocaleDateString()}` : "Mark cut"}
+            </button>
+          </form>
         </span>
       </div>
       <div

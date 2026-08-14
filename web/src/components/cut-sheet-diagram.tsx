@@ -1,5 +1,6 @@
 import { BRAND } from "@/lib/brand";
 import type { CutSheetDiagramData } from "@/lib/cut-list-nesting-service";
+import { toggleCutSheetLockAction, toggleCutSheetCutAction } from "@/app/(app)/estimates/[id]/versions/[versionId]/cut-list/actions";
 
 // Cut-list phase 6: a real DOM <svg> port of cut-sheet-pdf.tsx's per-sheet
 // layout math (scale/labelFontSize/canLabel threshold, kept identical),
@@ -13,11 +14,24 @@ const DIAGRAM_MAX_WIDTH = 500;
 const DIAGRAM_MAX_HEIGHT = 380;
 
 export function CutSheetDiagram({
+  estimateId,
+  versionId,
+  materialId,
   sheet,
   sheetCount,
+  versionLocked = false,
 }: {
+  estimateId: string;
+  versionId: string;
+  materialId: string;
   sheet: CutSheetDiagramData["sheets"][number];
   sheetCount: number;
+  // The lock/unlock toggle is a cut-list EDIT (gated by assertUnlocked
+  // same as everything else), so it's hidden once the whole
+  // EstimateVersion is locked -- it would only ever fail, same
+  // hide-rather-than-error convention cut-list/page.tsx already uses for
+  // its Add-a-part form/delete buttons/Optimize buttons.
+  versionLocked?: boolean;
 }) {
   // Each sheet draws against ITS OWN real usable area -- a remnant's own
   // (smaller) dimensions, not the material's nominal stock size, or the
@@ -27,15 +41,37 @@ export function CutSheetDiagram({
   const svgHeight = sheet.length * scale;
   const labelFontSize = Math.max(Math.min(sheet.width, sheet.length) * 0.018, 0.15);
 
+  // Phase 8: plain <form action> toggles -- no client-side interactivity
+  // needed for a simple flip, matching every other server-action button
+  // in this app. Works fine in this still-plain server component.
+  const toggleLockWithIds = toggleCutSheetLockAction.bind(null, estimateId, versionId, materialId, sheet.sheetNumber);
+  const toggleCutWithIds = toggleCutSheetCutAction.bind(null, estimateId, versionId, materialId, sheet.sheetNumber);
+
   return (
     <div className="flex flex-col items-center gap-1">
       <div className="flex w-full items-center justify-between text-xs text-neutral-500">
         <span>
           Sheet {sheet.sheetNumber} of {sheetCount}
           {sheet.isRemnant && <span className="ml-2 font-semibold uppercase tracking-wide text-brand-tangerine">Remnant</span>}
+          {sheet.locked && <span className="ml-2 font-semibold uppercase tracking-wide text-neutral-600">Locked</span>}
         </span>
-        <span>
+        <span className="flex items-center gap-3">
           Stock: {sheet.width}&quot; x {sheet.length}&quot;
+          {!versionLocked && (
+            <form action={toggleLockWithIds}>
+              <button type="submit" className="rounded border border-neutral-300 px-2 py-0.5 hover:bg-neutral-50">
+                {sheet.locked ? "Unlock" : "Lock"}
+              </button>
+            </form>
+          )}
+          <form action={toggleCutWithIds}>
+            <button
+              type="submit"
+              className={`rounded border px-2 py-0.5 hover:bg-neutral-50 ${sheet.cutAt ? "border-green-300 text-green-700" : "border-neutral-300"}`}
+            >
+              {sheet.cutAt ? `Cut ✓ ${new Date(sheet.cutAt).toLocaleDateString()}` : "Mark cut"}
+            </button>
+          </form>
         </span>
       </div>
       <svg

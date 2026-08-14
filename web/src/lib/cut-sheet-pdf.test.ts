@@ -49,6 +49,8 @@ describe("CutSheetDiagramDocument", () => {
           { cutListPartId: "a", x: 0, y: 0, width: 20, height: 20, rotated: false, description: "Side panel" },
           { cutListPartId: "b", x: 20, y: 0, width: 15, height: 15, rotated: true, description: "Top panel" },
         ],
+        locked: false,
+        cutAt: null,
       },
     ],
   };
@@ -70,6 +72,8 @@ describe("CutSheetDiagramDocument", () => {
           width: 48,
           length: 96,
           parts: [{ cutListPartId: "c", x: 0, y: 0, width: 10, height: 10, rotated: false, description: "Extra piece" }],
+          locked: false,
+          cutAt: null,
         },
       ],
     };
@@ -91,6 +95,8 @@ describe("CutSheetDiagramDocument", () => {
           width: 48,
           length: 96,
           parts: [{ cutListPartId: "tiny", x: 0, y: 0, width: 0.5, height: 0.5, rotated: false, description: "Tiny spacer block" }],
+          locked: false,
+          cutAt: null,
         },
       ],
     };
@@ -110,6 +116,8 @@ describe("CutSheetDiagramDocument", () => {
           width: 4,
           length: 4,
           parts: [{ cutListPartId: "a", x: 0, y: 0, width: 2, height: 2, rotated: false, description: "Corner block" }],
+          locked: false,
+          cutAt: null,
         },
       ],
     };
@@ -129,6 +137,8 @@ describe("CutSheetDiagramDocument", () => {
           width: 12,
           length: 20,
           parts: [{ cutListPartId: "a", x: 0, y: 0, width: 10, height: 10, rotated: false, description: "Small block" }],
+          locked: false,
+          cutAt: null,
         },
       ],
     };

@@ -151,7 +151,15 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
 
       {costReport.materials.length > 0 && (
         <Card className="p-6">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Cut list summary</h2>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">Cut list summary</h2>
+            <a
+              href={`/estimates/${id}/versions/${versionId}/cut-list/export`}
+              className="text-sm text-brand-navy hover:underline"
+            >
+              Export to Excel ↓
+            </a>
+          </div>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <div>
               <div className="text-xs uppercase tracking-wide text-neutral-400">Total material cost</div>
@@ -159,7 +167,12 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
             </div>
             <div>
               <div className="text-xs uppercase tracking-wide text-neutral-400">Total sheets</div>
-              <div className="text-lg font-semibold">{costReport.totalSheetsUsed}</div>
+              <div className="text-lg font-semibold">
+                {costReport.totalSheetsUsed}
+                {costReport.totalSheetsCut > 0 && (
+                  <span className="ml-1 text-sm font-normal text-green-700">({costReport.totalSheetsCut} cut)</span>
+                )}
+              </div>
             </div>
           </div>
         </Card>
@@ -214,7 +227,18 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
       )}
 
       {materialGroups.length > 0 && !version.isLocked && (
-        <form action={optimizeAllWithIds}>
+        <form action={optimizeAllWithIds} className="flex flex-wrap items-end gap-3">
+          <div className="w-56">
+            <SelectField
+              label="Mode"
+              name="mode"
+              defaultValue="cost"
+              options={[
+                { value: "cost", label: "Cost (use remnants first)" },
+                { value: "waste", label: "Waste (fresh stock only)" },
+              ]}
+            />
+          </div>
           <Button>Optimize all materials</Button>
         </form>
       )}
@@ -233,7 +257,18 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                 {material.defaultKerf ? ` — kerf ${material.defaultKerf}"` : ""}
               </div>
               {!version.isLocked && (
-                <form action={optimizeWithIds}>
+                <form action={optimizeWithIds} className="flex items-end gap-2">
+                  <div className="w-48">
+                    <SelectField
+                      label="Mode"
+                      name="mode"
+                      defaultValue="cost"
+                      options={[
+                        { value: "cost", label: "Cost (remnants)" },
+                        { value: "waste", label: "Waste (fresh only)" },
+                      ]}
+                    />
+                  </div>
                   <Button variant="secondary">{waste ? "Re-optimize" : "Optimize"}</Button>
                 </form>
               )}
@@ -249,6 +284,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                       ({waste.remnantSheetsUsed} remnant, {waste.freshSheetsUsed} fresh)
                     </span>
                   )}
+                  {waste.sheetsCut > 0 && <span className="text-green-700"> ({waste.sheetsCut} cut)</span>}
                 </span>
                 <span>
                   <strong>{money(waste.totalCost)}</strong> material cost
@@ -280,8 +316,16 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
             {diagramData && (
               <div className="mb-4 flex flex-col gap-4">
                 {diagramData.sheets.map((sheet) =>
-                  version.isLocked ? (
-                    <CutSheetDiagram key={sheet.sheetNumber} sheet={sheet} sheetCount={diagramData.sheets.length} />
+                  version.isLocked || sheet.locked ? (
+                    <CutSheetDiagram
+                      key={sheet.sheetNumber}
+                      estimateId={id}
+                      versionId={versionId}
+                      materialId={materialId}
+                      sheet={sheet}
+                      sheetCount={diagramData.sheets.length}
+                      versionLocked={version.isLocked}
+                    />
                   ) : (
                     <CutSheetDiagramEditor
                       key={sheet.sheetNumber}

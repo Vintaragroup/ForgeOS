@@ -16,6 +16,8 @@ const baseData: CutSheetDiagramData = {
         { cutListPartId: "a", x: 0, y: 0, width: 20, height: 20, rotated: false, description: "Side panel" },
         { cutListPartId: "b", x: 20, y: 0, width: 15, height: 15, rotated: true, description: "Top panel" },
       ],
+      locked: false,
+      cutAt: null,
     },
     {
       sheetNumber: 2,
@@ -23,6 +25,8 @@ const baseData: CutSheetDiagramData = {
       width: 48,
       length: 96,
       parts: [{ cutListPartId: "c", x: 0, y: 0, width: 10, height: 10, rotated: false, description: "Extra piece" }],
+      locked: false,
+      cutAt: null,
     },
   ],
 };
@@ -68,6 +72,8 @@ describe("generateCutSheetDxf", () => {
           width: 12,
           length: 20,
           parts: [{ cutListPartId: "a", x: 0, y: 0, width: 10, height: 10, rotated: false, description: "Small block" }],
+          locked: false,
+          cutAt: null,
         },
       ],
     };

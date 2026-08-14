@@ -237,7 +237,11 @@ function packOneBin(
 // CutSheet rows goes through the same one cleanup, not a second
 // (previously missing) copy.
 export async function clearStaleCutSheets(estimateVersionId: string, materialId: string): Promise<void> {
-  const oldSheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId } });
+  // locked: false -- a locked sheet (Phase 8, CutList Plus's "pinned
+  // diagrams") is never superseded by this cleanup, regardless of what
+  // else changed for this material. Its consumed/generated remnants stay
+  // exactly as they are too.
+  const oldSheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId, locked: false } });
   if (oldSheets.length === 0) return;
   const oldConsumedRemnantIds = oldSheets.map((s) => s.consumedRemnantId).filter((id): id is string => id != null);
   const oldSheetIds = oldSheets.map((s) => s.id);
@@ -254,6 +258,14 @@ export async function clearStaleCutSheets(estimateVersionId: string, materialId:
 export async function optimizeNestingForMaterial(
   estimateVersionId: string,
   materialId: string,
+  // Phase 8: "cost" (default, today's behavior) tries shop-wide remnants
+  // first; "waste" skips remnant consumption entirely and packs every
+  // instance onto clean fresh stock -- for a job where oddly-shaped
+  // leftover scraps aren't wanted even though they're free. Remnant
+  // GENERATION from this run's own leftover space stays on regardless of
+  // mode -- that's free bookkeeping for a future job either way, not
+  // something "waste" mode has a reason to skip.
+  mode: "cost" | "waste" = "cost",
 ): Promise<PlacedPart[][]> {
   const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
   if (material.materialType !== "SHEET" || !material.stockWidth || !material.stockLength) {
@@ -289,8 +301,23 @@ export async function optimizeNestingForMaterial(
   // cleanup is about to delete, violating the FK.
   await clearStaleCutSheets(estimateVersionId, materialId);
 
+  // Locked sheets survived that cleanup untouched -- fetch them fresh
+  // (post-cleanup, so this reflects the real "what's already placed and
+  // staying" state) and tally how many instances of each part they
+  // already account for. Re-optimizing after locking a sheet is
+  // additive: only the un-accounted-for quantity gets packed again, not
+  // every instance from scratch.
+  const lockedSheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId, locked: true } });
+  const lockedCountByPartId = new Map<string, number>();
+  for (const sheet of lockedSheets) {
+    for (const p of sheet.layout as unknown as PlacedPart[]) {
+      lockedCountByPartId.set(p.cutListPartId, (lockedCountByPartId.get(p.cutListPartId) ?? 0) + 1);
+    }
+  }
+  const lockedLayouts = lockedSheets.map((s) => s.layout as unknown as PlacedPart[]);
+
   if (parts.length === 0) {
-    return [];
+    return lockedLayouts;
   }
 
   const allInstances: Instance[] = [];
@@ -303,7 +330,9 @@ export async function optimizeNestingForMaterial(
       stockWidth,
       stockLength,
     );
-    for (let i = 0; i < part.qty; i++) {
+    const alreadyLocked = lockedCountByPartId.get(part.id) ?? 0;
+    const remainingQty = Math.max(0, part.qty - alreadyLocked);
+    for (let i = 0; i < remainingQty; i++) {
       allInstances.push({ cutListPartId: part.id, width, height, preRotated, grainConstrained: part.grainConstrained });
     }
   }
@@ -312,10 +341,15 @@ export async function optimizeNestingForMaterial(
   // shop heuristic (use up small scraps, save bigger reusable pieces for
   // bigger future needs), and the actual point of this feature: using
   // already-owned material is free, a fresh sheet costs real money.
-  const availableRemnants = await db.materialRemnant.findMany({
-    where: { materialId, consumedAt: null },
-    orderBy: [{ width: "asc" }, { length: "asc" }],
-  });
+  // Skipped entirely in "waste" mode -- see this function's own mode
+  // parameter comment.
+  const availableRemnants =
+    mode === "waste"
+      ? []
+      : await db.materialRemnant.findMany({
+          where: { materialId, consumedAt: null },
+          orderBy: [{ width: "asc" }, { length: "asc" }],
+        });
 
   const bins: BinResult[] = [];
   let remaining = allInstances;
@@ -361,6 +395,11 @@ export async function optimizeNestingForMaterial(
     }
   }
 
+  // Continues after the highest LOCKED sheet's number rather than
+  // renumbering from 1 -- a locked sheet's number must stay stable
+  // (its DXF download link, and its own identity, are keyed by it).
+  const nextSheetNumber = lockedSheets.reduce((max, s) => Math.max(max, s.sheetNumber), 0) + 1;
+
   await db.$transaction(async (tx) => {
     for (let i = 0; i < bins.length; i++) {
       const bin = bins[i];
@@ -368,7 +407,7 @@ export async function optimizeNestingForMaterial(
         data: {
           estimateVersionId,
           materialId,
-          sheetNumber: i + 1,
+          sheetNumber: nextSheetNumber + i,
           layout: bin.placed as unknown as Prisma.InputJsonValue,
           consumedRemnantId: bin.consumedRemnantId,
         },
@@ -389,7 +428,10 @@ export async function optimizeNestingForMaterial(
     }
   });
 
-  return bins.map((b) => b.placed);
+  // Locked sheets' existing layouts are included alongside the newly
+  // packed ones -- optimizeNestingForVersion's reported sheetCount stays
+  // accurate; a caller isn't left assuming a locked sheet vanished.
+  return [...lockedLayouts, ...bins.map((b) => b.placed)];
 }
 
 // Convenience wrapper for a full cut list -- finds every distinct
@@ -404,7 +446,10 @@ export interface OptimizeAllResult {
   skipped: { materialId: string; materialName: string; reason: string }[];
 }
 
-export async function optimizeNestingForVersion(estimateVersionId: string): Promise<OptimizeAllResult> {
+export async function optimizeNestingForVersion(
+  estimateVersionId: string,
+  mode: "cost" | "waste" = "cost",
+): Promise<OptimizeAllResult> {
   const materialIds = await db.cutListPart.findMany({
     where: { estimateVersionId, deletedAt: null },
     select: { materialId: true },
@@ -417,7 +462,7 @@ export async function optimizeNestingForVersion(estimateVersionId: string): Prom
   for (const { materialId } of materialIds) {
     const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
     try {
-      const sheets = await optimizeNestingForMaterial(estimateVersionId, materialId);
+      const sheets = await optimizeNestingForMaterial(estimateVersionId, materialId, mode);
       optimized.push({ materialId, materialName: material.name, sheetCount: sheets.length });
     } catch (err) {
       skipped.push({ materialId, materialName: material.name, reason: err instanceof Error ? err.message : String(err) });
@@ -448,6 +493,12 @@ export interface CutSheetDiagramData {
     width: number;
     length: number;
     parts: (PlacedPart & { description: string })[];
+    // Phase 8: survives re-optimize (see clearStaleCutSheets) and always
+    // renders read-only regardless of the EstimateVersion's own lock
+    // state -- see cut-list/page.tsx's render branch.
+    locked: boolean;
+    // Shop-floor "this sheet was physically cut" confirmation, or null.
+    cutAt: Date | null;
   }[];
 }
 
@@ -481,6 +532,8 @@ export async function getCutSheetDiagramData(
         ...p,
         description: descriptionById.get(p.cutListPartId) ?? "Unknown part",
       })),
+      locked: sheet.locked,
+      cutAt: sheet.cutAt,
     })),
   };
 }
@@ -502,6 +555,10 @@ export interface MaterialWasteReport {
   // count. freshSheetsUsed + remnantSheetsUsed === sheetsUsed always.
   freshSheetsUsed: number;
   remnantSheetsUsed: number;
+  // Phase 8: how many of sheetsUsed have cutAt set -- production
+  // visibility into cutting progress, shown alongside the cost/waste
+  // stats it's computed next to.
+  sheetsCut: number;
   // freshSheetsUsed * currentUnitCost -- material cost only, no labor/
   // kerf-loss-as-a-dollar-figure; kerf is already reflected physically
   // in sheetsUsed (more kerf spacing can push a layout onto an extra
@@ -538,6 +595,7 @@ export async function getMaterialWasteReport(
 
   const freshSheetsUsed = sheets.filter((s) => !s.consumedRemnant).length;
   const remnantSheetsUsed = sheets.length - freshSheetsUsed;
+  const sheetsCut = sheets.filter((s) => s.cutAt != null).length;
 
   const usedAreaSqIn = sheets.reduce((sum, sheet) => {
     const layout = sheet.layout as unknown as PlacedPart[];
@@ -554,6 +612,7 @@ export async function getMaterialWasteReport(
     sheetsUsed: sheets.length,
     freshSheetsUsed,
     remnantSheetsUsed,
+    sheetsCut,
     totalCost: freshSheetsUsed * unitCost,
     usedAreaSqIn,
     totalStockAreaSqIn,
@@ -565,6 +624,7 @@ export interface CutListCostReport {
   materials: MaterialWasteReport[];
   totalCost: number;
   totalSheetsUsed: number;
+  totalSheetsCut: number;
 }
 
 // Version-level rollup across every material that's actually been
@@ -586,5 +646,6 @@ export async function getCutListCostReport(estimateVersionId: string): Promise<C
     materials,
     totalCost: materials.reduce((sum, m) => sum + m.totalCost, 0),
     totalSheetsUsed: materials.reduce((sum, m) => sum + m.sheetsUsed, 0),
+    totalSheetsCut: materials.reduce((sum, m) => sum + m.sheetsCut, 0),
   };
 }

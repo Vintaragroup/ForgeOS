@@ -157,7 +157,12 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
             </div>
             <div>
               <div className="text-xs uppercase tracking-wide text-neutral-400">Total sheets</div>
-              <div className="text-lg font-semibold">{cutListReport.totalSheetsUsed}</div>
+              <div className="text-lg font-semibold">
+                {cutListReport.totalSheetsUsed}
+                {cutListReport.totalSheetsCut > 0 && (
+                  <span className="ml-1 text-sm font-normal text-green-700">({cutListReport.totalSheetsCut} cut)</span>
+                )}
+              </div>
             </div>
           </div>
           <ul className="flex flex-col divide-y divide-neutral-200 text-sm">
@@ -172,6 +177,7 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
                       ({m.remnantSheetsUsed} remnant, {m.freshSheetsUsed} fresh)
                     </span>
                   )}
+                  {m.sheetsCut > 0 && <span className="text-green-700"> ({m.sheetsCut} cut)</span>}
                 </span>
                 <span>
                   <strong>{money(m.totalCost)}</strong>
