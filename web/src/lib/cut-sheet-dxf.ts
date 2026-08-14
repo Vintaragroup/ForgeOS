@@ -45,7 +45,11 @@ export function generateCutSheetDxf(data: CutSheetDiagramData, sheetNumber: numb
 
   // The stock sheet's own boundary -- the CNC's reference for where the
   // physical material actually is, same as the PDF diagram's outer rect.
-  dxf.addRectangle(point2d(0, 0), point2d(data.stockWidth, data.stockLength), { layerName: STOCK_LAYER });
+  // Uses the SHEET's own real usable area (a remnant's own smaller
+  // dimensions, when this sheet was cut from one), not the material's
+  // nominal stockWidth/stockLength -- a CNC file drawn against the wrong
+  // assumed sheet size is a real, physical mistake, not cosmetic.
+  dxf.addRectangle(point2d(0, 0), point2d(sheet.width, sheet.length), { layerName: STOCK_LAYER });
 
   // Small, fixed text height rather than scaled-to-sheet like the PDF's
   // labelFontSize -- DXF text height is a real physical dimension (the
@@ -53,6 +57,12 @@ export function generateCutSheetDxf(data: CutSheetDiagramData, sheetNumber: numb
   // display-scaled font size, so a fixed 0.25" reads consistently
   // regardless of how big or small the sheet itself is.
   const labelHeight = 0.25;
+
+  if (sheet.isRemnant) {
+    dxf.addText(point3d(0.1, sheet.length - labelHeight - 0.1), labelHeight, "REMNANT -- not a fresh sheet", {
+      layerName: LABELS_LAYER,
+    });
+  }
 
   sheet.parts.forEach((part, i) => {
     dxf.addRectangle(point2d(part.x, part.y), point2d(part.x + part.width, part.y + part.height), {

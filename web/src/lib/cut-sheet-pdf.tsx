@@ -42,6 +42,7 @@ const styles = StyleSheet.create({
   },
   materialName: { fontSize: 14, fontWeight: 700, color: BRAND.navy },
   sheetLabel: { fontSize: 9, color: "#737373", marginTop: 2 },
+  remnantLabel: { fontSize: 8, fontWeight: 700, color: BRAND.tangerine, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 },
   stockLabel: { fontSize: 9, textAlign: "right" },
   diagramWrap: { alignItems: "center", marginBottom: 16 },
   legendTitle: { fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "#737373", marginBottom: 4 },
@@ -61,35 +62,43 @@ const DIAGRAM_MAX_WIDTH = 500;
 const DIAGRAM_MAX_HEIGHT = 380;
 
 export function CutSheetDiagramDocument({ data }: { data: CutSheetDiagramData }) {
-  const { materialName, stockWidth, stockLength, sheets } = data;
-  const scale = Math.min(DIAGRAM_MAX_WIDTH / stockWidth, DIAGRAM_MAX_HEIGHT / stockLength);
-  const svgWidth = stockWidth * scale;
-  const svgHeight = stockLength * scale;
-  // A small fraction of the sheet's shorter real dimension -- see file
-  // header. Inline labels only render for a part with room to plausibly
-  // hold them; every part is always listed in the legend table below
-  // regardless, so nothing depends on the label actually fitting.
-  const labelFontSize = Math.max(Math.min(stockWidth, stockLength) * 0.018, 0.15);
+  const { materialName, sheets } = data;
 
   return (
     <Document>
-      {sheets.map((sheet) => (
-        <Page key={sheet.sheetNumber} size="LETTER" orientation="landscape" style={styles.page}>
+      {sheets.map((sheet) => {
+        // Each sheet draws against ITS OWN real usable area -- a
+        // remnant's own (smaller) dimensions, not the material's
+        // nominal stock size (data.stockWidth/stockLength), or the
+        // diagram would show a shop-floor cutter the wrong sheet size.
+        const scale = Math.min(DIAGRAM_MAX_WIDTH / sheet.width, DIAGRAM_MAX_HEIGHT / sheet.length);
+        const svgWidth = sheet.width * scale;
+        const svgHeight = sheet.length * scale;
+        // A small fraction of the sheet's shorter real dimension -- see
+        // file header. Inline labels only render for a part with room
+        // to plausibly hold them; every part is always listed in the
+        // legend table below regardless, so nothing depends on the
+        // label actually fitting.
+        const labelFontSize = Math.max(Math.min(sheet.width, sheet.length) * 0.018, 0.15);
+
+        return (
+      <Page key={sheet.sheetNumber} size="LETTER" orientation="landscape" style={styles.page}>
           <View style={styles.headerRow}>
             <View>
               <Text style={styles.materialName}>{materialName}</Text>
               <Text style={styles.sheetLabel}>
                 Sheet {sheet.sheetNumber} of {sheets.length}
               </Text>
+              {sheet.isRemnant && <Text style={styles.remnantLabel}>Remnant -- already-owned offcut, not a fresh sheet</Text>}
             </View>
             <Text style={styles.stockLabel}>
-              Stock: {stockWidth}&quot; x {stockLength}&quot;
+              Stock: {sheet.width}&quot; x {sheet.length}&quot;
             </Text>
           </View>
 
           <View style={styles.diagramWrap}>
-            <Svg width={svgWidth} height={svgHeight} viewBox={`0 0 ${stockWidth} ${stockLength}`}>
-              <Rect x={0} y={0} width={stockWidth} height={stockLength} fill="#ffffff" stroke={BRAND.black} strokeWidth={0.05} />
+            <Svg width={svgWidth} height={svgHeight} viewBox={`0 0 ${sheet.width} ${sheet.length}`}>
+              <Rect x={0} y={0} width={sheet.width} height={sheet.length} fill="#ffffff" stroke={BRAND.black} strokeWidth={0.05} />
               {sheet.parts.map((part, i) => {
                 const canLabel = part.width > labelFontSize * 5 && part.height > labelFontSize * 2.5;
                 return (
@@ -134,8 +143,9 @@ export function CutSheetDiagramDocument({ data }: { data: CutSheetDiagramData })
               </Text>
             </View>
           ))}
-        </Page>
-      ))}
+      </Page>
+        );
+      })}
     </Document>
   );
 }

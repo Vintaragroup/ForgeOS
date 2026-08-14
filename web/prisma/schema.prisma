@@ -702,8 +702,9 @@ model Material {
   // than re-decided per part.
   grainDirectionMatters Boolean       @default(false)
 
-  cutListParts CutListPart[]
-  cutSheets    CutSheet[]
+  cutListParts     CutListPart[]
+  cutSheets        CutSheet[]
+  materialRemnants MaterialRemnant[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -996,9 +997,58 @@ model CutSheet {
   // orientation itself.
   layout Json
 
+  // Phase 5: set when this sheet was actually cut from an existing
+  // remnant instead of fresh full-size stock -- null for an ordinary
+  // fresh sheet. That remnant's OWN width/length (not the material's
+  // full stockWidth/stockLength) is this sheet's real usable area; the
+  // diagram/DXF renderers must draw against that, not the material's
+  // nominal stock size, or a shop-floor cut is made against the wrong
+  // assumed sheet size.
+  consumedRemnantId String?          @unique
+  consumedRemnant   MaterialRemnant? @relation("ConsumedRemnant", fields: [consumedRemnantId], references: [id])
+  // Back-relation only (FK lives on MaterialRemnant.generatedByCutSheetId)
+  // -- the single largest leftover free rectangle from this sheet's own
+  // packing run, if any, above the practical minimum size to bother
+  // tracking. Deleted alongside this CutSheet on re-optimize (see
+  // optimizeNestingForMaterial), not left as a stale orphan.
+  generatedRemnant MaterialRemnant? @relation("GeneratedRemnant")
+
   createdAt DateTime @default(now())
 
   @@map("cut_sheets")
+}
+
+// Phase 5: shop-wide (NOT job/EstimateVersion-scoped) reusable leftover
+// stock from a completed nesting run -- matches real shop practice (a
+// cutoff bin any future job can draw from) and the real CutList Plus
+// export this feature is grounded in, which has an "Off-Cut" policy
+// flag per material stock row, not per job. Only the single largest
+// free rectangle per sheet is ever tracked -- maxrects-packer's
+// freeRects can report multiple OVERLAPPING candidate regions for the
+// same leftover space (confirmed live before this was built), so
+// persisting more than one per sheet would risk double-booking the same
+// physical scrap as two different "available" remnants.
+model MaterialRemnant {
+  id         String   @id @default(cuid())
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id])
+  width      Decimal  @db.Decimal(8, 3)
+  length     Decimal  @db.Decimal(8, 3)
+
+  // Deleted (not orphaned) when this CutSheet is deleted on a
+  // re-optimize -- otherwise every re-run piles up duplicate stale
+  // remnants describing a layout that no longer exists.
+  generatedByCutSheetId String   @unique
+  generatedByCutSheet   CutSheet @relation("GeneratedRemnant", fields: [generatedByCutSheetId], references: [id])
+
+  consumedAt DateTime?
+  // Cleared (remnant given back as available), not deleted, when the
+  // consuming CutSheet is deleted on a re-optimize.
+  consumedBy CutSheet? @relation("ConsumedRemnant")
+
+  createdAt DateTime @default(now())
+
+  @@map("material_remnants")
 }
 
 // ---------------------------------------------------------------------

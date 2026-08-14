@@ -203,6 +203,12 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
               <div className="mb-4 flex flex-wrap items-center gap-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm">
                 <span>
                   <strong>{waste.sheetsUsed}</strong> sheet{waste.sheetsUsed === 1 ? "" : "s"}
+                  {waste.remnantSheetsUsed > 0 && (
+                    <span className="text-neutral-500">
+                      {" "}
+                      ({waste.remnantSheetsUsed} remnant, {waste.freshSheetsUsed} fresh)
+                    </span>
+                  )}
                 </span>
                 <span>
                   <strong>{money(waste.totalCost)}</strong> material cost

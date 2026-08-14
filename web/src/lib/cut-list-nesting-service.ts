@@ -72,6 +72,117 @@ function resolvePlacementOrientation(
   return { width: part.length, height: part.width, preRotated: true };
 }
 
+// Phase 5: below this in either dimension, a leftover scrap isn't worth
+// tracking as reusable stock -- a real, deliberately conservative
+// simplification (see the file-level note on why only ONE remnant is
+// ever kept per sheet, ahead of this).
+const MIN_REMNANT_DIMENSION = 6;
+
+interface Instance {
+  cutListPartId: string;
+  width: number;
+  height: number;
+  preRotated: boolean;
+  grainConstrained: boolean;
+}
+
+// Re-checks a pre-oriented instance (already resolved against the FULL
+// sheet size) against a SMALLER bin -- a specific remnant. Allowed to
+// swap again if the instance isn't grain-constrained; returns null (not
+// an error) when it simply doesn't fit this particular remnant, since
+// that's a normal, expected outcome here (try the next remnant, or fall
+// through to fresh stock), not the permanent "too big for any stock"
+// case resolvePlacementOrientation guards against.
+function fitsInBin(inst: Instance, binWidth: number, binHeight: number): { width: number; height: number; rotatedAgain: boolean } | null {
+  if (inst.width <= binWidth && inst.height <= binHeight) return { width: inst.width, height: inst.height, rotatedAgain: false };
+  if (!inst.grainConstrained && inst.height <= binWidth && inst.width <= binHeight) {
+    return { width: inst.height, height: inst.width, rotatedAgain: true };
+  }
+  return null;
+}
+
+// Only the single largest free rectangle, and only above
+// MIN_REMNANT_DIMENSION -- see the file-level note on why more than one
+// per sheet risks double-booking the same physical scrap.
+function extractLargestRemnantCandidate(freeRects: { width: number; height: number }[]): { width: number; length: number } | null {
+  let best: { width: number; height: number } | null = null;
+  for (const fr of freeRects) {
+    if (fr.width < MIN_REMNANT_DIMENSION || fr.height < MIN_REMNANT_DIMENSION) continue;
+    if (!best || fr.width * fr.height > best.width * best.height) best = fr;
+  }
+  return best ? { width: best.width, length: best.height } : null;
+}
+
+interface BinResult {
+  placed: PlacedPart[];
+  consumedRemnantId: string | null;
+  generatedRemnant: { width: number; length: number } | null;
+}
+
+// Packs `instances` into a single bin of the given size, taking ONLY the
+// packer's first bin as this attempt's real result -- maxrects-packer
+// will silently spawn a SECOND same-sized bin for anything that doesn't
+// fit the first (correct behavior for an unlimited supply of fresh
+// sheets, wrong here: a specific remnant is one-of-a-kind, there's no
+// second copy of it). Anything that spills past the first bin, or
+// doesn't individually fit these dimensions at all, is returned as
+// still-unplaced for the caller to try elsewhere.
+function packOneBin(
+  instances: Instance[],
+  binWidth: number,
+  binHeight: number,
+  kerf: number,
+): { result: BinResult; unplaced: Instance[] } {
+  const packer = new MaxRectsPacker(binWidth, binHeight, kerf, { smart: false, pot: false, square: false });
+  const unplaced: Instance[] = [];
+  const attempted: Instance[] = [];
+
+  for (const inst of instances) {
+    const fit = fitsInBin(inst, binWidth, binHeight);
+    if (!fit) {
+      unplaced.push(inst);
+      continue;
+    }
+    const rect = new Rectangle(fit.width, fit.height, 0, 0, false, !inst.grainConstrained);
+    // instanceRef carries the exact object identity through the packer
+    // so placed-vs-spilled-to-a-phantom-second-bin can be told apart
+    // afterward by reference, not by re-deriving it from cutListPartId
+    // (multiple instances of the same part share that id).
+    rect.data = { cutListPartId: inst.cutListPartId, preRotated: inst.preRotated !== fit.rotatedAgain, instanceRef: inst };
+    packer.add(rect);
+    attempted.push(inst);
+  }
+
+  const firstBin = packer.bins[0];
+  // Anything the packer put in a second (phantom, same-sized) bin didn't
+  // really fit alongside everything else in this one real remnant --
+  // requeue it for the caller to try elsewhere.
+  for (const inst of attempted) {
+    const placedInFirstBin = firstBin?.rects.some((r) => (r.data as { instanceRef: Instance }).instanceRef === inst);
+    if (!placedInFirstBin) unplaced.push(inst);
+  }
+
+  const placed: PlacedPart[] = firstBin
+    ? firstBin.rects.map((r) => ({
+        cutListPartId: (r.data as { cutListPartId: string }).cutListPartId,
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+        rotated: (r.data as { preRotated: boolean }).preRotated !== r.rot,
+      }))
+    : [];
+
+  return {
+    result: {
+      placed,
+      consumedRemnantId: null,
+      generatedRemnant: firstBin ? extractLargestRemnantCandidate(firstBin.freeRects) : null,
+    },
+    unplaced,
+  };
+}
+
 // Explicitly triggered (a future "Optimize" button, or a caller building
 // a full cut list), same posture as scope-line-item-service.ts's own
 // header comment on Propose -- never run implicitly as a side effect of
@@ -97,21 +208,39 @@ export async function optimizeNestingForMaterial(
     where: { estimateVersionId, materialId, deletedAt: null },
   });
 
+  // Every old CutSheet for this material+version is about to be
+  // superseded regardless of whether there are still parts to place --
+  // clean up what it did to the shop-wide remnant pool BEFORE anything
+  // below reads availableRemnants: give back any remnant it consumed
+  // (it's available again), and remove any remnant it generated (a
+  // fresh one gets computed below if parts remain, and a stale one
+  // describing a layout that no longer exists shouldn't linger either
+  // way). This MUST run before the availableRemnants query further
+  // down, not after packing -- reading it first would either miss a
+  // remnant this same material's previous run had consumed (now given
+  // back here) or, worse, let a new CutSheet reference a remnant this
+  // cleanup is about to delete, violating the FK. A remnant's
+  // generatedByCutSheet FK is required (ON DELETE RESTRICT) -- the
+  // generated remnant must be deleted before its CutSheet, not after.
+  const oldSheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId } });
+  const oldConsumedRemnantIds = oldSheets.map((s) => s.consumedRemnantId).filter((id): id is string => id != null);
+  const oldSheetIds = oldSheets.map((s) => s.id);
+
+  if (oldSheetIds.length > 0) {
+    await db.$transaction(async (tx) => {
+      if (oldConsumedRemnantIds.length > 0) {
+        await tx.materialRemnant.updateMany({ where: { id: { in: oldConsumedRemnantIds } }, data: { consumedAt: null } });
+      }
+      await tx.materialRemnant.deleteMany({ where: { generatedByCutSheetId: { in: oldSheetIds } } });
+      await tx.cutSheet.deleteMany({ where: { id: { in: oldSheetIds } } });
+    });
+  }
+
   if (parts.length === 0) {
-    await db.cutSheet.deleteMany({ where: { estimateVersionId, materialId } });
     return [];
   }
 
-  // padding (the packer's 3rd constructor arg) is spacing applied
-  // between every placed rect -- kerf is exactly that, the material
-  // actually lost to each cut, so this is the real mechanism, not a
-  // manual per-rect inflate-then-shrink-back workaround.
-  const packer = new MaxRectsPacker(stockWidth, stockLength, kerf, {
-    smart: false, // fixed real stock size, not a "shrink to fit" texture atlas
-    pot: false, // no power-of-2 sizing -- this isn't a texture atlas
-    square: false,
-  });
-
+  const allInstances: Instance[] = [];
   for (const part of parts) {
     if (part.width == null) {
       throw new Error(`"${part.description}" has no width set -- a sheet-good part needs both width and length.`);
@@ -121,44 +250,93 @@ export async function optimizeNestingForMaterial(
       stockWidth,
       stockLength,
     );
-
     for (let i = 0; i < part.qty; i++) {
-      const rect = new Rectangle(width, height, 0, 0, false, !part.grainConstrained);
-      rect.data = { cutListPartId: part.id, preRotated };
-      packer.add(rect);
+      allInstances.push({ cutListPartId: part.id, width, height, preRotated, grainConstrained: part.grainConstrained });
     }
   }
 
-  const placedByBin: PlacedPart[][] = packer.bins.map((bin) =>
-    bin.rects.map((r) => ({
-      cutListPartId: (r.data as { cutListPartId: string }).cutListPartId,
-      x: r.x,
-      y: r.y,
-      width: r.width,
-      height: r.height,
-      // XOR of "did we pre-swap it before adding" and "did the packer
-      // additionally rotate it for placement" -- both are real
-      // orientation changes away from what was entered, and either one
-      // alone (not both) means the final placement is rotated.
-      rotated: (r.data as { preRotated: boolean }).preRotated !== r.rot,
-    })),
-  );
+  // Remnants first, smallest usable piece before a bigger one -- real
+  // shop heuristic (use up small scraps, save bigger reusable pieces for
+  // bigger future needs), and the actual point of this feature: using
+  // already-owned material is free, a fresh sheet costs real money.
+  const availableRemnants = await db.materialRemnant.findMany({
+    where: { materialId, consumedAt: null },
+    orderBy: [{ width: "asc" }, { length: "asc" }],
+  });
 
-  await db.cutSheet.deleteMany({ where: { estimateVersionId, materialId } });
-  await db.$transaction(
-    placedByBin.map((layout, i) =>
-      db.cutSheet.create({
+  const bins: BinResult[] = [];
+  let remaining = allInstances;
+
+  for (const remnant of availableRemnants) {
+    if (remaining.length === 0) break;
+    const rw = remnant.width.toNumber();
+    const rl = remnant.length.toNumber();
+    const { result, unplaced } = packOneBin(remaining, rw, rl, kerf);
+    if (result.placed.length > 0) {
+      bins.push({ ...result, consumedRemnantId: remnant.id });
+    }
+    remaining = result.placed.length > 0 ? unplaced : remaining;
+  }
+
+  // padding (the packer's 3rd constructor arg) is spacing applied
+  // between every placed rect -- kerf is exactly that, the material
+  // actually lost to each cut, so this is the real mechanism, not a
+  // manual per-rect inflate-then-shrink-back workaround. Unlike the
+  // remnant loop above, the packer's own multi-bin behavior is exactly
+  // right here: an unlimited supply of fresh same-size sheets is a
+  // correct assumption.
+  if (remaining.length > 0) {
+    const packer = new MaxRectsPacker(stockWidth, stockLength, kerf, { smart: false, pot: false, square: false });
+    for (const inst of remaining) {
+      const rect = new Rectangle(inst.width, inst.height, 0, 0, false, !inst.grainConstrained);
+      rect.data = inst;
+      packer.add(rect);
+    }
+    for (const bin of packer.bins) {
+      bins.push({
+        placed: bin.rects.map((r) => ({
+          cutListPartId: (r.data as { cutListPartId: string }).cutListPartId,
+          x: r.x,
+          y: r.y,
+          width: r.width,
+          height: r.height,
+          rotated: (r.data as { preRotated: boolean }).preRotated !== r.rot,
+        })),
+        consumedRemnantId: null,
+        generatedRemnant: extractLargestRemnantCandidate(bin.freeRects),
+      });
+    }
+  }
+
+  await db.$transaction(async (tx) => {
+    for (let i = 0; i < bins.length; i++) {
+      const bin = bins[i];
+      const sheet = await tx.cutSheet.create({
         data: {
           estimateVersionId,
           materialId,
           sheetNumber: i + 1,
-          layout: layout as unknown as Prisma.InputJsonValue,
+          layout: bin.placed as unknown as Prisma.InputJsonValue,
+          consumedRemnantId: bin.consumedRemnantId,
         },
-      }),
-    ),
-  );
+      });
+      if (bin.consumedRemnantId) {
+        await tx.materialRemnant.update({ where: { id: bin.consumedRemnantId }, data: { consumedAt: new Date() } });
+      }
+      if (bin.generatedRemnant) {
+        await tx.materialRemnant.create({
+          data: {
+            materialId,
+            width: bin.generatedRemnant.width,
+            length: bin.generatedRemnant.length,
+            generatedByCutSheetId: sheet.id,
+          },
+        });
+      }
+    }
+  });
 
-  return placedByBin;
+  return bins.map((b) => b.placed);
 }
 
 // Convenience wrapper for a full cut list -- finds every distinct
@@ -208,6 +386,14 @@ export interface CutSheetDiagramData {
   stockLength: number;
   sheets: {
     sheetNumber: number;
+    isRemnant: boolean;
+    // The REAL usable area for THIS sheet -- the material's nominal
+    // stockWidth/stockLength above for an ordinary fresh sheet, or the
+    // specific consumed remnant's own (smaller) dimensions. A renderer
+    // must draw against this, not the material's nominal size, or a
+    // shop-floor cut is made against the wrong assumed sheet.
+    width: number;
+    length: number;
     parts: (PlacedPart & { description: string })[];
   }[];
 }
@@ -220,6 +406,7 @@ export async function getCutSheetDiagramData(
   const sheets = await db.cutSheet.findMany({
     where: { estimateVersionId, materialId },
     orderBy: { sheetNumber: "asc" },
+    include: { consumedRemnant: true },
   });
   if (sheets.length === 0) {
     throw new Error(`No cutting diagram for "${material.name}" yet -- run Optimize first.`);
@@ -234,6 +421,9 @@ export async function getCutSheetDiagramData(
     stockLength: material.stockLength!.toNumber(),
     sheets: sheets.map((sheet) => ({
       sheetNumber: sheet.sheetNumber,
+      isRemnant: sheet.consumedRemnant != null,
+      width: sheet.consumedRemnant ? sheet.consumedRemnant.width.toNumber() : material.stockWidth!.toNumber(),
+      length: sheet.consumedRemnant ? sheet.consumedRemnant.length.toNumber() : material.stockLength!.toNumber(),
       parts: (sheet.layout as unknown as PlacedPart[]).map((p) => ({
         ...p,
         description: descriptionById.get(p.cutListPartId) ?? "Unknown part",
@@ -253,11 +443,22 @@ export interface MaterialWasteReport {
   materialId: string;
   materialName: string;
   sheetsUsed: number;
-  // sheetsUsed * currentUnitCost -- material cost only, no labor/kerf-
-  // loss-as-a-dollar-figure; kerf is already reflected physically in
-  // sheetsUsed (more kerf spacing can push a layout onto an extra sheet).
+  // Phase 5: a remnant-based sheet is already-owned material -- $0, not
+  // a display quirk. Only fresh sheets cost real money; this is the
+  // actual point of remnant reuse made visible, not just a nicer sheet
+  // count. freshSheetsUsed + remnantSheetsUsed === sheetsUsed always.
+  freshSheetsUsed: number;
+  remnantSheetsUsed: number;
+  // freshSheetsUsed * currentUnitCost -- material cost only, no labor/
+  // kerf-loss-as-a-dollar-figure; kerf is already reflected physically
+  // in sheetsUsed (more kerf spacing can push a layout onto an extra
+  // sheet).
   totalCost: number;
   usedAreaSqIn: number;
+  // Sum of each sheet's OWN real area -- a remnant sheet's actual
+  // (smaller) area, not the material's full nominal stock area, so
+  // waste% isn't computed against a denominator larger than the real
+  // stock that sheet was ever cut from.
   totalStockAreaSqIn: number;
   // 0-1, not a percentage string -- same "store the number, format at
   // the UI layer" posture as every other computed figure in this app
@@ -270,7 +471,10 @@ export async function getMaterialWasteReport(
   materialId: string,
 ): Promise<MaterialWasteReport> {
   const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
-  const sheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId } });
+  const sheets = await db.cutSheet.findMany({
+    where: { estimateVersionId, materialId },
+    include: { consumedRemnant: true },
+  });
   if (sheets.length === 0) {
     throw new Error(`No cutting layout for "${material.name}" yet -- run Optimize first.`);
   }
@@ -279,17 +483,25 @@ export async function getMaterialWasteReport(
   const stockLength = material.stockLength!.toNumber();
   const unitCost = material.currentUnitCost.toNumber();
 
+  const freshSheetsUsed = sheets.filter((s) => !s.consumedRemnant).length;
+  const remnantSheetsUsed = sheets.length - freshSheetsUsed;
+
   const usedAreaSqIn = sheets.reduce((sum, sheet) => {
     const layout = sheet.layout as unknown as PlacedPart[];
     return sum + layout.reduce((s, part) => s + part.width * part.height, 0);
   }, 0);
-  const totalStockAreaSqIn = sheets.length * stockWidth * stockLength;
+  const totalStockAreaSqIn = sheets.reduce((sum, sheet) => {
+    if (sheet.consumedRemnant) return sum + sheet.consumedRemnant.width.toNumber() * sheet.consumedRemnant.length.toNumber();
+    return sum + stockWidth * stockLength;
+  }, 0);
 
   return {
     materialId,
     materialName: material.name,
     sheetsUsed: sheets.length,
-    totalCost: sheets.length * unitCost,
+    freshSheetsUsed,
+    remnantSheetsUsed,
+    totalCost: freshSheetsUsed * unitCost,
     usedAreaSqIn,
     totalStockAreaSqIn,
     wastePct: totalStockAreaSqIn === 0 ? 0 : 1 - usedAreaSqIn / totalStockAreaSqIn,

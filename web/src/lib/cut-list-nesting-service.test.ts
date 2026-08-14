@@ -11,6 +11,9 @@ import {
 } from "@/lib/cut-list-nesting-service";
 
 afterEach(async () => {
+  // MaterialRemnant.generatedByCutSheetId is ON DELETE RESTRICT -- must
+  // clear remnants before their generating CutSheet, not after.
+  await db.materialRemnant.deleteMany();
   await db.cutSheet.deleteMany();
   await db.cutListPart.deleteMany();
   await db.estimateVersion.deleteMany();
@@ -202,6 +205,149 @@ describe("optimizeNestingForMaterial", () => {
 
     const sheets = await optimizeNestingForMaterial(version.id, material.id);
     expect(sheets.length).toBeGreaterThan(1);
+  });
+});
+
+describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
+  it("generates a shop-wide remnant from real leftover space above the minimum threshold", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial({ defaultKerf: 0 }); // 48x96
+    await makePart(version.id, material.id, { description: "Small block", width: 10, length: 10 });
+
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const remnants = await db.materialRemnant.findMany({ where: { materialId: material.id } });
+    expect(remnants).toHaveLength(1);
+    expect(remnants[0].width.toNumber()).toBeGreaterThanOrEqual(6);
+    expect(remnants[0].length.toNumber()).toBeGreaterThanOrEqual(6);
+    expect(remnants[0].consumedAt).toBeNull();
+  });
+
+  it("does not persist a leftover region below the minimum remnant threshold", async () => {
+    const version = await makeVersion();
+    // A 20x20 sheet with an 18x20 part placed leaves only a 2"-wide
+    // strip -- below MIN_REMNANT_DIMENSION (6") on that axis, so no
+    // remnant candidate should survive extractLargestRemnantCandidate.
+    const material = await makeSheetMaterial({ stockWidth: 20, stockLength: 20, defaultKerf: 0 });
+    await makePart(version.id, material.id, { description: "Nearly full-width panel", width: 18, length: 20 });
+
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const remnants = await db.materialRemnant.findMany({ where: { materialId: material.id } });
+    expect(remnants).toHaveLength(0);
+  });
+
+  it("consumes an available shop-wide remnant before buying a fresh sheet, when a part fits it", async () => {
+    const material = await makeSheetMaterial({ defaultKerf: 0 }); // 48x96
+    const versionA = await makeVersion();
+    await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
+    await optimizeNestingForMaterial(versionA.id, material.id);
+
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const remnantWidth = remnant.width.toNumber();
+    const remnantLength = remnant.length.toNumber();
+
+    // A different job (shop-wide reuse, not scoped to versionA) with a
+    // part that comfortably fits inside the real remnant just generated.
+    const versionB = await makeVersion();
+    await makePart(versionB.id, material.id, {
+      description: "Fits the remnant",
+      width: Math.max(1, remnantWidth - 2),
+      length: Math.max(1, remnantLength - 2),
+    });
+
+    const sheets = await optimizeNestingForMaterial(versionB.id, material.id);
+    expect(sheets).toHaveLength(1);
+
+    const storedB = await db.cutSheet.findMany({ where: { estimateVersionId: versionB.id, materialId: material.id } });
+    expect(storedB).toHaveLength(1);
+    expect(storedB[0].consumedRemnantId).toBe(remnant.id);
+
+    const consumedRemnant = await db.materialRemnant.findUniqueOrThrow({ where: { id: remnant.id } });
+    expect(consumedRemnant.consumedAt).not.toBeNull();
+  });
+
+  it("skips a remnant too small for the part, falling through to a fresh sheet", async () => {
+    const material = await makeSheetMaterial({ defaultKerf: 0 }); // 48x96
+    // Seed a real, but tiny, remnant directly -- tied to a throwaway
+    // CutSheet in an unrelated version, matching how a remnant persists
+    // independently of whichever job originally generated it.
+    const seedVersion = await makeVersion();
+    const seedSheet = await db.cutSheet.create({
+      data: { estimateVersionId: seedVersion.id, materialId: material.id, sheetNumber: 1, layout: [] },
+    });
+    const smallRemnant = await db.materialRemnant.create({
+      data: { materialId: material.id, width: 6, length: 6, generatedByCutSheetId: seedSheet.id },
+    });
+
+    const version = await makeVersion();
+    await makePart(version.id, material.id, { description: "Too big for the tiny remnant", width: 10, length: 10 });
+
+    const sheets = await optimizeNestingForMaterial(version.id, material.id);
+    expect(sheets).toHaveLength(1);
+
+    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: version.id, materialId: material.id } });
+    expect(stored[0].consumedRemnantId).toBeNull();
+
+    const refreshedSmallRemnant = await db.materialRemnant.findUniqueOrThrow({ where: { id: smallRemnant.id } });
+    expect(refreshedSmallRemnant.consumedAt).toBeNull();
+  });
+
+  it("re-optimizing gives back a previously-consumed remnant and doesn't duplicate a previously-generated one", async () => {
+    const material = await makeSheetMaterial({ defaultKerf: 0 }); // 48x96
+    const versionA = await makeVersion();
+    await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
+    await optimizeNestingForMaterial(versionA.id, material.id);
+
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const remnantWidth = remnant.width.toNumber();
+    const remnantLength = remnant.length.toNumber();
+
+    const versionB = await makeVersion();
+    await makePart(versionB.id, material.id, {
+      description: "Fits the remnant",
+      width: Math.max(1, remnantWidth - 2),
+      length: Math.max(1, remnantLength - 2),
+    });
+    await optimizeNestingForMaterial(versionB.id, material.id);
+
+    const remnantIdsBefore = (await db.materialRemnant.findMany({ where: { materialId: material.id } }))
+      .map((r) => r.id)
+      .sort();
+
+    await optimizeNestingForMaterial(versionB.id, material.id);
+
+    const remnantsAfter = await db.materialRemnant.findMany({ where: { materialId: material.id } });
+    expect(remnantsAfter.map((r) => r.id).sort()).toEqual(remnantIdsBefore);
+
+    const reConsumedRemnant = await db.materialRemnant.findUniqueOrThrow({ where: { id: remnant.id } });
+    expect(reConsumedRemnant.consumedAt).not.toBeNull();
+  });
+
+  it("splits fresh vs. remnant sheet cost in the waste/cost reports -- a remnant sheet costs $0", async () => {
+    const material = await makeSheetMaterial({ defaultKerf: 0 }); // 48x96
+    const versionA = await makeVersion();
+    await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
+    await optimizeNestingForMaterial(versionA.id, material.id);
+
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const versionB = await makeVersion();
+    await makePart(versionB.id, material.id, {
+      description: "Fits the remnant",
+      width: Math.max(1, remnant.width.toNumber() - 2),
+      length: Math.max(1, remnant.length.toNumber() - 2),
+    });
+    await optimizeNestingForMaterial(versionB.id, material.id);
+
+    const report = await getMaterialWasteReport(versionB.id, material.id);
+    expect(report.sheetsUsed).toBe(1);
+    expect(report.freshSheetsUsed).toBe(0);
+    expect(report.remnantSheetsUsed).toBe(1);
+    expect(report.totalCost).toBe(0);
+
+    const rollup = await getCutListCostReport(versionB.id);
+    expect(rollup.totalCost).toBe(0);
+    expect(rollup.totalSheetsUsed).toBe(1);
   });
 });
 
