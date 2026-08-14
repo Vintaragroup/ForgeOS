@@ -19,6 +19,8 @@ import {
   uploadDocumentAction,
 } from "./documents/actions";
 import { runClarificationQuestionsAnalysisAction } from "./ai-actions";
+import { deleteMisattributedLineItemAction, moveLineItemToEstimateAction } from "./line-item-audit-actions";
+import { findMisattributedLineItems, type MisattributedLineItem } from "@/lib/line-item-audit-service";
 import type { ClarificationQuestion } from "@/lib/ai/clarification-questions-service";
 import { listDocuments } from "@/lib/document-service";
 import { getThreadMessages } from "@/lib/chat-service";
@@ -395,6 +397,61 @@ function ProjectBriefCard({
   );
 }
 
+// Only rendered when findMisattributedLineItems (line-item-audit-
+// service.ts) found something -- invisible for every opportunity with no
+// findings, same gating as every other multi-project card on this page.
+// The target estimate is already known from whichever signal flagged the
+// row, so "Move" is a single button, not a picker.
+function LineItemAuditCard({
+  opportunityId,
+  findings,
+}: {
+  opportunityId: string;
+  findings: MisattributedLineItem[];
+}) {
+  if (findings.length === 0) return null;
+
+  return (
+    <CollapsibleSection title={`Line items to review (${findings.length})`}>
+      <p className="mb-4 text-sm text-neutral-500">
+        These line items were committed into an estimate that no longer matches their source
+        document&apos;s project — most often because a document was retagged to a different project
+        after its items were already committed. Move each to the estimate it actually belongs to, or
+        delete it if it&apos;s not needed.
+      </p>
+      <ul className="flex flex-col gap-3 text-sm">
+        {findings.map((f) => (
+          <li key={f.lineItemId} className="flex items-start justify-between gap-3 rounded border border-amber-200 bg-amber-50 p-3">
+            <div>
+              <div className="font-medium">{f.description}</div>
+              {f.sourceQuote && <div className="mt-0.5 text-xs italic text-neutral-500">&ldquo;{f.sourceQuote}&rdquo;</div>}
+              <div className="mt-1 text-xs text-neutral-500">
+                From {f.documentFilename} — currently in <strong>{f.currentEstimateName}</strong>, belongs in{" "}
+                <strong>{f.correctEstimateName}</strong>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              <form action={moveLineItemToEstimateAction.bind(null, opportunityId, f.lineItemId, f.correctEstimateId)}>
+                <button type="submit" className="text-xs font-medium text-blue-600 hover:underline">
+                  Move to {f.correctEstimateName}
+                </button>
+              </form>
+              <ConfirmForm
+                action={deleteMisattributedLineItemAction.bind(null, opportunityId, f.lineItemId)}
+                confirmMessage={`Delete "${f.description}"? This can't be undone.`}
+              >
+                <button type="submit" className="text-xs text-neutral-400 hover:text-red-600">
+                  Delete
+                </button>
+              </ConfirmForm>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </CollapsibleSection>
+  );
+}
+
 const EXTRACTABLE_FIELD_LABELS: Record<ExtractableOpportunityField, string> = {
   boothNumber: "Booth number",
   boothSize: "Booth size",
@@ -613,7 +670,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   );
   const isMultiProject = namedEstimates.length >= 2;
 
-  const [companies, users, contacts, documents, chatMessages, taxRates] = await Promise.all([
+  const [companies, users, contacts, documents, chatMessages, taxRates, misattributedLineItems] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.contact.findMany({
@@ -623,6 +680,9 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     listDocuments(opportunity.id),
     getThreadMessages(opportunity.id),
     db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
+    // Zero-cost for the common single-project Opportunity -- returns []
+    // immediately without a query (see findMisattributedLineItems).
+    isMultiProject ? findMisattributedLineItems(opportunity.id) : Promise.resolve([] as MisattributedLineItem[]),
   ]);
 
   const updateWithId = updateOpportunity.bind(null, opportunity.id);
@@ -1139,6 +1199,8 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       </CollapsibleSection>
 
       <ProjectBriefCard opportunityId={opportunity.id} documents={documents} namedEstimates={namedEstimates} />
+
+      <LineItemAuditCard opportunityId={opportunity.id} findings={misattributedLineItems} />
 
       {hasScopeDocuments && (
         <CollapsibleSection title="Clarification questions" id="clarification-questions">

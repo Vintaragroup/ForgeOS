@@ -366,6 +366,44 @@ export async function moveLineItemWithinSection(lineItemId: string, direction: "
   );
 }
 
+// The missing primitive for the line-item-audit-service.ts "move to the
+// correct project" fix -- moveLineItemWithinSection only reorders inside
+// one section, and nothing else in this file changes a LineItem's
+// sectionId. Reuses findOrCreateSection so a target estimate that already
+// has a same-named section (the common case -- both estimates' documents
+// were classified against the same fixed SCOPE_CATEGORIES list) gets the
+// item merged in rather than a duplicate section created. Both versions'
+// totals change, so both get recomputed, not just the destination.
+export async function moveLineItemToEstimate(lineItemId: string, targetEstimateId: string) {
+  const lineItem = await db.lineItem.findUniqueOrThrow({
+    where: { id: lineItemId },
+    include: { section: true },
+  });
+  const fromEstimateVersionId = lineItem.section.estimateVersionId;
+  await assertUnlocked(fromEstimateVersionId);
+
+  const targetVersion = await db.estimateVersion.findFirstOrThrow({
+    where: { estimateId: targetEstimateId, isCurrent: true },
+  });
+  await assertUnlocked(targetVersion.id);
+
+  const existingCount = await db.estimateSection.count({
+    where: { estimateVersionId: targetVersion.id, optionId: null },
+  });
+  const targetSection = await findOrCreateSection(targetVersion.id, {
+    name: lineItem.section.name,
+    sectionType: lineItem.section.sectionType,
+    groupLabel: lineItem.section.groupLabel,
+    sortOrder: existingCount,
+  });
+
+  await db.lineItem.update({ where: { id: lineItemId }, data: { sectionId: targetSection.id } });
+  await recomputeVersionTotals(fromEstimateVersionId);
+  await recomputeVersionTotals(targetVersion.id);
+
+  return { fromEstimateVersionId, toEstimateVersionId: targetVersion.id };
+}
+
 export async function archiveEstimate(id: string) {
   return db.estimate.update({ where: { id }, data: { deletedAt: new Date() } });
 }

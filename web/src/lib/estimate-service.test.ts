@@ -16,6 +16,7 @@ import {
   createNewVersionFromLocked,
   deleteLineItem,
   lockEstimateVersion,
+  moveLineItemToEstimate,
   recomputeVersionTotals,
   updateLineItem,
   updateMarginTarget,
@@ -373,5 +374,71 @@ describe("design-intake prototype: draft line items + Attachment", () => {
     await lockEstimateVersion(version.id);
 
     await expect(confirmDraftLineItem(draft.id)).rejects.toThrow(/locked/);
+  });
+});
+
+describe("moveLineItemToEstimate", () => {
+  async function makeTwoEstimates() {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const estimateA = await db.estimate.create({ data: { opportunityId: opportunity.id, name: "Estimate A" } });
+    const estimateB = await db.estimate.create({ data: { opportunityId: opportunity.id, name: "Estimate B" } });
+    const versionA = await createEstimateVersion(estimateA.id, 0);
+    const versionB = await createEstimateVersion(estimateB.id, 0);
+    return { estimateA, estimateB, versionA, versionB };
+  }
+
+  it("moves a line item into the target estimate's current version, creating a matching section, and recomputes both totals", async () => {
+    const { estimateB, versionA, versionB } = await makeTwoEstimates();
+    const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
+    const item = await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+
+    const result = await moveLineItemToEstimate(item.id, estimateB.id);
+    expect(result.fromEstimateVersionId).toBe(versionA.id);
+    expect(result.toEstimateVersionId).toBe(versionB.id);
+
+    const refreshedA = await recomputeVersionTotals(versionA.id);
+    const refreshedB = await recomputeVersionTotals(versionB.id);
+    expect(refreshedA.totalCost.toNumber()).toBe(0);
+    expect(refreshedB.totalCost.toNumber()).toBe(500);
+
+    const sectionsB = await db.estimateSection.findMany({ where: { estimateVersionId: versionB.id } });
+    expect(sectionsB).toHaveLength(1);
+    expect(sectionsB[0].name).toBe("Doors & Hardware");
+    const movedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(movedItem.sectionId).toBe(sectionsB[0].id);
+  });
+
+  it("reuses an existing same-named section in the target estimate instead of creating a duplicate", async () => {
+    const { estimateB, versionA, versionB } = await makeTwoEstimates();
+    const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
+    const item = await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+    const existingSectionB = await addSection(versionB.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
+    await addLineItem(existingSectionB.id, { lineType: "MATERIAL", description: "Existing hinge", qty: 1, unitCost: 25 });
+
+    await moveLineItemToEstimate(item.id, estimateB.id);
+
+    const sectionsB = await db.estimateSection.findMany({ where: { estimateVersionId: versionB.id } });
+    expect(sectionsB).toHaveLength(1);
+    const itemsInSection = await db.lineItem.findMany({ where: { sectionId: existingSectionB.id } });
+    expect(itemsInSection).toHaveLength(2);
+  });
+
+  it("rejects moving out of a locked source version", async () => {
+    const { estimateB, versionA } = await makeTwoEstimates();
+    const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
+    const item = await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+    await lockEstimateVersion(versionA.id);
+
+    await expect(moveLineItemToEstimate(item.id, estimateB.id)).rejects.toThrow(/locked/);
+  });
+
+  it("rejects moving into a locked target version", async () => {
+    const { estimateB, versionA, versionB } = await makeTwoEstimates();
+    const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
+    const item = await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+    await lockEstimateVersion(versionB.id);
+
+    await expect(moveLineItemToEstimate(item.id, estimateB.id)).rejects.toThrow(/locked/);
   });
 });
