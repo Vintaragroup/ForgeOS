@@ -5,8 +5,10 @@ import {
   getCutListCostReport,
   getCutSheetDiagramData,
   getMaterialWasteReport,
+  noOverlap,
   optimizeNestingForMaterial,
   optimizeNestingForVersion,
+  validateManualLayout,
   type PlacedPart,
 } from "@/lib/cut-list-nesting-service";
 
@@ -67,10 +69,6 @@ async function makePart(
       grainConstrained: data.grainConstrained ?? false,
     },
   });
-}
-
-function noOverlap(a: PlacedPart, b: PlacedPart): boolean {
-  return a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
 }
 
 describe("optimizeNestingForMaterial", () => {
@@ -491,5 +489,52 @@ describe("getCutListCostReport", () => {
     const version = await makeVersion();
     const report = await getCutListCostReport(version.id);
     expect(report).toEqual({ materials: [], totalCost: 0, totalSheetsUsed: 0 });
+  });
+});
+
+describe("validateManualLayout", () => {
+  const existing: PlacedPart[] = [
+    { cutListPartId: "a", x: 0, y: 0, width: 20, height: 20, rotated: false },
+    { cutListPartId: "b", x: 20, y: 0, width: 15, height: 15, rotated: false },
+  ];
+
+  it("accepts a valid reposition of the same parts, in bounds and non-overlapping", () => {
+    const moved: PlacedPart[] = [
+      { cutListPartId: "a", x: 5, y: 5, width: 20, height: 20, rotated: false },
+      { cutListPartId: "b", x: 25, y: 25, width: 15, height: 15, rotated: false },
+    ];
+    expect(() => validateManualLayout(moved, existing, 48, 96)).not.toThrow();
+  });
+
+  it("rejects a part moved outside the sheet's bounds", () => {
+    const moved: PlacedPart[] = [
+      { cutListPartId: "a", x: 40, y: 0, width: 20, height: 20, rotated: false }, // 40+20=60 > 48
+      { cutListPartId: "b", x: 20, y: 0, width: 15, height: 15, rotated: false },
+    ];
+    expect(() => validateManualLayout(moved, existing, 48, 96)).toThrow(/outside the sheet's bounds/);
+  });
+
+  it("rejects two parts that now overlap", () => {
+    const moved: PlacedPart[] = [
+      { cutListPartId: "a", x: 0, y: 0, width: 20, height: 20, rotated: false },
+      { cutListPartId: "b", x: 10, y: 10, width: 15, height: 15, rotated: false }, // overlaps "a"
+    ];
+    expect(() => validateManualLayout(moved, existing, 48, 96)).toThrow(/overlap/);
+  });
+
+  it("rejects a submitted layout whose parts don't match the sheet's real instances", () => {
+    const tampered: PlacedPart[] = [
+      { cutListPartId: "a", x: 0, y: 0, width: 20, height: 20, rotated: false },
+      { cutListPartId: "c", x: 20, y: 0, width: 15, height: 15, rotated: false }, // "c" was never on this sheet
+    ];
+    expect(() => validateManualLayout(tampered, existing, 48, 96)).toThrow(/doesn't match this sheet's real parts/);
+  });
+
+  it("accepts touching (edge-sharing) parts as non-overlapping", () => {
+    const moved: PlacedPart[] = [
+      { cutListPartId: "a", x: 0, y: 0, width: 20, height: 20, rotated: false },
+      { cutListPartId: "b", x: 20, y: 0, width: 15, height: 15, rotated: false }, // shares the x=20 edge
+    ];
+    expect(() => validateManualLayout(moved, existing, 48, 96)).not.toThrow();
   });
 });

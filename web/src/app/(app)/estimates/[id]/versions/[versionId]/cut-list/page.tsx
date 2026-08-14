@@ -8,6 +8,7 @@ import { addCutListPartAction, deleteCutListPartAction, optimizeAllMaterialsActi
 import { Button, Card, CollapsibleSection, Field, Notice, PageHeader, SelectField } from "@/components/ui";
 import { CutListPartFields } from "@/components/cut-list-part-fields";
 import { CutSheetDiagram } from "@/components/cut-sheet-diagram";
+import { CutSheetDiagramEditor } from "@/components/cut-sheet-diagram-editor";
 
 function money(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -276,9 +277,20 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
 
             {diagramData && (
               <div className="mb-4 flex flex-col gap-4">
-                {diagramData.sheets.map((sheet) => (
-                  <CutSheetDiagram key={sheet.sheetNumber} sheet={sheet} sheetCount={diagramData.sheets.length} />
-                ))}
+                {diagramData.sheets.map((sheet) =>
+                  version.isLocked ? (
+                    <CutSheetDiagram key={sheet.sheetNumber} sheet={sheet} sheetCount={diagramData.sheets.length} />
+                  ) : (
+                    <CutSheetDiagramEditor
+                      key={sheet.sheetNumber}
+                      estimateId={id}
+                      versionId={versionId}
+                      materialId={materialId}
+                      sheet={sheet}
+                      sheetCount={diagramData.sheets.length}
+                    />
+                  ),
+                )}
               </div>
             )}
 

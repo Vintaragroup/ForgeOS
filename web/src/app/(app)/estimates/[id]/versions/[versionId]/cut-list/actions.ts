@@ -3,9 +3,15 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import { requireEstimateAccess } from "@/lib/opportunity-access";
 import { assertUnlocked } from "@/lib/estimate-service";
-import { optimizeNestingForMaterial, optimizeNestingForVersion } from "@/lib/cut-list-nesting-service";
+import {
+  optimizeNestingForMaterial,
+  optimizeNestingForVersion,
+  validateManualLayout,
+  type PlacedPart,
+} from "@/lib/cut-list-nesting-service";
 
 function emptyToNull(value: FormDataEntryValue | null): string | null {
   const str = String(value ?? "").trim();
@@ -143,4 +149,48 @@ export async function optimizeAllMaterialsAction(estimateId: string, versionId: 
       ? errorRedirectPath(estimateId, versionId, errorMessage)
       : `${cutListPath(estimateId, versionId)}?optimizeAllResult=${encodeURIComponent(JSON.stringify(result))}`,
   );
+}
+
+// Cut-list phase 6, feature 5: persists a manually dragged-and-dropped
+// layout. Unlike every action above, this is called directly from a
+// client component (cut-sheet-diagram-editor.tsx), not bound to a
+// <form action> -- same "Server Action invoked directly, not via a form"
+// pattern chat-widget.tsx's sendWidgetMessageAction already established
+// for this app. So this throws a plain Error on failure (caught by the
+// client's own try/catch inside startTransition) instead of the
+// redirect+query-param pattern the form-bound actions above use, which
+// only makes sense for a full-page navigation.
+export async function updateCutSheetLayoutAction(
+  estimateId: string,
+  versionId: string,
+  materialId: string,
+  sheetNumber: number,
+  parts: PlacedPart[],
+): Promise<void> {
+  await requireEstimateAccess(estimateId);
+  await assertUnlocked(versionId);
+
+  const sheet = await db.cutSheet.findFirst({
+    where: { estimateVersionId: versionId, materialId, sheetNumber },
+    include: { consumedRemnant: true },
+  });
+  if (!sheet) throw new Error(`Sheet ${sheetNumber} not found -- it may have been re-optimized since this page loaded.`);
+
+  const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
+  const sheetWidth = sheet.consumedRemnant ? sheet.consumedRemnant.width.toNumber() : material.stockWidth!.toNumber();
+  const sheetLength = sheet.consumedRemnant ? sheet.consumedRemnant.length.toNumber() : material.stockLength!.toNumber();
+
+  validateManualLayout(parts, sheet.layout as unknown as PlacedPart[], sheetWidth, sheetLength);
+
+  await db.$transaction(async (tx) => {
+    await tx.cutSheet.update({ where: { id: sheet.id }, data: { layout: parts as unknown as Prisma.InputJsonValue } });
+    // The freeRects-based leftover this sheet may have generated no
+    // longer describes real leftover space once a human has manually
+    // repositioned its parts -- same cleanup optimizeNestingForMaterial
+    // already applies to a superseded auto-computed layout, just
+    // triggered by a manual save here instead of a re-optimize.
+    await tx.materialRemnant.deleteMany({ where: { generatedByCutSheetId: sheet.id } });
+  });
+
+  revalidatePath(cutListPath(estimateId, versionId));
 }

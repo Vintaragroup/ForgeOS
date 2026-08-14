@@ -28,20 +28,52 @@
 import { MaxRectsPacker, Rectangle } from "maxrects-packer";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
+import { noOverlap, type PlacedPart } from "@/lib/cut-sheet-geometry";
 
-export interface PlacedPart {
-  cutListPartId: string;
-  x: number;
-  y: number;
-  // As-placed dimensions (post any rotation) -- not the part's
-  // originally entered width/length. A renderer (phase 3) draws
-  // straight from these.
-  width: number;
-  height: number;
-  // True if this instance's final orientation differs from how the part
-  // was entered, whether because it only fit the sheet rotated or
-  // because the packer chose to rotate it for a tighter fit.
-  rotated: boolean;
+// Re-exported (not just imported) so every existing consumer of these
+// two names (tests, cut-list/actions.ts) keeps importing from this one
+// module as before -- see cut-sheet-geometry.ts's own header comment for
+// why the actual definitions had to move out of here: a client component
+// (cut-sheet-diagram-editor.tsx) importing noOverlap directly from this
+// file would bundle this file's own top-level `db` import (and the `pg`
+// Postgres driver with it) into the browser build.
+export { noOverlap };
+export type { PlacedPart };
+
+// Cut-list phase 6, feature 5: re-validates a manually dragged-and-
+// dropped layout server-side (cut-list/actions.ts's
+// updateCutSheetLayoutAction) -- never trust client-computed positions
+// blindly. Throws a clear Error on the first violation found; returns
+// nothing on success. A pure function (no DB access) so it's directly
+// testable independent of the action's auth/fetch/persist plumbing.
+export function validateManualLayout(
+  parts: PlacedPart[],
+  existingParts: PlacedPart[],
+  sheetWidth: number,
+  sheetLength: number,
+): void {
+  // A manual reposition can only rearrange the parts already placed on
+  // this sheet -- never add, remove, or swap which instances are here.
+  // Compared as a multiset of cutListPartIds (an instance carries no
+  // stable id of its own, so array order can't be trusted).
+  const existingIds = existingParts.map((p) => p.cutListPartId).sort();
+  const incomingIds = parts.map((p) => p.cutListPartId).sort();
+  if (existingIds.length !== incomingIds.length || existingIds.some((id, i) => id !== incomingIds[i])) {
+    throw new Error("The submitted layout doesn't match this sheet's real parts -- reload the page and try again.");
+  }
+
+  for (const part of parts) {
+    if (part.x < 0 || part.y < 0 || part.x + part.width > sheetWidth || part.y + part.height > sheetLength) {
+      throw new Error("A part is positioned outside the sheet's bounds -- move it back onto the sheet before saving.");
+    }
+  }
+  for (let i = 0; i < parts.length; i++) {
+    for (let j = i + 1; j < parts.length; j++) {
+      if (!noOverlap(parts[i], parts[j])) {
+        throw new Error("Two parts overlap -- move them apart before saving.");
+      }
+    }
+  }
 }
 
 // Decides, once, whether a part needs to be pre-swapped before it's
