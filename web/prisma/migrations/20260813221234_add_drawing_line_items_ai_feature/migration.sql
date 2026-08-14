@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "AiFeature" ADD VALUE 'DRAWING_LINE_ITEMS';

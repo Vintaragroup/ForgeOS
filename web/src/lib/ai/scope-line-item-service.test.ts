@@ -169,6 +169,38 @@ describe("commitScopeLineItems", () => {
     expect(allLineItems.every((li) => li.sourcePageNumber === null)).toBe(true);
   });
 
+  it("uses a model-reported pageNumber directly when present, bypassing text-search page lookup -- the drawing-sourced case", async () => {
+    // A DOCX-mime document (no PDF page text at all) proves this isn't
+    // accidentally working via locateQuotePage -- drawing-line-item-
+    // service.ts's items carry pageNumber but an empty sourceQuote (no
+    // text layer to search), so this is the only way they get a page.
+    const document = await makeAnalyzedDocument("some scope text");
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "Booth structure fabrication",
+        qty: 1,
+        qtyIsExplicit: false,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "",
+        pageNumber: 3,
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitScopeLineItems(version.id, document.id);
+
+    const lineItem = await db.lineItem.findFirstOrThrow({ where: { documentId: document.id } });
+    expect(lineItem.sourcePageNumber).toBe(3);
+  });
+
   it("computes a real page number for a PDF source, from the PDF's own per-page text", async () => {
     const { readFile } = await import("node:fs/promises");
     const path = await import("node:path");

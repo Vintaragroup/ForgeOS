@@ -44,6 +44,7 @@ import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labo
 import { LineItemRow } from "@/components/line-item-row";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
+import { getProjectContext } from "@/lib/ai/scope-document-context";
 import { citationHref } from "@/lib/citation";
 import { auditLineItemCategories } from "@/lib/category-audit";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
@@ -142,19 +143,28 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       orderBy: { createdAt: "desc" },
     }),
     // Any analyzed document EXCEPT a pricing schedule (which already has
-    // real qty/unit rows -- an AI guess would be strictly worse) or a
-    // drawing (never text-extracted) is a candidate to propose scope-based
-    // line items from.
+    // real qty/unit rows -- an AI guess would be strictly worse) is a
+    // candidate to propose line items from -- DRAWING included, via the
+    // vision-based drawing-line-item-service.ts (proposeScopeItemsAction
+    // dispatches on documentType).
     db.document.findMany({
       where: {
         opportunityId: estimate.opportunityId,
         deletedAt: null,
         extractionStatus: "COMPLETE",
-        documentType: { notIn: ["PRICING_SCHEDULE", "DRAWING"] },
+        documentType: { notIn: ["PRICING_SCHEDULE"] },
       },
       orderBy: { createdAt: "desc" },
     }),
   ]);
+
+  // Only non-empty once this Opportunity has 2+ named Estimates (see
+  // getProjectContext) -- lets the Propose preview table show which
+  // project each item was classified into, so a bad classification can be
+  // caught before Commit, not just after (see line-item-audit-service.ts
+  // for the after-commit half of this).
+  const projectContext = await getProjectContext(estimate.opportunityId);
+  const estimateNameById = new Map(projectContext.estimates.map((e) => [e.id, e.name]));
 
   // Plain-object, pre-formatted rows -- not the raw Prisma LaborRate[]
   // (its `rate` is a Decimal instance, which shouldn't cross into the
@@ -593,13 +603,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       {canImport && (
         <Card className="p-6">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Propose line items from Scope of Work
+            Propose line items from a document
           </h2>
           <p className="mb-4 text-sm text-neutral-500">
-            For an RFP with no pre-built pricing schedule -- reads an analyzed document&apos;s scope text and
-            proposes draft line items. Unlike a real pricing schedule, quantities here are often AI-inferred, not
-            read from the source: rows marked <span className="italic">(qty estimated — verify)</span> had no
-            explicit quantity in the document at all. Verify every row against the source before relying on it.
+            For an RFP with no pre-built pricing schedule -- reads an analyzed Scope of Work (or the page images of
+            a drawing/rendering) and proposes draft line items. Unlike a real pricing schedule, quantities here are
+            often AI-inferred, not read from the source: rows marked{" "}
+            <span className="italic">(qty estimated — verify)</span> had no explicit quantity in the document at
+            all. Verify every row against the source before relying on it.
           </p>
           {scopeDocuments.length === 0 ? (
             <Notice
@@ -643,6 +654,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                       <th className="px-2 py-1.5 text-right font-normal">Unit</th>
                       <th className="px-2 py-1.5 text-right font-normal">Qty</th>
                       <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
+                      {estimateNameById.size > 0 && <th className="px-2 py-1.5 font-normal">Project</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -675,6 +687,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                               <span className="text-neutral-400">—</span>
                             )}
                           </td>
+                          {estimateNameById.size > 0 && (
+                            <td className="px-2 py-1 text-neutral-500">
+                              {item.estimateId ? (estimateNameById.get(item.estimateId) ?? "Unknown estimate") : "Shared"}
+                            </td>
+                          )}
                         </tr>
                       );
                     })}

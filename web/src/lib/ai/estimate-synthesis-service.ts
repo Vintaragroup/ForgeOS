@@ -14,11 +14,13 @@
 // analyzed-but-never-proposed scope doc) were sitting there unused.
 
 import { db } from "@/lib/db";
+import type { Document } from "@/generated/prisma/client";
 import { commitPricingImport } from "@/lib/pricing-import-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
+import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service";
 
 export interface BuildEstimateResult {
-  imported: { filename: string; kind: "pricing" | "scope"; rowsImported: number }[];
+  imported: { filename: string; kind: "pricing" | "scope" | "drawing"; rowsImported: number }[];
   skipped: { filename: string; reason: string }[];
 }
 
@@ -27,6 +29,44 @@ async function alreadyCommitted(estimateVersionId: string, documentId: string): 
     where: { documentId, section: { estimateVersionId, optionId: null } },
   });
   return !!existing;
+}
+
+// Shared by the text-scope and drawing loops below -- same skip/propose/
+// commit shape, differing only in which propose function actually reads
+// the document (extracted text vs. vision page images) and the "kind"
+// label attached to a successful import.
+async function proposeAndCommit(
+  estimateVersionId: string,
+  userId: string | null,
+  docs: Document[],
+  kind: "scope" | "drawing",
+  proposeFn: (documentId: string, userId: string | null) => Promise<unknown>,
+  imported: BuildEstimateResult["imported"],
+  skipped: BuildEstimateResult["skipped"],
+) {
+  for (const doc of docs) {
+    if (doc.extractionStatus !== "COMPLETE") {
+      skipped.push({ filename: doc.filename, reason: "Not analyzed yet -- click Analyze on the Opportunity page first." });
+      continue;
+    }
+    if (await alreadyCommitted(estimateVersionId, doc.id)) {
+      skipped.push({ filename: doc.filename, reason: "Already imported into this estimate." });
+      continue;
+    }
+    try {
+      // proposedLineItems is cached on the Document once proposed (see
+      // scope-line-item-service.ts / drawing-line-item-service.ts) --
+      // reuse it instead of a repeat OpenAI call for a document someone
+      // already ran Propose on by hand.
+      if (!doc.proposedLineItems) {
+        await proposeFn(doc.id, userId);
+      }
+      const result = await commitScopeLineItems(estimateVersionId, doc.id);
+      imported.push({ filename: doc.filename, kind, rowsImported: result.rowsImported });
+    } catch (err) {
+      skipped.push({ filename: doc.filename, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
 }
 
 export async function buildEstimateFromAllDocuments(
@@ -70,8 +110,8 @@ export async function buildEstimateFromAllDocuments(
   }
 
   // Same candidate filter as the Propose panel: not a pricing schedule
-  // (real rows already, an AI guess would be worse) or a drawing (never
-  // text-extracted, see analyze-document.ts).
+  // (real rows already, an AI guess would be worse) or a drawing (a
+  // separate vision-based path below, since it has no extracted text).
   const scopeDocs = await db.document.findMany({
     where: {
       opportunityId,
@@ -81,28 +121,13 @@ export async function buildEstimateFromAllDocuments(
     },
     orderBy: { createdAt: "asc" },
   });
-  for (const doc of scopeDocs) {
-    if (doc.extractionStatus !== "COMPLETE") {
-      skipped.push({ filename: doc.filename, reason: "Not analyzed yet -- click Analyze on the Opportunity page first." });
-      continue;
-    }
-    if (await alreadyCommitted(estimateVersionId, doc.id)) {
-      skipped.push({ filename: doc.filename, reason: "Already imported into this estimate." });
-      continue;
-    }
-    try {
-      // proposedLineItems is cached on the Document once proposed (see
-      // scope-line-item-service.ts) -- reuse it instead of a repeat
-      // OpenAI call for a document someone already ran Propose on by hand.
-      if (!doc.proposedLineItems) {
-        await proposeLineItemsFromScope(doc.id, userId);
-      }
-      const result = await commitScopeLineItems(estimateVersionId, doc.id);
-      imported.push({ filename: doc.filename, kind: "scope", rowsImported: result.rowsImported });
-    } catch (err) {
-      skipped.push({ filename: doc.filename, reason: err instanceof Error ? err.message : String(err) });
-    }
-  }
+  await proposeAndCommit(estimateVersionId, userId, scopeDocs, "scope", proposeLineItemsFromScope, imported, skipped);
+
+  const drawingDocs = await db.document.findMany({
+    where: { opportunityId, deletedAt: null, documentType: "DRAWING", ...notOtherProject },
+    orderBy: { createdAt: "asc" },
+  });
+  await proposeAndCommit(estimateVersionId, userId, drawingDocs, "drawing", proposeLineItemsFromDrawing, imported, skipped);
 
   return { imported, skipped };
 }

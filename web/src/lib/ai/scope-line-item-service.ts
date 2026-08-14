@@ -68,6 +68,12 @@ export interface ProposedLineItem {
   category: ScopeCategory;
   sourceQuote: string;
   estimateId?: string | null;
+  // Only ever set by drawing-line-item-service.ts -- a drawing has no
+  // extracted-text layer to search sourceQuote against (see
+  // commitScopeLineItems below), so its page number is model-reported and
+  // trusted directly instead of computed via locateQuotePage. Absent (not
+  // just null) for every text-sourced item.
+  pageNumber?: number | null;
 }
 
 // What OpenAI actually returns -- project is only present when the
@@ -328,7 +334,7 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
           isClientOwned: inferIsClientOwned(item.description),
           documentId,
           sourceQuote: item.sourceQuote,
-          sourcePageNumber: pageTexts ? locateQuotePage(pageTexts, item.sourceQuote) : null,
+          sourcePageNumber: item.pageNumber ?? (pageTexts ? locateQuotePage(pageTexts, item.sourceQuote) : null),
         };
       }),
     );

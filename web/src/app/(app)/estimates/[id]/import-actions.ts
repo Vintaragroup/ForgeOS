@@ -5,11 +5,13 @@ import { revalidatePath } from "next/cache";
 import { RateLimitError } from "openai";
 import { commitPricingImport } from "@/lib/pricing-import-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
+import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service";
 import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
 import { buildEstimateFromAllDocuments } from "@/lib/ai/estimate-synthesis-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import { recomputeVersionTotals, updateLineItem } from "@/lib/estimate-service";
 import { requireEstimateAccess } from "@/lib/opportunity-access";
+import { db } from "@/lib/db";
 
 export async function buildFullEstimateFromDocumentsAction(
   estimateId: string,
@@ -46,7 +48,20 @@ export async function proposeScopeItemsAction(estimateId: string, formData: Form
   if (!documentId) throw new Error("Choose a document to propose items from");
 
   try {
-    await proposeLineItemsFromScope(documentId, user.id);
+    // Same dispatch shape as analyze-document.ts -- a DRAWING has no
+    // extracted text, so it needs the vision-based proposer instead of
+    // the text-based one, but both write the identical ProposedLineItem[]
+    // shape, so everything downstream (this action's redirect, the
+    // preview table, commitScopeItemsAction) needs no branch of its own.
+    const { documentType } = await db.document.findUniqueOrThrow({
+      where: { id: documentId },
+      select: { documentType: true },
+    });
+    if (documentType === "DRAWING") {
+      await proposeLineItemsFromDrawing(documentId, user.id);
+    } else {
+      await proposeLineItemsFromScope(documentId, user.id);
+    }
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {
       throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable this.");
