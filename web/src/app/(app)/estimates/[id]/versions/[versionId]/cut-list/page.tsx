@@ -3,9 +3,11 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
-import { getCutListCostReport, type OptimizeAllResult } from "@/lib/cut-list-nesting-service";
+import { getCutListCostReport, getCutSheetDiagramData, type OptimizeAllResult } from "@/lib/cut-list-nesting-service";
 import { addCutListPartAction, deleteCutListPartAction, optimizeAllMaterialsAction, optimizeMaterialAction } from "./actions";
 import { Button, Card, CollapsibleSection, Field, Notice, PageHeader, SelectField } from "@/components/ui";
+import { CutListPartFields } from "@/components/cut-list-part-fields";
+import { CutSheetDiagram } from "@/components/cut-sheet-diagram";
 
 function money(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -35,10 +37,10 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
   if (!version) notFound();
   if (!(await canAccessOpportunity(user, version.estimate.opportunityId))) notFound();
 
-  const [cutListParts, sheetMaterials, costReport] = await Promise.all([
+  const [cutListParts, sheetMaterials, lineItems, costReport] = await Promise.all([
     db.cutListPart.findMany({
       where: { estimateVersionId: versionId, deletedAt: null },
-      include: { material: true },
+      include: { material: true, lineItem: true },
       orderBy: { createdAt: "asc" },
     }),
     // Only materials actually set up as nestable stock (see the Cut-list
@@ -49,8 +51,23 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
       where: { deletedAt: null, materialType: "SHEET", stockWidth: { not: null }, stockLength: { not: null } },
       orderBy: { name: "asc" },
     }),
+    // LineItem has no direct estimateVersionId -- always reached through
+    // its EstimateSection. Offered as an optional "link to line item"
+    // pick on Add-a-part (cut-list-part-fields.tsx) so a part can be tied
+    // back to the priced line it's fabrication detail for, instead of
+    // living as a disconnected shadow list.
+    db.lineItem.findMany({
+      where: { section: { estimateVersionId: versionId } },
+      orderBy: [{ category: "asc" }, { description: "asc" }],
+    }),
     getCutListCostReport(versionId),
   ]);
+
+  const lineItemOptions = lineItems.map((li) => ({
+    id: li.id,
+    label: li.category ? `${li.category} — ${li.description}` : li.description,
+    description: li.description,
+  }));
 
   const wasteByMaterialId = new Map(costReport.materials.map((m) => [m.materialId, m]));
 
@@ -63,6 +80,19 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
   const materialGroups = [...partsByMaterial.entries()]
     .map(([materialId, parts]) => ({ materialId, material: parts[0].material, parts }))
     .sort((a, b) => a.material.name.localeCompare(b.material.name));
+
+  // Only for materials that have actually been optimized (real CutSheet
+  // rows to read) -- fetched in parallel (not a sequential per-material
+  // await) once materialGroups is known, since it's derived from
+  // cutListParts above. Renders the packed layout inline (Feature 4) in
+  // addition to the existing PDF/DXF download links, which stay useful
+  // for printing and CNC.
+  const diagramEntries = await Promise.all(
+    materialGroups
+      .filter(({ materialId }) => wasteByMaterialId.has(materialId))
+      .map(async ({ materialId }) => [materialId, await getCutSheetDiagramData(versionId, materialId)] as const),
+  );
+  const diagramDataByMaterialId = new Map(diagramEntries);
 
   const addPartWithIds = addCutListPartAction.bind(null, id, versionId);
   const optimizeAllWithIds = optimizeAllMaterialsAction.bind(null, id, versionId);
@@ -77,6 +107,10 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
           </Link>
         }
       />
+
+      <p className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
+        Version {version.versionNumber} {version.isLocked ? "· locked" : "· editing"}
+      </p>
 
       {optimizeError && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">{optimizeError}</div>
@@ -128,55 +162,55 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
         </Card>
       )}
 
-      <Card className="p-6">
-        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Add a part</h2>
-        <p className="mb-4 text-sm text-neutral-500">
-          Every dimension is in inches. Only materials set up as nestable sheet stock (material type + stock
-          width/length, on that material&apos;s own catalog page) appear below.
-        </p>
-        {sheetMaterials.length === 0 ? (
-          <Notice
-            message="No materials are set up as cuttable sheet stock yet."
-            actionHref="/catalog/materials"
-            actionLabel="Set one up"
-          />
-        ) : (
-          <form action={addPartWithIds} className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
-            <div className="col-span-2 sm:order-1 sm:flex-1 sm:min-w-[10rem]">
-              <Field label="Description" name="description" required />
-            </div>
-            <div className="col-span-2 sm:order-2 sm:w-56">
-              <SelectField
-                label="Material"
-                name="materialId"
-                required
-                options={sheetMaterials.map((m) => ({
-                  value: m.id,
-                  label: `${m.name} (${m.stockWidth}x${m.stockLength})`,
-                }))}
-              />
-            </div>
-            <div className="sm:order-3 sm:w-24">
-              <Field label="Width (in)" name="width" type="number" required />
-            </div>
-            <div className="sm:order-4 sm:w-24">
-              <Field label="Length (in)" name="length" type="number" required />
-            </div>
-            <div className="sm:order-5 sm:w-20">
-              <Field label="Qty" name="qty" type="number" defaultValue="1" required />
-            </div>
-            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-6 sm:col-span-1">
-              <input type="checkbox" name="grainConstrained" />
-              Grain-constrained
-            </label>
-            <div className="col-span-2 sm:order-7">
-              <Button variant="secondary">Add part</Button>
-            </div>
-          </form>
-        )}
-      </Card>
+      {!version.isLocked && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Add a part</h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Every dimension is in inches. Only materials set up as nestable sheet stock (material type + stock
+            width/length, on that material&apos;s own catalog page) appear below.
+          </p>
+          {sheetMaterials.length === 0 ? (
+            <Notice
+              message="No materials are set up as cuttable sheet stock yet."
+              actionHref="/catalog/materials"
+              actionLabel="Set one up"
+            />
+          ) : (
+            <form action={addPartWithIds} className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
+              <CutListPartFields lineItems={lineItemOptions} />
+              <div className="col-span-2 sm:order-2 sm:w-56">
+                <SelectField
+                  label="Material"
+                  name="materialId"
+                  required
+                  options={sheetMaterials.map((m) => ({
+                    value: m.id,
+                    label: `${m.name} (${m.stockWidth}x${m.stockLength})`,
+                  }))}
+                />
+              </div>
+              <div className="sm:order-3 sm:w-24">
+                <Field label="Width (in)" name="width" type="number" required />
+              </div>
+              <div className="sm:order-4 sm:w-24">
+                <Field label="Length (in)" name="length" type="number" required />
+              </div>
+              <div className="sm:order-5 sm:w-20">
+                <Field label="Qty" name="qty" type="number" defaultValue="1" required />
+              </div>
+              <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-6 sm:col-span-1">
+                <input type="checkbox" name="grainConstrained" />
+                Grain-constrained
+              </label>
+              <div className="col-span-2 sm:order-7">
+                <Button variant="secondary">Add part</Button>
+              </div>
+            </form>
+          )}
+        </Card>
+      )}
 
-      {materialGroups.length > 0 && (
+      {materialGroups.length > 0 && !version.isLocked && (
         <form action={optimizeAllWithIds}>
           <Button>Optimize all materials</Button>
         </form>
@@ -184,6 +218,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
 
       {materialGroups.map(({ materialId, material, parts }) => {
         const waste = wasteByMaterialId.get(materialId);
+        const diagramData = diagramDataByMaterialId.get(materialId);
         const optimizeWithIds = optimizeMaterialAction.bind(null, id, versionId, materialId);
         const deleteWithIds = deleteCutListPartAction.bind(null, id, versionId);
         return (
@@ -194,9 +229,11 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                 {material.thickness ? ` x ${material.thickness}"` : ""}
                 {material.defaultKerf ? ` — kerf ${material.defaultKerf}"` : ""}
               </div>
-              <form action={optimizeWithIds}>
-                <Button variant="secondary">{waste ? "Re-optimize" : "Optimize"}</Button>
-              </form>
+              {!version.isLocked && (
+                <form action={optimizeWithIds}>
+                  <Button variant="secondary">{waste ? "Re-optimize" : "Optimize"}</Button>
+                </form>
+              )}
             </div>
 
             {waste && (
@@ -237,18 +274,31 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
               </div>
             )}
 
+            {diagramData && (
+              <div className="mb-4 flex flex-col gap-4">
+                {diagramData.sheets.map((sheet) => (
+                  <CutSheetDiagram key={sheet.sheetNumber} sheet={sheet} sheetCount={diagramData.sheets.length} />
+                ))}
+              </div>
+            )}
+
             <ul className="flex flex-col divide-y divide-neutral-200 text-sm">
               {parts.map((part) => (
                 <li key={part.id} className="flex items-center justify-between gap-3 py-2">
                   <span>
                     {part.description} — {part.width?.toString()}x{part.length.toString()} x{part.qty}
                     {part.grainConstrained && <span className="ml-1 text-amber-600">(grain-constrained)</span>}
+                    {part.lineItem && (
+                      <span className="ml-1 text-neutral-400">— linked to &quot;{part.lineItem.description}&quot;</span>
+                    )}
                   </span>
-                  <form action={deleteWithIds.bind(null, part.id)}>
-                    <button type="submit" className="text-neutral-400 hover:text-red-600" aria-label={`Delete ${part.description}`}>
-                      ✕
-                    </button>
-                  </form>
+                  {!version.isLocked && (
+                    <form action={deleteWithIds.bind(null, part.id)}>
+                      <button type="submit" className="text-neutral-400 hover:text-red-600" aria-label={`Delete ${part.description}`}>
+                        ✕
+                      </button>
+                    </form>
+                  )}
                 </li>
               ))}
             </ul>

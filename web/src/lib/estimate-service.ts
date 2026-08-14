@@ -77,7 +77,7 @@ const VERSION_WITH_TOTALS_INCLUDE = {
   sections: { where: { optionId: null }, include: { lineItems: true } },
 } satisfies Prisma.EstimateVersionInclude;
 
-async function assertUnlocked(estimateVersionId: string) {
+export async function assertUnlocked(estimateVersionId: string) {
   const version = await db.estimateVersion.findUniqueOrThrow({
     where: { id: estimateVersionId },
   });

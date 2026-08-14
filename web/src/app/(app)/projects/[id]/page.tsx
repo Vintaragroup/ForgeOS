@@ -3,6 +3,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
+import { getCutListCostReport, type CutListCostReport } from "@/lib/cut-list-nesting-service";
 import type { Prisma } from "@/generated/prisma/client";
 import {
   addShipmentAction,
@@ -50,6 +51,10 @@ function fmtDate(d: Date | null): string {
   return d.toISOString().slice(0, 10);
 }
 
+function money(n: number): string {
+  return `$${n.toFixed(2)}`;
+}
+
 export default async function ProjectDetailPage(props: PageProps<"/projects/[id]">) {
   const { id } = await props.params;
   const user = await getCurrentUser();
@@ -81,6 +86,25 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.vendor.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
   ]);
+
+  // Project has no direct FK to Estimate/EstimateVersion -- deliberate,
+  // both already reach the same Opportunity, so a second direct link
+  // would just be a redundant path to the same data (see the schema
+  // comment above the Project model). "The accepted estimate" for
+  // production is derived here instead: the most recently locked version
+  // across every Estimate this Opportunity has (usually one, but an
+  // Opportunity can have more -- e.g. two separate exhibits). Only a
+  // LOCKED version's cut list is shown -- that's the real signal an
+  // estimate is settled, same gate cut-list/page.tsx itself now enforces
+  // (Phase 6).
+  const lockedVersion = await db.estimateVersion.findFirst({
+    where: { estimate: { opportunityId: project.opportunityId }, isLocked: true },
+    orderBy: { versionNumber: "desc" },
+  });
+  let cutListReport: CutListCostReport | null = null;
+  if (lockedVersion) {
+    cutListReport = await getCutListCostReport(lockedVersion.id);
+  }
 
   const updateProjectWithId = updateProjectDetailsAction.bind(null, project.id);
   const startWorkOrderWithId = startWorkOrderAction.bind(null, project.id);
@@ -114,6 +138,57 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
           </div>
         </form>
       </Card>
+
+      {lockedVersion && cutListReport && cutListReport.materials.length > 0 && (
+        <Card className="p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">Cut list</h2>
+            <Link
+              href={`/estimates/${lockedVersion.estimateId}/versions/${lockedVersion.id}/cut-list`}
+              className="text-sm text-brand-navy hover:underline"
+            >
+              View full cut list →
+            </Link>
+          </div>
+          <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-neutral-400">Total material cost</div>
+              <div className="text-lg font-semibold">{money(cutListReport.totalCost)}</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wide text-neutral-400">Total sheets</div>
+              <div className="text-lg font-semibold">{cutListReport.totalSheetsUsed}</div>
+            </div>
+          </div>
+          <ul className="flex flex-col divide-y divide-neutral-200 text-sm">
+            {cutListReport.materials.map((m) => (
+              <li key={m.materialId} className="flex flex-wrap items-center gap-4 py-2">
+                <span className="flex-1 font-medium">{m.materialName}</span>
+                <span>
+                  <strong>{m.sheetsUsed}</strong> sheet{m.sheetsUsed === 1 ? "" : "s"}
+                  {m.remnantSheetsUsed > 0 && (
+                    <span className="text-neutral-500">
+                      {" "}
+                      ({m.remnantSheetsUsed} remnant, {m.freshSheetsUsed} fresh)
+                    </span>
+                  )}
+                </span>
+                <span>
+                  <strong>{money(m.totalCost)}</strong>
+                </span>
+                <span className="text-neutral-500">{(m.wastePct * 100).toFixed(1)}% waste</span>
+                <Link
+                  href={`/estimates/${lockedVersion.estimateId}/versions/${lockedVersion.id}/cut-list/${m.materialId}/diagram`}
+                  target="_blank"
+                  className="text-brand-navy hover:underline"
+                >
+                  Diagram (PDF)
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       {!workOrder ? (
         <Card className="p-6">
