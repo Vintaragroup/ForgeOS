@@ -1,6 +1,13 @@
 "use client";
 
-import { useRef, useState, useTransition, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { BRAND } from "@/lib/brand";
 import { noOverlap, type PlacedPart } from "@/lib/cut-sheet-geometry";
 import type { CutSheetDiagramData } from "@/lib/cut-list-nesting-service";
@@ -33,6 +40,14 @@ const GRID_SNAP = 0.25;
 // inches via the current scale, not a fixed inch value that would feel
 // twitchy on a small remnant and unreachable on a full 48x96 sheet.
 const SNAP_PIXELS = 6;
+
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.25;
+
+function clampZoom(z: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+}
 
 function snap(n: number): number {
   return Math.round(n / GRID_SNAP) * GRID_SNAP;
@@ -143,11 +158,56 @@ export function CutSheetDiagramEditor({
   // alongside setParts inside the same handlePointerMove call, so both
   // land in the same React 18+ batched re-render.
   const [activeGuides, setActiveGuides] = useState<Guide[]>([]);
+  const [zoom, setZoom] = useState(1);
+  // The scrollable viewport around the SVG -- zooming in grows the SVG's
+  // rendered size past this container's fixed max, so the browser's own
+  // scrollbars (native, no custom pan logic needed) let the user get to
+  // the rest of it. Also where the non-passive wheel listener attaches
+  // (see the effect below for why that can't just be onWheel).
+  const viewportRef = useRef<HTMLDivElement>(null);
 
-  const scale = Math.min(DIAGRAM_MAX_WIDTH / sheet.width, DIAGRAM_MAX_HEIGHT / sheet.length);
+  const scale = Math.min(DIAGRAM_MAX_WIDTH / sheet.width, DIAGRAM_MAX_HEIGHT / sheet.length) * zoom;
   const svgWidth = sheet.width * scale;
   const svgHeight = sheet.length * scale;
   const labelFontSize = Math.max(Math.min(sheet.width, sheet.length) * 0.018, 0.15);
+
+  // Ctrl/Cmd+scroll to zoom (trackpad pinch-zoom also reports ctrlKey:
+  // true on wheel events, so this covers both) -- a plain scroll is left
+  // alone so it still scrolls the page/container normally, matching the
+  // same modifier convention Figma and Google Maps use. Attached as a
+  // real DOM listener with { passive: false }, not the JSX onWheel prop:
+  // React's synthetic wheel handler doesn't reliably let
+  // preventDefault() suppress the browser's own native zoom/scroll on
+  // every browser, and this needs to actually win that race.
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    function handleWheel(e: WheelEvent) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom((z) => clampZoom(z + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
+    }
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  // Scoped to this diagram's own container (tabIndex + onKeyDown below),
+  // not a global window listener -- a version can show several sheets
+  // at once, and a global listener would fire for all of them regardless
+  // of which one the user actually meant, or hijack keystrokes while
+  // typing in the Add-a-part form elsewhere on the page.
+  function handleKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (e.key === "+" || e.key === "=") {
+      e.preventDefault();
+      setZoom((z) => clampZoom(z + ZOOM_STEP));
+    } else if (e.key === "-" || e.key === "_") {
+      e.preventDefault();
+      setZoom((z) => clampZoom(z - ZOOM_STEP));
+    } else if (e.key === "0") {
+      e.preventDefault();
+      setZoom(1);
+    }
+  }
 
   const dirty = parts.some((p, i) => p.x !== baseline[i].x || p.y !== baseline[i].y);
 
@@ -235,14 +295,21 @@ export function CutSheetDiagramEditor({
           Stock: {sheet.width}&quot; x {sheet.length}&quot;
         </span>
       </div>
-      <svg
-        width={svgWidth}
-        height={svgHeight}
-        viewBox={`0 0 ${sheet.width} ${sheet.length}`}
-        className="touch-none rounded-sm border border-neutral-300 bg-white select-none"
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
+      <div
+        ref={viewportRef}
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        className="max-w-full overflow-auto rounded-sm border border-neutral-300 outline-none focus-visible:ring-2 focus-visible:ring-brand-teal"
+        style={{ maxWidth: DIAGRAM_MAX_WIDTH, maxHeight: DIAGRAM_MAX_HEIGHT }}
       >
+        <svg
+          width={svgWidth}
+          height={svgHeight}
+          viewBox={`0 0 ${sheet.width} ${sheet.length}`}
+          className="touch-none bg-white select-none"
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+        >
         <rect x={0} y={0} width={sheet.width} height={sheet.length} fill="#ffffff" stroke={BRAND.black} strokeWidth={0.05} />
         {parts.map((part, i) => {
           const canLabel = part.width > labelFontSize * 5 && part.height > labelFontSize * 2.5;
@@ -304,7 +371,37 @@ export function CutSheetDiagramEditor({
             />
           ),
         )}
-      </svg>
+        </svg>
+      </div>
+      <div className="flex w-full items-center justify-between text-xs text-neutral-500">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setZoom((z) => clampZoom(z - ZOOM_STEP))}
+            disabled={zoom <= MIN_ZOOM}
+            aria-label="Zoom out"
+            className="flex h-5 w-5 items-center justify-center rounded border border-neutral-300 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            −
+          </button>
+          <span className="w-10 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
+          <button
+            type="button"
+            onClick={() => setZoom((z) => clampZoom(z + ZOOM_STEP))}
+            disabled={zoom >= MAX_ZOOM}
+            aria-label="Zoom in"
+            className="flex h-5 w-5 items-center justify-center rounded border border-neutral-300 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            +
+          </button>
+          {zoom !== 1 && (
+            <button type="button" onClick={() => setZoom(1)} className="text-neutral-500 hover:underline">
+              Reset zoom
+            </button>
+          )}
+        </div>
+        <span>Shortcuts: click diagram, then +/− to zoom, 0 to reset, or Ctrl/Cmd+scroll</span>
+      </div>
       <div className="flex min-h-[1.5rem] items-center gap-3 text-xs">
         {!valid && <span className="text-red-600">Overlapping or out-of-bounds parts (shown in red) can&apos;t be saved.</span>}
         {error && <span className="text-red-600">{error}</span>}
