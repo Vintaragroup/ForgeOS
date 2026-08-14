@@ -195,3 +195,131 @@ export async function optimizeNestingForVersion(estimateVersionId: string): Prom
 
   return { optimized, skipped };
 }
+
+// Phase 3: joins a material's stored CutSheet layouts (position/size
+// only -- see PlacedPart) with its CutListParts (to get each placed
+// instance's real description) into the shape cut-sheet-pdf.tsx renders
+// from. A read, not a compute -- run optimizeNestingForMaterial first;
+// this throws if that's never been done, same "click Propose/Optimize
+// first" posture as commitScopeLineItems's identical guard.
+export interface CutSheetDiagramData {
+  materialName: string;
+  stockWidth: number;
+  stockLength: number;
+  sheets: {
+    sheetNumber: number;
+    parts: (PlacedPart & { description: string })[];
+  }[];
+}
+
+export async function getCutSheetDiagramData(
+  estimateVersionId: string,
+  materialId: string,
+): Promise<CutSheetDiagramData> {
+  const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
+  const sheets = await db.cutSheet.findMany({
+    where: { estimateVersionId, materialId },
+    orderBy: { sheetNumber: "asc" },
+  });
+  if (sheets.length === 0) {
+    throw new Error(`No cutting diagram for "${material.name}" yet -- run Optimize first.`);
+  }
+
+  const parts = await db.cutListPart.findMany({ where: { estimateVersionId, materialId } });
+  const descriptionById = new Map(parts.map((p) => [p.id, p.description]));
+
+  return {
+    materialName: material.name,
+    stockWidth: material.stockWidth!.toNumber(),
+    stockLength: material.stockLength!.toNumber(),
+    sheets: sheets.map((sheet) => ({
+      sheetNumber: sheet.sheetNumber,
+      parts: (sheet.layout as unknown as PlacedPart[]).map((p) => ({
+        ...p,
+        description: descriptionById.get(p.cutListPartId) ?? "Unknown part",
+      })),
+    })),
+  };
+}
+
+// Phase 4: the REAL waste/cost figure, computed directly from actual
+// packed layouts (Phase 2) rather than a rough pre-nesting estimate --
+// the plan's own original phase 4 framed this as "replace phase 1's
+// naive waste estimate," but phase 1 (a parts-list UI with its own rough
+// area-vs-stock guess) was never built, so there's no naive figure to
+// replace -- this is just the real report, buildable now because
+// optimizeNestingForMaterial already produces exact placements to sum.
+export interface MaterialWasteReport {
+  materialId: string;
+  materialName: string;
+  sheetsUsed: number;
+  // sheetsUsed * currentUnitCost -- material cost only, no labor/kerf-
+  // loss-as-a-dollar-figure; kerf is already reflected physically in
+  // sheetsUsed (more kerf spacing can push a layout onto an extra sheet).
+  totalCost: number;
+  usedAreaSqIn: number;
+  totalStockAreaSqIn: number;
+  // 0-1, not a percentage string -- same "store the number, format at
+  // the UI layer" posture as every other computed figure in this app
+  // (e.g. EstimateVersion.grossMarginPct's own callers).
+  wastePct: number;
+}
+
+export async function getMaterialWasteReport(
+  estimateVersionId: string,
+  materialId: string,
+): Promise<MaterialWasteReport> {
+  const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
+  const sheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId } });
+  if (sheets.length === 0) {
+    throw new Error(`No cutting layout for "${material.name}" yet -- run Optimize first.`);
+  }
+
+  const stockWidth = material.stockWidth!.toNumber();
+  const stockLength = material.stockLength!.toNumber();
+  const unitCost = material.currentUnitCost.toNumber();
+
+  const usedAreaSqIn = sheets.reduce((sum, sheet) => {
+    const layout = sheet.layout as unknown as PlacedPart[];
+    return sum + layout.reduce((s, part) => s + part.width * part.height, 0);
+  }, 0);
+  const totalStockAreaSqIn = sheets.length * stockWidth * stockLength;
+
+  return {
+    materialId,
+    materialName: material.name,
+    sheetsUsed: sheets.length,
+    totalCost: sheets.length * unitCost,
+    usedAreaSqIn,
+    totalStockAreaSqIn,
+    wastePct: totalStockAreaSqIn === 0 ? 0 : 1 - usedAreaSqIn / totalStockAreaSqIn,
+  };
+}
+
+export interface CutListCostReport {
+  materials: MaterialWasteReport[];
+  totalCost: number;
+  totalSheetsUsed: number;
+}
+
+// Version-level rollup across every material that's actually been
+// optimized -- same "find every distinct material with real CutSheet
+// rows" shape optimizeNestingForVersion already established, reused here
+// for reporting instead of computing.
+export async function getCutListCostReport(estimateVersionId: string): Promise<CutListCostReport> {
+  const materialIds = await db.cutSheet.findMany({
+    where: { estimateVersionId },
+    select: { materialId: true },
+    distinct: ["materialId"],
+  });
+
+  const materials = await Promise.all(
+    materialIds.map(({ materialId }) => getMaterialWasteReport(estimateVersionId, materialId)),
+  );
+
+  return {
+    materials,
+    totalCost: materials.reduce((sum, m) => sum + m.totalCost, 0),
+    totalSheetsUsed: materials.reduce((sum, m) => sum + m.sheetsUsed, 0),
+  };
+}

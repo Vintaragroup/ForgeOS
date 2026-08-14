@@ -1,7 +1,14 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { createEstimateVersion } from "@/lib/estimate-service";
-import { optimizeNestingForMaterial, optimizeNestingForVersion, type PlacedPart } from "@/lib/cut-list-nesting-service";
+import {
+  getCutListCostReport,
+  getCutSheetDiagramData,
+  getMaterialWasteReport,
+  optimizeNestingForMaterial,
+  optimizeNestingForVersion,
+  type PlacedPart,
+} from "@/lib/cut-list-nesting-service";
 
 afterEach(async () => {
   await db.cutSheet.deleteMany();
@@ -212,5 +219,131 @@ describe("optimizeNestingForVersion", () => {
     expect(result.skipped).toHaveLength(1);
     expect(result.skipped[0].materialId).toBe(cement.id);
     expect(result.skipped[0].reason).toMatch(/isn't set up as sheet stock/);
+  });
+});
+
+describe("getCutSheetDiagramData", () => {
+  it("joins each sheet's placed parts back to their real descriptions", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial();
+    const partA = await makePart(version.id, material.id, { description: "Side panel", width: 20, length: 20 });
+    const partB = await makePart(version.id, material.id, { description: "Top panel", width: 15, length: 15 });
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const data = await getCutSheetDiagramData(version.id, material.id);
+
+    expect(data.materialName).toBe(material.name);
+    expect(data.stockWidth).toBe(48);
+    expect(data.stockLength).toBe(96);
+    expect(data.sheets).toHaveLength(1);
+    expect(data.sheets[0].sheetNumber).toBe(1);
+    const descriptions = data.sheets[0].parts.map((p) => p.description).sort();
+    expect(descriptions).toEqual(["Side panel", "Top panel"]);
+    const byId = new Map(data.sheets[0].parts.map((p) => [p.cutListPartId, p]));
+    expect(byId.get(partA.id)?.description).toBe("Side panel");
+    expect(byId.get(partB.id)?.description).toBe("Top panel");
+  });
+
+  it("throws a clear, actionable error when nothing has been optimized yet", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial();
+    await makePart(version.id, material.id, { description: "Panel", width: 20, length: 20 });
+    // Deliberately no optimizeNestingForMaterial call.
+
+    await expect(getCutSheetDiagramData(version.id, material.id)).rejects.toThrow(/run Optimize first/);
+  });
+
+  it("reflects multiple sheets in order when a material's parts span more than one", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial({ stockWidth: 20, stockLength: 20 });
+    await makePart(version.id, material.id, { description: "Big panel A", width: 18, length: 18 });
+    await makePart(version.id, material.id, { description: "Big panel B", width: 18, length: 18 });
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const data = await getCutSheetDiagramData(version.id, material.id);
+
+    expect(data.sheets.map((s) => s.sheetNumber)).toEqual([1, 2]);
+  });
+});
+
+describe("getMaterialWasteReport", () => {
+  it("computes exact waste and cost from the real packed layout, not an estimate", async () => {
+    const version = await makeVersion();
+    // 48x96 = 4608 sq in per sheet, $100/sheet. One 48x48 part (2304 sq
+    // in) easily fits on a single sheet -- hand-computable expected
+    // result: 1 sheet, $100 cost, exactly 50% waste.
+    const material = await db.material.create({
+      data: {
+        name: "3/4in Plywood",
+        currentUnitCost: 100,
+        materialType: "SHEET",
+        stockWidth: 48,
+        stockLength: 96,
+        defaultKerf: 0,
+      },
+    });
+    await makePart(version.id, material.id, { description: "Half sheet", width: 48, length: 48 });
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const report = await getMaterialWasteReport(version.id, material.id);
+
+    expect(report.sheetsUsed).toBe(1);
+    expect(report.totalCost).toBe(100);
+    expect(report.usedAreaSqIn).toBe(48 * 48);
+    expect(report.totalStockAreaSqIn).toBe(48 * 96);
+    expect(report.wastePct).toBeCloseTo(0.5, 5);
+  });
+
+  it("scales cost and stock area with the number of sheets actually used", async () => {
+    const version = await makeVersion();
+    const material = await db.material.create({
+      data: { name: "MDF", currentUnitCost: 50, materialType: "SHEET", stockWidth: 20, stockLength: 20, defaultKerf: 0 },
+    });
+    // Two 18x18 parts can't share one 20x20 sheet -- forces 2 sheets.
+    await makePart(version.id, material.id, { description: "Panel A", width: 18, length: 18 });
+    await makePart(version.id, material.id, { description: "Panel B", width: 18, length: 18 });
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const report = await getMaterialWasteReport(version.id, material.id);
+
+    expect(report.sheetsUsed).toBe(2);
+    expect(report.totalCost).toBe(100);
+    expect(report.totalStockAreaSqIn).toBe(2 * 20 * 20);
+  });
+
+  it("throws a clear error when nothing has been optimized for this material yet", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial();
+    await makePart(version.id, material.id, { description: "Panel", width: 10, length: 10 });
+
+    await expect(getMaterialWasteReport(version.id, material.id)).rejects.toThrow(/run Optimize first/);
+  });
+});
+
+describe("getCutListCostReport", () => {
+  it("rolls up every optimized material's cost and sheet count", async () => {
+    const version = await makeVersion();
+    const plywood = await db.material.create({
+      data: { name: "Plywood", currentUnitCost: 100, materialType: "SHEET", stockWidth: 48, stockLength: 96, defaultKerf: 0 },
+    });
+    const mdf = await db.material.create({
+      data: { name: "MDF", currentUnitCost: 50, materialType: "SHEET", stockWidth: 48, stockLength: 96, defaultKerf: 0 },
+    });
+    await makePart(version.id, plywood.id, { description: "Panel", width: 20, length: 20 });
+    await makePart(version.id, mdf.id, { description: "Panel", width: 20, length: 20 });
+    await optimizeNestingForMaterial(version.id, plywood.id);
+    await optimizeNestingForMaterial(version.id, mdf.id);
+
+    const report = await getCutListCostReport(version.id);
+
+    expect(report.materials).toHaveLength(2);
+    expect(report.totalSheetsUsed).toBe(2);
+    expect(report.totalCost).toBe(150);
+  });
+
+  it("returns an empty report when nothing in this version has been optimized", async () => {
+    const version = await makeVersion();
+    const report = await getCutListCostReport(version.id);
+    expect(report).toEqual({ materials: [], totalCost: 0, totalSheetsUsed: 0 });
   });
 });
