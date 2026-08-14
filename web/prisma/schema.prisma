@@ -703,6 +703,7 @@ model Material {
   grainDirectionMatters Boolean       @default(false)
 
   cutListParts CutListPart[]
+  cutSheets    CutSheet[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -791,6 +792,7 @@ model EstimateVersion {
   changeOrdersAsBase  ChangeOrder[]     @relation("ChangeOrderBaseVersion")
   changeOrderAsResult ChangeOrder?      @relation("ChangeOrderResultVersion")
   cutListParts        CutListPart[]
+  cutSheets           CutSheet[]
 
   @@map("estimate_versions")
 }
@@ -968,6 +970,35 @@ model CutListPart {
   deletedAt DateTime?
 
   @@map("cut_list_parts")
+}
+
+// Cut-list phase 2 (cut-list-nesting-service.ts): one row per sheet/board
+// a material's nesting run actually used, holding the packed layout
+// (placed-part positions) as JSON -- same full-overwrite-on-re-run
+// posture as Document.proposedLineItems/EstimateVersion.coverageAnalysis
+// elsewhere in this schema, not something that incrementally patches.
+// Scoped to (estimateVersionId, materialId): a version's different
+// materials never share a sheet, so they're optimized (and stored)
+// independently, one CutSheet set per material.
+model CutSheet {
+  id                String          @id @default(cuid())
+  estimateVersionId String
+  estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
+  materialId        String
+  material          Material        @relation(fields: [materialId], references: [id])
+
+  sheetNumber Int
+  // PlacedPart[] (cut-list-nesting-service.ts): { cutListPartId, x, y,
+  // width, height, rotated } per instance actually placed on this sheet
+  // -- width/height are the AS-PLACED dimensions (post any rotation),
+  // not the part's originally entered width/length, so a renderer
+  // (phase 3) can draw straight from this without re-deriving
+  // orientation itself.
+  layout Json
+
+  createdAt DateTime @default(now())
+
+  @@map("cut_sheets")
 }
 
 // ---------------------------------------------------------------------
