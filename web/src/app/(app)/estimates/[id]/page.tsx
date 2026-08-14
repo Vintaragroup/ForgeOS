@@ -449,6 +449,23 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         </Card>
       )}
 
+      {currentVersion && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Cut list</h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Material calculator, sheet-nesting optimization, printable cutting diagrams, and CNC DXF export for
+            this estimate&apos;s fabrication -- a shop-floor planning tool, separate from this estimate&apos;s
+            priced line items.
+          </p>
+          <Link
+            href={`/estimates/${id}/versions/${currentVersion.id}/cut-list`}
+            className="text-sm font-medium text-brand-navy hover:underline"
+          >
+            Manage cut list →
+          </Link>
+        </Card>
+      )}
+
       {currentVersion && scopeDocuments.length > 0 && runCoverageAnalysisWithIds && (
         <Card className="p-6">
           <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">

@@ -7,12 +7,13 @@
 import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { LaborRateType } from "../src/generated/prisma/enums";
+import { LaborRateType, MaterialType } from "../src/generated/prisma/enums";
 import {
   CATALOG_EXPANSION_LABOR_RATES,
   CATALOG_EXPANSION_MATERIALS,
   CATALOG_EXPANSION_RENTAL_ITEMS,
 } from "./seed-data/catalog-expansion";
+import { CUTLIST_SEED_MATERIALS } from "./seed-data/cutlist-materials";
 
 const adapter = new PrismaPg(process.env.DATABASE_URL!);
 const db = new PrismaClient({ adapter });
@@ -231,6 +232,31 @@ async function main() {
     });
   }
   console.log(`Seeded ${CATALOG_EXPANSION_LABOR_RATES.length} show-site city labor rates.`);
+
+  // Real extraction from data/Catalog_Data/cut-list_data/ -- this shop's
+  // own actual CutList Plus material library export (Sheet Goods and
+  // Dimensioned Lumber only; see scripts/generate-cutlist-materials.ts
+  // for why Rough Lumber is excluded). Gives the cut-list feature
+  // (cut-list-nesting-service.ts) a real, immediately-usable material
+  // library instead of an empty one requiring everything typed by hand.
+  for (const m of CUTLIST_SEED_MATERIALS) {
+    const existing = await db.material.findFirst({ where: { name: m.name } });
+    const data = {
+      category: m.category,
+      materialType: MaterialType[m.materialType],
+      stockWidth: m.stockWidth,
+      stockLength: m.stockLength,
+      thickness: m.thickness,
+      currentUnitCost: m.currentUnitCost,
+      sourceNote: m.sourceNote,
+    };
+    if (existing) {
+      await db.material.update({ where: { id: existing.id }, data });
+    } else {
+      await db.material.create({ data: { name: m.name, ...data } });
+    }
+  }
+  console.log(`Seeded ${CUTLIST_SEED_MATERIALS.length} cut-list materials (real shop data).`);
 }
 
 main()
