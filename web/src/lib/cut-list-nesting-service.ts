@@ -222,6 +222,35 @@ function packOneBin(
 // expensive-feeling operation on every keystroke (this one's cheap/local,
 // no AI call, but the explicit-trigger discipline is worth keeping
 // consistent across the app regardless).
+// Cut-list phase 6 bugfix: every OTHER caller that deletes a material's
+// CutSheet rows to clear stale state (addCutListPartAction,
+// deleteCutListPartAction in cut-list/actions.ts) did a bare
+// `db.cutSheet.deleteMany(...)`, missing this exact cleanup -- a real,
+// confirmed-live bug: adding or deleting a part on a material with an
+// existing optimized layout threw `Foreign key constraint violated on
+// the constraint: material_remnants_generatedByCutSheetId_fkey`, because
+// a MaterialRemnant this material's CutSheet had generated still
+// referenced it (ON DELETE RESTRICT) and was never cleaned up first.
+// optimizeNestingForMaterial had this exact logic inline already (see
+// its own header comment on why it must run before availableRemnants is
+// read) -- promoted here so every caller that clears a material's old
+// CutSheet rows goes through the same one cleanup, not a second
+// (previously missing) copy.
+export async function clearStaleCutSheets(estimateVersionId: string, materialId: string): Promise<void> {
+  const oldSheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId } });
+  if (oldSheets.length === 0) return;
+  const oldConsumedRemnantIds = oldSheets.map((s) => s.consumedRemnantId).filter((id): id is string => id != null);
+  const oldSheetIds = oldSheets.map((s) => s.id);
+
+  await db.$transaction(async (tx) => {
+    if (oldConsumedRemnantIds.length > 0) {
+      await tx.materialRemnant.updateMany({ where: { id: { in: oldConsumedRemnantIds } }, data: { consumedAt: null } });
+    }
+    await tx.materialRemnant.deleteMany({ where: { generatedByCutSheetId: { in: oldSheetIds } } });
+    await tx.cutSheet.deleteMany({ where: { id: { in: oldSheetIds } } });
+  });
+}
+
 export async function optimizeNestingForMaterial(
   estimateVersionId: string,
   materialId: string,
@@ -251,22 +280,8 @@ export async function optimizeNestingForMaterial(
   // down, not after packing -- reading it first would either miss a
   // remnant this same material's previous run had consumed (now given
   // back here) or, worse, let a new CutSheet reference a remnant this
-  // cleanup is about to delete, violating the FK. A remnant's
-  // generatedByCutSheet FK is required (ON DELETE RESTRICT) -- the
-  // generated remnant must be deleted before its CutSheet, not after.
-  const oldSheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId } });
-  const oldConsumedRemnantIds = oldSheets.map((s) => s.consumedRemnantId).filter((id): id is string => id != null);
-  const oldSheetIds = oldSheets.map((s) => s.id);
-
-  if (oldSheetIds.length > 0) {
-    await db.$transaction(async (tx) => {
-      if (oldConsumedRemnantIds.length > 0) {
-        await tx.materialRemnant.updateMany({ where: { id: { in: oldConsumedRemnantIds } }, data: { consumedAt: null } });
-      }
-      await tx.materialRemnant.deleteMany({ where: { generatedByCutSheetId: { in: oldSheetIds } } });
-      await tx.cutSheet.deleteMany({ where: { id: { in: oldSheetIds } } });
-    });
-  }
+  // cleanup is about to delete, violating the FK.
+  await clearStaleCutSheets(estimateVersionId, materialId);
 
   if (parts.length === 0) {
     return [];

@@ -7,6 +7,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { requireEstimateAccess } from "@/lib/opportunity-access";
 import { assertUnlocked } from "@/lib/estimate-service";
 import {
+  clearStaleCutSheets,
   optimizeNestingForMaterial,
   optimizeNestingForVersion,
   validateManualLayout,
@@ -79,8 +80,13 @@ export async function addCutListPartAction(estimateId: string, versionId: string
     // wrong-but-present result on screen, forces a fresh Optimize before
     // any sheets/cost/waste numbers show again -- same "wrong answer is
     // worse than a visible gap" posture the catalog-match scorer's own
-    // header comment argues for elsewhere in this app.
-    await db.cutSheet.deleteMany({ where: { estimateVersionId: versionId, materialId } });
+    // header comment argues for elsewhere in this app. Goes through
+    // clearStaleCutSheets (not a bare deleteMany) -- a real, confirmed-
+    // live bug here previously threw a foreign key violation whenever
+    // this material already had an optimized layout that had generated a
+    // shop-wide remnant, since that remnant's generatedByCutSheetId FK
+    // (ON DELETE RESTRICT) was never cleared first.
+    await clearStaleCutSheets(versionId, materialId);
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : String(err);
   }
@@ -97,8 +103,9 @@ export async function deleteCutListPartAction(estimateId: string, versionId: str
     // Same staleness reasoning as addCutListPartAction -- confirmed
     // live: without this, the cut list summary kept showing a
     // material's old sheet count/cost/waste after its only part was
-    // deleted, computed from parts that no longer exist.
-    await db.cutSheet.deleteMany({ where: { estimateVersionId: versionId, materialId: part.materialId } });
+    // deleted, computed from parts that no longer exist. Same
+    // clearStaleCutSheets fix as addCutListPartAction, same bug.
+    await clearStaleCutSheets(versionId, part.materialId);
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : String(err);
   }

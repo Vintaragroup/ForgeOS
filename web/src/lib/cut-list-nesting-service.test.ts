@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import {
+  clearStaleCutSheets,
   getCutListCostReport,
   getCutSheetDiagramData,
   getMaterialWasteReport,
@@ -536,5 +537,64 @@ describe("validateManualLayout", () => {
       { cutListPartId: "b", x: 20, y: 0, width: 15, height: 15, rotated: false }, // shares the x=20 edge
     ];
     expect(() => validateManualLayout(moved, existing, 48, 96)).not.toThrow();
+  });
+});
+
+describe("clearStaleCutSheets", () => {
+  // Real, confirmed-live bug: cut-list/actions.ts's addCutListPartAction
+  // and deleteCutListPartAction used to clear a material's old CutSheet
+  // rows with a bare db.cutSheet.deleteMany(...) -- if that material's
+  // existing layout had generated a shop-wide remnant (Phase 5), this
+  // threw "Foreign key constraint violated on the constraint:
+  // material_remnants_generatedByCutSheetId_fkey", since the remnant's
+  // generatedByCutSheetId (ON DELETE RESTRICT) still pointed at the
+  // sheet being deleted. Both actions now go through this shared
+  // function instead of their own copy.
+  it("deletes a remnant the old sheet generated, instead of leaving a dangling FK reference", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial({ defaultKerf: 0 }); // 48x96
+    await makePart(version.id, material.id, { description: "Small block", width: 10, length: 10 });
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const sheet = await db.cutSheet.findFirstOrThrow({ where: { estimateVersionId: version.id, materialId: material.id } });
+    expect(remnant.generatedByCutSheetId).toBe(sheet.id);
+
+    // This is the exact call addCutListPartAction/deleteCutListPartAction
+    // make -- previously a bare deleteMany here would throw.
+    await expect(clearStaleCutSheets(version.id, material.id)).resolves.not.toThrow();
+
+    expect(await db.cutSheet.findUnique({ where: { id: sheet.id } })).toBeNull();
+    expect(await db.materialRemnant.findUnique({ where: { id: remnant.id } })).toBeNull();
+  });
+
+  it("gives back (doesn't delete) a remnant the old sheet had consumed", async () => {
+    const material = await makeSheetMaterial({ defaultKerf: 0 }); // 48x96
+    const versionA = await makeVersion();
+    await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
+    await optimizeNestingForMaterial(versionA.id, material.id);
+
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const versionB = await makeVersion();
+    await makePart(versionB.id, material.id, {
+      description: "Fits the remnant",
+      width: Math.max(1, remnant.width.toNumber() - 2),
+      length: Math.max(1, remnant.length.toNumber() - 2),
+    });
+    await optimizeNestingForMaterial(versionB.id, material.id);
+
+    const consumed = await db.materialRemnant.findUniqueOrThrow({ where: { id: remnant.id } });
+    expect(consumed.consumedAt).not.toBeNull();
+
+    await clearStaleCutSheets(versionB.id, material.id);
+
+    const givenBack = await db.materialRemnant.findUniqueOrThrow({ where: { id: remnant.id } });
+    expect(givenBack.consumedAt).toBeNull();
+  });
+
+  it("is a no-op when the material has no existing CutSheet rows", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial();
+    await expect(clearStaleCutSheets(version.id, material.id)).resolves.not.toThrow();
   });
 });
