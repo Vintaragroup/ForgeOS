@@ -657,6 +657,17 @@ model TaxRate {
   @@map("tax_rates")
 }
 
+// Cut-list phase 0: only meaningful for a Material that's actually
+// cuttable raw stock (plywood, MDF, dimensioned lumber) -- left null for
+// every other Material row (hardware, adhesives, paint, etc.), same
+// optional posture as `unit`/`category` above. SHEET has both
+// stockWidth and stockLength (a sheet good); LINEAR has stockLength only
+// (a board -- cut to length, no meaningful "width" to nest against).
+enum MaterialType {
+  SHEET
+  LINEAR
+}
+
 model Material {
   id              String  @id @default(cuid())
   name            String
@@ -668,6 +679,30 @@ model Material {
   // researched industry-reference starting point pending the shop's real
   // supplier costs. Keeps that distinction from getting silently lost.
   sourceNote      String?
+
+  // Cut-list phase 0 (cut-list-service.ts): structured stock dimensions,
+  // all in inches -- the standard unit for shop-floor cut lists in this
+  // industry, same convention CutList Plus itself defaults to. Null on
+  // every Material row until someone opts a specific catalog entry into
+  // being real cuttable stock by filling these in; nothing about the
+  // existing catalog changes for a row that never gets them set.
+  materialType          MaterialType?
+  stockWidth            Decimal?      @db.Decimal(8, 3)
+  stockLength           Decimal?      @db.Decimal(8, 3)
+  thickness             Decimal?      @db.Decimal(8, 3)
+  // Saw kerf width -- the material actually lost to each cut, not just a
+  // display value. Feeds directly into the nesting engine (phase 2) as
+  // the per-part inflation amount; a part-level override isn't needed
+  // yet since kerf is a property of the saw/material combo, not the part.
+  defaultKerf           Decimal?      @db.Decimal(6, 3)
+  // True when parts cut from this material must keep a fixed orientation
+  // (visible wood grain, a directional laminate/finish) -- read by the
+  // nesting engine (phase 2) to disable rotation for any CutListPart that
+  // inherits this, the same way Document.estimateId is inherited rather
+  // than re-decided per part.
+  grainDirectionMatters Boolean       @default(false)
+
+  cutListParts CutListPart[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -755,6 +790,7 @@ model EstimateVersion {
   proposals           Proposal[]
   changeOrdersAsBase  ChangeOrder[]     @relation("ChangeOrderBaseVersion")
   changeOrderAsResult ChangeOrder?      @relation("ChangeOrderResultVersion")
+  cutListParts        CutListPart[]
 
   @@map("estimate_versions")
 }
@@ -872,9 +908,66 @@ model LineItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  costActuals CostActual[]
+  costActuals  CostActual[]
+  cutListParts CutListPart[]
 
   @@map("line_items")
+}
+
+// Cut-list phase 0 (see docs/... cut-list-service.ts) -- one row per
+// physical part to be cut from raw stock, the input to the phase 2
+// nesting engine. Deliberately its own model, not a LineItem field:
+// LineItem is a costing row (qty/unit/cost) already serving the
+// proposal/PDF pipeline, and most LineItems (labor, rentals, services)
+// have no cut-list meaning at all. A cut list is fabrication data for
+// the shop floor, priced work is what LineItem already tracks -- a part
+// optionally points back at the LineItem it's costed under, but doesn't
+// replace it.
+model CutListPart {
+  id         String   @id @default(cuid())
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id])
+
+  description String
+  qty         Int     @default(1)
+  // Inches, same convention as Material's stock fields above. width is
+  // meaningless (left null) for a LINEAR material's part -- only length
+  // (cut-to-length) applies; a SHEET material's part uses both.
+  width       Decimal? @db.Decimal(8, 3)
+  length      Decimal  @db.Decimal(8, 3)
+  // Overrides the material's own thickness only when this specific part
+  // genuinely differs (e.g. a doubled-up panel) -- null means "use
+  // material.thickness," the common case, not "no thickness."
+  thickness   Decimal? @db.Decimal(8, 3)
+
+  // Inherited from Material.grainDirectionMatters by default at entry
+  // time, but a per-part override -- some parts from a grain-constrained
+  // sheet (an edge piece, a hidden brace) genuinely don't care about
+  // orientation even though most of that sheet's parts do.
+  grainConstrained Boolean @default(false)
+  // Free text for now (e.g. "top,bottom") -- same posture as
+  // Material.category before it got a real taxonomy; not load-bearing
+  // for phase 0/1, just carried through so phase 2+ doesn't need a
+  // migration to start using it.
+  edgeBanding      String?
+
+  sortOrder Int @default(0)
+
+  estimateVersionId String
+  estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
+
+  // Optional -- ties this part back to the specific priced LineItem it's
+  // fabrication detail for (e.g. a "Custom reception counter" line),
+  // when one exists. Null for a cut list entered before -- or without --
+  // a matching priced line.
+  lineItemId String?
+  lineItem   LineItem? @relation(fields: [lineItemId], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("cut_list_parts")
 }
 
 // ---------------------------------------------------------------------
