@@ -65,6 +65,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/catalog/rental-items", label: "Rental items" },
       { href: "/catalog/proposal-templates", label: "Proposal templates" },
       { href: "/catalog/vendors", label: "Vendors" },
+      { href: "/catalog/cut-list-settings", label: "Cut list settings" },
     ],
   },
 ];

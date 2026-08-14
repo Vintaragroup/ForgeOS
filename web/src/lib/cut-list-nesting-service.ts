@@ -29,6 +29,7 @@ import { MaxRectsPacker, Rectangle } from "maxrects-packer";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { noOverlap, type PlacedPart } from "@/lib/cut-sheet-geometry";
+import { getCutListSettings } from "@/lib/cut-list-settings-service";
 
 // Re-exported (not just imported) so every existing consumer of these
 // two names (tests, cut-list/actions.ts) keeps importing from this one
@@ -104,12 +105,6 @@ function resolvePlacementOrientation(
   return { width: part.length, height: part.width, preRotated: true };
 }
 
-// Phase 5: below this in either dimension, a leftover scrap isn't worth
-// tracking as reusable stock -- a real, deliberately conservative
-// simplification (see the file-level note on why only ONE remnant is
-// ever kept per sheet, ahead of this).
-const MIN_REMNANT_DIMENSION = 6;
-
 interface Instance {
   cutListPartId: string;
   width: number;
@@ -134,12 +129,16 @@ function fitsInBin(inst: Instance, binWidth: number, binHeight: number): { width
 }
 
 // Only the single largest free rectangle, and only above
-// MIN_REMNANT_DIMENSION -- see the file-level note on why more than one
-// per sheet risks double-booking the same physical scrap.
-function extractLargestRemnantCandidate(freeRects: { width: number; height: number }[]): { width: number; length: number } | null {
+// minRemnantDimension (a shop-configurable setting -- see
+// CutListSettings) -- see the file-level note on why more than one per
+// sheet risks double-booking the same physical scrap.
+function extractLargestRemnantCandidate(
+  freeRects: { width: number; height: number }[],
+  minRemnantDimension: number,
+): { width: number; length: number } | null {
   let best: { width: number; height: number } | null = null;
   for (const fr of freeRects) {
-    if (fr.width < MIN_REMNANT_DIMENSION || fr.height < MIN_REMNANT_DIMENSION) continue;
+    if (fr.width < minRemnantDimension || fr.height < minRemnantDimension) continue;
     if (!best || fr.width * fr.height > best.width * best.height) best = fr;
   }
   return best ? { width: best.width, length: best.height } : null;
@@ -164,6 +163,7 @@ function packOneBin(
   binWidth: number,
   binHeight: number,
   kerf: number,
+  minRemnantDimension: number,
 ): { result: BinResult; unplaced: Instance[] } {
   const packer = new MaxRectsPacker(binWidth, binHeight, kerf, { smart: false, pot: false, square: false });
   const unplaced: Instance[] = [];
@@ -209,7 +209,7 @@ function packOneBin(
     result: {
       placed,
       consumedRemnantId: null,
-      generatedRemnant: firstBin ? extractLargestRemnantCandidate(firstBin.freeRects) : null,
+      generatedRemnant: firstBin ? extractLargestRemnantCandidate(firstBin.freeRects, minRemnantDimension) : null,
     },
     unplaced,
   };
@@ -263,7 +263,13 @@ export async function optimizeNestingForMaterial(
   }
   const stockWidth = material.stockWidth.toNumber();
   const stockLength = material.stockLength.toNumber();
-  const kerf = material.defaultKerf?.toNumber() ?? 0;
+  // Material.defaultKerf (set per-material on its own catalog page)
+  // always wins when present; CutListSettings.defaultKerf is only the
+  // shop-wide fallback for a material that hasn't been given its own
+  // real value yet -- see the settings panel (catalog/cut-list-settings).
+  const settings = await getCutListSettings();
+  const kerf = material.defaultKerf?.toNumber() ?? settings.defaultKerf.toNumber();
+  const minRemnantDimension = settings.minRemnantDimension.toNumber();
 
   const parts = await db.cutListPart.findMany({
     where: { estimateVersionId, materialId, deletedAt: null },
@@ -318,7 +324,7 @@ export async function optimizeNestingForMaterial(
     if (remaining.length === 0) break;
     const rw = remnant.width.toNumber();
     const rl = remnant.length.toNumber();
-    const { result, unplaced } = packOneBin(remaining, rw, rl, kerf);
+    const { result, unplaced } = packOneBin(remaining, rw, rl, kerf, minRemnantDimension);
     if (result.placed.length > 0) {
       bins.push({ ...result, consumedRemnantId: remnant.id });
     }
@@ -350,7 +356,7 @@ export async function optimizeNestingForMaterial(
           rotated: (r.data as { preRotated: boolean }).preRotated !== r.rot,
         })),
         consumedRemnantId: null,
-        generatedRemnant: extractLargestRemnantCandidate(bin.freeRects),
+        generatedRemnant: extractLargestRemnantCandidate(bin.freeRects, minRemnantDimension),
       });
     }
   }

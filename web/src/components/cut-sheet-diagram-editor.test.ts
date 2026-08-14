@@ -7,10 +7,13 @@ import type { PlacedPart } from "@/lib/cut-sheet-geometry";
 // picked directly here since these tests exercise the pure function, not
 // the pixel/scale conversion around it.
 const THRESHOLD = 0.5;
+// Matches CutListSettings.dragGridSnap's own schema default -- these
+// tests exercise the fallback-to-grid behavior against that same value.
+const GRID_SNAP = 0.25;
 
 describe("computeAlignedPosition", () => {
   it("falls back to the plain grid snap when nothing is within threshold", () => {
-    const { x, y, guides } = computeAlignedPosition(10.1, 10.1, 5, 5, [], 48, 96, THRESHOLD);
+    const { x, y, guides } = computeAlignedPosition(10.1, 10.1, 5, 5, [], 48, 96, THRESHOLD, GRID_SNAP);
     expect(x).toBe(10); // nearest 0.25
     expect(y).toBe(10);
     expect(guides).toEqual([]);
@@ -20,7 +23,7 @@ describe("computeAlignedPosition", () => {
     const other: PlacedPart[] = [{ cutListPartId: "a", x: 0, y: 0, width: 10, height: 10, rotated: false }];
     // Candidate left edge (20.3) is close to other's right edge (10)? No --
     // pick a candidate whose left edge (10.3) is close to other's right edge (10).
-    const { x, guides } = computeAlignedPosition(10.3, 30, 5, 5, other, 48, 96, THRESHOLD);
+    const { x, guides } = computeAlignedPosition(10.3, 30, 5, 5, other, 48, 96, THRESHOLD, GRID_SNAP);
     expect(x).toBe(10);
     expect(guides).toContainEqual({ axis: "x", position: 10 });
   });
@@ -29,13 +32,13 @@ describe("computeAlignedPosition", () => {
     // other spans x=[10,20], center=15. Dragged part width=4, candidate
     // left=12.7 -> its own center=14.7, within 0.5 of 15.
     const other: PlacedPart[] = [{ cutListPartId: "a", x: 10, y: 0, width: 10, height: 10, rotated: false }];
-    const { x, guides } = computeAlignedPosition(12.7, 30, 4, 4, other, 48, 96, THRESHOLD);
+    const { x, guides } = computeAlignedPosition(12.7, 30, 4, 4, other, 48, 96, THRESHOLD, GRID_SNAP);
     expect(x).toBe(13); // left = center(15) - width/2(2)
     expect(guides).toContainEqual({ axis: "x", position: 15 });
   });
 
   it("snaps to the sheet's own edges and center, not just other parts", () => {
-    const { x, guides } = computeAlignedPosition(0.2, 30, 5, 5, [], 48, 96, THRESHOLD);
+    const { x, guides } = computeAlignedPosition(0.2, 30, 5, 5, [], 48, 96, THRESHOLD, GRID_SNAP);
     expect(x).toBe(0);
     expect(guides).toContainEqual({ axis: "x", position: 0 });
   });
@@ -45,7 +48,7 @@ describe("computeAlignedPosition", () => {
     // Dragged part (width=5,height=5) candidate near (20.2, 20.2) so its
     // own top-left corner (its start) lands near that corner.
     const other: PlacedPart[] = [{ cutListPartId: "a", x: 10, y: 10, width: 10, height: 10, rotated: false }];
-    const { x, y, guides } = computeAlignedPosition(20.2, 20.2, 5, 5, other, 48, 96, THRESHOLD);
+    const { x, y, guides } = computeAlignedPosition(20.2, 20.2, 5, 5, other, 48, 96, THRESHOLD, GRID_SNAP);
     expect(x).toBe(20);
     expect(y).toBe(20);
     expect(guides).toHaveLength(2);
@@ -59,7 +62,7 @@ describe("computeAlignedPosition", () => {
     // exactly a ref) should win. Here candidate left=24.05, closest ref is
     // the sheet center at 24 (delta 0.05) vs the part edge at 24.3 (delta 0.25).
     const other: PlacedPart[] = [{ cutListPartId: "a", x: 19.3, y: 0, width: 5, height: 5, rotated: false }]; // right edge = 24.3
-    const { x, guides } = computeAlignedPosition(24.05, 30, 5, 5, other, 48, 96, THRESHOLD);
+    const { x, guides } = computeAlignedPosition(24.05, 30, 5, 5, other, 48, 96, THRESHOLD, GRID_SNAP);
     expect(x).toBe(24);
     expect(guides).toContainEqual({ axis: "x", position: 24 });
   });

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { createEstimateVersion } from "@/lib/estimate-service";
+import { updateCutListSettings } from "@/lib/cut-list-settings-service";
 import {
   clearStaleCutSheets,
   getCutListCostReport,
@@ -24,6 +25,13 @@ afterEach(async () => {
   await db.material.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
+  // optimizeNestingForMaterial lazily creates the CutListSettings
+  // singleton (cut-list-settings-service.ts) the first time it's called
+  // -- clear it too, or it leaks across test FILES (fileParallelism:
+  // false means they share one DB run in sequence) and breaks
+  // cut-list-settings-service.test.ts's own "starts at zero rows"
+  // assumption.
+  await db.cutListSettings.deleteMany();
 });
 
 afterAll(async () => {
@@ -596,5 +604,56 @@ describe("clearStaleCutSheets", () => {
     const version = await makeVersion();
     const material = await makeSheetMaterial();
     await expect(clearStaleCutSheets(version.id, material.id)).resolves.not.toThrow();
+  });
+});
+
+describe("optimizeNestingForMaterial -- CutListSettings integration (Phase 7)", () => {
+  it("falls back to the global default kerf when a material has none set, not a hardcoded 0", async () => {
+    const version = await makeVersion();
+    // Explicitly null, unlike makeSheetMaterial's own default of 0.125 --
+    // this material has never been given a real kerf value.
+    const material = await db.material.create({
+      data: { name: "No-kerf plywood", currentUnitCost: 80, materialType: "SHEET", stockWidth: 40, stockLength: 40, defaultKerf: null },
+    });
+    // 20 + 5 (global default kerf) + 20 = 45 > 40 -- doesn't fit either
+    // axis once the GLOBAL kerf is actually applied; would fit trivially
+    // (20+20=40) if the fallback were still the old hardcoded 0.
+    await updateCutListSettings({ defaultKerf: 5, minRemnantDimension: 6, dragGridSnap: 0.25 });
+    await makePart(version.id, material.id, { description: "Left half", width: 20, length: 20 });
+    await makePart(version.id, material.id, { description: "Right half", width: 20, length: 20 });
+
+    const sheets = await optimizeNestingForMaterial(version.id, material.id);
+
+    expect(sheets.length).toBeGreaterThan(1);
+  });
+
+  it("still prefers a material's own kerf over the global default when both are set", async () => {
+    const version = await makeVersion();
+    // Real per-material kerf (0) -- fits everything on one sheet even
+    // though the global default (5) would force two.
+    const material = await makeSheetMaterial({ stockWidth: 40, stockLength: 40, defaultKerf: 0 });
+    await updateCutListSettings({ defaultKerf: 5, minRemnantDimension: 6, dragGridSnap: 0.25 });
+    await makePart(version.id, material.id, { description: "Left half", width: 20, length: 20 });
+    await makePart(version.id, material.id, { description: "Right half", width: 20, length: 20 });
+
+    const sheets = await optimizeNestingForMaterial(version.id, material.id);
+
+    expect(sheets).toHaveLength(1);
+  });
+
+  it("sources the remnant-worth-keeping threshold from settings, not a hardcoded 6\"", async () => {
+    const version = await makeVersion();
+    // Same 20x20 sheet / 18x20 part fixture as the hardcoded-threshold
+    // test above -- leaves a 2"-wide strip. Below the schema default
+    // (6"), but above a custom, much smaller threshold set here.
+    const material = await makeSheetMaterial({ stockWidth: 20, stockLength: 20, defaultKerf: 0 });
+    await updateCutListSettings({ defaultKerf: 0.125, minRemnantDimension: 1, dragGridSnap: 0.25 });
+    await makePart(version.id, material.id, { description: "Nearly full-width panel", width: 18, length: 20 });
+
+    await optimizeNestingForMaterial(version.id, material.id);
+
+    const remnants = await db.materialRemnant.findMany({ where: { materialId: material.id } });
+    expect(remnants).toHaveLength(1);
+    expect(remnants[0].width.toNumber()).toBeGreaterThanOrEqual(1);
   });
 });

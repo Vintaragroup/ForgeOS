@@ -22,19 +22,16 @@ import { updateCutSheetLayoutAction } from "@/app/(app)/estimates/[id]/versions/
 // gates this the same way it gates every other mutating control).
 //
 // Smart guides + shift-drag (both added after the initial drag build):
-// grid-snap (GRID_SNAP) is the default, but a drag that lands within
-// SNAP_PIXELS of another part's or the sheet's own edge/center overrides
-// it and draws a guide line -- see computeAlignedPosition. "Snap to
-// corner" isn't a separate feature; it's just both axes matching a guide
-// at once. Holding Shift while dragging constrains movement to whichever
-// axis has moved further, matching Figma/PowerPoint's own convention.
+// grid-snap (gridSnap prop, from CutListSettings.dragGridSnap -- a
+// shop-configurable value, see catalog/cut-list-settings) is the
+// default, but a drag that lands within SNAP_PIXELS of another part's or
+// the sheet's own edge/center overrides it and draws a guide line -- see
+// computeAlignedPosition. "Snap to corner" isn't a separate feature;
+// it's just both axes matching a guide at once. Holding Shift while
+// dragging constrains movement to whichever axis has moved further,
+// matching Figma/PowerPoint's own convention.
 const DIAGRAM_MAX_WIDTH = 500;
 const DIAGRAM_MAX_HEIGHT = 380;
-// A real, physically meaningful snap -- fine enough to place a part
-// precisely, coarse enough that a shop worker cutting from the resulting
-// diagram isn't chasing hundredths of an inch. Falls back to this on any
-// axis that doesn't land within SNAP_PIXELS of an alignment guide.
-const GRID_SNAP = 0.25;
 // A screen-pixel (not inch) threshold -- alignment "feel" should stay
 // consistent regardless of a sheet's real size, so this is converted to
 // inches via the current scale, not a fixed inch value that would feel
@@ -49,8 +46,8 @@ function clampZoom(z: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 }
 
-function snap(n: number): number {
-  return Math.round(n / GRID_SNAP) * GRID_SNAP;
+function snap(n: number, gridSnap: number): number {
+  return Math.round(n / gridSnap) * gridSnap;
 }
 
 export interface Guide {
@@ -96,6 +93,7 @@ export function computeAlignedPosition(
   sheetWidth: number,
   sheetLength: number,
   thresholdIn: number,
+  gridSnap: number,
 ): { x: number; y: number; guides: Guide[] } {
   const refX = [0, sheetWidth / 2, sheetWidth];
   const refY = [0, sheetLength / 2, sheetLength];
@@ -106,11 +104,11 @@ export function computeAlignedPosition(
 
   const guides: Guide[] = [];
   const xSnap = bestAxisSnap(candidateX, width, refX, thresholdIn);
-  const x = xSnap ? xSnap.start : snap(candidateX);
+  const x = xSnap ? xSnap.start : snap(candidateX, gridSnap);
   if (xSnap) guides.push({ axis: "x", position: xSnap.guide });
 
   const ySnap = bestAxisSnap(candidateY, height, refY, thresholdIn);
-  const y = ySnap ? ySnap.start : snap(candidateY);
+  const y = ySnap ? ySnap.start : snap(candidateY, gridSnap);
   if (ySnap) guides.push({ axis: "y", position: ySnap.guide });
 
   return { x, y, guides };
@@ -122,12 +120,18 @@ export function CutSheetDiagramEditor({
   materialId,
   sheet,
   sheetCount,
+  gridSnap,
 }: {
   estimateId: string;
   versionId: string;
   materialId: string;
   sheet: CutSheetDiagramData["sheets"][number];
   sheetCount: number;
+  // CutListSettings.dragGridSnap -- a shop-configurable value (see
+  // catalog/cut-list-settings), fetched server-side by cut-list/page.tsx
+  // and passed down rather than read directly here (this is a client
+  // component; DB access stays server-side).
+  gridSnap: number;
 }) {
   const [parts, setParts] = useState<PlacedPart[]>(sheet.parts);
   // The last successfully-saved (or initial) layout -- what "dirty"
@@ -256,6 +260,7 @@ export function CutSheetDiagramEditor({
       sheet.width,
       sheet.length,
       thresholdIn,
+      gridSnap,
     );
 
     setParts((prev) => prev.map((p, i) => (i === origin.index ? { ...p, x, y } : p)));

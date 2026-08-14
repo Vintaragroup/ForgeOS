@@ -1456,3 +1456,37 @@ model ChatMessage {
 
   @@map("chat_messages")
 }
+
+// Cut-list phase 7: shop-wide defaults for the nesting engine and the
+// diagram editor, editable from a single settings panel instead of
+// living as hardcoded constants or only per-material overrides. A true
+// singleton -- exactly one row should ever exist; getCutListSettings()
+// (cut-list-settings-service.ts) lazily creates it with these column
+// defaults on first read, so no manual seed step is required. Column
+// defaults match what was already hardcoded before this model existed,
+// so nothing changes behaviorally until someone actually edits the panel.
+model CutListSettings {
+  id String @id @default(cuid())
+
+  // Fallback ONLY -- Material.defaultKerf (per-material, already
+  // editable on that material's own catalog page) always wins when set.
+  // This is what a material falls back to until it has its own real
+  // value (a newly added material, or one without machine specs yet).
+  defaultKerf Decimal @default(0.125) @db.Decimal(6, 3)
+
+  // Below this in either dimension, a leftover scrap isn't tracked as
+  // reusable stock (see cut-list-nesting-service.ts's
+  // extractLargestRemnantCandidate) -- how small a piece is worth
+  // keeping is a real shop policy call, not a fixed constant.
+  minRemnantDimension Decimal @default(6) @db.Decimal(6, 3)
+
+  // Grid snap for the drag-to-reposition diagram editor
+  // (cut-sheet-diagram-editor.tsx) -- fine enough to place a part
+  // precisely, coarse enough a shop worker isn't chasing hundredths of
+  // an inch; different shops cut to different tolerances.
+  dragGridSnap Decimal @default(0.25) @db.Decimal(6, 3)
+
+  updatedAt DateTime @updatedAt
+
+  @@map("cut_list_settings")
+}

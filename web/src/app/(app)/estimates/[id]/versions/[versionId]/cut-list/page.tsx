@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { getCutListCostReport, getCutSheetDiagramData, type OptimizeAllResult } from "@/lib/cut-list-nesting-service";
+import { getCutListSettings } from "@/lib/cut-list-settings-service";
 import { addCutListPartAction, deleteCutListPartAction, optimizeAllMaterialsAction, optimizeMaterialAction } from "./actions";
 import { Button, Card, CollapsibleSection, Field, Notice, PageHeader, SelectField } from "@/components/ui";
 import { CutListPartFields } from "@/components/cut-list-part-fields";
@@ -38,7 +39,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
   if (!version) notFound();
   if (!(await canAccessOpportunity(user, version.estimate.opportunityId))) notFound();
 
-  const [cutListParts, sheetMaterials, lineItems, costReport] = await Promise.all([
+  const [cutListParts, sheetMaterials, lineItems, costReport, settings] = await Promise.all([
     db.cutListPart.findMany({
       where: { estimateVersionId: versionId, deletedAt: null },
       include: { material: true, lineItem: true },
@@ -62,6 +63,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
       orderBy: [{ category: "asc" }, { description: "asc" }],
     }),
     getCutListCostReport(versionId),
+    getCutListSettings(),
   ]);
 
   const lineItemOptions = lineItems.map((li) => ({
@@ -288,6 +290,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                       materialId={materialId}
                       sheet={sheet}
                       sheetCount={diagramData.sheets.length}
+                      gridSnap={settings.dragGridSnap.toNumber()}
                     />
                   ),
                 )}
