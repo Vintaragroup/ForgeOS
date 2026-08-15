@@ -4,14 +4,20 @@ import {
   SESSION_COOKIE,
   SESSION_MAX_AGE_SECONDS,
   buildSessionValue,
+  isSessionStale,
   parseSessionValue,
 } from "@/lib/session";
 
 export { hashPassword, verifyPassword } from "@/lib/session";
 
 export async function createSession(userId: string): Promise<void> {
+  // Fetched fresh (not trusted from a caller-supplied value) so the
+  // embedded claim always reflects the CURRENT passwordChangedAt at the
+  // moment this specific session is issued -- see session.ts's
+  // buildSessionValue and this file's own getCurrentUser.
+  const user = await db.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordChangedAt: true } });
   const store = await cookies();
-  store.set(SESSION_COOKIE, buildSessionValue(userId), {
+  store.set(SESSION_COOKIE, buildSessionValue(userId, user.passwordChangedAt), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -29,10 +35,20 @@ export async function getCurrentUser() {
   const store = await cookies();
   const session = parseSessionValue(store.get(SESSION_COOKIE)?.value);
   if (!session) return null;
-  return db.user.findFirst({
+  const user = await db.user.findFirst({
     where: { id: session.userId, deletedAt: null },
-    select: { id: true, name: true, email: true, systemRole: true },
+    select: { id: true, name: true, email: true, systemRole: true, passwordChangedAt: true },
   });
+  if (!user) return null;
+  // A session issued before the user's password was last changed is
+  // stale -- reject it even though its signature/expiry are still
+  // technically valid, so a stolen/leaked session cookie (or any other
+  // still-open browser) stops working the instant the legitimate owner
+  // changes their password. See session.ts's isSessionStale for the
+  // actual (directly unit-tested) comparison.
+  if (isSessionStale(session, user)) return null;
+  const { passwordChangedAt: _passwordChangedAt, ...publicUser } = user;
+  return publicUser;
 }
 
 // Server Actions under /admin re-check this themselves rather than trusting

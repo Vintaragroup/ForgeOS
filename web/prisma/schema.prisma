@@ -86,6 +86,17 @@ model User {
   // a web form, so there is no unauthenticated password-set endpoint. Null
   // until set, meaning the account can't log in yet. See src/lib/auth.ts.
   passwordHash String?
+  // Item #7 of the security/hardening roadmap: embedded as a claim inside
+  // the signed session cookie at issue time (session.ts's
+  // buildSessionValue) and compared against this column on every request
+  // that hits the DB (auth.ts's getCurrentUser) -- a session issued
+  // before this timestamp is rejected even if its signature/expiry are
+  // still valid, so a stolen/leaked session cookie stops working the
+  // moment the legitimate owner changes their password. Null means
+  // "never explicitly changed since this column existed" -- treated as
+  // no constraint, not as an error, so it stays backward-compatible with
+  // every user row that predates this column.
+  passwordChangedAt DateTime?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

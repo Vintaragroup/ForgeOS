@@ -25,10 +25,15 @@ async function main() {
   const db = new PrismaClient({ adapter });
 
   const passwordHash = await hashPassword(password);
+  // passwordChangedAt on the update branch invalidates any session
+  // issued before this re-run -- see set-password.ts's own comment for
+  // the full rationale. Meaningless on the create branch (no prior
+  // session could exist yet) but set anyway for a consistent, non-null
+  // value from this user's very first row.
   const user = await db.user.upsert({
     where: { email },
-    create: { name, email, passwordHash, systemRole: "SUPER_ADMIN" },
-    update: { name, passwordHash, systemRole: "SUPER_ADMIN", deletedAt: null },
+    create: { name, email, passwordHash, systemRole: "SUPER_ADMIN", passwordChangedAt: new Date() },
+    update: { name, passwordHash, systemRole: "SUPER_ADMIN", deletedAt: null, passwordChangedAt: new Date() },
   });
 
   console.log(`Super admin ready: ${user.name} <${user.email}>.`);

@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { getCurrentUser, hashPassword, verifyPassword } from "@/lib/auth";
+import { createSession, getCurrentUser, hashPassword, verifyPassword } from "@/lib/auth";
 import { checkRateLimit, RateLimitError } from "@/lib/rate-limit";
 
 const CHANGE_PASSWORD_ATTEMPT_LIMIT = 8;
@@ -43,7 +43,14 @@ export async function changePasswordAction(formData: FormData) {
   }
 
   const passwordHash = await hashPassword(newPassword);
-  await db.user.update({ where: { id: user.id }, data: { passwordHash } });
+  await db.user.update({ where: { id: user.id }, data: { passwordHash, passwordChangedAt: new Date() } });
+  // Item #7 of the security/hardening roadmap: passwordChangedAt just
+  // moved forward, which makes THIS request's own current session cookie
+  // (issued before the change) stale too -- re-issue it immediately so
+  // the person who just changed their password stays logged in, while
+  // every OTHER session (a different browser/device, or a stolen cookie)
+  // now fails getCurrentUser's comparison the next time it's used.
+  await createSession(user.id);
 
   redirect("/account?success=1");
 }

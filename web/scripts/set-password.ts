@@ -32,7 +32,11 @@ async function main() {
   }
 
   const passwordHash = await hashPassword(password);
-  await db.user.update({ where: { id: user.id }, data: { passwordHash } });
+  // passwordChangedAt invalidates any session issued before this reset --
+  // see src/lib/session.ts's buildSessionValue / src/lib/auth.ts's
+  // getCurrentUser -- so a CLI-forced reset actually logs out whatever
+  // session prompted needing this reset in the first place.
+  await db.user.update({ where: { id: user.id }, data: { passwordHash, passwordChangedAt: new Date() } });
 
   console.log(`Password set for ${user.name} <${user.email}>.`);
   await db.$disconnect();

@@ -37,24 +37,48 @@ function sign(payload: string): string {
   return createHmac("sha256", sessionSecret()).update(payload).digest("hex");
 }
 
-export function buildSessionValue(userId: string): string {
-  const payload = `${userId}.${Date.now() + SESSION_TTL_MS}`;
+// Item #7 of the security/hardening roadmap: passwordChangedAt is
+// embedded as a THIRD signed claim (not just userId + expiresAt) so a
+// session issued before the user's password was last changed can be
+// rejected later, without needing a server-side session store -- see
+// auth.ts's getCurrentUser for the actual comparison (this file stays
+// DB-free on purpose, see the header comment above). null (never
+// explicitly changed) is encoded as 0, distinguishable from any real
+// timestamp (which is always > 0).
+export function buildSessionValue(userId: string, passwordChangedAt: Date | null): string {
+  const payload = `${userId}.${Date.now() + SESSION_TTL_MS}.${passwordChangedAt ? passwordChangedAt.getTime() : 0}`;
   return `${payload}.${sign(payload)}`;
 }
 
 export const SESSION_MAX_AGE_SECONDS = SESSION_TTL_MS / 1000;
 
-export function parseSessionValue(value: string | undefined): { userId: string } | null {
+export function parseSessionValue(value: string | undefined): { userId: string; passwordChangedAtMs: number } | null {
   if (!value) return null;
   const parts = value.split(".");
-  if (parts.length !== 3) return null;
-  const [userId, expiresAtStr, signature] = parts;
-  const payload = `${userId}.${expiresAtStr}`;
+  if (parts.length !== 4) return null;
+  const [userId, expiresAtStr, passwordChangedAtStr, signature] = parts;
+  const payload = `${userId}.${expiresAtStr}.${passwordChangedAtStr}`;
   const expected = sign(payload);
   const sigBuf = Buffer.from(signature);
   const expectedBuf = Buffer.from(expected);
   if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) return null;
   const expiresAt = Number(expiresAtStr);
   if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return null;
-  return { userId };
+  const passwordChangedAtMs = Number(passwordChangedAtStr);
+  if (!Number.isFinite(passwordChangedAtMs)) return null;
+  return { userId, passwordChangedAtMs };
+}
+
+// Pure comparison, deliberately pulled out of auth.ts's getCurrentUser
+// (which needs a real Next.js request context via cookies() to reach at
+// all) so this specific security-critical check -- get it wrong either
+// direction and it either locks out every legitimate session or revokes
+// nothing -- is directly unit-testable on its own. null passwordChangedAt
+// (a user row that predates this column, or one that's never explicitly
+// changed its password) never counts as stale.
+export function isSessionStale(
+  session: { passwordChangedAtMs: number },
+  user: { passwordChangedAt: Date | null },
+): boolean {
+  return user.passwordChangedAt != null && session.passwordChangedAtMs < user.passwordChangedAt.getTime();
 }
