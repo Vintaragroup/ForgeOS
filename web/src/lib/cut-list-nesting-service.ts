@@ -27,7 +27,7 @@
 
 import { MaxRectsPacker, Rectangle } from "maxrects-packer";
 import { db } from "@/lib/db";
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
 import { noOverlap, type PlacedPart } from "@/lib/cut-sheet-geometry";
 import { getCutListSettings } from "@/lib/cut-list-settings-service";
 
@@ -400,33 +400,51 @@ export async function optimizeNestingForMaterial(
   // (its DXF download link, and its own identity, are keyed by it).
   const nextSheetNumber = lockedSheets.reduce((max, s) => Math.max(max, s.sheetNumber), 0) + 1;
 
-  await db.$transaction(async (tx) => {
-    for (let i = 0; i < bins.length; i++) {
-      const bin = bins[i];
-      const sheet = await tx.cutSheet.create({
-        data: {
-          estimateVersionId,
-          materialId,
-          sheetNumber: nextSheetNumber + i,
-          layout: bin.placed as unknown as Prisma.InputJsonValue,
-          consumedRemnantId: bin.consumedRemnantId,
-        },
-      });
-      if (bin.consumedRemnantId) {
-        await tx.materialRemnant.update({ where: { id: bin.consumedRemnantId }, data: { consumedAt: new Date() } });
-      }
-      if (bin.generatedRemnant) {
-        await tx.materialRemnant.create({
+  // availableRemnants was read above with no lock -- two concurrent
+  // optimize runs for the SAME material (a double-click, two open tabs)
+  // can both plan a bin around the same remnant. CutSheet.consumedRemnantId
+  // is @unique (schema.prisma), so the DB itself correctly rejects the
+  // loser's cutSheet.create with a P2002 unique-constraint violation --
+  // no remnant is ever silently double-consumed. Without this catch,
+  // that P2002 would bubble up through optimizeMaterialAction's own
+  // try/catch as a raw Prisma error message, not something a shop-floor
+  // user could act on -- same "clear, actionable error over a leaked
+  // implementation detail" posture deleteCutListPartAction's locked-sheet
+  // guard already uses elsewhere in this file's caller.
+  try {
+    await db.$transaction(async (tx) => {
+      for (let i = 0; i < bins.length; i++) {
+        const bin = bins[i];
+        const sheet = await tx.cutSheet.create({
           data: {
+            estimateVersionId,
             materialId,
-            width: bin.generatedRemnant.width,
-            length: bin.generatedRemnant.length,
-            generatedByCutSheetId: sheet.id,
+            sheetNumber: nextSheetNumber + i,
+            layout: bin.placed as unknown as Prisma.InputJsonValue,
+            consumedRemnantId: bin.consumedRemnantId,
           },
         });
+        if (bin.consumedRemnantId) {
+          await tx.materialRemnant.update({ where: { id: bin.consumedRemnantId }, data: { consumedAt: new Date() } });
+        }
+        if (bin.generatedRemnant) {
+          await tx.materialRemnant.create({
+            data: {
+              materialId,
+              width: bin.generatedRemnant.width,
+              length: bin.generatedRemnant.length,
+              generatedByCutSheetId: sheet.id,
+            },
+          });
+        }
       }
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      throw new Error("This material's remnant pool changed since you loaded this page -- click Optimize again.");
     }
-  });
+    throw err;
+  }
 
   // Locked sheets' existing layouts are included alongside the newly
   // packed ones -- optimizeNestingForVersion's reported sheetCount stays

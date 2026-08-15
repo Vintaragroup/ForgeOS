@@ -752,3 +752,46 @@ describe("clearStaleCutSheets -- locked sheets (Phase 8)", () => {
     }
   });
 });
+
+describe("optimizeNestingForMaterial -- remnant race, fail clean (Phase 9)", () => {
+  it("surfaces a clear, actionable message instead of a raw Prisma error when the remnant it planned to consume was already consumed by another sheet", async () => {
+    const version = await makeVersion();
+    const material = await makeSheetMaterial({ defaultKerf: 0 });
+    await makePart(version.id, material.id, { description: "Small block", width: 10, length: 10 });
+
+    // A remnant genuinely available at read time (consumedAt: null) --
+    // optimizeNestingForMaterial's own availableRemnants query will see
+    // it and plan a bin around it. generatedByCutSheetId is required
+    // (every remnant traces back to the sheet that produced it), so this
+    // needs its own throwaway seed sheet, same pattern the remnant-reuse
+    // tests above already use.
+    const seedVersion = await makeVersion();
+    const seedSheet = await db.cutSheet.create({
+      data: { estimateVersionId: seedVersion.id, materialId: material.id, sheetNumber: 1, layout: [] },
+    });
+    const remnant = await db.materialRemnant.create({
+      data: { materialId: material.id, width: 20, length: 20, generatedByCutSheetId: seedSheet.id },
+    });
+    // Simulates the exact DB state a real concurrent optimize race
+    // leaves behind for one brief window: another sheet already holds
+    // this remnant's id (CutSheet.consumedRemnantId is @unique in
+    // schema.prisma) even though the remnant's own consumedAt hasn't
+    // been read as taken yet -- locked so clearStaleCutSheets (which
+    // this function calls first) doesn't delete it out from under this
+    // setup before the real collision can happen.
+    await db.cutSheet.create({
+      data: {
+        estimateVersionId: version.id,
+        materialId: material.id,
+        sheetNumber: 1,
+        layout: [],
+        consumedRemnantId: remnant.id,
+        locked: true,
+      },
+    });
+
+    await expect(optimizeNestingForMaterial(version.id, material.id)).rejects.toThrow(
+      "This material's remnant pool changed since you loaded this page -- click Optimize again.",
+    );
+  });
+});
