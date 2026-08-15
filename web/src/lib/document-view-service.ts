@@ -9,7 +9,22 @@ import ExcelJS from "exceljs";
 import mammoth from "mammoth";
 import { getDocumentProxy, extractTextItems, createIsomorphicCanvasFactory, type StructuredTextItem } from "unpdf";
 import type { Canvas, SKRSContext2D } from "@napi-rs/canvas";
+import DOMPurify from "dompurify";
+import { JSDOM } from "jsdom";
 import { cellText } from "@/lib/xlsx-utils";
+
+// Item #2 of the security/hardening roadmap: this used to be a hand-
+// rolled regex blocklist (strip <script>, strip on*= attributes) --  a
+// known-weak pattern (bypassable via malformed/nested tags, <svg
+// onload=, etc.) even though mammoth's own HTML output isn't fully
+// attacker-controlled arbitrary text. DOMPurify is an allowlist
+// sanitizer instead: anything not explicitly permitted is stripped,
+// regardless of what shape the dangerous content takes. This module runs
+// server-side (a Server Component's data layer, not the browser), so it
+// needs its own DOM implementation -- jsdom, the same "usage with
+// Node.js" pattern DOMPurify's own docs recommend, not a browser globals
+// polyfill hack.
+const purify = DOMPurify(new JSDOM("").window);
 
 export interface SpreadsheetSheet {
   name: string;
@@ -70,10 +85,18 @@ export async function renderSpreadsheet(bytes: Buffer): Promise<SpreadsheetSheet
 
 // mammoth's HTML output is generated from OOXML structure, not passed
 // through from arbitrary text, so script/event-handler injection isn't
-// realistically reachable -- still, a cheap defensive strip costs
-// nothing given this renders via dangerouslySetInnerHTML.
-function stripDangerousHtml(html: string): string {
-  return html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replace(/\son\w+="[^"]*"/gi, "");
+// realistically reachable -- still, a real allowlist sanitizer costs
+// nothing given this renders via dangerouslySetInnerHTML, and closes off
+// the whole class of bypass a blocklist can't rule out (malformed/nested
+// tags, an <svg onload=...>, etc.), not just the two shapes the old
+// regex happened to name.
+// Exported (not just used internally by renderDocx) so the regression
+// tests below can prove concrete bypasses of the OLD regex blocklist --
+// e.g. an unquoted or single-quoted event handler attribute, which
+// `/\son\w+="[^"]*"/gi` never matched at all -- are actually caught now,
+// not just that the one shape the old regex happened to name still is.
+export function stripDangerousHtml(html: string): string {
+  return purify.sanitize(html);
 }
 
 export async function renderDocx(bytes: Buffer): Promise<string> {

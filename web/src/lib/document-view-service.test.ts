@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { findSpreadsheetMatch, highlightQuote, renderDocx, renderSpreadsheet } from "@/lib/document-view-service";
+import {
+  findSpreadsheetMatch,
+  highlightQuote,
+  renderDocx,
+  renderSpreadsheet,
+  stripDangerousHtml,
+} from "@/lib/document-view-service";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
 
@@ -76,6 +82,40 @@ describe("renderDocx", () => {
     const bytes = await readFile(path.join(RFP_DIR, "Exhibit 2 - SBLXI - Vendor Services Agreement.docx"));
     const html = await renderDocx(bytes);
     expect(html).not.toContain("<script");
+  });
+});
+
+// Item #2 of the security/hardening roadmap: stripDangerousHtml used to
+// be a regex blocklist (`/<script\b[^>]*>[\s\S]*?<\/script>/gi` +
+// `/\son\w+="[^"]*"/gi`) -- these cases are concrete, real bypasses of
+// THAT specific regex (not hypothetical), each one now caught by
+// DOMPurify's allowlist approach instead.
+describe("stripDangerousHtml -- real bypasses of the old regex blocklist", () => {
+  it("strips an unquoted event handler attribute (the old regex only matched a double-quoted value)", () => {
+    const result = stripDangerousHtml('<img src="x" onerror=alert(1)>');
+    expect(result).not.toContain("onerror");
+    expect(result).not.toContain("alert(1)");
+  });
+
+  it("strips a single-quoted event handler attribute (the old regex only matched double quotes)", () => {
+    const result = stripDangerousHtml("<svg onload='alert(1)'>");
+    expect(result).not.toContain("onload");
+    expect(result).not.toContain("alert(1)");
+  });
+
+  it("strips a javascript: URI in an href (the old regex never inspected attribute VALUES beyond on*=)", () => {
+    const result = stripDangerousHtml('<a href="javascript:alert(1)">click</a>');
+    expect(result.toLowerCase()).not.toContain("javascript:");
+  });
+
+  it("strips a script tag with no closing tag (the old regex required a matching </script>)", () => {
+    const result = stripDangerousHtml('<p>before</p><script src="evil.js">');
+    expect(result).not.toContain("<script");
+  });
+
+  it("still preserves ordinary safe formatting content untouched", () => {
+    const html = "<p>Hello <strong>world</strong>, see <a href=\"https://example.com\">this link</a>.</p>";
+    expect(stripDangerousHtml(html)).toBe(html);
   });
 });
 
