@@ -2,10 +2,12 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { assertVersionBelongsToEstimate, requireEstimateAccess } from "@/lib/opportunity-access";
 import { assertUnlocked } from "@/lib/estimate-service";
+import { parseFormData } from "@/lib/form-validation";
 import {
   clearStaleCutSheets,
   optimizeNestingForMaterial,
@@ -19,10 +21,41 @@ function readMode(formData: FormData): "cost" | "waste" {
   return formData.get("mode") === "waste" ? "waste" : "cost";
 }
 
-function emptyToNull(value: FormDataEntryValue | null): string | null {
-  const str = String(value ?? "").trim();
-  return str === "" ? null : str;
-}
+// Item #3 of the security/hardening roadmap: first application of the
+// zod + parseFormData convention (src/lib/form-validation.ts) in this
+// app, chosen here because this action already had the file's richest
+// hand-rolled if-throw validation block. Every message below matches
+// what the hand-written checks it replaces already threw -- this changes
+// the validation MECHANISM, not what a user sees for an invalid field.
+// .optional() on every field below -- zod v4 requires a key to be
+// PRESENT in the input object unless the schema says otherwise, even
+// though z.any() accepts any VALUE once present; an unchecked checkbox
+// (grainConstrained) or a field a malformed/direct POST omits entirely
+// never appears in FormData.keys() at all, so parseFormData's raw
+// object won't have that key set (not even as null/undefined) --
+// confirmed live by form-validation.test.ts before this pattern was
+// trusted anywhere else.
+const trimmedString = z.any().optional().transform((v) => String(v ?? "").trim());
+// z.coerce.number()'s OWN base check rejects a NaN-producing coercion
+// (e.g. "abc") with its own built-in message before a chained .finite()
+// would ever run -- confirmed live by form-validation.test.ts. Passing
+// the message via the factory's `error` option covers that coercion
+// failure directly; .positive()/.min() below still supply their own
+// message for a value that coerced fine but fails the range check.
+const AddCutListPartSchema = z.object({
+  description: trimmedString.pipe(z.string().min(1, "Part description is required")),
+  materialId: trimmedString.pipe(z.string().min(1, "Choose a material")),
+  width: z.coerce.number({ error: "Width must be a positive number" }).positive("Width must be a positive number"),
+  length: z.coerce.number({ error: "Length must be a positive number" }).positive("Length must be a positive number"),
+  qty: z.coerce.number({ error: "Qty must be at least 1" }).min(1, "Qty must be at least 1"),
+  grainConstrained: z.any().optional().transform((v) => v === "on"),
+  edgeBanding: trimmedString.transform((v) => (v === "" ? null : v)),
+  // Format-only here (non-empty string or null) -- the real check, that
+  // it belongs to THIS estimate version, still happens as a separate DB
+  // lookup below (a business-logic check, not a format one, so it stays
+  // outside the schema).
+  lineItemId: trimmedString.transform((v) => (v === "" ? null : v)),
+});
 
 function cutListPath(estimateId: string, versionId: string): string {
   return `/estimates/${estimateId}/versions/${versionId}/cut-list`;
@@ -52,24 +85,13 @@ export async function addCutListPartAction(estimateId: string, versionId: string
   try {
     await assertUnlocked(versionId);
 
-    const description = String(formData.get("description") ?? "").trim();
-    if (!description) throw new Error("Part description is required");
-    const materialId = String(formData.get("materialId") ?? "").trim();
-    if (!materialId) throw new Error("Choose a material");
-    const width = Number(formData.get("width"));
-    const length = Number(formData.get("length"));
-    const qty = Number(formData.get("qty"));
-    if (!Number.isFinite(width) || width <= 0) throw new Error("Width must be a positive number");
-    if (!Number.isFinite(length) || length <= 0) throw new Error("Length must be a positive number");
-    if (!Number.isFinite(qty) || qty < 1) throw new Error("Qty must be at least 1");
-    const grainConstrained = formData.get("grainConstrained") === "on";
-    const edgeBanding = emptyToNull(formData.get("edgeBanding"));
+    const { description, materialId, width, length, qty, grainConstrained, edgeBanding, lineItemId: lineItemIdRaw } =
+      parseFormData(formData, AddCutListPartSchema);
 
     // Optional -- ties this part back to the specific priced LineItem
     // it's fabrication detail for (cut-list-part-fields.tsx's picker).
     // Validated against this same estimate version rather than trusted
     // blindly, since it's a plain form value.
-    const lineItemIdRaw = emptyToNull(formData.get("lineItemId"));
     let lineItemId: string | null = null;
     if (lineItemIdRaw) {
       const lineItem = await db.lineItem.findFirst({ where: { id: lineItemIdRaw, section: { estimateVersionId: versionId } } });
