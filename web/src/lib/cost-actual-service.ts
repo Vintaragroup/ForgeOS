@@ -14,7 +14,15 @@ type DecimalInput = Decimal | number | string;
 // -- no update/delete here; a correction is a new entry, not an edit to
 // history. Must reference a LineItem and/or a Task -- enforced here
 // rather than at the DB level, matching Attachment's minimalism.
+//
+// opportunityId is the caller's already-access-checked opportunity, NOT
+// trusted from lineItemId alone -- see estimate-service.ts's
+// deleteLineItem for the full rationale. Only checked when lineItemId is
+// present; a taskId-only entry has no opportunity-scoped ownership check
+// today since no caller in this app creates one yet (see cost-actual-
+// service.test.ts).
 export async function recordCostActual(data: {
+  opportunityId: string;
   lineItemId?: string | null;
   taskId?: string | null;
   actualCost: DecimalInput;
@@ -23,6 +31,11 @@ export async function recordCostActual(data: {
 }) {
   if (!data.lineItemId && !data.taskId) {
     throw new Error("A cost actual must reference a LineItem or a Task.");
+  }
+  if (data.lineItemId) {
+    await db.lineItem.findFirstOrThrow({
+      where: { id: data.lineItemId, section: { estimateVersion: { estimate: { opportunityId: data.opportunityId } } } },
+    });
   }
   return db.costActual.create({
     data: {

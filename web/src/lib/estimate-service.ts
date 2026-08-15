@@ -137,8 +137,14 @@ export async function addSection(
 // swap between two zeroes would be a no-op. A no-op (already at the top/
 // bottom) is silently ignored rather than an error, since a UI button
 // simply won't be at an edge case the caller needs to specially handle.
-export async function moveSectionOrder(sectionId: string, direction: "up" | "down") {
-  const section = await db.estimateSection.findUniqueOrThrow({ where: { id: sectionId } });
+// opportunityId is the caller's already-access-checked opportunity (via
+// opportunity-access.ts's estimateOpportunityId), NOT trusted from
+// sectionId alone -- see deleteLineItem's header comment for the full
+// rationale.
+export async function moveSectionOrder(opportunityId: string, sectionId: string, direction: "up" | "down") {
+  const section = await db.estimateSection.findFirstOrThrow({
+    where: { id: sectionId, estimateVersion: { estimate: { opportunityId } } },
+  });
   await assertUnlocked(section.estimateVersionId);
 
   const siblings = await db.estimateSection.findMany({
@@ -198,7 +204,12 @@ export function computeOptionTotal(sections: { lineItems: { totalCost: DecimalIn
   return sections.reduce((sum, section) => sum.plus(computeSectionTotal(section.lineItems)), new Prisma.Decimal(0));
 }
 
+// estimateVersionId is the caller's already-verified version (see
+// opportunity-access.ts's assertVersionBelongsToEstimate) -- sectionId
+// alone doesn't prove it belongs to that version, the same cross-
+// resource gap deleteLineItem's header comment describes.
 export async function addLineItem(
+  estimateVersionId: string,
   sectionId: string,
   data: {
     lineType: LineItemType;
@@ -221,7 +232,7 @@ export async function addLineItem(
     attachmentId?: string | null;
   },
 ) {
-  const section = await db.estimateSection.findUniqueOrThrow({ where: { id: sectionId } });
+  const section = await db.estimateSection.findFirstOrThrow({ where: { id: sectionId, estimateVersionId } });
   await assertUnlocked(section.estimateVersionId);
 
   return db.lineItem.create({
@@ -303,7 +314,10 @@ export async function addLineItemsBulk(
   return db.lineItem.findMany({ where: { sectionId, documentId: items[0].documentId } });
 }
 
+// opportunityId is the caller's already-access-checked opportunity, NOT
+// trusted from lineItemId alone -- see deleteLineItem's header comment.
 export async function updateLineItem(
+  opportunityId: string,
   lineItemId: string,
   data: {
     description?: string;
@@ -316,8 +330,8 @@ export async function updateLineItem(
     unitCost?: DecimalInput;
   },
 ) {
-  const existing = await db.lineItem.findUniqueOrThrow({
-    where: { id: lineItemId },
+  const existing = await db.lineItem.findFirstOrThrow({
+    where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
     include: { section: true },
   });
   await assertUnlocked(existing.section.estimateVersionId);
@@ -346,8 +360,12 @@ export async function updateLineItem(
 // order within a COMPONENT/CATEGORY-type section) -- unrelated to
 // `category`, the client-facing proposal grouping, which this never
 // touches.
-export async function moveLineItemWithinSection(lineItemId: string, direction: "up" | "down") {
-  const item = await db.lineItem.findUniqueOrThrow({ where: { id: lineItemId }, include: { section: true } });
+// opportunityId ownership check -- see deleteLineItem's header comment.
+export async function moveLineItemWithinSection(opportunityId: string, lineItemId: string, direction: "up" | "down") {
+  const item = await db.lineItem.findFirstOrThrow({
+    where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
+    include: { section: true },
+  });
   await assertUnlocked(item.section.estimateVersionId);
 
   const siblings = await db.lineItem.findMany({
@@ -374,16 +392,24 @@ export async function moveLineItemWithinSection(lineItemId: string, direction: "
 // were classified against the same fixed SCOPE_CATEGORIES list) gets the
 // item merged in rather than a duplicate section created. Both versions'
 // totals change, so both get recomputed, not just the destination.
-export async function moveLineItemToEstimate(lineItemId: string, targetEstimateId: string) {
-  const lineItem = await db.lineItem.findUniqueOrThrow({
-    where: { id: lineItemId },
+// opportunityId ownership check on BOTH ends of the move -- see
+// deleteLineItem's header comment. Without this, a caller authorized for
+// opportunityId could move a line item OUT of an estimate they have no
+// access to (via lineItemId alone), or move one of their own items INTO
+// an estimate under a different opportunity entirely (via
+// targetEstimateId alone) -- both directions need the same check, not
+// just the source.
+export async function moveLineItemToEstimate(opportunityId: string, lineItemId: string, targetEstimateId: string) {
+  const lineItem = await db.lineItem.findFirstOrThrow({
+    where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
     include: { section: true },
   });
   const fromEstimateVersionId = lineItem.section.estimateVersionId;
   await assertUnlocked(fromEstimateVersionId);
 
+  const targetEstimate = await db.estimate.findFirstOrThrow({ where: { id: targetEstimateId, opportunityId } });
   const targetVersion = await db.estimateVersion.findFirstOrThrow({
-    where: { estimateId: targetEstimateId, isCurrent: true },
+    where: { estimateId: targetEstimate.id, isCurrent: true },
   });
   await assertUnlocked(targetVersion.id);
 
@@ -408,9 +434,25 @@ export async function archiveEstimate(id: string) {
   return db.estimate.update({ where: { id }, data: { deletedAt: new Date() } });
 }
 
-export async function deleteLineItem(lineItemId: string) {
-  const existing = await db.lineItem.findUniqueOrThrow({
-    where: { id: lineItemId },
+// opportunityId is the caller's already-access-checked opportunity (from
+// requireOpportunityAccess/requireEstimateAccess, via
+// opportunity-access.ts's estimateOpportunityId when only an estimateId
+// is in scope), NOT trusted from lineItemId alone -- lineItemId is an
+// opaque, guessable/enumerable string a caller supplies directly, and
+// without confirming it actually belongs to the opportunity the caller
+// was authorized for, any authenticated user with access to SOME
+// opportunity could mutate or delete another company's pricing data by
+// ID alone. This is called from two different callers with two different
+// natural scoping keys (estimates/actions.ts has an estimateId,
+// line-item-audit-actions.ts only has an opportunityId since a
+// misattributed item's actual estimate isn't known in advance) --
+// opportunityId is the one boundary both can supply, and it's the app's
+// real access-control axis (see opportunity-access.ts's own header
+// comment): SystemRole answers "admin area or not," this answers "can
+// this user see this opportunity and everything under it."
+export async function deleteLineItem(opportunityId: string, lineItemId: string) {
+  const existing = await db.lineItem.findFirstOrThrow({
+    where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
     include: { section: true },
   });
   await assertUnlocked(existing.section.estimateVersionId);
@@ -421,9 +463,10 @@ export async function deleteLineItem(lineItemId: string) {
 // Marks a draft line item (Phase 4 design-intake prototype) as
 // human-reviewed and priced -- migration-plan.md's "human-reviewed
 // before pricing" -- so it starts counting toward the version's totals.
-export async function confirmDraftLineItem(lineItemId: string) {
-  const existing = await db.lineItem.findUniqueOrThrow({
-    where: { id: lineItemId },
+// opportunityId ownership check -- see deleteLineItem's header comment.
+export async function confirmDraftLineItem(opportunityId: string, lineItemId: string) {
+  const existing = await db.lineItem.findFirstOrThrow({
+    where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
     include: { section: true },
   });
   await assertUnlocked(existing.section.estimateVersionId);

@@ -62,8 +62,8 @@ describe("Yoku Moku acceptance (Phase 1 validated)", () => {
 
     // Two real line items from Yoku Moku's COMPONENT 2 sheet: qty=1,
     // unitCost=900 each (business-rules.md Rule 2: material qty x cost).
-    await addLineItem(section.id, { lineType: "MATERIAL", description: "Line 1", qty: 1, unitCost: 900 });
-    await addLineItem(section.id, { lineType: "MATERIAL", description: "Line 2", qty: 1, unitCost: 900 });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Line 1", qty: 1, unitCost: 900 });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Line 2", qty: 1, unitCost: 900 });
 
     const lineItems = await db.lineItem.findMany({ where: { sectionId: section.id } });
     const sectionTotal = computeSectionTotal(lineItems);
@@ -87,7 +87,7 @@ describe("Yoku Moku acceptance (Phase 1 validated)", () => {
     // itself is already proven exact.
     const version = await createEstimateVersion(estimate.id, 45.3996887538702);
     const section = await addSection(version.id, { name: "COST SUMMARY", sectionType: "CATEGORY" });
-    await addLineItem(section.id, {
+    await addLineItem(version.id, section.id, {
       lineType: "FEE",
       description: "Total job cost (Phase 1 validated)",
       qty: 1,
@@ -119,7 +119,7 @@ describe("Yoku Moku through the Phase 4 workflow", () => {
     // category (see category-audit.ts), so this fixture needs a real,
     // matching Category row -- forgeos_test has no seeded categories.
     const category = await db.category.create({ data: { name: "Professional Services", key: "professional_services" } });
-    await addLineItem(section.id, {
+    await addLineItem(version.id, section.id, {
       lineType: "FEE",
       description: "Total job cost (Phase 1 validated)",
       qty: 1,
@@ -162,7 +162,7 @@ describe("Yoku Moku through the Phase 4 workflow", () => {
     const resultSection = await db.estimateSection.findFirstOrThrow({
       where: { estimateVersionId: changeOrder.resultVersionId },
     });
-    await addLineItem(resultSection.id, {
+    await addLineItem(changeOrder.resultVersionId, resultSection.id, {
       lineType: "FEE",
       description: "Second phase scope",
       qty: 1,
@@ -199,7 +199,7 @@ describe("Yoku Moku through the Phase 6 workflow", () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 45.3996887538702);
     const section = await addSection(version.id, { name: "COST SUMMARY", sectionType: "CATEGORY" });
-    const lineItem = await addLineItem(section.id, {
+    const lineItem = await addLineItem(version.id, section.id, {
       lineType: "FEE",
       description: "Total job cost (Phase 1 validated)",
       department: "EF",
@@ -209,7 +209,7 @@ describe("Yoku Moku through the Phase 6 workflow", () => {
     await lockEstimateVersion(version.id);
 
     // Synthetic actual: came in $2,000 over the real estimated cost.
-    await recordCostActual({ lineItemId: lineItem.id, actualCost: 38060.68, source: "Acceptance test" });
+    await recordCostActual({ opportunityId: estimate.opportunityId, lineItemId: lineItem.id, actualCost: 38060.68, source: "Acceptance test" });
 
     const reloaded = await db.lineItem.findUniqueOrThrow({
       where: { id: lineItem.id },

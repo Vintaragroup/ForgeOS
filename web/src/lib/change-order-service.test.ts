@@ -36,7 +36,7 @@ async function makeApprovedVersion() {
   const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
   const version = await createEstimateVersion(estimate.id, 50);
   const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-  await addLineItem(section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+  await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
   await lockEstimateVersion(version.id);
   const user = await db.user.create({ data: { name: "Approver", email: `a-${Date.now()}@example.com` } });
   await approveEstimateVersion(version.id, user.id);
@@ -75,7 +75,7 @@ describe("approveChangeOrder / rejectChangeOrder", () => {
     const { estimate, version } = await makeApprovedVersion();
     const changeOrder = await createChangeOrder(estimate.id, version.id, "Add flooring");
 
-    await expect(approveChangeOrder(changeOrder.id)).rejects.toThrow(/must be locked/);
+    await expect(approveChangeOrder(estimate.id, changeOrder.id)).rejects.toThrow(/must be locked/);
   });
 
   it("approves once the result version is locked", async () => {
@@ -83,7 +83,7 @@ describe("approveChangeOrder / rejectChangeOrder", () => {
     const changeOrder = await createChangeOrder(estimate.id, version.id, "Add flooring");
     await lockEstimateVersion(changeOrder.resultVersionId);
 
-    const approved = await approveChangeOrder(changeOrder.id);
+    const approved = await approveChangeOrder(estimate.id, changeOrder.id);
     expect(approved.status).toBe("APPROVED");
     expect(approved.approvedAt).not.toBeNull();
   });
@@ -92,8 +92,29 @@ describe("approveChangeOrder / rejectChangeOrder", () => {
     const { estimate, version } = await makeApprovedVersion();
     const changeOrder = await createChangeOrder(estimate.id, version.id, "Add flooring");
 
-    const rejected = await rejectChangeOrder(changeOrder.id);
+    const rejected = await rejectChangeOrder(estimate.id, changeOrder.id);
     expect(rejected.status).toBe("REJECTED");
+  });
+
+  // Regression test for the cross-resource ID authorization gap: these
+  // previously took only a changeOrderId, letting any caller with access
+  // to SOME estimate approve/reject a DIFFERENT estimate's change order
+  // just by supplying its ID -- see change-order-service.ts's own header
+  // comment on assertChangeOrderBelongsToEstimate.
+  it("rejects approving/rejecting a changeOrderId that belongs to a different estimate", async () => {
+    const { estimate, version } = await makeApprovedVersion();
+    const changeOrder = await createChangeOrder(estimate.id, version.id, "Add flooring");
+    await lockEstimateVersion(changeOrder.resultVersionId);
+
+    const otherCompany = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: otherCompany.id, showName: "Other Show" } });
+    const otherEstimate = await db.estimate.create({ data: { opportunityId: otherOpportunity.id } });
+
+    await expect(approveChangeOrder(otherEstimate.id, changeOrder.id)).rejects.toThrow();
+    await expect(rejectChangeOrder(otherEstimate.id, changeOrder.id)).rejects.toThrow();
+
+    const stillDraft = await db.changeOrder.findUniqueOrThrow({ where: { id: changeOrder.id } });
+    expect(stillDraft.status).toBe("DRAFT");
   });
 });
 
@@ -108,9 +129,9 @@ describe("computeChangeOrderDiff", () => {
     const resultLineItem = await db.lineItem.findFirstOrThrow({ where: { sectionId: resultSection.id } });
 
     // CHANGED: bump the copied Plywood line's qty
-    await updateLineItem(resultLineItem.id, { qty: 15 });
+    await updateLineItem(estimate.opportunityId, resultLineItem.id, { qty: 15 });
     // ADDED: a brand-new line item on the result side
-    await addLineItem(resultSection.id, { lineType: "MATERIAL", description: "Upgraded flooring", qty: 1, unitCost: 500 });
+    await addLineItem(changeOrder.resultVersionId, resultSection.id, { lineType: "MATERIAL", description: "Upgraded flooring", qty: 1, unitCost: 500 });
 
     const base = await db.estimateSection.findMany({
       where: { estimateVersionId: version.id },

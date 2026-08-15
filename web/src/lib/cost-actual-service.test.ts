@@ -29,19 +29,23 @@ async function makeLineItem(description: string, department: string | null, qty:
   const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
   const version = await createEstimateVersion(estimate.id, 0);
   const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-  return addLineItem(section.id, { lineType: "MATERIAL", description, department, qty, unitCost });
+  const lineItem = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description, department, qty, unitCost });
+  return { lineItem, opportunityId: opportunity.id };
 }
 
 describe("recordCostActual", () => {
   it("rejects a cost actual with neither a lineItemId nor a taskId", async () => {
-    await expect(recordCostActual({ actualCost: 100 })).rejects.toThrow(/LineItem or a Task/);
+    // opportunityId is never read here -- the "must reference a LineItem
+    // or a Task" throw happens before the ownership check would touch it.
+    await expect(recordCostActual({ opportunityId: "unused", actualCost: 100 })).rejects.toThrow(/LineItem or a Task/);
   });
 
   it("records an actual cost against a line item", async () => {
-    const lineItem = await makeLineItem("Plywood", "EF", 10, 20);
+    const { lineItem, opportunityId } = await makeLineItem("Plywood", "EF", 10, 20);
     const user = await db.user.create({ data: { name: "Estimator", email: `e-${Date.now()}@example.com` } });
 
     const actual = await recordCostActual({
+      opportunityId,
       lineItemId: lineItem.id,
       actualCost: 250,
       source: "Vendor invoice #4412",
@@ -54,13 +58,23 @@ describe("recordCostActual", () => {
   });
 
   it("is append-only -- multiple actuals accrue against the same line item", async () => {
-    const lineItem = await makeLineItem("Plywood", "EF", 10, 20);
-    await recordCostActual({ lineItemId: lineItem.id, actualCost: 150 });
-    await recordCostActual({ lineItemId: lineItem.id, actualCost: 90 });
+    const { lineItem, opportunityId } = await makeLineItem("Plywood", "EF", 10, 20);
+    await recordCostActual({ opportunityId, lineItemId: lineItem.id, actualCost: 150 });
+    await recordCostActual({ opportunityId, lineItemId: lineItem.id, actualCost: 90 });
 
     const actuals = await db.costActual.findMany({ where: { lineItemId: lineItem.id } });
     expect(actuals).toHaveLength(2);
     expect(computeActualTotal(actuals).toNumber()).toBe(240);
+  });
+
+  it("rejects a lineItemId that belongs to a different opportunity than the caller's own", async () => {
+    const { lineItem } = await makeLineItem("Plywood", "EF", 10, 20);
+    const otherCompany = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: otherCompany.id, showName: "Other Show" } });
+
+    await expect(
+      recordCostActual({ opportunityId: otherOpportunity.id, lineItemId: lineItem.id, actualCost: 100 }),
+    ).rejects.toThrow();
   });
 });
 

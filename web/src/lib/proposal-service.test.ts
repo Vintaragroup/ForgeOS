@@ -38,7 +38,7 @@ async function makeLockedVersion() {
   // category (see category-audit.ts), so this fixture needs a real,
   // matching Category row -- forgeos_test has no seeded categories.
   const category = await db.category.create({ data: { name: "Structure", key: "structure" } });
-  await addLineItem(section.id, {
+  await addLineItem(version.id, section.id, {
     lineType: "MATERIAL",
     description: "Plywood",
     qty: 10,

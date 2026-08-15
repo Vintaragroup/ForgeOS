@@ -17,6 +17,8 @@ import {
   deleteLineItem,
   lockEstimateVersion,
   moveLineItemToEstimate,
+  moveLineItemWithinSection,
+  moveSectionOrder,
   recomputeVersionTotals,
   updateLineItem,
   updateMarginTarget,
@@ -129,13 +131,13 @@ describe("estimate version lifecycle", () => {
     const version = await createEstimateVersion(estimate.id, 50);
 
     const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-    await addLineItem(section.id, {
+    await addLineItem(version.id, section.id, {
       lineType: "MATERIAL",
       description: "Plywood",
       qty: 10,
       unitCost: 20,
     });
-    await addLineItem(section.id, {
+    await addLineItem(version.id, section.id, {
       lineType: "LABOR",
       description: "Fabrication",
       department: "EF",
@@ -159,7 +161,7 @@ describe("estimate version lifecycle", () => {
     await lockEstimateVersion(version.id);
 
     await expect(
-      addLineItem(section.id, { lineType: "MATERIAL", description: "Late add", qty: 1, unitCost: 1 }),
+      addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Late add", qty: 1, unitCost: 1 }),
     ).rejects.toThrow(/locked/);
   });
 
@@ -167,7 +169,7 @@ describe("estimate version lifecycle", () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);
     const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-    const lineItem = await addLineItem(section.id, {
+    const lineItem = await addLineItem(version.id, section.id, {
       lineType: "MATERIAL",
       description: "Plywood",
       qty: 10,
@@ -178,7 +180,7 @@ describe("estimate version lifecycle", () => {
     expect(refreshed.totalCost.toNumber()).toBe(200);
     expect(refreshed.isLocked).toBe(false);
 
-    await updateLineItem(lineItem.id, { qty: 15 });
+    await updateLineItem(estimate.opportunityId, lineItem.id, { qty: 15 });
     refreshed = await recomputeVersionTotals(version.id);
     expect(refreshed.totalCost.toNumber()).toBe(300);
   });
@@ -198,7 +200,7 @@ describe("estimate version lifecycle", () => {
     const estimate = await makeEstimate();
     const v1 = await createEstimateVersion(estimate.id, 50);
     const section = await addSection(v1.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-    await addLineItem(section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+    await addLineItem(v1.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
     await lockEstimateVersion(v1.id);
 
     const v2 = await createNewVersionFromLocked(v1.id);
@@ -215,14 +217,14 @@ describe("estimate version lifecycle", () => {
     expect(v2Sections[0].lineItems[0].description).toBe("Plywood");
 
     // editable again post-copy
-    await addLineItem(v2Sections[0].id, { lineType: "MATERIAL", description: "Extra", qty: 1, unitCost: 5 });
+    await addLineItem(v2.id, v2Sections[0].id, { lineType: "MATERIAL", description: "Extra", qty: 1, unitCost: 5 });
   });
 
   it("carries over the source version's totals so the copy isn't shown as $0 before its first edit", async () => {
     const estimate = await makeEstimate();
     const v1 = await createEstimateVersion(estimate.id, 50);
     const section = await addSection(v1.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-    await addLineItem(section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+    await addLineItem(v1.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
     const locked = await lockEstimateVersion(v1.id);
 
     const v2 = await createNewVersionFromLocked(v1.id);
@@ -236,7 +238,7 @@ describe("estimate version lifecycle", () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 50);
     const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-    await addLineItem(section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
     await recomputeVersionTotals(version.id);
 
     const updated = await updateMarginTarget(version.id, 60);
@@ -249,14 +251,14 @@ describe("estimate version lifecycle", () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);
     const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-    const lineItem = await addLineItem(section.id, {
+    const lineItem = await addLineItem(version.id, section.id, {
       lineType: "MATERIAL",
       description: "Plywood",
       qty: 10,
       unitCost: 20,
     });
 
-    const deleted = await deleteLineItem(lineItem.id);
+    const deleted = await deleteLineItem(estimate.opportunityId, lineItem.id);
     expect(deleted.estimateVersionId).toBe(version.id);
 
     const refreshed = await recomputeVersionTotals(version.id);
@@ -269,7 +271,7 @@ describe("Option (alternates)", () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 50);
     const baseSection = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-    await addLineItem(baseSection.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+    await addLineItem(version.id, baseSection.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
 
     const option = await addOption(version.id, { name: "Option 1: Upgraded flooring" });
     const optionSection = await addSection(version.id, {
@@ -277,7 +279,7 @@ describe("Option (alternates)", () => {
       sectionType: "COMPONENT",
       optionId: option.id,
     });
-    await addLineItem(optionSection.id, {
+    await addLineItem(version.id, optionSection.id, {
       lineType: "MATERIAL",
       description: "Premium flooring",
       qty: 1,
@@ -312,7 +314,7 @@ describe("Option (alternates)", () => {
       sectionType: "COMPONENT",
       optionId: option.id,
     });
-    await addLineItem(optionSection.id, {
+    await addLineItem(v1.id, optionSection.id, {
       lineType: "MATERIAL",
       description: "Premium flooring",
       qty: 1,
@@ -342,8 +344,8 @@ describe("design-intake prototype: draft line items + Attachment", () => {
     const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
     const attachment = await addAttachment(estimate.id, { fileRef: "pull-sheet-v1.pdf" });
 
-    await addLineItem(section.id, { lineType: "MATERIAL", description: "Confirmed line", qty: 1, unitCost: 100 });
-    const draft = await addLineItem(section.id, {
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Confirmed line", qty: 1, unitCost: 100 });
+    const draft = await addLineItem(version.id, section.id, {
       lineType: "MATERIAL",
       description: "Drafted from pull sheet",
       qty: 1,
@@ -355,7 +357,7 @@ describe("design-intake prototype: draft line items + Attachment", () => {
     let refreshed = await recomputeVersionTotals(version.id);
     expect(refreshed.totalCost.toNumber()).toBe(100); // draft's $900 excluded
 
-    await confirmDraftLineItem(draft.id);
+    await confirmDraftLineItem(estimate.opportunityId, draft.id);
     refreshed = await recomputeVersionTotals(version.id);
     expect(refreshed.totalCost.toNumber()).toBe(1000); // now counts
   });
@@ -364,7 +366,7 @@ describe("design-intake prototype: draft line items + Attachment", () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);
     const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-    const draft = await addLineItem(section.id, {
+    const draft = await addLineItem(version.id, section.id, {
       lineType: "MATERIAL",
       description: "Drafted",
       qty: 1,
@@ -373,7 +375,7 @@ describe("design-intake prototype: draft line items + Attachment", () => {
     });
     await lockEstimateVersion(version.id);
 
-    await expect(confirmDraftLineItem(draft.id)).rejects.toThrow(/locked/);
+    await expect(confirmDraftLineItem(estimate.opportunityId, draft.id)).rejects.toThrow(/locked/);
   });
 });
 
@@ -385,15 +387,15 @@ describe("moveLineItemToEstimate", () => {
     const estimateB = await db.estimate.create({ data: { opportunityId: opportunity.id, name: "Estimate B" } });
     const versionA = await createEstimateVersion(estimateA.id, 0);
     const versionB = await createEstimateVersion(estimateB.id, 0);
-    return { estimateA, estimateB, versionA, versionB };
+    return { opportunity, estimateA, estimateB, versionA, versionB };
   }
 
   it("moves a line item into the target estimate's current version, creating a matching section, and recomputes both totals", async () => {
-    const { estimateB, versionA, versionB } = await makeTwoEstimates();
+    const { opportunity, estimateB, versionA, versionB } = await makeTwoEstimates();
     const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
-    const item = await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+    const item = await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
 
-    const result = await moveLineItemToEstimate(item.id, estimateB.id);
+    const result = await moveLineItemToEstimate(opportunity.id, item.id, estimateB.id);
     expect(result.fromEstimateVersionId).toBe(versionA.id);
     expect(result.toEstimateVersionId).toBe(versionB.id);
 
@@ -410,13 +412,13 @@ describe("moveLineItemToEstimate", () => {
   });
 
   it("reuses an existing same-named section in the target estimate instead of creating a duplicate", async () => {
-    const { estimateB, versionA, versionB } = await makeTwoEstimates();
+    const { opportunity, estimateB, versionA, versionB } = await makeTwoEstimates();
     const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
-    const item = await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+    const item = await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
     const existingSectionB = await addSection(versionB.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
-    await addLineItem(existingSectionB.id, { lineType: "MATERIAL", description: "Existing hinge", qty: 1, unitCost: 25 });
+    await addLineItem(versionB.id, existingSectionB.id, { lineType: "MATERIAL", description: "Existing hinge", qty: 1, unitCost: 25 });
 
-    await moveLineItemToEstimate(item.id, estimateB.id);
+    await moveLineItemToEstimate(opportunity.id, item.id, estimateB.id);
 
     const sectionsB = await db.estimateSection.findMany({ where: { estimateVersionId: versionB.id } });
     expect(sectionsB).toHaveLength(1);
@@ -425,20 +427,105 @@ describe("moveLineItemToEstimate", () => {
   });
 
   it("rejects moving out of a locked source version", async () => {
-    const { estimateB, versionA } = await makeTwoEstimates();
+    const { opportunity, estimateB, versionA } = await makeTwoEstimates();
     const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
-    const item = await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+    const item = await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
     await lockEstimateVersion(versionA.id);
 
-    await expect(moveLineItemToEstimate(item.id, estimateB.id)).rejects.toThrow(/locked/);
+    await expect(moveLineItemToEstimate(opportunity.id, item.id, estimateB.id)).rejects.toThrow(/locked/);
   });
 
   it("rejects moving into a locked target version", async () => {
-    const { estimateB, versionA, versionB } = await makeTwoEstimates();
+    const { opportunity, estimateB, versionA, versionB } = await makeTwoEstimates();
     const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
-    const item = await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+    const item = await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
     await lockEstimateVersion(versionB.id);
 
-    await expect(moveLineItemToEstimate(item.id, estimateB.id)).rejects.toThrow(/locked/);
+    await expect(moveLineItemToEstimate(opportunity.id, item.id, estimateB.id)).rejects.toThrow(/locked/);
+  });
+
+  it("rejects moving a line item using an opportunityId that isn't the item's real owning opportunity", async () => {
+    const { estimateB, versionA } = await makeTwoEstimates();
+    const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
+    const item = await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+    const otherCompany = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: otherCompany.id, showName: "Other Show" } });
+
+    await expect(moveLineItemToEstimate(otherOpportunity.id, item.id, estimateB.id)).rejects.toThrow();
+  });
+
+  it("rejects moving a line item INTO a targetEstimateId that belongs to a different opportunity than the caller's own", async () => {
+    const { opportunity, versionA } = await makeTwoEstimates();
+    const sectionA = await addSection(versionA.id, { name: "Doors & Hardware", sectionType: "CATEGORY" });
+    const item = await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "Door", qty: 1, unitCost: 500 });
+    const otherCompany = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: otherCompany.id, showName: "Other Show" } });
+    const foreignEstimate = await db.estimate.create({ data: { opportunityId: otherOpportunity.id } });
+    await createEstimateVersion(foreignEstimate.id, 0);
+
+    await expect(moveLineItemToEstimate(opportunity.id, item.id, foreignEstimate.id)).rejects.toThrow();
+  });
+});
+
+// Regression tests for the cross-resource ID authorization gap found
+// while auditing this file: requireEstimateAccess only checks the caller
+// can access estimateId -- these functions previously trusted a
+// lineItemId/sectionId/versionId taken from a form directly, letting any
+// caller with access to SOME estimate mutate a DIFFERENT (inaccessible)
+// estimate's line items/sections just by supplying its ID. See each
+// function's own header comment in estimate-service.ts.
+describe("opportunity-ownership checks (cross-resource ID authorization)", () => {
+  async function makeTwoOpportunities() {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunityA = await db.opportunity.create({ data: { companyId: company.id, showName: "Show A" } });
+    const opportunityB = await db.opportunity.create({ data: { companyId: company.id, showName: "Show B" } });
+    const estimateA = await db.estimate.create({ data: { opportunityId: opportunityA.id } });
+    const estimateB = await db.estimate.create({ data: { opportunityId: opportunityB.id } });
+    const versionA = await createEstimateVersion(estimateA.id, 0);
+    const versionB = await createEstimateVersion(estimateB.id, 0);
+    const sectionA = await addSection(versionA.id, { name: "Section A", sectionType: "CATEGORY" });
+    const sectionB = await addSection(versionB.id, { name: "Section B", sectionType: "CATEGORY" });
+    const itemA = await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "Item A", qty: 1, unitCost: 100 });
+    return { opportunityA, opportunityB, sectionA, sectionB, itemA };
+  }
+
+  it("addLineItem rejects a sectionId that doesn't belong to the given estimateVersionId", async () => {
+    const { sectionB } = await makeTwoOpportunities();
+    const company = await db.company.create({ data: { name: "Another Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Another Show" } });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await expect(
+      addLineItem(version.id, sectionB.id, { lineType: "MATERIAL", description: "Injected", qty: 1, unitCost: 1 }),
+    ).rejects.toThrow();
+  });
+
+  it("updateLineItem rejects a lineItemId that belongs to a different opportunity", async () => {
+    const { opportunityB, itemA } = await makeTwoOpportunities();
+    await expect(updateLineItem(opportunityB.id, itemA.id, { qty: 99 })).rejects.toThrow();
+  });
+
+  it("deleteLineItem rejects a lineItemId that belongs to a different opportunity", async () => {
+    const { opportunityB, itemA } = await makeTwoOpportunities();
+    await expect(deleteLineItem(opportunityB.id, itemA.id)).rejects.toThrow();
+
+    const stillThere = await db.lineItem.findUnique({ where: { id: itemA.id } });
+    expect(stillThere).not.toBeNull();
+  });
+
+  it("moveLineItemWithinSection rejects a lineItemId that belongs to a different opportunity", async () => {
+    const { opportunityB, itemA } = await makeTwoOpportunities();
+    await expect(moveLineItemWithinSection(opportunityB.id, itemA.id, "up")).rejects.toThrow();
+  });
+
+  it("confirmDraftLineItem rejects a lineItemId that belongs to a different opportunity", async () => {
+    const { opportunityB, itemA } = await makeTwoOpportunities();
+    await expect(confirmDraftLineItem(opportunityB.id, itemA.id)).rejects.toThrow();
+  });
+
+  it("moveSectionOrder rejects a sectionId that belongs to a different opportunity", async () => {
+    const { opportunityB, sectionA } = await makeTwoOpportunities();
+    await expect(moveSectionOrder(opportunityB.id, sectionA.id, "up")).rejects.toThrow();
   });
 });

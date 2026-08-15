@@ -10,15 +10,26 @@ import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
 import { buildEstimateFromAllDocuments } from "@/lib/ai/estimate-synthesis-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import { recomputeVersionTotals, updateLineItem } from "@/lib/estimate-service";
-import { requireEstimateAccess } from "@/lib/opportunity-access";
+import { assertVersionBelongsToEstimate, estimateOpportunityId, requireEstimateAccess } from "@/lib/opportunity-access";
 import { db } from "@/lib/db";
 
+// opportunityId is intentionally NOT trusted from the parameter below --
+// see estimate-service.ts's deleteLineItem for the general rationale. A
+// mismatched opportunityId here specifically risks pulling a DIFFERENT
+// opportunity's uploaded documents into this estimate's AI-synthesized
+// line items, a content-leak vector this AI pipeline is uniquely exposed
+// to (buildEstimateFromAllDocuments reads every document under
+// opportunityId). Re-resolved fresh from estimateId instead; the
+// parameter is kept only so this action's existing .bind(...) call site
+// (estimates/[id]/page.tsx) doesn't need to change.
 export async function buildFullEstimateFromDocumentsAction(
   estimateId: string,
   versionId: string,
-  opportunityId: string,
+  _opportunityId: string,
 ) {
   const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const opportunityId = await estimateOpportunityId(estimateId);
   const result = await buildEstimateFromAllDocuments(versionId, opportunityId, user.id);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}?buildResult=${encodeURIComponent(JSON.stringify(result))}`);
@@ -37,6 +48,7 @@ export async function commitImportAction(
   documentId: string,
 ) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   await commitPricingImport(versionId, documentId);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}`);
@@ -78,6 +90,7 @@ export async function commitScopeItemsAction(
   documentId: string,
 ) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   await commitScopeLineItems(versionId, documentId);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}`);
@@ -92,6 +105,7 @@ export async function commitScopeItemsAction(
 // just re-reads currentVersion.coverageAnalysis after revalidation.
 export async function runScopeCoverageAnalysisAction(estimateId: string, versionId: string) {
   const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   try {
     await runScopeCoverageAnalysis(versionId, user.id);
   } catch (err) {
@@ -118,10 +132,12 @@ export async function updateLineItemUnitCostAction(
   formData: FormData,
 ) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const opportunityId = await estimateOpportunityId(estimateId);
   const unitCost = Number(formData.get("unitCost"));
   if (!Number.isFinite(unitCost)) throw new Error("Unit cost must be a number");
 
-  await updateLineItem(lineItemId, { unitCost });
+  await updateLineItem(opportunityId, lineItemId, { unitCost });
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }

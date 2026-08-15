@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
-import { requireEstimateAccess } from "@/lib/opportunity-access";
+import { assertVersionBelongsToEstimate, requireEstimateAccess } from "@/lib/opportunity-access";
 import { assertUnlocked } from "@/lib/estimate-service";
 import {
   clearStaleCutSheets,
@@ -47,6 +47,7 @@ function errorRedirectPath(estimateId: string, versionId: string, message: strin
 // now guards all four, same as everywhere else in the app.
 export async function addCutListPartAction(estimateId: string, versionId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   try {
     await assertUnlocked(versionId);
@@ -107,6 +108,7 @@ export async function addCutListPartAction(estimateId: string, versionId: string
 // mixed success/skip outcome, rather than a single success/fail redirect.
 export async function importCutListPartsAction(estimateId: string, versionId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   let result: CutListImportResult | null = null;
   try {
@@ -127,10 +129,15 @@ export async function importCutListPartsAction(estimateId: string, versionId: st
 
 export async function deleteCutListPartAction(estimateId: string, versionId: string, partId: string) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   try {
     await assertUnlocked(versionId);
-    const part = await db.cutListPart.findUniqueOrThrow({ where: { id: partId } });
+    // partId scoped by estimateVersionId directly, not just proven to
+    // belong to SOME version of estimateId (assertVersionBelongsToEstimate
+    // above only checked that) -- a part with no relation to versionId at
+    // all must never be deletable through this action.
+    const part = await db.cutListPart.findFirstOrThrow({ where: { id: partId, estimateVersionId: versionId } });
 
     // Phase 8: a locked sheet (survives re-optimize, see
     // clearStaleCutSheets) must never be silently invalidated by
@@ -171,6 +178,7 @@ export async function deleteCutListPartAction(estimateId: string, versionId: str
 // is worth showing, not just success/fail).
 export async function optimizeMaterialAction(estimateId: string, versionId: string, materialId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   try {
     await assertUnlocked(versionId);
@@ -184,6 +192,7 @@ export async function optimizeMaterialAction(estimateId: string, versionId: stri
 
 export async function optimizeAllMaterialsAction(estimateId: string, versionId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   let result: Awaited<ReturnType<typeof optimizeNestingForVersion>> | null = null;
   try {
@@ -223,6 +232,7 @@ export async function updateCutSheetLayoutAction(
   parts: PlacedPart[],
 ): Promise<void> {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   await assertUnlocked(versionId);
 
   const sheet = await db.cutSheet.findFirst({
@@ -258,6 +268,7 @@ export async function updateCutSheetLayoutAction(
 // how the cut list itself behaves, not just a production status flag.
 export async function toggleCutSheetLockAction(estimateId: string, versionId: string, materialId: string, sheetNumber: number) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   try {
     await assertUnlocked(versionId);
@@ -278,6 +289,7 @@ export async function toggleCutSheetLockAction(estimateId: string, versionId: st
 // never changes the layout/geometry, only records production progress.
 export async function toggleCutSheetCutAction(estimateId: string, versionId: string, materialId: string, sheetNumber: number) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   try {
     const sheet = await db.cutSheet.findFirst({ where: { estimateVersionId: versionId, materialId, sheetNumber } });

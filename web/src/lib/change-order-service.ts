@@ -45,26 +45,30 @@ export async function createChangeOrder(estimateId: string, baseVersionId: strin
   });
 }
 
-async function assertResultLocked(changeOrderId: string) {
-  const changeOrder = await db.changeOrder.findUniqueOrThrow({
-    where: { id: changeOrderId },
+// estimateId is the caller's already-access-checked estimate (from
+// requireEstimateAccess), NOT trusted from changeOrderId alone -- see
+// estimate-service.ts's deleteLineItem for the full rationale.
+async function assertChangeOrderBelongsToEstimate(estimateId: string, changeOrderId: string) {
+  const changeOrder = await db.changeOrder.findFirstOrThrow({
+    where: { id: changeOrderId, estimateId },
     include: { resultVersion: true },
   });
-  if (!changeOrder.resultVersion.isLocked) {
-    throw new Error(`ChangeOrder ${changeOrderId}'s result version must be locked before it can be approved.`);
-  }
   return changeOrder;
 }
 
-export async function approveChangeOrder(changeOrderId: string) {
-  await assertResultLocked(changeOrderId);
+export async function approveChangeOrder(estimateId: string, changeOrderId: string) {
+  const changeOrder = await assertChangeOrderBelongsToEstimate(estimateId, changeOrderId);
+  if (!changeOrder.resultVersion.isLocked) {
+    throw new Error(`ChangeOrder ${changeOrderId}'s result version must be locked before it can be approved.`);
+  }
   return db.changeOrder.update({
     where: { id: changeOrderId },
     data: { status: "APPROVED", approvedAt: new Date() },
   });
 }
 
-export async function rejectChangeOrder(changeOrderId: string) {
+export async function rejectChangeOrder(estimateId: string, changeOrderId: string) {
+  await assertChangeOrderBelongsToEstimate(estimateId, changeOrderId);
   return db.changeOrder.update({
     where: { id: changeOrderId },
     data: { status: "REJECTED" },

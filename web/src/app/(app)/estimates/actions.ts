@@ -20,7 +20,7 @@ import {
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
 import { recordCostActual } from "@/lib/cost-actual-service";
-import { requireEstimateAccess } from "@/lib/opportunity-access";
+import { assertVersionBelongsToEstimate, estimateOpportunityId, requireEstimateAccess } from "@/lib/opportunity-access";
 import type { LineItemType, SectionType } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
@@ -44,6 +44,7 @@ export async function updateMarginTargetAction(
   formData: FormData,
 ) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   const marginTargetPct = Number(formData.get("marginTargetPct"));
   if (!Number.isFinite(marginTargetPct)) throw new Error("Margin target must be a number");
   await updateMarginTarget(versionId, marginTargetPct);
@@ -52,6 +53,7 @@ export async function updateMarginTargetAction(
 
 export async function addSectionAction(estimateId: string, versionId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Section name is required");
   const sectionType = String(formData.get("sectionType")) as SectionType;
@@ -62,12 +64,14 @@ export async function addSectionAction(estimateId: string, versionId: string, fo
 
 export async function moveSectionAction(estimateId: string, sectionId: string, direction: "up" | "down") {
   await requireEstimateAccess(estimateId);
-  await moveSectionOrder(sectionId, direction);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  await moveSectionOrder(opportunityId, sectionId, direction);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function addOptionAction(estimateId: string, versionId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Option name is required");
 
@@ -82,6 +86,7 @@ export async function addOptionSectionAction(
   formData: FormData,
 ) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Section name is required");
   const sectionType = String(formData.get("sectionType")) as SectionType;
@@ -97,6 +102,7 @@ export async function addLineItemAction(
   formData: FormData,
 ) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   const description = String(formData.get("description") ?? "").trim();
   if (!description) throw new Error("Line item description is required");
   const lineType = String(formData.get("lineType")) as LineItemType;
@@ -118,7 +124,7 @@ export async function addLineItemAction(
   const isDraft = formData.get("isDraft") === "on";
   const attachmentId = emptyToNull(formData.get("attachmentId"));
 
-  await addLineItem(sectionId, {
+  await addLineItem(versionId, sectionId, {
     lineType,
     description,
     department,
@@ -148,6 +154,8 @@ export async function updateLineItemAction(
   formData: FormData,
 ) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const opportunityId = await estimateOpportunityId(estimateId);
   const description = String(formData.get("description") ?? "").trim();
   if (!description) throw new Error("Line item description is required");
   const lineType = String(formData.get("lineType")) as LineItemType;
@@ -164,7 +172,7 @@ export async function updateLineItemAction(
     throw new Error("Qty and unit cost must be numbers");
   }
 
-  await updateLineItem(lineItemId, {
+  await updateLineItem(opportunityId, lineItemId, {
     description,
     lineType,
     department,
@@ -180,20 +188,23 @@ export async function updateLineItemAction(
 
 export async function moveLineItemAction(estimateId: string, lineItemId: string, direction: "up" | "down") {
   await requireEstimateAccess(estimateId);
-  await moveLineItemWithinSection(lineItemId, direction);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  await moveLineItemWithinSection(opportunityId, lineItemId, direction);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function deleteLineItemAction(estimateId: string, lineItemId: string) {
   await requireEstimateAccess(estimateId);
-  const { estimateVersionId } = await deleteLineItem(lineItemId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  const { estimateVersionId } = await deleteLineItem(opportunityId, lineItemId);
   await recomputeVersionTotals(estimateVersionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function confirmDraftLineItemAction(estimateId: string, lineItemId: string) {
   await requireEstimateAccess(estimateId);
-  await confirmDraftLineItem(lineItemId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  await confirmDraftLineItem(opportunityId, lineItemId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
@@ -209,18 +220,21 @@ export async function addAttachmentAction(estimateId: string, formData: FormData
 
 export async function lockVersionAction(estimateId: string, versionId: string) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   await lockEstimateVersion(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function createNewVersionAction(estimateId: string, versionId: string) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   await createNewVersionFromLocked(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function approveVersionAction(estimateId: string, versionId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   const approvedById = String(formData.get("approvedById") ?? "").trim();
   if (!approvedById) throw new Error("Select who is approving this version");
   await approveEstimateVersion(versionId, approvedById);
@@ -229,6 +243,7 @@ export async function approveVersionAction(estimateId: string, versionId: string
 
 export async function generateProposalAction(estimateId: string, versionId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
   const templateId = String(formData.get("templateId") ?? "").trim();
   if (!templateId) throw new Error("Select a proposal template");
   const proposal = await generateProposal(versionId, templateId);
@@ -238,12 +253,13 @@ export async function generateProposalAction(estimateId: string, versionId: stri
 
 export async function recordCostActualAction(estimateId: string, lineItemId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  const opportunityId = await estimateOpportunityId(estimateId);
   const actualCost = Number(formData.get("actualCost"));
   if (!Number.isFinite(actualCost)) throw new Error("Actual cost must be a number");
   const source = emptyToNull(formData.get("source"));
   const recordedById = emptyToNull(formData.get("recordedById"));
 
-  await recordCostActual({ lineItemId, actualCost, source, recordedById });
+  await recordCostActual({ opportunityId, lineItemId, actualCost, source, recordedById });
   revalidatePath(`/estimates/${estimateId}`);
 }
 

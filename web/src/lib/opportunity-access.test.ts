@@ -1,8 +1,16 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { canAccessOpportunity, opportunityAccessWhere } from "@/lib/opportunity-access";
+import {
+  assertVersionBelongsToEstimate,
+  canAccessOpportunity,
+  estimateOpportunityId,
+  opportunityAccessWhere,
+} from "@/lib/opportunity-access";
+import { createEstimateVersion } from "@/lib/estimate-service";
 
 afterEach(async () => {
+  await db.estimateVersion.deleteMany();
+  await db.estimate.deleteMany();
   await db.opportunityCollaborator.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
@@ -108,5 +116,45 @@ describe("opportunityAccessWhere", () => {
       where: { OR: [{ id: ownedOpp.id }, { id: collabOpp.id }], ...opportunityAccessWhere(collaborator) },
     });
     expect(collabResults.map((o) => o.id)).toEqual([collabOpp.id]);
+  });
+});
+
+// Regression tests for the cross-resource ID authorization gap:
+// requireEstimateAccess/requireOpportunityAccess only check the CALLER
+// can access the estimateId/opportunityId already in scope -- without
+// these helpers, an action that also receives a versionId/lineItemId/
+// sectionId could be pointed at a DIFFERENT estimate's data just by
+// supplying its ID, bypassing the access check entirely. See
+// estimate-service.ts's deleteLineItem and estimates/actions.ts's use of
+// assertVersionBelongsToEstimate for where these close real gaps.
+describe("assertVersionBelongsToEstimate", () => {
+  async function makeTwoEstimates() {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const estimateA = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const estimateB = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const versionA = await createEstimateVersion(estimateA.id, 0);
+    const versionB = await createEstimateVersion(estimateB.id, 0);
+    return { estimateA, estimateB, versionA, versionB };
+  }
+
+  it("resolves silently when versionId genuinely belongs to estimateId", async () => {
+    const { estimateA, versionA } = await makeTwoEstimates();
+    await expect(assertVersionBelongsToEstimate(estimateA.id, versionA.id)).resolves.toBeUndefined();
+  });
+
+  it("throws when versionId belongs to a DIFFERENT estimate than the one supplied", async () => {
+    const { estimateA, versionB } = await makeTwoEstimates();
+    await expect(assertVersionBelongsToEstimate(estimateA.id, versionB.id)).rejects.toThrow();
+  });
+});
+
+describe("estimateOpportunityId", () => {
+  it("resolves an estimate to its real owning opportunity", async () => {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+
+    expect(await estimateOpportunityId(estimate.id)).toBe(opportunity.id);
   });
 });

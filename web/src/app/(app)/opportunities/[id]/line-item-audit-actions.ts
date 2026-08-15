@@ -11,13 +11,13 @@ import { deleteLineItem, moveLineItemToEstimate, recomputeVersionTotals } from "
 
 export async function moveLineItemToEstimateAction(opportunityId: string, lineItemId: string, targetEstimateId: string) {
   await requireOpportunityAccess(opportunityId);
-  await moveLineItemToEstimate(lineItemId, targetEstimateId);
+  await moveLineItemToEstimate(opportunityId, lineItemId, targetEstimateId);
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 
 export async function deleteMisattributedLineItemAction(opportunityId: string, lineItemId: string) {
   await requireOpportunityAccess(opportunityId);
-  const { estimateVersionId } = await deleteLineItem(lineItemId);
+  const { estimateVersionId } = await deleteLineItem(opportunityId, lineItemId);
   await recomputeVersionTotals(estimateVersionId);
   revalidatePath(`/opportunities/${opportunityId}`);
 }

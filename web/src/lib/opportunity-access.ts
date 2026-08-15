@@ -65,6 +65,34 @@ export async function requireEstimateAccess(estimateId: string) {
   return requireOpportunityAccess(estimate.opportunityId);
 }
 
+// Verifies versionId actually belongs to estimateId -- requireEstimateAccess
+// only checks the CALLER can access estimateId; without this, an action
+// that also takes a versionId (nearly every action in estimates/actions.ts,
+// cut-list/actions.ts, import-actions.ts) could be pointed at a DIFFERENT
+// estimate's version just by supplying its ID, bypassing the access check
+// entirely even though requireEstimateAccess itself never failed. The same
+// cross-resource gap document-service.ts's functions were fixed for, one
+// level up the ownership chain -- call this immediately after
+// requireEstimateAccess in any action that also receives a versionId.
+export async function assertVersionBelongsToEstimate(estimateId: string, versionId: string): Promise<void> {
+  const version = await db.estimateVersion.findFirst({ where: { id: versionId, estimateId }, select: { id: true } });
+  if (!version) throw new Error("This estimate version doesn't belong to the given estimate.");
+}
+
+// Resolves an estimateId to its owning opportunityId -- for a caller that
+// already called requireEstimateAccess and now needs the opportunityId
+// itself to scope a nested-ID ownership check (see estimate-service.ts's
+// deleteLineItem/updateLineItem/moveSectionOrder/etc., cost-actual-
+// service.ts's recordCostActual): a lineItemId or sectionId taken from a
+// form alone doesn't prove it belongs to the estimate the caller was
+// actually authorized for, the same cross-resource ID gap document-
+// service.ts's deleteDocument/updateDocumentType/assignDocumentEstimate
+// were fixed for.
+export async function estimateOpportunityId(estimateId: string): Promise<string> {
+  const estimate = await db.estimate.findUniqueOrThrow({ where: { id: estimateId }, select: { opportunityId: true } });
+  return estimate.opportunityId;
+}
+
 // Same idea as requireEstimateAccess, for actions taking a projectId.
 export async function requireProjectAccess(projectId: string) {
   const project = await db.project.findUniqueOrThrow({

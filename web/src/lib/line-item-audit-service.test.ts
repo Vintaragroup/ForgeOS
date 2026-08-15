@@ -57,7 +57,7 @@ describe("findMisattributedLineItems", () => {
     const version = await createEstimateVersion(estimate.id, 0);
     const section = await addSection(version.id, { name: "Other", sectionType: "CATEGORY" });
     const doc = await makeDocument(opportunity.id, { estimateId: unnamedEstimate.id });
-    const item = await addLineItem(section.id, { lineType: "MATERIAL", description: "Item", qty: 1, unitCost: 1 });
+    const item = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Item", qty: 1, unitCost: 1 });
     await db.lineItem.update({ where: { id: item.id }, data: { documentId: doc.id } });
 
     const findings = await findMisattributedLineItems(opportunity.id);
@@ -68,7 +68,7 @@ describe("findMisattributedLineItems", () => {
     const { opportunity, estimateA, estimateB, versionB } = await makeTwoNamedEstimates();
     const doc = await makeDocument(opportunity.id, { estimateId: estimateA.id });
     const sectionB = await addSection(versionB.id, { name: "Other", sectionType: "CATEGORY" });
-    const item = await addLineItem(sectionB.id, { lineType: "MATERIAL", description: "Batting cage", qty: 1, unitCost: 1 });
+    const item = await addLineItem(versionB.id, sectionB.id, { lineType: "MATERIAL", description: "Batting cage", qty: 1, unitCost: 1 });
     await db.lineItem.update({ where: { id: item.id }, data: { documentId: doc.id, sourceQuote: "quote" } });
 
     const findings = await findMisattributedLineItems(opportunity.id);
@@ -85,7 +85,7 @@ describe("findMisattributedLineItems", () => {
     const { opportunity, estimateA, versionA } = await makeTwoNamedEstimates();
     const doc = await makeDocument(opportunity.id, { estimateId: estimateA.id });
     const sectionA = await addSection(versionA.id, { name: "Other", sectionType: "CATEGORY" });
-    const item = await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Batting cage", qty: 1, unitCost: 1 });
+    const item = await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "Batting cage", qty: 1, unitCost: 1 });
     await db.lineItem.update({ where: { id: item.id }, data: { documentId: doc.id } });
 
     const findings = await findMisattributedLineItems(opportunity.id);
@@ -108,7 +108,7 @@ describe("findMisattributedLineItems", () => {
     ];
     const doc = await makeDocument(opportunity.id, { estimateId: null, proposedLineItems: proposed });
     const sectionB = await addSection(versionB.id, { name: "Other", sectionType: "CATEGORY" });
-    const item = await addLineItem(sectionB.id, { lineType: "MATERIAL", description: "Palm trees rental", qty: 5, unitCost: 1 });
+    const item = await addLineItem(versionB.id, sectionB.id, { lineType: "MATERIAL", description: "Palm trees rental", qty: 5, unitCost: 1 });
     await db.lineItem.update({ where: { id: item.id }, data: { documentId: doc.id, sourceQuote: "five palm trees" } });
 
     const findings = await findMisattributedLineItems(opportunity.id);
@@ -124,7 +124,7 @@ describe("findMisattributedLineItems", () => {
   it("does not flag a manually-added line item with no documentId -- no signal to check it against", async () => {
     const { opportunity, versionA } = await makeTwoNamedEstimates();
     const sectionA = await addSection(versionA.id, { name: "Other", sectionType: "CATEGORY" });
-    await addLineItem(sectionA.id, { lineType: "MATERIAL", description: "Manually added item", qty: 1, unitCost: 1 });
+    await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "Manually added item", qty: 1, unitCost: 1 });
 
     const findings = await findMisattributedLineItems(opportunity.id);
     expect(findings).toEqual([]);
@@ -134,7 +134,7 @@ describe("findMisattributedLineItems", () => {
     const { opportunity, versionB } = await makeTwoNamedEstimates();
     const doc = await makeDocument(opportunity.id, { estimateId: null, proposedLineItems: null });
     const sectionB = await addSection(versionB.id, { name: "Other", sectionType: "CATEGORY" });
-    const item = await addLineItem(sectionB.id, { lineType: "MATERIAL", description: "Some item", qty: 1, unitCost: 1 });
+    const item = await addLineItem(versionB.id, sectionB.id, { lineType: "MATERIAL", description: "Some item", qty: 1, unitCost: 1 });
     await db.lineItem.update({ where: { id: item.id }, data: { documentId: doc.id, sourceQuote: "quote" } });
 
     const findings = await findMisattributedLineItems(opportunity.id);
