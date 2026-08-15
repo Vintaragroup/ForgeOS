@@ -13,6 +13,7 @@ import {
   validateManualLayout,
   type PlacedPart,
 } from "@/lib/cut-list-nesting-service";
+import { importCutListPartsFromCsv, type CutListImportResult } from "@/lib/cut-list-import-service";
 
 function readMode(formData: FormData): "cost" | "waste" {
   return formData.get("mode") === "waste" ? "waste" : "cost";
@@ -96,6 +97,32 @@ export async function addCutListPartAction(estimateId: string, versionId: string
   }
   revalidatePath(cutListPath(estimateId, versionId));
   redirect(errorMessage ? errorRedirectPath(estimateId, versionId, errorMessage) : cutListPath(estimateId, versionId));
+}
+
+// Cut-list phase 9: bulk-add parts from a CSV file. Same
+// requireEstimateAccess/assertUnlocked/revalidatePath/redirect shape as
+// addCutListPartAction, but the result -- imported count + skipped-row
+// errors -- comes back via the same JSON-through-a-redirect-query-param
+// pattern optimizeAllMaterialsAction already established for reporting a
+// mixed success/skip outcome, rather than a single success/fail redirect.
+export async function importCutListPartsAction(estimateId: string, versionId: string, formData: FormData) {
+  await requireEstimateAccess(estimateId);
+  let errorMessage: string | null = null;
+  let result: CutListImportResult | null = null;
+  try {
+    await assertUnlocked(versionId);
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) throw new Error("Choose a CSV file to import.");
+    result = await importCutListPartsFromCsv(versionId, await file.text());
+  } catch (err) {
+    errorMessage = err instanceof Error ? err.message : String(err);
+  }
+  revalidatePath(cutListPath(estimateId, versionId));
+  redirect(
+    errorMessage
+      ? errorRedirectPath(estimateId, versionId, errorMessage)
+      : `${cutListPath(estimateId, versionId)}?importResult=${encodeURIComponent(JSON.stringify(result))}`,
+  );
 }
 
 export async function deleteCutListPartAction(estimateId: string, versionId: string, partId: string) {

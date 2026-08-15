@@ -5,7 +5,14 @@ import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { getCutListCostReport, getCutSheetDiagramData, type OptimizeAllResult } from "@/lib/cut-list-nesting-service";
 import { getCutListSettings } from "@/lib/cut-list-settings-service";
-import { addCutListPartAction, deleteCutListPartAction, optimizeAllMaterialsAction, optimizeMaterialAction } from "./actions";
+import { CUT_LIST_CSV_HEADERS, type CutListImportResult } from "@/lib/cut-list-import-service";
+import {
+  addCutListPartAction,
+  deleteCutListPartAction,
+  importCutListPartsAction,
+  optimizeAllMaterialsAction,
+  optimizeMaterialAction,
+} from "./actions";
 import { Button, Card, CollapsibleSection, Field, Notice, PageHeader, SelectField } from "@/components/ui";
 import { CutListPartFields } from "@/components/cut-list-part-fields";
 import { CutSheetDiagram } from "@/components/cut-sheet-diagram";
@@ -17,7 +24,11 @@ function money(n: number): string {
 
 export default async function CutListPage(props: PageProps<"/estimates/[id]/versions/[versionId]/cut-list">) {
   const { id, versionId } = await props.params;
-  const { optimizeError: optimizeErrorParam, optimizeAllResult: optimizeAllResultParam } = await props.searchParams;
+  const {
+    optimizeError: optimizeErrorParam,
+    optimizeAllResult: optimizeAllResultParam,
+    importResult: importResultParam,
+  } = await props.searchParams;
   const optimizeError = Array.isArray(optimizeErrorParam) ? optimizeErrorParam[0] : optimizeErrorParam;
   const optimizeAllResultRaw = Array.isArray(optimizeAllResultParam) ? optimizeAllResultParam[0] : optimizeAllResultParam;
   let optimizeAllResult: OptimizeAllResult | null = null;
@@ -26,6 +37,15 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
       optimizeAllResult = JSON.parse(optimizeAllResultRaw) as OptimizeAllResult;
     } catch {
       optimizeAllResult = null; // malformed/tampered query param -- ignore rather than crash the page
+    }
+  }
+  const importResultRaw = Array.isArray(importResultParam) ? importResultParam[0] : importResultParam;
+  let importResult: CutListImportResult | null = null;
+  if (importResultRaw) {
+    try {
+      importResult = JSON.parse(importResultRaw) as CutListImportResult;
+    } catch {
+      importResult = null; // malformed/tampered query param -- ignore rather than crash the page
     }
   }
 
@@ -98,6 +118,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
   const diagramDataByMaterialId = new Map(diagramEntries);
 
   const addPartWithIds = addCutListPartAction.bind(null, id, versionId);
+  const importPartsWithIds = importCutListPartsAction.bind(null, id, versionId);
   const optimizeAllWithIds = optimizeAllMaterialsAction.bind(null, id, versionId);
 
   return (
@@ -141,6 +162,31 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                 {optimizeAllResult.skipped.map((r, i) => (
                   <li key={i}>
                     {r.materialName} — {r.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {importResult && (
+        <Card className="p-6">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">CSV import results</h2>
+          {importResult.imported > 0 && (
+            <div className="mb-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+              Imported {importResult.imported} part{importResult.imported === 1 ? "" : "s"}.
+            </div>
+          )}
+          {importResult.errors.length > 0 && (
+            <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm">
+              <p className="mb-1 font-medium text-neutral-700">
+                Skipped {importResult.errors.length} row{importResult.errors.length === 1 ? "" : "s"}:
+              </p>
+              <ul className="flex flex-col gap-0.5 text-neutral-600">
+                {importResult.errors.map((e, i) => (
+                  <li key={i}>
+                    Row {e.row}: {e.reason}
                   </li>
                 ))}
               </ul>
@@ -226,6 +272,32 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
         </Card>
       )}
 
+      {!version.isLocked && sheetMaterials.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Import parts from CSV</h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Bulk-add parts from a spreadsheet. Columns: {CUT_LIST_CSV_HEADERS.join(", ")} — Material must match an
+            existing catalog material&apos;s name exactly.{" "}
+            <a
+              href={`/estimates/${id}/versions/${versionId}/cut-list/csv-template`}
+              className="text-brand-navy hover:underline"
+            >
+              Download template
+            </a>
+          </p>
+          <form action={importPartsWithIds} className="flex flex-wrap items-end gap-3">
+            <input
+              type="file"
+              name="file"
+              accept=".csv,text/csv"
+              required
+              className="text-sm text-neutral-700 file:mr-3 file:rounded-md file:border file:border-neutral-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-neutral-50"
+            />
+            <Button variant="secondary">Import CSV</Button>
+          </form>
+        </Card>
+      )}
+
       {materialGroups.length > 0 && !version.isLocked && (
         <form action={optimizeAllWithIds} className="flex flex-wrap items-end gap-3">
           <div className="w-56">
@@ -298,6 +370,13 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                   className="text-brand-navy hover:underline"
                 >
                   View diagram (PDF)
+                </Link>
+                <Link
+                  href={`/estimates/${id}/versions/${versionId}/cut-list/${materialId}/labels`}
+                  target="_blank"
+                  className="text-brand-navy hover:underline"
+                >
+                  Print labels (PDF)
                 </Link>
                 <span className="flex flex-wrap gap-2">
                   {Array.from({ length: waste.sheetsUsed }, (_, i) => i + 1).map((sheetNum) => (

@@ -25,6 +25,7 @@
     "maxrects-packer": "^2.7.3",
     "next": "16.3.0",
     "openai": "^7.4.0",
+    "papaparse": "^5.6.0",
     "pg": "^8.22.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -33,6 +34,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/papaparse": "^5.5.2",
     "@types/pg": "^8.20.4",
     "@types/react": "^19",
     "@types/react-dom": "^19",
