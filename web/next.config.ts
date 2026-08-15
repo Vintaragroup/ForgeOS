@@ -29,6 +29,38 @@ const nextConfig: NextConfig = {
     // serverActions.bodySizeLimit above so both layers agree.
     proxyClientMaxBodySize: "40mb",
   },
+  // Item #5 of the security/hardening roadmap: the safe, low-risk header
+  // wins only. Deliberately excludes a Content-Security-Policy here -- a
+  // wrong CSP can silently break the chat widget, the PDF/DXF viewers, or
+  // Next's own dev-mode inline scripts, and needs its own careful,
+  // separately-tested pass rather than bundling into this change.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          // Stops a browser from MIME-sniffing a response into a
+          // different content type than the server declared (e.g.
+          // treating an uploaded document as executable script).
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          // Blocks this app from being framed by another site at all --
+          // no legitimate reason for ForgeOS to be embedded in an
+          // <iframe> elsewhere, so DENY over the narrower SAMEORIGIN.
+          { key: "X-Frame-Options", value: "DENY" },
+          // Sends the full referrer on a same-origin navigation, only the
+          // origin (no path/query) cross-origin -- balances analytics/
+          // debugging usefulness against leaking this app's internal URL
+          // structure (estimate/opportunity IDs live in paths) to
+          // external sites a user navigates to from here.
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // Denies every browser feature this app never uses, rather
+          // than leaving the browser default (which varies feature by
+          // feature and is broader than this app needs).
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -58,3 +58,12 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # Non-blocking for now -- this repo has known moderate/high
+      # advisories in transitive dependencies that haven't been triaged
+      # yet. Reporting them on every run without failing the build lets
+      # them stay visible without blocking unrelated PRs; tighten to
+      # blocking once they're addressed.
+      - name: Dependency audit (report only)
+        run: npm audit --audit-level=high
+        continue-on-error: true
