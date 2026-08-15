@@ -32,14 +32,14 @@ export async function uploadDocumentAction(opportunityId: string, formData: Form
 
 export async function deleteDocumentAction(opportunityId: string, documentId: string) {
   await requireOpportunityAccess(opportunityId);
-  await deleteDocument(documentId);
+  await deleteDocument(opportunityId, documentId);
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 
 export async function updateDocumentTypeAction(opportunityId: string, documentId: string, formData: FormData) {
   await requireOpportunityAccess(opportunityId);
   const documentType = String(formData.get("documentType") ?? "") as DocumentType;
-  await updateDocumentType(documentId, documentType);
+  await updateDocumentType(opportunityId, documentId, documentType);
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 
@@ -49,14 +49,14 @@ export async function updateDocumentTypeAction(opportunityId: string, documentId
 export async function assignDocumentEstimateAction(opportunityId: string, documentId: string, formData: FormData) {
   await requireOpportunityAccess(opportunityId);
   const rawEstimateId = String(formData.get("estimateId") ?? "").trim();
-  await assignDocumentEstimate(documentId, rawEstimateId || null);
+  await assignDocumentEstimate(opportunityId, documentId, rawEstimateId || null);
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 
 export async function analyzeDocumentAction(opportunityId: string, documentId: string) {
   const user = await requireOpportunityAccess(opportunityId);
   try {
-    await analyzeDocument(documentId, user.id);
+    await analyzeDocument(opportunityId, documentId, user.id);
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {
       throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable document analysis.");

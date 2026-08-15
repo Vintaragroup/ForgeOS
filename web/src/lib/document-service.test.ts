@@ -5,7 +5,14 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { XLSX_MIME } from "@/lib/ai/text-extraction";
-import { deleteDocument, getDocumentBytes, listDocuments, updateDocumentType, uploadDocument } from "@/lib/document-service";
+import {
+  assignDocumentEstimate,
+  deleteDocument,
+  getDocumentBytes,
+  listDocuments,
+  updateDocumentType,
+  uploadDocument,
+} from "@/lib/document-service";
 
 // Real fixture from Phase 7's roadmap RFP package -- see data/RFP/superbowl.
 // Small (~170KB), so it's fast to round-trip in a test.
@@ -56,7 +63,7 @@ describe("uploadDocument / getDocumentBytes / deleteDocument", () => {
     const filePathOnDisk = path.resolve(process.env.UPLOADS_DIR ?? "./uploads", document.storageKey);
     expect(existsSync(filePathOnDisk)).toBe(true);
 
-    await deleteDocument(document.id);
+    await deleteDocument(opportunity.id, document.id);
     expect(existsSync(filePathOnDisk)).toBe(false);
 
     const afterDelete = await db.document.findUniqueOrThrow({ where: { id: document.id } });
@@ -106,12 +113,52 @@ describe("updateDocumentType", () => {
       },
     });
 
-    const updated = await updateDocumentType(document.id, "PRICING_SCHEDULE");
+    const updated = await updateDocumentType(opportunity.id, document.id, "PRICING_SCHEDULE");
 
     expect(updated.documentType).toBe("PRICING_SCHEDULE");
     expect(updated.extractionStatus).toBe("PENDING");
     expect(updated.extractedText).toBeNull();
     expect(updated.extractedSummary).toBeNull();
     expect(updated.proposedLineItems).toBeNull();
+  });
+});
+
+// Regression tests for the cross-resource ID authorization gap: each of
+// these mutating functions previously trusted documentId alone, letting
+// any caller who already had SOME opportunity's access mutate a document
+// belonging to a DIFFERENT opportunity by ID. See each function's own
+// header comment in document-service.ts and analyze-document.ts.
+describe("opportunity-ownership checks (cross-resource ID authorization)", () => {
+  it("deleteDocument rejects a documentId that belongs to a different opportunity", async () => {
+    const owner = await makeOpportunity();
+    const attacker = await makeOpportunity();
+    const file = await makeFile(FIXTURE_PATH, "schedule.pdf", "application/pdf");
+    const document = await uploadDocument(owner.id, { file, documentType: "SCHEDULE" });
+
+    await expect(deleteDocument(attacker.id, document.id)).rejects.toThrow();
+
+    const stillThere = await db.document.findUniqueOrThrow({ where: { id: document.id } });
+    expect(stillThere.deletedAt).toBeNull();
+  });
+
+  it("updateDocumentType rejects a documentId that belongs to a different opportunity", async () => {
+    const owner = await makeOpportunity();
+    const attacker = await makeOpportunity();
+    const file = await makeFile(FIXTURE_PATH, "schedule.pdf", "application/pdf");
+    const document = await uploadDocument(owner.id, { file, documentType: "SCHEDULE" });
+
+    await expect(updateDocumentType(attacker.id, document.id, "RFP")).rejects.toThrow();
+
+    const stillThere = await db.document.findUniqueOrThrow({ where: { id: document.id } });
+    expect(stillThere.documentType).toBe("SCHEDULE");
+  });
+
+  it("assignDocumentEstimate rejects a documentId that belongs to a different opportunity", async () => {
+    const owner = await makeOpportunity();
+    const attacker = await makeOpportunity();
+    const file = await makeFile(FIXTURE_PATH, "schedule.pdf", "application/pdf");
+    const document = await uploadDocument(owner.id, { file, documentType: "SCHEDULE" });
+
+    await expect(assignDocumentEstimate(attacker.id, document.id, null)).rejects.toThrow();
   });
 });

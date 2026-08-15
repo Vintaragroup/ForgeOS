@@ -12,10 +12,16 @@ import { summarizeDrawing } from "@/lib/ai/drawing-summary-service";
 import { summarizeMeetingNotes } from "@/lib/ai/meeting-notes-summary-service";
 import { applyExtractedFieldsToOpportunity } from "@/lib/opportunity-service";
 
-export async function analyzeDocument(documentId: string, userId: string | null = null) {
-  const { documentType, opportunityId } = await db.document.findUniqueOrThrow({
-    where: { id: documentId },
-    select: { documentType: true, opportunityId: true },
+// opportunityId is the caller's already-access-checked opportunity (from
+// requireOpportunityAccess), NOT trusted from documentId alone -- see
+// document-service.ts's deleteDocument for the full rationale. This is
+// also a cost-bearing AI call, so the ownership check doubles as
+// protection against spending someone else's analysis budget on a
+// document the caller was never authorized to touch.
+export async function analyzeDocument(opportunityId: string, documentId: string, userId: string | null = null) {
+  const { documentType } = await db.document.findFirstOrThrow({
+    where: { id: documentId, opportunityId },
+    select: { documentType: true },
   });
   const result =
     documentType === "DRAWING"

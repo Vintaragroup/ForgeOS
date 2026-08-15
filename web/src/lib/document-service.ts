@@ -76,9 +76,21 @@ export async function getDocumentBytes(documentId: string) {
 // Soft-delete only, mirroring Attachment -- the on-disk bytes are removed
 // immediately (there's no benefit to keeping them once the record is
 // gone, unlike the DB row which stays for audit/history purposes).
-export async function deleteDocument(documentId: string) {
+//
+// opportunityId is the caller's already-access-checked opportunity (from
+// requireOpportunityAccess), NOT trusted from documentId alone -- see
+// [documentId]/route.ts's own header comment for the exact vulnerability
+// class this guards against: a documentId is an opaque, guessable/
+// enumerable string, and without confirming it actually belongs to the
+// opportunity the caller was authorized for, any authenticated user could
+// mutate another company's document by ID alone. findFirstOrThrow with
+// both id AND opportunityId in the where clause does the ownership check
+// and the existence check in one query, the same pattern cut-list's
+// addCutListPartAction already uses for a lineItemId.
+export async function deleteDocument(opportunityId: string, documentId: string) {
+  const existing = await db.document.findFirstOrThrow({ where: { id: documentId, opportunityId, deletedAt: null } });
   const document = await db.document.update({
-    where: { id: documentId },
+    where: { id: existing.id },
     data: { deletedAt: new Date() },
   });
   await deleteObject(document.storageKey);
@@ -93,9 +105,11 @@ export async function deleteDocument(documentId: string) {
 // assumption is reset back to PENDING rather than left stale, so the
 // document reads as "needs analysis again," not as already analyzed
 // under the type it's about to stop being.
-export async function updateDocumentType(documentId: string, documentType: DocumentType) {
+// opportunityId ownership check -- see deleteDocument's header comment.
+export async function updateDocumentType(opportunityId: string, documentId: string, documentType: DocumentType) {
+  const existing = await db.document.findFirstOrThrow({ where: { id: documentId, opportunityId, deletedAt: null } });
   return db.document.update({
-    where: { id: documentId },
+    where: { id: existing.id },
     data: {
       documentType,
       extractionStatus: "PENDING",
@@ -112,9 +126,11 @@ export async function updateDocumentType(documentId: string, documentType: Docum
 // out of date. estimateId null clears a manual tag, reverting the
 // document back to AI classification at fact level (see document-
 // summary-service.ts's own estimateId resolution).
-export async function assignDocumentEstimate(documentId: string, estimateId: string | null) {
+// opportunityId ownership check -- see deleteDocument's header comment.
+export async function assignDocumentEstimate(opportunityId: string, documentId: string, estimateId: string | null) {
+  const existing = await db.document.findFirstOrThrow({ where: { id: documentId, opportunityId, deletedAt: null } });
   return db.document.update({
-    where: { id: documentId },
+    where: { id: existing.id },
     data: {
       estimateId,
       extractionStatus: "PENDING",
