@@ -160,7 +160,13 @@ Required env vars on the Vercel project:
   Accelerate or an external pooler (PgBouncer), not a bigger `?connection_limit`.
 - `SESSION_SECRET`
 - `OPENAI_API_KEY`
-- `BLOB_READ_WRITE_TOKEN` — from the Vercel Blob store's dashboard.
+
+Vercel Blob needs no env var set by hand: connecting the project's Blob
+store via **Storage → (store) → Connect Project** in the dashboard
+auto-injects `VERCEL_OIDC_TOKEN` and `BLOB_STORE_ID`, and `@vercel/blob`
+picks them up on its own (`src/lib/storage.ts` never references either
+directly). For local dev, `vercel link` then
+`vercel env pull .env.local` pulls the same two vars down.
 
 Migrations run as part of the build itself, gated to production only via
 the `vercel-build` script (`package.json`) checking Vercel's own
