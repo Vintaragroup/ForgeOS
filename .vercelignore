@@ -1,0 +1,10 @@
+# Vercel's CLI upload only honors the .gitignore in the directory `vercel
+# deploy` is run from (this repo root) -- it doesn't recurse into web/'s
+# own .gitignore the way git itself does. Without this file, the full
+# web/node_modules (~970MB) and web/.next (~1.5GB) get uploaded on every
+# deploy even though git already correctly ignores both.
+web/node_modules
+web/.next
+web/coverage
+web/uploads
+web/backups

@@ -46,3 +46,5 @@ __pycache__/
 # above. web/scripts/generate-catalog-expansion.ts reads this locally and
 # writes its output to the committed web/prisma/seed-data/ instead.
 /data/Catalog_Data/
+.vercel
+.env*

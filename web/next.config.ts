@@ -4,7 +4,14 @@ const nextConfig: NextConfig = {
   // Produces a self-contained .next/standalone/server.js with only the
   // node_modules files actually needed at runtime -- what the Docker
   // build's runner stage copies, instead of the full node_modules tree.
-  output: "standalone",
+  // Vercel's own build pipeline does its own file-tracing/bundling for
+  // serverless functions and expects Next's *non*-standalone output
+  // layout -- with this unconditionally on, a real Vercel deploy fails at
+  // its bundling step (ENOENT on .next/next-server.js.nft.json, since
+  // standalone mode nests that trace file under .next/standalone/
+  // instead). VERCEL is set by Vercel's build environment; only opt into
+  // standalone when building for the Docker path.
+  output: process.env.VERCEL ? undefined : "standalone",
   // @napi-rs/canvas (drawing-summary-service.ts's PDF-page rasterization)
   // ships a native .node binary loaded via a plain js-binding.js require
   // -- Turbopack can't place that as an ESM chunk module, so the build
