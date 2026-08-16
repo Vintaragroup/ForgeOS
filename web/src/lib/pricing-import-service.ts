@@ -93,8 +93,21 @@ function findPricingSheet(
   return null;
 }
 
-export async function previewPricingImport(documentId: string): Promise<PricingImportPreview> {
+// opportunityId is the caller's already-access-checked opportunity (from
+// requireEstimateAccess, via opportunity-access.ts's estimateOpportunityId
+// when only an estimateId is in scope), NOT trusted from documentId
+// alone -- getDocumentBytes has no ownership concept of its own (see its
+// own callers, e.g. the raw-byte-serving route, for why each caller
+// checks independently). Without this, estimates/[id]/page.tsx's own
+// ?importDocumentId=<id> query param (read directly from searchParams)
+// could preview -- and, via commitPricingImport below, commit -- a
+// DIFFERENT opportunity's pricing schedule into an estimate the caller
+// was never authorized to see that document under.
+export async function previewPricingImport(documentId: string, opportunityId: string): Promise<PricingImportPreview> {
   const { document, bytes } = await getDocumentBytes(documentId);
+  if (document.opportunityId !== opportunityId) {
+    throw new Error("This document doesn't belong to this opportunity.");
+  }
 
   const workbook = new ExcelJS.Workbook();
   // exceljs's own Buffer type comes from a slightly different @types/node
@@ -198,7 +211,14 @@ function humanizeCategory(category: string): string {
 // leaving every single row at $0. Still isDraft, still requires the
 // existing confirm-before-it-counts step either way.
 export async function commitPricingImport(estimateVersionId: string, documentId: string) {
-  const preview = await previewPricingImport(documentId);
+  // Derived fresh from estimateVersionId, not a redundant caller-supplied
+  // parameter -- see previewPricingImport's own header comment for why
+  // this check exists at all.
+  const version = await db.estimateVersion.findUniqueOrThrow({
+    where: { id: estimateVersionId },
+    select: { estimate: { select: { opportunityId: true } } },
+  });
+  const preview = await previewPricingImport(documentId, version.estimate.opportunityId);
   if (preview.rows.length === 0) {
     throw new Error(`No line items found in "${preview.filename}".`);
   }

@@ -2,6 +2,7 @@
 
 import { db } from "@/lib/db";
 import { LaborRateType, LaborRateTier, LaborUnionStatus } from "@/generated/prisma/enums";
+import { requireAdmin } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -52,7 +53,10 @@ export async function updateLaborRate(id: string, formData: FormData) {
   redirect("/catalog/labor-rates");
 }
 
+// Admin-only -- see catalog/categories/actions.ts's deleteCategory for
+// the full rationale.
 export async function deleteLaborRate(id: string) {
+  await requireAdmin();
   await db.laborRate.update({ where: { id }, data: { deletedAt: new Date() } });
   revalidatePath("/catalog/labor-rates");
   redirect("/catalog/labor-rates");

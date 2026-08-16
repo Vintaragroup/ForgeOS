@@ -37,10 +37,11 @@ async function alreadyCommitted(estimateVersionId: string, documentId: string): 
 // label attached to a successful import.
 async function proposeAndCommit(
   estimateVersionId: string,
+  opportunityId: string,
   userId: string | null,
   docs: Document[],
   kind: "scope" | "drawing",
-  proposeFn: (documentId: string, userId: string | null) => Promise<unknown>,
+  proposeFn: (documentId: string, opportunityId: string, userId: string | null) => Promise<unknown>,
   imported: BuildEstimateResult["imported"],
   skipped: BuildEstimateResult["skipped"],
 ) {
@@ -57,9 +58,12 @@ async function proposeAndCommit(
       // proposedLineItems is cached on the Document once proposed (see
       // scope-line-item-service.ts / drawing-line-item-service.ts) --
       // reuse it instead of a repeat OpenAI call for a document someone
-      // already ran Propose on by hand.
+      // already ran Propose on by hand. docs here are already scoped to
+      // opportunityId (the findMany calls below), so this opportunityId
+      // is genuinely the document's own -- not a redundant re-trust of
+      // unchecked input.
       if (!doc.proposedLineItems) {
-        await proposeFn(doc.id, userId);
+        await proposeFn(doc.id, opportunityId, userId);
       }
       const result = await commitScopeLineItems(estimateVersionId, doc.id);
       imported.push({ filename: doc.filename, kind, rowsImported: result.rowsImported });
@@ -121,13 +125,13 @@ export async function buildEstimateFromAllDocuments(
     },
     orderBy: { createdAt: "asc" },
   });
-  await proposeAndCommit(estimateVersionId, userId, scopeDocs, "scope", proposeLineItemsFromScope, imported, skipped);
+  await proposeAndCommit(estimateVersionId, opportunityId, userId, scopeDocs, "scope", proposeLineItemsFromScope, imported, skipped);
 
   const drawingDocs = await db.document.findMany({
     where: { opportunityId, deletedAt: null, documentType: "DRAWING", ...notOtherProject },
     orderBy: { createdAt: "asc" },
   });
-  await proposeAndCommit(estimateVersionId, userId, drawingDocs, "drawing", proposeLineItemsFromDrawing, imported, skipped);
+  await proposeAndCommit(estimateVersionId, opportunityId, userId, drawingDocs, "drawing", proposeLineItemsFromDrawing, imported, skipped);
 
   return { imported, skipped };
 }

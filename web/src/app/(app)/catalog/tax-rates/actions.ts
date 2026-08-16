@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -37,7 +38,10 @@ export async function updateTaxRate(id: string, formData: FormData) {
   redirect("/catalog/tax-rates");
 }
 
+// Admin-only -- see catalog/categories/actions.ts's deleteCategory for
+// the full rationale.
 export async function deleteTaxRate(id: string) {
+  await requireAdmin();
   await db.taxRate.update({ where: { id }, data: { deletedAt: new Date() } });
   revalidatePath("/catalog/tax-rates");
   redirect("/catalog/tax-rates");

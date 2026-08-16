@@ -45,7 +45,7 @@ export async function updateWorkOrderAction(projectId: string, workOrderId: stri
   const balanceDueDate = emptyToDate(formData.get("balanceDueDate"));
   const installDate = emptyToDate(formData.get("installDate"));
 
-  await updateWorkOrder(workOrderId, {
+  await updateWorkOrder(projectId, workOrderId, {
     status,
     depositDueDate,
     productionMeetingDate,
@@ -65,20 +65,20 @@ export async function addTaskAction(projectId: string, workOrderId: string, form
   const assignedToId = emptyToNull(formData.get("assignedToId"));
   const vendorId = emptyToNull(formData.get("vendorId"));
 
-  await addTask(workOrderId, { description, departmentCode, dueDate, assignedToId, vendorId });
+  await addTask(projectId, workOrderId, { description, departmentCode, dueDate, assignedToId, vendorId });
   revalidatePath(`/projects/${projectId}`);
 }
 
 export async function updateTaskStatusAction(projectId: string, taskId: string, formData: FormData) {
   await requireProjectAccess(projectId);
   const status = String(formData.get("status")) as TaskStatus;
-  await updateTaskStatus(taskId, status);
+  await updateTaskStatus(projectId, taskId, status);
   revalidatePath(`/projects/${projectId}`);
 }
 
 export async function deleteTaskAction(projectId: string, taskId: string) {
   await requireProjectAccess(projectId);
-  await deleteTask(taskId);
+  await deleteTask(projectId, taskId);
   revalidatePath(`/projects/${projectId}`);
 }
 
@@ -88,7 +88,7 @@ export async function addShipmentAction(projectId: string, workOrderId: string, 
   const loadListNote = emptyToNull(formData.get("loadListNote"));
   const shipDate = emptyToDate(formData.get("shipDate"));
 
-  await addShipment(workOrderId, { carrier, loadListNote, shipDate });
+  await addShipment(projectId, workOrderId, { carrier, loadListNote, shipDate });
   revalidatePath(`/projects/${projectId}`);
 }
 
@@ -97,13 +97,13 @@ export async function updateShipmentAction(projectId: string, shipmentId: string
   const status = String(formData.get("status")) as ShipmentStatus;
   const trackingRef = emptyToNull(formData.get("trackingRef"));
 
-  await updateShipment(shipmentId, { status, trackingRef });
+  await updateShipment(projectId, shipmentId, { status, trackingRef });
   revalidatePath(`/projects/${projectId}`);
 }
 
 export async function deleteShipmentAction(projectId: string, shipmentId: string) {
   await requireProjectAccess(projectId);
-  await deleteShipment(shipmentId);
+  await deleteShipment(projectId, shipmentId);
   revalidatePath(`/projects/${projectId}`);
 }
 

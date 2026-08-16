@@ -87,8 +87,14 @@ category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closes
 // item-service.ts's own header comment establishes for the text path, so
 // a routine Analyze click doesn't silently double every drawing's vision
 // cost.
-export async function proposeLineItemsFromDrawing(documentId: string, userId: string | null = null) {
+// opportunityId ownership check -- see scope-line-item-service.ts's
+// proposeLineItemsFromScope for the full rationale (same pipeline, same
+// cost-bearing-AI-call-plus-write-back shape).
+export async function proposeLineItemsFromDrawing(documentId: string, opportunityId: string, userId: string | null = null) {
   const { document, bytes } = await getDocumentBytes(documentId);
+  if (document.opportunityId !== opportunityId) {
+    throw new Error("This document doesn't belong to this opportunity.");
+  }
 
   // Throws AiNotConfiguredError before any DB write, same posture as
   // proposeLineItemsFromScope.

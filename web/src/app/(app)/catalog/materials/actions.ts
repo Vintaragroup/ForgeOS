@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { MaterialType } from "@/generated/prisma/enums";
@@ -75,7 +76,10 @@ function parseOptionalPositiveNumber(value: FormDataEntryValue | null): number |
   return n;
 }
 
+// Admin-only -- see catalog/categories/actions.ts's deleteCategory for
+// the full rationale.
 export async function deleteMaterial(id: string) {
+  await requireAdmin();
   await db.material.update({ where: { id }, data: { deletedAt: new Date() } });
   revalidatePath("/catalog/materials");
   redirect("/catalog/materials");

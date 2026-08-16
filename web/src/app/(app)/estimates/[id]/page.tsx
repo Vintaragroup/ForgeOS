@@ -199,7 +199,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
 
   const canImport = !!currentVersion && !currentVersion.isLocked;
   const importPreview =
-    canImport && importDocumentId ? await previewPricingImport(importDocumentId).catch((err: Error) => err) : null;
+    canImport && importDocumentId
+      ? await previewPricingImport(importDocumentId, estimate.opportunityId).catch((err: Error) => err)
+      : null;
 
   // proposedLineItems is computed once (see the "Propose items" button,
   // scope-line-item-service.ts) and cached on the Document -- reading it

@@ -45,9 +45,9 @@ async function makeDocument() {
 
 describe("previewPricingImport", () => {
   it("parses the real Exhibit 1 pricing schedule into 149 rows across 5 categories", async () => {
-    const { document } = await makeDocument();
+    const { opportunity, document } = await makeDocument();
 
-    const preview = await previewPricingImport(document.id);
+    const preview = await previewPricingImport(document.id, opportunity.id);
 
     expect(preview.rows).toHaveLength(149);
     expect(preview.categories.sort()).toEqual(
@@ -74,9 +74,9 @@ describe("previewPricingImport", () => {
 
   it("suggests a catalog rate when a row's description confidently matches a real catalog entry", async () => {
     await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
-    const { document } = await makeDocument();
+    const { opportunity, document } = await makeDocument();
 
-    const preview = await previewPricingImport(document.id);
+    const preview = await previewPricingImport(document.id, opportunity.id);
     const doorRow = preview.rows.find((r) => r.description.toLowerCase().includes("compliant door"));
 
     expect(doorRow).toBeDefined();
@@ -85,9 +85,9 @@ describe("previewPricingImport", () => {
 
   it("leaves catalogMatch null for a turnkey line description with no real catalog vocabulary overlap", async () => {
     await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
-    const { document } = await makeDocument();
+    const { opportunity, document } = await makeDocument();
 
-    const preview = await previewPricingImport(document.id);
+    const preview = await previewPricingImport(document.id, opportunity.id);
     const boothBuildRow = preview.rows.find((r) => r.description.includes("Complete Booth Build"));
 
     expect(boothBuildRow?.catalogMatch).toBeNull();
@@ -99,7 +99,21 @@ describe("previewPricingImport", () => {
     const file = new File([Buffer.from("not a spreadsheet")], "notes.txt", { type: "text/plain" });
     const document = await uploadDocument(opportunity.id, { file, documentType: "OTHER" });
 
-    await expect(previewPricingImport(document.id)).rejects.toThrow();
+    await expect(previewPricingImport(document.id, opportunity.id)).rejects.toThrow();
+  });
+
+  // Regression test for the cross-resource ID authorization gap: this
+  // previously trusted documentId alone, letting a caller preview (and,
+  // via commitPricingImport, commit) a DIFFERENT opportunity's pricing
+  // schedule -- see previewPricingImport's own header comment.
+  it("rejects a documentId that belongs to a different opportunity", async () => {
+    const { document } = await makeDocument();
+    const otherCompany = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: otherCompany.id, showName: "Other Show" } });
+
+    await expect(previewPricingImport(document.id, otherOpportunity.id)).rejects.toThrow(
+      "This document doesn't belong to this opportunity.",
+    );
   });
 });
 
@@ -199,5 +213,20 @@ describe("commitPricingImport", () => {
     expect(sections).toHaveLength(36);
     const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
     expect(lineItemCount).toBe(149);
+  });
+
+  it("rejects committing a document that belongs to a different opportunity than the target estimate", async () => {
+    const { document } = await makeDocument(); // belongs to its own opportunity
+    const otherCompany = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: otherCompany.id, showName: "Other Show" } });
+    const otherEstimate = await db.estimate.create({ data: { opportunityId: otherOpportunity.id } });
+    const otherVersion = await createEstimateVersion(otherEstimate.id, 0);
+
+    await expect(commitPricingImport(otherVersion.id, document.id)).rejects.toThrow(
+      "This document doesn't belong to this opportunity.",
+    );
+
+    const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: otherVersion.id } } });
+    expect(lineItemCount).toBe(0);
   });
 });

@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -64,7 +65,14 @@ export async function updateCategory(id: string, formData: FormData) {
   redirect("/catalog/categories");
 }
 
+// Item #2 of the security/hardening roadmap: create/update stay open to
+// every employee (shared reference data, day-to-day usable), but delete
+// -- the widest-blast-radius, hardest-to-reverse action on data every
+// opportunity/estimate can reference -- is admin-only. Same SystemRole
+// gate admin/users/actions.ts already uses, applied here for the first
+// time to catalog data.
 export async function deleteCategory(id: string) {
+  await requireAdmin();
   // Orphan children rather than blocking the delete or cascading further
   // deletes -- they become top-level categories in their own right, still
   // real, still usable, just no longer nested under the deleted parent.

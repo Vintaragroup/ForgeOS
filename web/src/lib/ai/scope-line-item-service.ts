@@ -261,8 +261,16 @@ export function flagUncertainClassifications(
 // ~19% of that document from every "Propose items" run on it.
 const MAX_INPUT_CHARS = 150_000;
 
-export async function proposeLineItemsFromScope(documentId: string, userId: string | null = null) {
-  const document = await db.document.findUniqueOrThrow({ where: { id: documentId } });
+// opportunityId is the caller's already-access-checked opportunity, NOT
+// trusted from documentId alone -- this is a cost-bearing AI call that
+// also WRITES its result back onto the document (proposedLineItems
+// below), so the ownership check doubles as protection against both
+// spending someone else's AI budget AND overwriting another
+// opportunity's document with this caller's classification. See
+// pricing-import-service.ts's previewPricingImport for the same
+// rationale on the read-only sibling of this pipeline.
+export async function proposeLineItemsFromScope(documentId: string, opportunityId: string, userId: string | null = null) {
+  const document = await db.document.findFirstOrThrow({ where: { id: documentId, opportunityId } });
   if (!document.extractedText) {
     throw new Error(`"${document.filename}" hasn't been analyzed yet -- click Analyze on it first.`);
   }
@@ -395,8 +403,16 @@ async function reclassifyForConsistency(
 // placeholder," and burying that caveat only in a preview table that
 // disappears after commit would let it silently get treated as real.
 export async function commitScopeLineItems(estimateVersionId: string, documentId: string) {
-  const document = await db.document.findUniqueOrThrow({ where: { id: documentId } });
-  const version = await db.estimateVersion.findUniqueOrThrow({ where: { id: estimateVersionId } });
+  const version = await db.estimateVersion.findUniqueOrThrow({
+    where: { id: estimateVersionId },
+    include: { estimate: { select: { opportunityId: true } } },
+  });
+  // documentId scoped by the SAME opportunity estimateVersionId belongs
+  // to, not trusted alone -- see proposeLineItemsFromScope's own header
+  // comment for the full rationale (same pipeline, same gap class).
+  const document = await db.document.findFirstOrThrow({
+    where: { id: documentId, opportunityId: version.estimate.opportunityId },
+  });
   const allItems = (document.proposedLineItems as unknown as ProposedLineItem[] | null) ?? [];
   // Drops items tagged to a DIFFERENT project's estimate before anything
   // gets written -- a shared/untagged document's proposal is generated

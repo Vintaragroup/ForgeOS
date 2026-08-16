@@ -77,7 +77,15 @@ async function findInstallDateFromDocuments(opportunityId: string): Promise<Date
   return candidates[0];
 }
 
+// projectId is the caller's already-access-checked project (from
+// requireProjectAccess), NOT trusted from workOrderId alone -- a
+// workOrderId taken from a form/URL directly doesn't prove it belongs to
+// the project the caller was actually authorized for, the same cross-
+// resource ID gap estimate-service.ts's deleteLineItem (and friends) were
+// fixed for. findFirstOrThrow with both id AND projectId in the where
+// clause does the ownership check and the existence check in one query.
 export async function updateWorkOrder(
+  projectId: string,
   workOrderId: string,
   data: {
     status?: WorkOrderStatus;
@@ -88,7 +96,8 @@ export async function updateWorkOrder(
     installDate?: Date | null;
   },
 ) {
-  return db.workOrder.update({ where: { id: workOrderId }, data });
+  const existing = await db.workOrder.findFirstOrThrow({ where: { id: workOrderId, projectId } });
+  return db.workOrder.update({ where: { id: existing.id }, data });
 }
 
 // task_type maps to business-rules.md Rule 1's department codes or Rule
@@ -97,7 +106,9 @@ export async function updateWorkOrder(
 // comment. Gives production staff an actual worklist, which the workbook
 // never provided (it only priced these activities, never assigned/
 // tracked them).
+// projectId ownership check -- see updateWorkOrder's header comment.
 export async function addTask(
+  projectId: string,
   workOrderId: string,
   data: {
     description: string;
@@ -107,28 +118,41 @@ export async function addTask(
     vendorId?: string | null;
   },
 ) {
-  return db.task.create({ data: { workOrderId, ...data } });
+  const workOrder = await db.workOrder.findFirstOrThrow({ where: { id: workOrderId, projectId } });
+  return db.task.create({ data: { workOrderId: workOrder.id, ...data } });
 }
 
-export async function updateTaskStatus(taskId: string, status: TaskStatus) {
-  return db.task.update({ where: { id: taskId }, data: { status } });
+// projectId ownership check -- see updateWorkOrder's header comment. Task
+// is one hop further from Project than WorkOrder (Task -> WorkOrder ->
+// Project), so this goes through the relation rather than a direct
+// projectId column.
+export async function updateTaskStatus(projectId: string, taskId: string, status: TaskStatus) {
+  const existing = await db.task.findFirstOrThrow({ where: { id: taskId, workOrder: { projectId } } });
+  return db.task.update({ where: { id: existing.id }, data: { status } });
 }
 
-export async function deleteTask(taskId: string) {
-  return db.task.delete({ where: { id: taskId } });
+export async function deleteTask(projectId: string, taskId: string) {
+  const existing = await db.task.findFirstOrThrow({ where: { id: taskId, workOrder: { projectId } } });
+  return db.task.delete({ where: { id: existing.id } });
 }
 
 // Self-contained ForgeOS record replacing the workbook's TRUCKING & LOAD
 // LIST sheet, whose own data depends on a broken external link
 // (schema.prisma's Shipment comment).
+// projectId ownership check -- see updateWorkOrder's header comment.
 export async function addShipment(
+  projectId: string,
   workOrderId: string,
   data: { carrier?: string | null; loadListNote?: string | null; shipDate?: Date | null; trackingRef?: string | null },
 ) {
-  return db.shipment.create({ data: { workOrderId, ...data } });
+  const workOrder = await db.workOrder.findFirstOrThrow({ where: { id: workOrderId, projectId } });
+  return db.shipment.create({ data: { workOrderId: workOrder.id, ...data } });
 }
 
+// projectId ownership check -- see updateTaskStatus's header comment
+// (same one-hop-further-than-WorkOrder relation shape).
 export async function updateShipment(
+  projectId: string,
   shipmentId: string,
   data: {
     carrier?: string | null;
@@ -138,9 +162,11 @@ export async function updateShipment(
     status?: ShipmentStatus;
   },
 ) {
-  return db.shipment.update({ where: { id: shipmentId }, data });
+  const existing = await db.shipment.findFirstOrThrow({ where: { id: shipmentId, workOrder: { projectId } } });
+  return db.shipment.update({ where: { id: existing.id }, data });
 }
 
-export async function deleteShipment(shipmentId: string) {
-  return db.shipment.delete({ where: { id: shipmentId } });
+export async function deleteShipment(projectId: string, shipmentId: string) {
+  const existing = await db.shipment.findFirstOrThrow({ where: { id: shipmentId, workOrder: { projectId } } });
+  return db.shipment.delete({ where: { id: existing.id } });
 }

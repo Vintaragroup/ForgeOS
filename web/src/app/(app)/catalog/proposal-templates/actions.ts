@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -37,7 +38,10 @@ export async function updateProposalTemplate(id: string, formData: FormData) {
   redirect("/catalog/proposal-templates");
 }
 
+// Admin-only -- see catalog/categories/actions.ts's deleteCategory for
+// the full rationale.
 export async function deleteProposalTemplate(id: string) {
+  await requireAdmin();
   await db.proposalTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
   revalidatePath("/catalog/proposal-templates");
   redirect("/catalog/proposal-templates");

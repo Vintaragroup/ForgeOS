@@ -56,13 +56,24 @@ describe("proposeLineItemsFromScope", () => {
   it("refuses to propose items for a document that hasn't been analyzed yet, before ever touching the OpenAI client", async () => {
     const document = await makeAnalyzedDocument(null);
 
-    await expect(proposeLineItemsFromScope(document.id)).rejects.toThrow(/hasn't been analyzed yet/);
+    await expect(proposeLineItemsFromScope(document.id, document.opportunityId)).rejects.toThrow(/hasn't been analyzed yet/);
   });
 
   it("throws AiNotConfiguredError for an analyzed document when no API key is set -- .env.test deliberately has none", async () => {
     const document = await makeAnalyzedDocument("Provide booth construction, graphics, and installation labor.");
 
-    await expect(proposeLineItemsFromScope(document.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
+    await expect(proposeLineItemsFromScope(document.id, document.opportunityId)).rejects.toBeInstanceOf(AiNotConfiguredError);
+  });
+
+  // Regression test for the cross-resource ID authorization gap: this
+  // previously trusted documentId alone -- see the function's own header
+  // comment.
+  it("rejects a documentId that belongs to a different opportunity, before ever touching the OpenAI client", async () => {
+    const document = await makeAnalyzedDocument("Provide booth construction, graphics, and installation labor.");
+    const otherCompany = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: otherCompany.id, showName: "Other Show" } });
+
+    await expect(proposeLineItemsFromScope(document.id, otherOpportunity.id)).rejects.toThrow();
   });
 });
 
@@ -307,6 +318,34 @@ describe("commitScopeLineItems", () => {
     const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
     expect(sections).toHaveLength(1);
     expect(sections[0].name).toBe("Doors & Hardware");
+  });
+
+  it("rejects committing a document that belongs to a different opportunity than the target estimate", async () => {
+    const document = await makeAnalyzedDocument("some scope text");
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "Booth walls",
+        qty: 1,
+        qtyIsExplicit: false,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+    const otherCompany = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: otherCompany.id, showName: "Other Show" } });
+    const otherEstimate = await db.estimate.create({ data: { opportunityId: otherOpportunity.id } });
+    const otherVersion = await createEstimateVersion(otherEstimate.id, 0);
+
+    await expect(commitScopeLineItems(otherVersion.id, document.id)).rejects.toThrow();
+
+    const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: otherVersion.id } } });
+    expect(lineItemCount).toBe(0);
   });
 });
 

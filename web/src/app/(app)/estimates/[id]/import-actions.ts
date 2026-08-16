@@ -56,6 +56,7 @@ export async function commitImportAction(
 
 export async function proposeScopeItemsAction(estimateId: string, formData: FormData) {
   const user = await requireEstimateAccess(estimateId);
+  const opportunityId = await estimateOpportunityId(estimateId);
   const documentId = String(formData.get("documentId") ?? "").trim();
   if (!documentId) throw new Error("Choose a document to propose items from");
 
@@ -70,9 +71,9 @@ export async function proposeScopeItemsAction(estimateId: string, formData: Form
       select: { documentType: true },
     });
     if (documentType === "DRAWING") {
-      await proposeLineItemsFromDrawing(documentId, user.id);
+      await proposeLineItemsFromDrawing(documentId, opportunityId, user.id);
     } else {
-      await proposeLineItemsFromScope(documentId, user.id);
+      await proposeLineItemsFromScope(documentId, opportunityId, user.id);
     }
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {

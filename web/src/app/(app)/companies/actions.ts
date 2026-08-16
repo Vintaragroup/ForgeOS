@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -40,7 +41,11 @@ export async function updateCompany(id: string, formData: FormData) {
   redirect(`/companies/${id}`);
 }
 
+// Admin-only -- widest-blast-radius, hardest-to-reverse action on data
+// every opportunity referencing this company can see. See catalog/
+// categories/actions.ts's deleteCategory for the full rationale.
 export async function deleteCompany(id: string) {
+  await requireAdmin();
   await db.company.update({ where: { id }, data: { deletedAt: new Date() } });
   revalidatePath("/companies");
   redirect("/companies");

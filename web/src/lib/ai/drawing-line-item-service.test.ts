@@ -36,9 +36,22 @@ describe("proposeLineItemsFromDrawing", () => {
   it("throws AiNotConfiguredError before writing anything to the document", async () => {
     const document = await makeDrawingDocument();
 
-    await expect(proposeLineItemsFromDrawing(document.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
+    await expect(proposeLineItemsFromDrawing(document.id, document.opportunityId)).rejects.toBeInstanceOf(AiNotConfiguredError);
 
     const refreshed = await db.document.findUniqueOrThrow({ where: { id: document.id } });
     expect(refreshed.proposedLineItems).toBeNull();
+  });
+
+  // Regression test for the cross-resource ID authorization gap: this
+  // previously trusted documentId alone -- see the function's own header
+  // comment.
+  it("rejects a documentId that belongs to a different opportunity, before ever touching the OpenAI client", async () => {
+    const document = await makeDrawingDocument();
+    const otherCompany = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: otherCompany.id, showName: "Other Show" } });
+
+    await expect(proposeLineItemsFromDrawing(document.id, otherOpportunity.id)).rejects.toThrow(
+      "This document doesn't belong to this opportunity.",
+    );
   });
 });

@@ -76,7 +76,7 @@ describe("startWorkOrder / updateWorkOrder", () => {
     expect(workOrder.projectId).toBe(project.id);
     expect(workOrder.status).toBe("DRAFT");
 
-    const updated = await updateWorkOrder(workOrder.id, {
+    const updated = await updateWorkOrder(project.id, workOrder.id, {
       status: "IN_PRODUCTION",
       depositDueDate: new Date("2026-08-15"),
       installDate: new Date("2026-09-01"),
@@ -136,7 +136,7 @@ describe("addTask / updateTaskStatus / deleteTask", () => {
     const workOrder = await startWorkOrder(project.id);
     const user = await db.user.create({ data: { name: "Production Lead", email: `p-${Date.now()}@example.com` } });
 
-    const task = await addTask(workOrder.id, {
+    const task = await addTask(project.id, workOrder.id, {
       description: "Fabricate flooring",
       departmentCode: "EF",
       dueDate: new Date("2026-08-25"),
@@ -153,9 +153,9 @@ describe("addTask / updateTaskStatus / deleteTask", () => {
     const opportunity = await makeWonOpportunity();
     const project = await convertOpportunityToProject(opportunity.id);
     const workOrder = await startWorkOrder(project.id);
-    const task = await addTask(workOrder.id, { description: "Design time" });
+    const task = await addTask(project.id, workOrder.id, { description: "Design time" });
 
-    const updated = await updateTaskStatus(task.id, "IN_PROGRESS");
+    const updated = await updateTaskStatus(project.id, task.id, "IN_PROGRESS");
     expect(updated.status).toBe("IN_PROGRESS");
     expect(updated.description).toBe("Design time");
   });
@@ -164,9 +164,9 @@ describe("addTask / updateTaskStatus / deleteTask", () => {
     const opportunity = await makeWonOpportunity();
     const project = await convertOpportunityToProject(opportunity.id);
     const workOrder = await startWorkOrder(project.id);
-    const task = await addTask(workOrder.id, { description: "Packing" });
+    const task = await addTask(project.id, workOrder.id, { description: "Packing" });
 
-    await deleteTask(task.id);
+    await deleteTask(project.id, task.id);
 
     const found = await db.task.findUnique({ where: { id: task.id } });
     expect(found).toBeNull();
@@ -179,7 +179,7 @@ describe("addShipment / updateShipment / deleteShipment", () => {
     const project = await convertOpportunityToProject(opportunity.id);
     const workOrder = await startWorkOrder(project.id);
 
-    const shipment = await addShipment(workOrder.id, {
+    const shipment = await addShipment(project.id, workOrder.id, {
       carrier: "ABC Freight",
       loadListNote: "2 crates, 1 skid",
       shipDate: new Date("2026-08-28"),
@@ -194,9 +194,9 @@ describe("addShipment / updateShipment / deleteShipment", () => {
     const opportunity = await makeWonOpportunity();
     const project = await convertOpportunityToProject(opportunity.id);
     const workOrder = await startWorkOrder(project.id);
-    const shipment = await addShipment(workOrder.id, { carrier: "ABC Freight" });
+    const shipment = await addShipment(project.id, workOrder.id, { carrier: "ABC Freight" });
 
-    const updated = await updateShipment(shipment.id, { status: "SHIPPED", trackingRef: "TRK-12345" });
+    const updated = await updateShipment(project.id, shipment.id, { status: "SHIPPED", trackingRef: "TRK-12345" });
 
     expect(updated.status).toBe("SHIPPED");
     expect(updated.trackingRef).toBe("TRK-12345");
@@ -206,9 +206,9 @@ describe("addShipment / updateShipment / deleteShipment", () => {
     const opportunity = await makeWonOpportunity();
     const project = await convertOpportunityToProject(opportunity.id);
     const workOrder = await startWorkOrder(project.id);
-    const shipment = await addShipment(workOrder.id, { carrier: "ABC Freight" });
+    const shipment = await addShipment(project.id, workOrder.id, { carrier: "ABC Freight" });
 
-    await deleteShipment(shipment.id);
+    await deleteShipment(project.id, shipment.id);
 
     const found = await db.shipment.findUnique({ where: { id: shipment.id } });
     expect(found).toBeNull();
@@ -229,23 +229,23 @@ describe("acceptance: a won opportunity carries through to a trackable project",
     await updateProjectDetails(project.id, { jobNumber: "J-2001" });
 
     const workOrder = await startWorkOrder(project.id);
-    await updateWorkOrder(workOrder.id, {
+    await updateWorkOrder(project.id, workOrder.id, {
       status: "IN_PRODUCTION",
       depositDueDate: new Date("2026-08-15"),
       installDate: new Date("2026-09-10"),
     });
 
     const user = await db.user.create({ data: { name: "Production Lead", email: `pl-${Date.now()}@example.com` } });
-    const task = await addTask(workOrder.id, {
+    const task = await addTask(project.id, workOrder.id, {
       description: "Fabricate flooring",
       departmentCode: "EF",
       dueDate: new Date("2026-09-01"),
       assignedToId: user.id,
     });
-    await updateTaskStatus(task.id, "IN_PROGRESS");
+    await updateTaskStatus(project.id, task.id, "IN_PROGRESS");
 
-    const shipment = await addShipment(workOrder.id, { carrier: "ABC Freight", loadListNote: "2 crates" });
-    await updateShipment(shipment.id, { status: "SHIPPED", trackingRef: "TRK-99" });
+    const shipment = await addShipment(project.id, workOrder.id, { carrier: "ABC Freight", loadListNote: "2 crates" });
+    await updateShipment(project.id, shipment.id, { status: "SHIPPED", trackingRef: "TRK-99" });
 
     // Read back the whole tree the way the /projects/[id] page does, and
     // confirm every piece of the chain landed correctly.
@@ -268,5 +268,60 @@ describe("acceptance: a won opportunity carries through to a trackable project",
     expect(reloadedWorkOrder.tasks[0].assignedTo?.name).toBe("Production Lead");
     expect(reloadedWorkOrder.shipments).toHaveLength(1);
     expect(reloadedWorkOrder.shipments[0]).toMatchObject({ status: "SHIPPED", trackingRef: "TRK-99" });
+  });
+});
+
+// Regression tests for the cross-resource ID authorization gap: these
+// previously took only a workOrderId/taskId/shipmentId, letting any
+// caller with access to SOME project mutate a DIFFERENT (inaccessible)
+// project's work orders/tasks/shipments just by supplying its ID -- see
+// each function's own header comment in project-service.ts.
+describe("project-ownership checks (cross-resource ID authorization)", () => {
+  async function makeTwoProjects() {
+    const opportunityA = await makeWonOpportunity();
+    const opportunityB = await makeWonOpportunity();
+    const projectA = await convertOpportunityToProject(opportunityA.id);
+    const projectB = await convertOpportunityToProject(opportunityB.id);
+    const workOrderA = await startWorkOrder(projectA.id);
+    return { projectA, projectB, workOrderA };
+  }
+
+  it("updateWorkOrder rejects a workOrderId that belongs to a different project", async () => {
+    const { projectB, workOrderA } = await makeTwoProjects();
+    await expect(updateWorkOrder(projectB.id, workOrderA.id, { status: "IN_PRODUCTION" })).rejects.toThrow();
+  });
+
+  it("addTask rejects a workOrderId that belongs to a different project", async () => {
+    const { projectB, workOrderA } = await makeTwoProjects();
+    await expect(addTask(projectB.id, workOrderA.id, { description: "Injected" })).rejects.toThrow();
+  });
+
+  it("updateTaskStatus / deleteTask reject a taskId that belongs to a different project", async () => {
+    const { projectA, projectB, workOrderA } = await makeTwoProjects();
+    const task = await addTask(projectA.id, workOrderA.id, { description: "Real task" });
+
+    await expect(updateTaskStatus(projectB.id, task.id, "IN_PROGRESS")).rejects.toThrow();
+    await expect(deleteTask(projectB.id, task.id)).rejects.toThrow();
+
+    const stillThere = await db.task.findUnique({ where: { id: task.id } });
+    expect(stillThere).not.toBeNull();
+    expect(stillThere?.status).toBe("TODO");
+  });
+
+  it("addShipment rejects a workOrderId that belongs to a different project", async () => {
+    const { projectB, workOrderA } = await makeTwoProjects();
+    await expect(addShipment(projectB.id, workOrderA.id, { carrier: "Injected Freight" })).rejects.toThrow();
+  });
+
+  it("updateShipment / deleteShipment reject a shipmentId that belongs to a different project", async () => {
+    const { projectA, projectB, workOrderA } = await makeTwoProjects();
+    const shipment = await addShipment(projectA.id, workOrderA.id, { carrier: "Real Freight" });
+
+    await expect(updateShipment(projectB.id, shipment.id, { status: "SHIPPED" })).rejects.toThrow();
+    await expect(deleteShipment(projectB.id, shipment.id)).rejects.toThrow();
+
+    const stillThere = await db.shipment.findUnique({ where: { id: shipment.id } });
+    expect(stillThere).not.toBeNull();
+    expect(stillThere?.status).toBe("PLANNED");
   });
 });
