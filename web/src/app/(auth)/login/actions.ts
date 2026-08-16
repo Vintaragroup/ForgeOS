@@ -19,7 +19,7 @@ export async function loginAction(formData: FormData) {
   const next = String(formData.get("next") ?? "/");
 
   try {
-    checkRateLimit(`login:${email.toLowerCase()}`, LOGIN_ATTEMPT_LIMIT, LOGIN_ATTEMPT_WINDOW_MS);
+    await checkRateLimit(`login:${email.toLowerCase()}`, LOGIN_ATTEMPT_LIMIT, LOGIN_ATTEMPT_WINDOW_MS);
   } catch (err) {
     if (err instanceof RateLimitError) {
       redirect(`/login?next=${encodeURIComponent(next)}&error=2`);

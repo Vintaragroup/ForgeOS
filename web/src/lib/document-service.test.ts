@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { existsSync } from "node:fs";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { XLSX_MIME } from "@/lib/ai/text-extraction";
+import { getObject } from "@/lib/storage";
 import {
   assignDocumentEstimate,
   deleteDocument,
@@ -60,11 +60,10 @@ describe("uploadDocument / getDocumentBytes / deleteDocument", () => {
     const listed = await listDocuments(opportunity.id);
     expect(listed.map((d) => d.id)).toContain(document.id);
 
-    const filePathOnDisk = path.resolve(process.env.UPLOADS_DIR ?? "./uploads", document.storageKey);
-    expect(existsSync(filePathOnDisk)).toBe(true);
+    await expect(getObject(document.storageKey)).resolves.toBeInstanceOf(Buffer);
 
     await deleteDocument(opportunity.id, document.id);
-    expect(existsSync(filePathOnDisk)).toBe(false);
+    await expect(getObject(document.storageKey)).rejects.toThrow(/not found/i);
 
     const afterDelete = await db.document.findUniqueOrThrow({ where: { id: document.id } });
     expect(afterDelete.deletedAt).not.toBeNull();

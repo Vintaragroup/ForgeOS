@@ -24,7 +24,7 @@ export async function changePasswordAction(formData: FormData) {
   // B20: rate-limited by user id -- this endpoint accepts a guessed
   // "current password," so it's exactly the kind of action B20 is about.
   try {
-    checkRateLimit(`change-password:${user.id}`, CHANGE_PASSWORD_ATTEMPT_LIMIT, CHANGE_PASSWORD_ATTEMPT_WINDOW_MS);
+    await checkRateLimit(`change-password:${user.id}`, CHANGE_PASSWORD_ATTEMPT_LIMIT, CHANGE_PASSWORD_ATTEMPT_WINDOW_MS);
   } catch (err) {
     if (err instanceof RateLimitError) fail(err.message);
     throw err;

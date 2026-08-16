@@ -142,6 +142,44 @@ The image is built from `web/Dockerfile` (multi-stage: `deps` → `builder`
   the Dockerfile copies it into the image explicitly rather than relying
   on the traced output.
 
+## Deployment
+
+Production target: **Vercel hosts the app, Render hosts Postgres only.**
+Vercel's own build pipeline is used directly (native Next.js support, not
+the Dockerfile above — the Dockerfile stays for anyone who wants to
+self-host instead). File storage is Vercel Blob rather than local disk,
+since serverless functions have no persistent filesystem at all.
+
+Required env vars on the Vercel project:
+
+- `DATABASE_URL` — Render's external Postgres connection string. Append
+  `?connection_limit=1&pool_timeout=10` to cap how many connections a
+  single function invocation's Prisma client can open — a cheap guard
+  against connection exhaustion under concurrent cold starts. If that
+  ever proves insufficient in practice, the upgrade path is Prisma
+  Accelerate or an external pooler (PgBouncer), not a bigger `?connection_limit`.
+- `SESSION_SECRET`
+- `OPENAI_API_KEY`
+- `BLOB_READ_WRITE_TOKEN` — from the Vercel Blob store's dashboard.
+
+Migrations run as part of the build itself, gated to production only via
+the `vercel-build` script (`package.json`) checking Vercel's own
+`VERCEL_ENV` build-time var:
+
+```bash
+if [ "$VERCEL_ENV" = "production" ]; then npx prisma migrate deploy; fi && npx prisma generate && next build
+```
+
+Vercel prefers `vercel-build` over `build` automatically when present —
+no `vercel.json` needed. This means a PR preview deploy builds and runs
+the app without ever touching the shared production schema; only a real
+production deploy applies pending migrations.
+
+Rate limiting (login attempts, password changes, AI chat) is backed by a
+`RateLimitBucket` Postgres table rather than in-memory state, since a
+serverless invocation can't assume it's the same process as the last
+request — see `src/lib/rate-limit.ts`.
+
 ## Backups
 
 ```bash
@@ -348,11 +386,12 @@ sequencing" section for the full backlog and reasoning.
   a real e-signature — a DocuSign/HelloSign-class integration needs a
   vendor account that doesn't exist yet, tracked in the backlog (not
   attempted here, same reasoning as the deploy-target decision below).
-- **Not built — needs a decision, not just code:** a real deploy target
-  (managed Postgres + hosting provider) and real email/Slack alerting
-  for `WorkOrder` deadlines (needs a mail provider or webhook URL). Both
-  require the business's own choice of vendor/provider, so both stayed
-  backlog items instead of a guess.
+- **Not built — needs a decision, not just code:** real email/Slack
+  alerting for `WorkOrder` deadlines (needs a mail provider or webhook
+  URL) — requires the business's own choice of vendor, so it stayed a
+  backlog item instead of a guess. (The deploy-target decision — Vercel
+  app + Render Postgres — has since been made; see the Deployment
+  section above.)
 
 ## Commands
 

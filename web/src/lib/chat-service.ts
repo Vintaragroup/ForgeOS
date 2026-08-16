@@ -22,7 +22,7 @@ async function getOrCreateThread(opportunityId: string) {
 export async function sendMessage(opportunityId: string, userId: string, content: string) {
   // First cost-bearing action in this app -- rate-limited by user, same
   // key shape as login/change-password (see rate-limit.ts's call sites).
-  checkRateLimit(`chat:${userId}`, CHAT_MESSAGE_LIMIT, CHAT_MESSAGE_WINDOW_MS);
+  await checkRateLimit(`chat:${userId}`, CHAT_MESSAGE_LIMIT, CHAT_MESSAGE_WINDOW_MS);
 
   const client = getOpenAiClient();
   const thread = await getOrCreateThread(opportunityId);

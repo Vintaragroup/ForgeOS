@@ -1514,3 +1514,17 @@ model CutListSettings {
 
   @@map("cut_list_settings")
 }
+
+// Postgres-backed rate limiter state -- replaces the old in-memory Map
+// (rate-limit.ts), which only worked because the app ran as a single
+// always-on process. Serverless invocations are effectively multi-instance,
+// so the bucket has to live somewhere shared. Expired rows are simply
+// overwritten by the next upsert; no separate cleanup job needed at this
+// table's expected size.
+model RateLimitBucket {
+  key     String   @id
+  count   Int      @default(1)
+  resetAt DateTime
+
+  @@map("rate_limit_buckets")
+}
