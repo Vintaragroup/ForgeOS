@@ -162,7 +162,7 @@ export function Field({
         required={required}
         placeholder={placeholder}
         step={type === "number" ? "any" : undefined}
-        className="rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none focus:border-neutral-500"
       />
     </div>
   );
@@ -220,7 +220,7 @@ export function TextareaField({
         required={required}
         placeholder={placeholder}
         rows={rows}
-        className="rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none focus:border-neutral-500"
       />
     </div>
   );

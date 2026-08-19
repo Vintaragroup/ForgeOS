@@ -1101,7 +1101,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                         name="estimateId"
                         defaultValue={doc.estimateId ?? ""}
                         title="Which project this document is about -- left as 'AI classifies' for a document that discusses more than one (e.g. a meeting transcript)."
-                        className="rounded-md border border-neutral-300 px-2 py-1 text-xs outline-none focus:border-neutral-500"
+                        className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 outline-none focus:border-neutral-500"
                       >
                         <option value="">— AI classifies —</option>
                         {namedEstimates.map((e) => (
