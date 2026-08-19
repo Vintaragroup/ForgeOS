@@ -72,6 +72,27 @@
     opacity: 1;
   }
 
+  /* Browser/password-manager autofill (most visible on the login
+     password field) repaints an input's text and background through
+     -webkit-text-fill-color and its own UA background, bypassing the
+     text-neutral-900/bg-white classes on Field/TextareaField/SelectField
+     entirely -- the fix for the plain white-on-white input didn't touch
+     this state at all. Force the same colors here, and use a huge
+     transition delay (the standard trick) so Chrome's own autofill
+     background-color transition never gets a chance to show through. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  select:-webkit-autofill,
+  select:-webkit-autofill:hover,
+  select:-webkit-autofill:focus {
+    -webkit-text-fill-color: #171717;
+    -webkit-box-shadow: 0 0 0px 1000px #ffffff inset;
+    box-shadow: 0 0 0px 1000px #ffffff inset;
+    caret-color: #171717;
+    transition: background-color 600000s 0s, color 600000s 0s;
+  }
+
   /* Minimal styling for mammoth's raw DOCX->HTML output (document
      view page) -- no @tailwindcss/typography dependency for one view,
      just enough that headings/tables/lists read as a document instead
