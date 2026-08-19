@@ -7,9 +7,13 @@
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { DocumentType } from "@/generated/prisma/enums";
-import { buildStorageKey, deleteObject, getObject, putObject } from "@/lib/storage";
+import { buildStorageKey, deleteObject, getObject, headPrivateObject, putObject } from "@/lib/storage";
 
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB -- see next.config.ts's bodySizeLimit comment
+// Exported: documents/upload/route.ts's onBeforeGenerateToken enforces the
+// same two rules (extension, size) before it ever issues a client upload
+// token, for the direct-to-Blob path -- see that file's header comment for
+// why the check has to happen there too, not just here.
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB -- see next.config.ts's bodySizeLimit comment
 
 // Native CAD/BIM formats aren't parseable without a heavy proprietary
 // SDK -- out of scope by design (see Phase 7 plan). Real-world CAD content
@@ -17,7 +21,7 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB -- see next.config.ts's bodyS
 // RFP packages in data/RFP/superbowl), which this app CAN read. Rejecting
 // these extensions up front gives a clear message instead of silently
 // storing a file nothing will ever extract text or a summary from.
-const UNSUPPORTED_EXTENSIONS = [".dwg", ".dxf", ".rvt", ".skp"];
+export const UNSUPPORTED_EXTENSIONS = [".dwg", ".dxf", ".rvt", ".skp"];
 
 export async function uploadDocument(
   opportunityId: string,
@@ -45,6 +49,40 @@ export async function uploadDocument(
       mimeType: data.file.type || "application/octet-stream",
       sizeBytes: bytes.byteLength,
       storageKey,
+      documentType: data.documentType,
+      uploadedById: data.uploadedById ?? null,
+    },
+  });
+}
+
+// Counterpart to uploadDocument for the direct-to-Blob path (documents/
+// upload/route.ts + document-upload-form.tsx): the file's bytes already
+// live in Blob by the time this runs -- the browser uploaded them straight
+// there, never through this server at all, which is the whole point (see
+// next.config.ts's bodySizeLimit comment on why routing large files through
+// a Server Action's own body doesn't scale). This only needs to verify the
+// blob and record it, mirroring uploadDocument's db.document.create shape.
+// storageKey is trusted here only because documents/upload/route.ts's
+// onBeforeGenerateToken already required it to start with
+// `${opportunityId}/` before a token was ever issued for it -- re-checked
+// here too since this function has its own callers.
+export async function finalizeUploadedDocument(
+  opportunityId: string,
+  data: { storageKey: string; filename: string; documentType: DocumentType; uploadedById?: string | null },
+) {
+  if (!data.storageKey.startsWith(`${opportunityId}/`)) {
+    throw new Error("Storage key doesn't belong to this opportunity.");
+  }
+
+  const { size, contentType } = await headPrivateObject(data.storageKey);
+
+  return db.document.create({
+    data: {
+      opportunityId,
+      filename: data.filename,
+      mimeType: contentType || "application/octet-stream",
+      sizeBytes: size,
+      storageKey: data.storageKey,
       documentType: data.documentType,
       uploadedById: data.uploadedById ?? null,
     },

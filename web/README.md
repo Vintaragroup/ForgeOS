@@ -160,13 +160,30 @@ Required env vars on the Vercel project:
   Accelerate or an external pooler (PgBouncer), not a bigger `?connection_limit`.
 - `SESSION_SECRET`
 - `OPENAI_API_KEY`
+- `BLOB_READ_WRITE_TOKEN` — see below; this one's an exception to the
+  "Vercel Blob needs nothing set by hand" story.
 
-Vercel Blob needs no env var set by hand: connecting the project's Blob
-store via **Storage → (store) → Connect Project** in the dashboard
+Vercel Blob mostly needs no env var set by hand: connecting the project's
+Blob store via **Storage → (store) → Connect Project** in the dashboard
 auto-injects `VERCEL_OIDC_TOKEN` and `BLOB_STORE_ID`, and `@vercel/blob`
-picks them up on its own (`src/lib/storage.ts` never references either
-directly). For local dev, `vercel link` then
-`vercel env pull .env.local` pulls the same two vars down.
+picks them up on its own for `put`/`get`/`del`/`head`
+(`src/lib/storage.ts` never references either directly). For local dev,
+`vercel link` then `vercel env pull .env.local` pulls the same two vars
+down.
+
+The one exception: documents upload straight from the browser to Blob
+(`documents/upload-token/route.ts` + `document-upload-form.tsx`) rather
+than through a Server Action's own request body, because Vercel Functions
+enforce their own request-size ceiling ahead of anything
+`next.config.ts`'s `serverActions.bodySizeLimit` can promise — a real
+7.2MB/6-file upload 413'd well under the app's own 40MB limit before this
+existed. Minting the short-lived client upload token that path needs
+(`generateClientTokenFromReadWriteToken`, inside `handleUpload`) has no
+OIDC fallback anywhere in the `@vercel/blob` SDK — confirmed from the
+installed package's own source, not just its docs — so
+`BLOB_READ_WRITE_TOKEN` has to be set explicitly: **Storage → (store) →
+.env.local tab** in the dashboard, added to the Vercel project (Production
++ Preview) and to local `.env`.
 
 Migrations run as part of the build itself, gated to production only via
 the `vercel-build` script (`package.json`) checking Vercel's own

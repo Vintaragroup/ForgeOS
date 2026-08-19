@@ -1,32 +1,37 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getCurrentUser } from "@/lib/auth";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
-import { assignDocumentEstimate, deleteDocument, updateDocumentType, uploadDocument } from "@/lib/document-service";
+import {
+  assignDocumentEstimate,
+  deleteDocument,
+  finalizeUploadedDocument,
+  updateDocumentType,
+} from "@/lib/document-service";
 import { analyzeDocument } from "@/lib/ai/analyze-document";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import type { DocumentType } from "@/generated/prisma/enums";
 
-// Accepts one or many files under the same "file" field (the drag-and-drop
-// dropzone sets a real multi-file FileList on the input) -- uploaded one
-// at a time, not Promise.all, so a large batch doesn't try to write every
-// file to disk concurrently and a mid-batch failure leaves the earlier
-// files already saved rather than all-or-nothing.
-export async function uploadDocumentAction(opportunityId: string, formData: FormData) {
-  await requireOpportunityAccess(opportunityId);
-  const user = await getCurrentUser();
-  const files = formData.getAll("file").filter((f): f is File => f instanceof File && f.size > 0);
-  const documentType = String(formData.get("documentType") ?? "OTHER") as DocumentType;
-
-  if (files.length === 0) {
-    throw new Error("Choose at least one file to upload.");
-  }
-
-  for (const file of files) {
-    await uploadDocument(opportunityId, { file, documentType, uploadedById: user?.id ?? null });
-  }
-
+// Records a Document row for a file the browser already uploaded directly
+// to Blob (see upload-token/route.ts and document-upload-form.tsx) --
+// bytes never pass through this action or any Server Action's own request
+// body, which is the fix for the 413 a 7.2MB/6-file upload used to hit
+// well under next.config.ts's 40MB Server Action limit (Vercel Functions
+// enforce their own, lower request-body ceiling ahead of that config).
+// Called once per uploaded file, same one-at-a-time posture the old
+// byte-carrying version had -- a mid-batch failure still leaves the
+// earlier files' Document rows already created rather than all-or-nothing.
+export async function finalizeDocumentUploadAction(
+  opportunityId: string,
+  data: { storageKey: string; filename: string; documentType: string },
+) {
+  const user = await requireOpportunityAccess(opportunityId);
+  await finalizeUploadedDocument(opportunityId, {
+    storageKey: data.storageKey,
+    filename: data.filename,
+    documentType: data.documentType as DocumentType,
+    uploadedById: user.id,
+  });
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 

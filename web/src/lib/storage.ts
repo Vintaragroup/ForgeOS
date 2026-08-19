@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { del, get, put } from "@vercel/blob";
+import { del, get, head, put } from "@vercel/blob";
 
 // Vercel Blob-backed object storage -- access: "private" means blobs are
 // only readable via an authenticated get() call, never a bare public URL.
@@ -46,4 +46,27 @@ export async function getObject(storageKey: string): Promise<Buffer> {
 
 export async function deleteObject(storageKey: string): Promise<void> {
   await del(storageKey);
+}
+
+// For documents uploaded directly from the browser to Blob (bypassing the
+// app server entirely, to get around Vercel Functions' own request-body
+// ceiling -- see documents/upload/route.ts), rather than through putObject
+// above. The client chooses access:"private" itself when it calls the Blob
+// client SDK's upload(), but nothing server-side can constrain that choice
+// at token-issuance time -- Vercel Blob's client-token protocol doesn't
+// expose `access` to onBeforeGenerateToken at all, so a modified client
+// could request access:"public" instead and this file would have no way to
+// stop it up front. This is the one place every such upload passes through
+// before its Document row is created, so it's where that gets verified: a
+// plain, unauthenticated fetch of the blob's own URL must NOT succeed. If
+// it does, the blob is deleted and the upload is rejected outright, rather
+// than trusting the client's own claim about its access level.
+export async function headPrivateObject(storageKey: string): Promise<{ size: number; contentType: string }> {
+  const meta = await head(storageKey);
+  const publicProbe = await fetch(meta.url);
+  if (publicProbe.ok) {
+    await del(storageKey);
+    throw new Error("Upload rejected: the stored file was not private.");
+  }
+  return { size: meta.size, contentType: meta.contentType };
 }

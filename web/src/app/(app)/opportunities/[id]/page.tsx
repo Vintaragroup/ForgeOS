@@ -15,8 +15,8 @@ import {
   analyzeDocumentAction,
   assignDocumentEstimateAction,
   deleteDocumentAction,
+  finalizeDocumentUploadAction,
   updateDocumentTypeAction,
-  uploadDocumentAction,
 } from "./documents/actions";
 import { runClarificationQuestionsAnalysisAction } from "./ai-actions";
 import { deleteMisattributedLineItemAction, moveLineItemToEstimateAction } from "./line-item-audit-actions";
@@ -692,7 +692,6 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   const collaboratorIds = new Set(opportunity.collaborators.map((c) => c.userId));
   const convertWithId = convertToEstimate.bind(null, opportunity.id);
   const convertToProjectWithId = convertToProject.bind(null, opportunity.id);
-  const uploadDocumentWithId = uploadDocumentAction.bind(null, opportunity.id);
   const pricingScheduleDoc = documents.find((d) => d.documentType === "PRICING_SCHEDULE");
   const buildEstimateWithIds = pricingScheduleDoc
     ? buildEstimateFromDocumentsAction.bind(null, opportunity.id, pricingScheduleDoc.id)
@@ -1195,7 +1194,11 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             ))}
           </ul>
         )}
-        <DocumentUploadForm action={uploadDocumentWithId} documentTypeOptions={DOCUMENT_TYPE_OPTIONS} />
+        <DocumentUploadForm
+          opportunityId={opportunity.id}
+          finalizeUpload={finalizeDocumentUploadAction}
+          documentTypeOptions={DOCUMENT_TYPE_OPTIONS}
+        />
       </CollapsibleSection>
 
       <ProjectBriefCard opportunityId={opportunity.id} documents={documents} namedEstimates={namedEstimates} />
