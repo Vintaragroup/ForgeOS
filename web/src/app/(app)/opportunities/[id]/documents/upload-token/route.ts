@@ -59,6 +59,12 @@ export async function POST(
     });
     return Response.json(jsonResponse);
   } catch (error) {
+    // Logged, not just returned -- the client only ever sees @vercel/blob/
+    // client's own generic "Failed to retrieve the client token" wrapper
+    // around whatever this route responds with, so the real reason
+    // (auth, extension, size, or a Blob-side credential problem) has to
+    // be visible server-side or it's undiagnosable from a bug report alone.
+    console.error("upload-token route rejected:", error);
     return Response.json({ error: error instanceof Error ? error.message : "Upload authorization failed." }, {
       status: 400,
     });
