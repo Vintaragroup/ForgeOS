@@ -42,6 +42,7 @@ import { Button, CollapsibleSection, Field, PageHeader, ReadOnlyField, SelectFie
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
 import { DocumentUploadForm } from "@/components/document-upload-form";
+import { SubmitButton } from "@/components/submit-button";
 import { ProjectTypeFields, ProjectTypeFieldsView } from "@/components/project-type-fields";
 import { CLOSE_REASON_LABELS, StageChangeFields } from "@/components/stage-change-fields";
 
@@ -1164,21 +1165,22 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                   {doc.documentType !== "PRICING_SCHEDULE" &&
                     (doc.extractionStatus === "PENDING" || doc.extractionStatus === "FAILED") && (
                       <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
-                        <button type="submit" className="text-xs text-neutral-500 hover:underline">
+                        <SubmitButton pendingText="Analyzing…" className="text-xs text-neutral-500 hover:underline">
                           Analyze
-                        </button>
+                        </SubmitButton>
                       </form>
                     )}
                   {doc.documentType !== "PRICING_SCHEDULE" &&
                     doc.extractionStatus === "COMPLETE" && (
                       <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
-                        <button
-                          type="submit"
+                        <SubmitButton
+                          pendingText="Re-analyzing…"
                           className="text-xs text-neutral-400 hover:underline"
-                          title="Re-run analysis -- picks up any improvements since this document was last analyzed"
                         >
-                          Re-analyze
-                        </button>
+                          <span title="Re-run analysis -- picks up any improvements since this document was last analyzed">
+                            Re-analyze
+                          </span>
+                        </SubmitButton>
                       </form>
                     )}
                   <ConfirmForm
