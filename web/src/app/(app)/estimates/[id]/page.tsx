@@ -51,6 +51,7 @@ import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance 
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
+import { SubmitButton } from "@/components/submit-button";
 
 const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
@@ -446,7 +447,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             </div>
           )}
           <form action={buildEstimateWithIds}>
-            <Button>Build from all analyzed documents</Button>
+            <SubmitButton pendingText="Building…" variant="primary">
+              Build from all analyzed documents
+            </SubmitButton>
           </form>
         </Card>
       )}
@@ -479,9 +482,12 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             flag against the source before treating it as a real gap.
           </p>
           <form action={runCoverageAnalysisWithIds}>
-            <Button variant="secondary">
+            <SubmitButton
+              pendingText={coverageAnalysis ? "Re-running…" : "Running…"}
+              variant="secondary"
+            >
               {coverageAnalysis ? "Re-run coverage analysis" : "Run coverage analysis"}
-            </Button>
+            </SubmitButton>
           </form>
 
           {coverageAnalysis && (
@@ -647,7 +653,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                   options={scopeDocuments.map((d) => ({ value: d.id, label: d.filename }))}
                 />
               </div>
-              <Button variant="secondary">Propose items</Button>
+              <SubmitButton pendingText="Proposing…" variant="secondary">
+                Propose items
+              </SubmitButton>
             </form>
           )}
 
@@ -1111,7 +1119,9 @@ function EstimateVersionCard({
                         options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
                       />
                     </div>
-                    <Button variant="secondary">Generate proposal</Button>
+                    <SubmitButton pendingText="Generating…" variant="secondary">
+                      Generate proposal
+                    </SubmitButton>
                   </form>
                 )}
                 {version.proposals.length > 0 && (

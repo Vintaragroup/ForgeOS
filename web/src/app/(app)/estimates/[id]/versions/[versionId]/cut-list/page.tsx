@@ -14,6 +14,7 @@ import {
   optimizeMaterialAction,
 } from "./actions";
 import { Button, Card, CollapsibleSection, Field, Notice, PageHeader, SelectField } from "@/components/ui";
+import { SubmitButton } from "@/components/submit-button";
 import { CutListPartFields } from "@/components/cut-list-part-fields";
 import { CutSheetDiagram } from "@/components/cut-sheet-diagram";
 import { CutSheetDiagramEditor } from "@/components/cut-sheet-diagram-editor";
@@ -311,7 +312,9 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
               ]}
             />
           </div>
-          <Button>Optimize all materials</Button>
+          <SubmitButton pendingText="Optimizing…" variant="primary">
+            Optimize all materials
+          </SubmitButton>
         </form>
       )}
 
@@ -341,7 +344,9 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                       ]}
                     />
                   </div>
-                  <Button variant="secondary">{waste ? "Re-optimize" : "Optimize"}</Button>
+                  <SubmitButton pendingText={waste ? "Re-optimizing…" : "Optimizing…"} variant="secondary">
+                    {waste ? "Re-optimize" : "Optimize"}
+                  </SubmitButton>
                 </form>
               )}
             </div>

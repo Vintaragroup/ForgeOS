@@ -1059,7 +1059,9 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           </form>
           {buildEstimateWithIds && (
             <form action={buildEstimateWithIds}>
-              <Button>Build estimate from &quot;{pricingScheduleDoc!.filename}&quot;</Button>
+              <SubmitButton pendingText="Building…" variant="primary">
+                Build estimate from &quot;{pricingScheduleDoc!.filename}&quot;
+              </SubmitButton>
             </form>
           )}
         </div>
@@ -1221,9 +1223,12 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             )}
           </p>
           <form action={runClarificationQuestionsWithId}>
-            <Button variant="secondary">
+            <SubmitButton
+              pendingText={clarificationQuestions ? "Re-generating…" : "Generating…"}
+              variant="secondary"
+            >
               {clarificationQuestions ? "Re-generate clarification questions" : "Generate clarification questions"}
-            </Button>
+            </SubmitButton>
           </form>
 
           {clarificationQuestions && (
