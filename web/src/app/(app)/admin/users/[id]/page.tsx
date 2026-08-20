@@ -4,11 +4,13 @@ import { getCurrentUser } from "@/lib/auth";
 import {
   deactivateUser,
   reactivateUser,
+  resetUserPasswordAction,
   updateUserProfile,
   updateUserSystemRole,
 } from "../actions";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
+import { SubmitButton } from "@/components/submit-button";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,7 @@ export default async function AdminUserDetailPage(props: PageProps<"/admin/users
   const updateRoleWithId = updateUserSystemRole.bind(null, user.id);
   const deactivateWithId = deactivateUser.bind(null, user.id);
   const reactivateWithId = reactivateUser.bind(null, user.id);
+  const resetPasswordWithId = resetUserPasswordAction.bind(null, user.id);
 
   return (
     <div className="flex flex-col gap-8">
@@ -85,6 +88,31 @@ export default async function AdminUserDetailPage(props: PageProps<"/admin/users
           </p>
         )}
       </Card>
+
+      {canManageRole && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Reset password
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Sets their password directly -- no need to know the old one. This immediately signs them
+            out of every device (the same guarantee changing your own password gives you), so only use
+            it when they&apos;re actually locked out. Tell them the new password through a channel other
+            than this page -- ForgeOS never displays it back once set.
+          </p>
+          <form action={resetPasswordWithId} className="flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="New password" name="newPassword" type="password" required />
+              <Field label="Confirm new password" name="confirmPassword" type="password" required />
+            </div>
+            <div>
+              <SubmitButton pendingText="Resetting…" variant="secondary">
+                Reset password
+              </SubmitButton>
+            </div>
+          </form>
+        </Card>
+      )}
 
       <Card className="p-6">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">

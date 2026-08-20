@@ -143,6 +143,46 @@ export async function deactivateUser(id: string) {
   revalidatePath("/users");
 }
 
+// SUPER_ADMIN only, not requireAdmin like the profile/role/status actions
+// above -- setting someone else's password outright (no current-password
+// check, unlike account/actions.ts's self-service changePasswordAction)
+// is a materially bigger blast radius, the same reasoning
+// updateUserSystemRole already applies to granting roles. This is the
+// same operation set-password.ts has always done from the host, just
+// reachable from the UI now so a locked-out user doesn't need someone
+// with terminal/database access to get back in. Logged to
+// AdminAuditLog like every other admin mutation here, but the detail
+// text never includes the password itself -- only that a reset
+// happened, by whom, and for whom.
+export async function resetUserPasswordAction(id: string, formData: FormData) {
+  const requester = await requireSuperAdmin();
+
+  const newPassword = String(formData.get("newPassword") ?? "");
+  const confirmPassword = String(formData.get("confirmPassword") ?? "");
+  if (newPassword.length < 8) throw new Error("Password must be at least 8 characters.");
+  if (newPassword !== confirmPassword) throw new Error("New password and confirmation don't match.");
+
+  const target = await db.user.findFirst({ where: { id, deletedAt: null } });
+  if (!target) throw new Error("User not found.");
+
+  const passwordHash = await hashPassword(newPassword);
+  // Same passwordChangedAt bump as changePasswordAction and
+  // set-password.ts -- invalidates every session the target user
+  // currently has, not just a DB field update they'd never notice took
+  // effect. Exactly the guarantee this feature exists for: whatever was
+  // wrong with their old credential stops working the moment this runs.
+  await db.user.update({ where: { id }, data: { passwordHash, passwordChangedAt: new Date() } });
+
+  await logAdminAction({
+    action: "user.password_reset",
+    detail: `Password reset for ${target.email}`,
+    actorId: requester.id,
+    targetUserId: id,
+  });
+
+  revalidatePath(`/admin/users/${id}`);
+}
+
 export async function reactivateUser(id: string) {
   const requester = await requireAdmin();
   const target = await db.user.findFirst({ where: { id } });
