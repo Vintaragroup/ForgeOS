@@ -322,7 +322,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         </Card>
       ) : (
         <>
-          <VersionSummaryBar estimateId={estimate.id} version={currentVersion} />
+          <VersionSummaryBar estimateId={estimate.id} version={currentVersion} proposalTemplates={proposalTemplates} />
 
           <Suspense fallback={null}>
             <Tabs
@@ -423,7 +423,15 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
 // since it's context relevant regardless of which tab is open, the same
 // reasoning the design note gave for keeping it out: "context, not a
 // section."
-function VersionSummaryBar({ estimateId, version }: { estimateId: string; version: VersionWithSections }) {
+function VersionSummaryBar({
+  estimateId,
+  version,
+  proposalTemplates,
+}: {
+  estimateId: string;
+  version: VersionWithSections;
+  proposalTemplates: { id: string; name: string }[];
+}) {
   const lockVersionWithIds = lockVersionAction.bind(null, estimateId, version.id);
   const createNewVersionWithIds = createNewVersionAction.bind(null, estimateId, version.id);
 
@@ -445,7 +453,7 @@ function VersionSummaryBar({ estimateId, version }: { estimateId: string; versio
         )}
       </div>
 
-      <div className="grid grid-cols-3 gap-4 rounded-md bg-neutral-50 p-4 text-sm">
+      <div className="mb-4 grid grid-cols-3 gap-4 rounded-md bg-neutral-50 p-4 text-sm">
         <div>
           <div className="text-neutral-500">Total cost</div>
           <div className="text-lg font-semibold">{money(version.totalCost)}</div>
@@ -458,6 +466,44 @@ function VersionSummaryBar({ estimateId, version }: { estimateId: string; versio
           <div className="text-neutral-500">Gross margin</div>
           <div className="text-lg font-semibold">{version.grossMarginPct.toFixed(1)}%</div>
         </div>
+      </div>
+
+      {/* Kept always visible (not inside Proposal & Approval) on purpose --
+          this deliberately works "anytime, even while this version is
+          still unlocked and changing" (see the form's own copy below), an
+          editing-time check, not a final-approval one. A user reported it
+          missing after the tab restructuring specifically because it had
+          been moved behind a tab click; this is the fix, not a new
+          feature. */}
+      <div className="rounded-md border border-dashed border-neutral-300 p-4">
+        <p className="mb-3 text-sm text-neutral-500">
+          Check the branded PDF format anytime, even while this version is still unlocked and
+          changing — this doesn&apos;t create a real Proposal record, just renders current numbers.
+        </p>
+        {proposalTemplates.length === 0 ? (
+          <Notice
+            message="Previewing a PDF needs a branded template, and there are no templates yet."
+            actionHref="/catalog/proposal-templates/new"
+            actionLabel="Add a template"
+          />
+        ) : (
+          <form
+            action={`/estimates/${estimateId}/versions/${version.id}/preview-pdf`}
+            method="get"
+            target="_blank"
+            className="flex items-end gap-3"
+          >
+            <div className="w-56">
+              <SelectField
+                label="Proposal template"
+                name="templateId"
+                required
+                options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
+              />
+            </div>
+            <Button variant="secondary">Preview PDF</Button>
+          </form>
+        )}
       </div>
     </Card>
   );
@@ -1729,39 +1775,8 @@ function ProposalApprovalTab({
   return (
     <div className="flex flex-col gap-6">
       <Card className="p-6">
-        <div className="rounded-md border border-dashed border-neutral-300 p-4">
-          <p className="mb-3 text-sm text-neutral-500">
-            Check the branded PDF format anytime, even while this version is still unlocked and
-            changing — this doesn&apos;t create a real Proposal record, just renders current numbers.
-          </p>
-          {proposalTemplates.length === 0 ? (
-            <Notice
-              message="Previewing a PDF needs a branded template, and there are no templates yet."
-              actionHref="/catalog/proposal-templates/new"
-              actionLabel="Add a template"
-            />
-          ) : (
-            <form
-              action={`/estimates/${estimateId}/versions/${version.id}/preview-pdf`}
-              method="get"
-              target="_blank"
-              className="flex items-end gap-3"
-            >
-              <div className="w-56">
-                <SelectField
-                  label="Proposal template"
-                  name="templateId"
-                  required
-                  options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
-                />
-              </div>
-              <Button variant="secondary">Preview PDF</Button>
-            </form>
-          )}
-        </div>
-
         {version.isLocked ? (
-          <div className="mt-6">
+          <div>
             <p className="mb-4 text-sm text-neutral-500">
               Margin target: {version.marginTargetPct.toFixed(1)}% (locked{" "}
               {version.lockedAt ? version.lockedAt.toISOString().slice(0, 16).replace("T", " ") : ""})
@@ -1860,7 +1875,7 @@ function ProposalApprovalTab({
             </div>
           </div>
         ) : (
-          <p className="mt-6 text-sm text-neutral-500">
+          <p className="text-sm text-neutral-500">
             Lock this version (in the header above) to unlock approval, proposal generation, and change orders.
           </p>
         )}
