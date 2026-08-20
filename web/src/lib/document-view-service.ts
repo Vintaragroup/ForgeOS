@@ -11,6 +11,7 @@ import { getDocumentProxy, extractTextItems, createIsomorphicCanvasFactory, type
 import type { Canvas, SKRSContext2D } from "@napi-rs/canvas";
 import sanitizeHtml from "sanitize-html";
 import { cellText } from "@/lib/xlsx-utils";
+import { ensureCanvasFontsRegistered } from "@/lib/canvas-fonts";
 
 // Item #2 of the security/hardening roadmap: this used to be a hand-
 // rolled regex blocklist (strip <script>, strip on*= attributes) -- a
@@ -216,6 +217,7 @@ const PDF_HIGHLIGHT_COLOR = "rgba(253, 223, 177, 0.55)"; // #fddfb1 amber -- sam
 // match. Assumes page.rotate === 0, same as every other page-text
 // consumer in this codebase (locateQuotePage, pageImages) -- not handled.
 export async function renderHighlightedPdfPage(bytes: Buffer, pageNumber: number, quote: string): Promise<string | null> {
+  ensureCanvasFontsRegistered();
   const pdf = await getDocumentProxy(new Uint8Array(bytes));
   const { items } = await extractTextItems(pdf);
   const pageItems = items[pageNumber - 1];

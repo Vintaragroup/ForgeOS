@@ -18,6 +18,15 @@ const nextConfig: NextConfig = {
   // fails unless this package is excluded from bundling and left for
   // Node's own require/import to resolve from node_modules at runtime.
   serverExternalPackages: ["@napi-rs/canvas"],
+  // canvas-fonts.ts registers these two .ttf files by an explicit
+  // process.cwd()-relative path, not a plain import -- Next's tracer
+  // can miss files reached that way, and this is exactly the class of
+  // "works locally, silently absent on Vercel" gap that already caused
+  // a real production outage today (jsdom). Forced in explicitly here
+  // rather than trusted to implicit tracing.
+  outputFileTracingIncludes: {
+    "/*": ["src/assets/fonts/*.ttf"],
+  },
   experimental: {
     // Next's default Server Action body limit is 1MB. A real RFP package
     // dropped in all at once (the drag-and-drop multi-upload) runs ~12MB

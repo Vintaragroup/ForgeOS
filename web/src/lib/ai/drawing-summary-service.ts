@@ -15,6 +15,7 @@ import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import type { DocumentSummary, KeyDateType } from "@/lib/ai/document-summary-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
+import { ensureCanvasFontsRegistered } from "@/lib/canvas-fonts";
 
 const IMAGE_MIMES = ["image/png", "image/jpeg", "image/jpg"];
 
@@ -120,6 +121,13 @@ export async function pageImages(mimeType: string, bytes: Buffer): Promise<strin
     return [`data:${mimeType};base64,${bytes.toString("base64")}`];
   }
   if (mimeType === PDF_MIME) {
+    // Same missing-glyph gap as document-view-service.ts's highlighted-
+    // page render, one level more consequential here: this image is what
+    // the vision model actually reads for dimensions/labels/callouts
+    // (SYSTEM_PROMPT above), so text silently failing to rasterize on
+    // Vercel doesn't just look wrong -- it starves the AI extraction of
+    // everything the drawing's own labels say, sheet by sheet.
+    ensureCanvasFontsRegistered();
     const pdf = await getDocumentProxy(new Uint8Array(bytes));
     const pageCount = Math.min(pdf.numPages, MAX_DRAWING_PAGES);
     const images: string[] = [];
