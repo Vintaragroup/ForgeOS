@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { uploadDocument } from "@/lib/document-service";
+import { deleteObject } from "@/lib/storage";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import { summarizeDocument } from "@/lib/ai/document-summary-service";
 
@@ -64,5 +65,24 @@ describe("summarizeDocument", () => {
     const result = await summarizeDocument(document.id);
 
     expect(result.extractionStatus).toBe("UNSUPPORTED");
+  });
+
+  // Regression test for a real production incident: a Document row whose
+  // backing Blob object no longer exists (confirmed live -- a stale row
+  // from before the Blob storage migration) used to crash getDocumentBytes
+  // with an unhandled "Storage object not found" error, which propagated
+  // all the way past this function and past analyzeDocumentAction into an
+  // unhandled Server Action failure. The document's extractionStatus was
+  // left exactly as it was before the click (often still COMPLETE from a
+  // prior successful run), so nothing on screen indicated the retry had
+  // failed at all -- a user could click Re-analyze forever and get the
+  // same silent crash every time.
+  it("marks the document FAILED, not an unhandled throw, when its storage object is missing", async () => {
+    const document = await makeDocument("RFP");
+    await deleteObject(document.storageKey);
+
+    const result = await summarizeDocument(document.id);
+
+    expect(result.extractionStatus).toBe("FAILED");
   });
 });

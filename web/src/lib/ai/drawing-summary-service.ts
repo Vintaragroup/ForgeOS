@@ -153,7 +153,17 @@ function withEmptyQuote<T extends { pageNumber: number }>(
 }
 
 export async function summarizeDrawing(documentId: string, userId: string | null = null) {
-  const { document, bytes } = await getDocumentBytes(documentId);
+  let loaded: { document: Awaited<ReturnType<typeof getDocumentBytes>>["document"]; bytes: Buffer };
+  try {
+    loaded = await getDocumentBytes(documentId);
+  } catch {
+    // Same retry posture as the OpenAI-call catch below -- see
+    // document-summary-service.ts's identical guard for the full
+    // rationale (a stale storage reference used to crash the whole
+    // Server Action instead of landing here).
+    return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED" } });
+  }
+  const { document, bytes } = loaded;
 
   // Checked before any DB write, same posture as summarizeDocument -- a
   // missing key leaves the document PENDING/retryable, not stuck.

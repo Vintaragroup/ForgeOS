@@ -29,6 +29,7 @@ import {
   locateQuotePage,
   resolveHighlightableQuote,
   PDF_MIME,
+  type ExtractionResult,
 } from "@/lib/ai/text-extraction";
 import { ADVANCED_MODEL, BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
@@ -189,9 +190,19 @@ Also extract candidateGaps: unresolved open items raised in discussion that bloc
 }
 
 export async function summarizeMeetingNotes(documentId: string, userId: string | null = null) {
-  const { document, bytes } = await getDocumentBytes(documentId);
-
-  const extraction = await extractDocumentText(document.documentType, document.mimeType, bytes);
+  let loaded: { document: Awaited<ReturnType<typeof getDocumentBytes>>["document"]; bytes: Buffer; extraction: ExtractionResult };
+  try {
+    const { document, bytes } = await getDocumentBytes(documentId);
+    const extraction = await extractDocumentText(document.documentType, document.mimeType, bytes);
+    loaded = { document, bytes, extraction };
+  } catch {
+    // Same retry posture as the OpenAI-call catch below -- see
+    // document-summary-service.ts's identical guard for the full
+    // rationale (a stale storage reference used to crash the whole
+    // Server Action instead of landing here).
+    return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED" } });
+  }
+  const { document, bytes, extraction } = loaded;
 
   if (extraction.status === "UNSUPPORTED") {
     return db.document.update({

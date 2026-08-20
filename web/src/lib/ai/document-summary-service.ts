@@ -15,6 +15,7 @@ import {
   locateQuotePage,
   resolveHighlightableQuote,
   PDF_MIME,
+  type ExtractionResult,
 } from "@/lib/ai/text-extraction";
 import { ADVANCED_MODEL, BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
@@ -339,12 +340,25 @@ Also classify suggestedDocumentType: what this document's content actually IS, i
 const MAX_INPUT_CHARS = 150_000;
 
 export async function summarizeDocument(documentId: string, userId: string | null = null) {
-  const { document, bytes } = await getDocumentBytes(documentId);
-
-  // Type-based UNSUPPORTED cases (PRICING_SCHEDULE, DRAWING) never call
-  // OpenAI at all -- resolved before the config check below so they work
-  // regardless of whether a key is configured.
-  const extraction = await extractDocumentText(document.documentType, document.mimeType, bytes);
+  let loaded: { document: Awaited<ReturnType<typeof getDocumentBytes>>["document"]; bytes: Buffer; extraction: ExtractionResult };
+  try {
+    const { document, bytes } = await getDocumentBytes(documentId);
+    // Type-based UNSUPPORTED cases (PRICING_SCHEDULE, DRAWING) never call
+    // OpenAI at all -- resolved before the config check below so they work
+    // regardless of whether a key is configured.
+    const extraction = await extractDocumentText(document.documentType, document.mimeType, bytes);
+    loaded = { document, bytes, extraction };
+  } catch {
+    // Same retry posture as the OpenAI-call catch below -- a storage
+    // object that no longer exists for this Document row (confirmed real:
+    // a stale row from before the Blob migration) previously crashed the
+    // whole Server Action with an unhandled error instead of landing here,
+    // leaving the document's extractionStatus exactly as it was (often
+    // still COMPLETE from a prior run) with no visible sign the retry
+    // failed at all.
+    return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED" } });
+  }
+  const { document, bytes, extraction } = loaded;
 
   if (extraction.status === "UNSUPPORTED") {
     return db.document.update({
