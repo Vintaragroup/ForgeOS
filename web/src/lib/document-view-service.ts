@@ -9,22 +9,34 @@ import ExcelJS from "exceljs";
 import mammoth from "mammoth";
 import { getDocumentProxy, extractTextItems, createIsomorphicCanvasFactory, type StructuredTextItem } from "unpdf";
 import type { Canvas, SKRSContext2D } from "@napi-rs/canvas";
-import DOMPurify from "dompurify";
-import { JSDOM } from "jsdom";
+import sanitizeHtml from "sanitize-html";
 import { cellText } from "@/lib/xlsx-utils";
 
 // Item #2 of the security/hardening roadmap: this used to be a hand-
-// rolled regex blocklist (strip <script>, strip on*= attributes) --  a
+// rolled regex blocklist (strip <script>, strip on*= attributes) -- a
 // known-weak pattern (bypassable via malformed/nested tags, <svg
-// onload=, etc.) even though mammoth's own HTML output isn't fully
-// attacker-controlled arbitrary text. DOMPurify is an allowlist
+// onload=>, etc.) even though mammoth's own HTML output isn't fully
+// attacker-controlled arbitrary text. sanitize-html is an allowlist
 // sanitizer instead: anything not explicitly permitted is stripped,
-// regardless of what shape the dangerous content takes. This module runs
-// server-side (a Server Component's data layer, not the browser), so it
-// needs its own DOM implementation -- jsdom, the same "usage with
-// Node.js" pattern DOMPurify's own docs recommend, not a browser globals
-// polyfill hack.
-const purify = DOMPurify(new JSDOM("").window);
+// regardless of what shape the dangerous content takes.
+//
+// Originally DOMPurify(jsdom) instead -- switched after a real production
+// outage: jsdom's html-encoding-sniffer dependency requires @exodus/bytes,
+// which is ESM-only, and Node's require() can't load it inside Vercel's
+// serverless bundle (confirmed from the installed packages' own
+// package.json, not a guess) -- "Failed to load external module jsdom...
+// ERR_REQUIRE_ESM" on every single /view request, 100% reproducible, not
+// something serverExternalPackages could fix since the failure is inside
+// jsdom's own require() chain, not Next's bundling of it. sanitize-html
+// has no DOM dependency at all, so this whole failure class doesn't exist
+// for it. img added on top of the defaults (not included there) since
+// DOMPurify's default allowlist -- what this app shipped with before --
+// did allow it, and mammoth embeds DOCX images as data: URIs.
+const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: sanitizeHtml.defaults.allowedTags.concat(["img"]),
+  allowedAttributes: sanitizeHtml.defaults.allowedAttributes,
+  allowedSchemesByTag: { img: ["data", "http", "https"] },
+};
 
 export interface SpreadsheetSheet {
   name: string;
@@ -96,7 +108,7 @@ export async function renderSpreadsheet(bytes: Buffer): Promise<SpreadsheetSheet
 // `/\son\w+="[^"]*"/gi` never matched at all -- are actually caught now,
 // not just that the one shape the old regex happened to name still is.
 export function stripDangerousHtml(html: string): string {
-  return purify.sanitize(html);
+  return sanitizeHtml(html, SANITIZE_OPTIONS);
 }
 
 export async function renderDocx(bytes: Buffer): Promise<string> {

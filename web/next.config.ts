@@ -17,15 +17,7 @@ const nextConfig: NextConfig = {
   // -- Turbopack can't place that as an ESM chunk module, so the build
   // fails unless this package is excluded from bundling and left for
   // Node's own require/import to resolve from node_modules at runtime.
-  //
-  // jsdom (document-view-service.ts's `new JSDOM("")` at module load time,
-  // for DOMPurify's server-side DOM) hits the same class of failure for a
-  // different reason: its html-encoding-sniffer dependency pulls in
-  // @exodus/bytes, an ESM-only package, and Vercel's bundled serverless
-  // function throws `ERR_REQUIRE_ESM` trying to require() it -- confirmed
-  // live: every single /view request 500'd, for every document, since the
-  // crash happens at import time, before any per-document branching.
-  serverExternalPackages: ["@napi-rs/canvas", "jsdom"],
+  serverExternalPackages: ["@napi-rs/canvas"],
   experimental: {
     // Next's default Server Action body limit is 1MB. A real RFP package
     // dropped in all at once (the drag-and-drop multi-upload) runs ~12MB
