@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
@@ -19,7 +20,6 @@ import {
   generateProposalAction,
   lockVersionAction,
   moveLineItemAction,
-  moveSectionAction,
   recordCostActualAction,
   updateEstimateDetails,
   updateLineItemAction,
@@ -47,11 +47,13 @@ import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { getProjectContext } from "@/lib/ai/scope-document-context";
 import { citationHref } from "@/lib/citation";
 import { auditLineItemCategories } from "@/lib/category-audit";
+import { isKnownCategory } from "@/lib/line-item-category";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
 import { SubmitButton } from "@/components/submit-button";
+import { Tabs } from "@/components/tabs";
 
 const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
@@ -258,6 +260,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       })
     : [];
 
+  const reviewIssueCount = riskFlags.length + categoryAudit.issues.length + coverageGapsWithDocs.length;
+
   return (
     <div className="flex flex-col gap-8">
       <PageHeader
@@ -304,443 +308,6 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         </ConfirmForm>
       </Card>
 
-      <Card className="p-6">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Attachments
-        </h2>
-        <p className="mb-4 text-sm text-neutral-500">
-          Design files (pull sheets, artwork) referenced by filename or an external link -- ForgeOS doesn&apos;t
-          host files yet, matching how artwork already moves via FTP/WeTransfer outside the workbook.
-        </p>
-        {attachments.length > 0 && (
-          <ul className="mb-4 flex flex-col gap-1 text-sm">
-            {attachments.map((a) => (
-              <li key={a.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
-                <span>{a.fileRef}</span>
-                <span className="text-neutral-500">{a.uploadedBy?.name ?? "unknown"}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-        <form action={addAttachmentWithId} className="flex items-end gap-3">
-          <div className="flex-1">
-            <Field label="File reference" name="fileRef" placeholder="e.g. pull-sheet-v1.pdf or a WeTransfer link" required />
-          </div>
-          <div className="w-48">
-            <SelectField
-              label="Uploaded by"
-              name="uploadedById"
-              options={[{ value: "", label: "— unspecified —" }, ...users.map((u) => ({ value: u.id, label: u.name }))]}
-            />
-          </div>
-          <Button variant="secondary">Add attachment</Button>
-        </form>
-      </Card>
-
-      {riskFlags.length > 0 && (
-        <Card className="p-6">
-          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Risk &amp; compliance flags
-          </h2>
-          <p className="mb-4 text-sm text-neutral-500">
-            Extracted from this job&apos;s analyzed documents — verify against the source before pricing or
-            signing off around these terms.
-          </p>
-          <ul className="flex flex-col gap-2 text-sm">
-            {riskFlags.map((flag, i) => {
-              const href = citationHref(estimate.opportunityId, flag.doc, flag, `/estimates/${estimate.id}#risk-flag-${i}`);
-              return (
-                <li
-                  key={i}
-                  id={`risk-flag-${i}`}
-                  className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
-                >
-                  <span className="flex items-start gap-2 text-amber-900">
-                    <span aria-hidden>⚠</span>
-                    {flag.text}
-                  </span>
-                  {href ? (
-                    <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
-                      {flag.doc.filename} →
-                    </Link>
-                  ) : (
-                    <span className="shrink-0 text-xs text-neutral-400">{flag.doc.filename}</span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </Card>
-      )}
-
-      {categoryAudit.issues.length > 0 && (
-        <Card className="p-6">
-          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Category review
-          </h2>
-          <p className="mb-4 text-sm text-neutral-500">
-            These line items won&apos;t bucket correctly on the client-facing proposal — they&apos;ll fall
-            into &quot;Other&quot; instead of their real category. Fix them here before sending.
-          </p>
-          <ul className="flex flex-col gap-2 text-sm">
-            {categoryAudit.issues.map((issue) => (
-              <li
-                key={issue.lineItemId}
-                className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
-              >
-                <span className="flex items-start gap-2 text-amber-900">
-                  <span aria-hidden>⚠</span>
-                  {issue.description}
-                  {issue.reason === "orphaned" && (
-                    <span className="text-amber-700"> — category &quot;{issue.category}&quot; no longer exists</span>
-                  )}
-                </span>
-                <a href={`#line-item-${issue.lineItemId}`} className="shrink-0 text-xs text-brand-navy hover:underline">
-                  {issue.sectionName}
-                  {issue.groupLabel ? ` — ${issue.groupLabel}` : ""} →
-                </a>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      {canImport && buildEstimateWithIds && (
-        <Card className="p-6">
-          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Build estimate from all documents
-          </h2>
-          <p className="mb-4 text-sm text-neutral-500">
-            Runs the Pricing Schedule import and Scope of Work proposal below across every analyzed document for
-            this Opportunity in one pass, instead of picking one at a time -- skips anything already imported, not
-            yet analyzed, or that turns up nothing to propose.
-          </p>
-          {buildResult && (
-            <div className="mb-4 flex flex-col gap-2 text-sm">
-              {buildResult.imported.length > 0 && (
-                <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2">
-                  <p className="mb-1 font-medium text-green-900">Imported {buildResult.imported.length} document(s):</p>
-                  <ul className="flex flex-col gap-0.5 text-green-800">
-                    {buildResult.imported.map((r, i) => (
-                      <li key={i}>
-                        {r.filename} — {r.rowsImported} {r.kind === "pricing" ? "pricing rows" : "proposed items"}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {buildResult.skipped.length > 0 && (
-                <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2">
-                  <p className="mb-1 font-medium text-neutral-700">Skipped {buildResult.skipped.length} document(s):</p>
-                  <ul className="flex flex-col gap-0.5 text-neutral-600">
-                    {buildResult.skipped.map((r, i) => (
-                      <li key={i}>
-                        {r.filename} — {r.reason}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {buildResult.imported.length === 0 && buildResult.skipped.length === 0 && (
-                <p className="text-neutral-500">No documents found for this Opportunity yet.</p>
-              )}
-            </div>
-          )}
-          <form action={buildEstimateWithIds}>
-            <SubmitButton pendingText="Building…" variant="primary">
-              Build from all analyzed documents
-            </SubmitButton>
-          </form>
-        </Card>
-      )}
-
-      {currentVersion && (
-        <Card className="p-6">
-          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Cut list</h2>
-          <p className="mb-4 text-sm text-neutral-500">
-            Material calculator, sheet-nesting optimization, printable cutting diagrams, and CNC DXF export for
-            this estimate&apos;s fabrication -- a shop-floor planning tool, separate from this estimate&apos;s
-            priced line items.
-          </p>
-          <Link
-            href={`/estimates/${id}/versions/${currentVersion.id}/cut-list`}
-            className="text-sm font-medium text-brand-navy hover:underline"
-          >
-            Manage cut list →
-          </Link>
-        </Card>
-      )}
-
-      {currentVersion && scopeDocuments.length > 0 && runCoverageAnalysisWithIds && (
-        <Card className="p-6">
-          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Scope coverage
-          </h2>
-          <p className="mb-4 text-sm text-neutral-500">
-            Checks this version&apos;s line items against its scope documents for requirements that don&apos;t
-            appear to be priced anywhere -- advisory only, never adds line items automatically. Verify every
-            flag against the source before treating it as a real gap.
-          </p>
-          <form action={runCoverageAnalysisWithIds}>
-            <SubmitButton
-              pendingText={coverageAnalysis ? "Re-running…" : "Running…"}
-              variant="secondary"
-            >
-              {coverageAnalysis ? "Re-run coverage analysis" : "Run coverage analysis"}
-            </SubmitButton>
-          </form>
-
-          {coverageAnalysis && (
-            <div className="mt-4 border-t border-neutral-200 pt-4">
-              <p className="mb-3 text-xs text-neutral-400">
-                Generated {new Date(coverageAnalysis.generatedAt).toLocaleString()}, based on{" "}
-                {coverageAnalysis.lineItemCount} line item(s) -- re-run after making changes to the estimate or
-                its documents.
-              </p>
-              {coverageGapsWithDocs.length === 0 ? (
-                <p className="text-sm text-neutral-500">No coverage gaps found.</p>
-              ) : (
-                <ul className="flex flex-col gap-2 text-sm">
-                  {coverageGapsWithDocs.map((gap, i) => {
-                    const href = citationHref(
-                      estimate.opportunityId,
-                      gap.doc,
-                      gap,
-                      `/estimates/${estimate.id}#coverage-gap-${i}`,
-                    );
-                    return (
-                      <li
-                        key={i}
-                        id={`coverage-gap-${i}`}
-                        className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
-                      >
-                        <span className="flex items-start gap-2 text-amber-900">
-                          <span aria-hidden>⚠</span>
-                          {gap.requirement}
-                        </span>
-                        {href ? (
-                          <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
-                            {gap.doc.filename} →
-                          </Link>
-                        ) : (
-                          <span className="shrink-0 text-xs text-neutral-400">{gap.doc.filename}</span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          )}
-        </Card>
-      )}
-
-      {canImport && (
-        <Card className="p-6">
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Import from document
-          </h2>
-          <p className="mb-4 text-sm text-neutral-500">
-            Parses a Pricing Schedule spreadsheet (uploaded on the Opportunity&apos;s Documents card) straight
-            into draft line items with qty/unit already filled in. A row seeds its Unit Rate from a confident
-            catalog match when one exists (shown below) — otherwise it starts at $0, pending review either way.
-          </p>
-          {pricingScheduleDocuments.length === 0 ? (
-            <Notice
-              message="No pricing-schedule documents uploaded yet."
-              actionHref={`/opportunities/${estimate.opportunity.id}`}
-              actionLabel="Go to Opportunity"
-            />
-          ) : (
-            <form action={previewImportWithId} className="flex items-end gap-3">
-              <div className="flex-1">
-                <SelectField
-                  label="Document"
-                  name="documentId"
-                  defaultValue={importDocumentId ?? ""}
-                  options={pricingScheduleDocuments.map((d) => ({ value: d.id, label: d.filename }))}
-                />
-              </div>
-              <Button variant="secondary">Preview import</Button>
-            </form>
-          )}
-
-          {importPreview instanceof Error && (
-            <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {importPreview.message}
-            </p>
-          )}
-
-          {importPreview && !(importPreview instanceof Error) && (
-            <div className="mt-4 border-t border-neutral-200 pt-4">
-              <p className="mb-3 text-sm text-neutral-700">
-                <span className="font-medium">{importPreview.rows.length}</span> line items across{" "}
-                <span className="font-medium">{importPreview.categories.length}</span> categories in{" "}
-                <span className="font-medium">{importPreview.filename}</span> ({importPreview.sheetName}).
-              </p>
-              <div className="mb-4 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-neutral-50">
-                    <tr className="text-left text-neutral-500">
-                      <th className="px-2 py-1.5 font-normal">Category</th>
-                      <th className="px-2 py-1.5 font-normal">Description</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Unit</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Qty</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {importPreview.rows.map((row) => (
-                      <tr key={row.rowNumber} className="border-t border-neutral-100">
-                        <td className="px-2 py-1 text-neutral-500">{row.category}</td>
-                        <td className="max-w-[24rem] truncate px-2 py-1" title={row.description}>
-                          {row.description.split("\n")[0]}
-                        </td>
-                        <td className="px-2 py-1 text-right">{row.unit}</td>
-                        <td className="px-2 py-1 text-right">{row.qty}</td>
-                        <td className="px-2 py-1 text-right">
-                          {row.catalogMatch ? (
-                            <span
-                              className="text-brand-navy"
-                              title={`Matched to ${row.catalogMatch.source} catalog: "${row.catalogMatch.name}" -- verify before relying on it.`}
-                            >
-                              ${row.catalogMatch.unitCost.toFixed(2)}
-                            </span>
-                          ) : (
-                            <span className="text-neutral-400">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <form action={commitImportAction.bind(null, estimate.id, currentVersion!.id, importPreview.documentId)}>
-                <Button>
-                  Commit {importPreview.rows.length} draft line items
-                </Button>
-              </form>
-            </div>
-          )}
-        </Card>
-      )}
-
-      {canImport && (
-        <Card className="p-6">
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Propose line items from a document
-          </h2>
-          <p className="mb-4 text-sm text-neutral-500">
-            For an RFP with no pre-built pricing schedule -- reads an analyzed Scope of Work (or the page images of
-            a drawing/rendering) and proposes draft line items. Unlike a real pricing schedule, quantities here are
-            often AI-inferred, not read from the source: rows marked{" "}
-            <span className="italic">(qty estimated — verify)</span> had no explicit quantity in the document at
-            all. Verify every row against the source before relying on it.
-          </p>
-          {scopeDocuments.length === 0 ? (
-            <Notice
-              message="No analyzed documents yet -- click Analyze on a document from the Opportunity page first."
-              actionHref={`/opportunities/${estimate.opportunity.id}`}
-              actionLabel="Go to Opportunity"
-            />
-          ) : (
-            <form action={proposeScopeItemsWithId} className="flex items-end gap-3">
-              <div className="flex-1">
-                <SelectField
-                  label="Document"
-                  name="documentId"
-                  defaultValue={proposeDocumentId ?? ""}
-                  options={scopeDocuments.map((d) => ({ value: d.id, label: d.filename }))}
-                />
-              </div>
-              <SubmitButton pendingText="Proposing…" variant="secondary">
-                Propose items
-              </SubmitButton>
-            </form>
-          )}
-
-          {proposeDocument && proposedItems && proposedItems.length === 0 && (
-            <p className="mt-4 text-sm text-neutral-500">
-              No concrete scope items found in &quot;{proposeDocument.filename}&quot;.
-            </p>
-          )}
-
-          {proposeDocument && proposedItems && proposedItems.length > 0 && (
-            <div className="mt-4 border-t border-neutral-200 pt-4">
-              <p className="mb-3 text-sm text-neutral-700">
-                <span className="font-medium">{proposedItems.length}</span> proposed line items in{" "}
-                <span className="font-medium">{proposeDocument.filename}</span> — AI-drafted, verify before
-                committing.
-              </p>
-              <div className="mb-4 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-neutral-50">
-                    <tr className="text-left text-neutral-500">
-                      <th className="px-2 py-1.5 font-normal">Category</th>
-                      <th className="px-2 py-1.5 font-normal">Description</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Unit</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Qty</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
-                      {estimateNameById.size > 0 && <th className="px-2 py-1.5 font-normal">Project</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {proposedItems.map((item, i) => {
-                      const catalogMatch = matchDescription(item.description, proposeCatalog);
-                      return (
-                        <tr key={i} className="border-t border-neutral-100">
-                          <td className="px-2 py-1 text-neutral-500">{item.category}</td>
-                          <td className="max-w-[24rem] truncate px-2 py-1" title={item.sourceQuote}>
-                            {item.description}
-                          </td>
-                          <td className="px-2 py-1 text-right">{item.unit}</td>
-                          <td className="px-2 py-1 text-right">
-                            {item.qty}
-                            {!item.qtyIsExplicit && (
-                              <span className="ml-1 text-amber-600" title="Not stated in the source -- a placeholder, not a real quantity.">
-                                *
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-2 py-1 text-right">
-                            {catalogMatch ? (
-                              <span
-                                className="text-brand-navy"
-                                title={`Matched to ${catalogMatch.source} catalog: "${catalogMatch.name}" -- verify before relying on it.`}
-                              >
-                                ${catalogMatch.unitCost.toFixed(2)}
-                              </span>
-                            ) : (
-                              <span className="text-neutral-400">—</span>
-                            )}
-                          </td>
-                          {estimateNameById.size > 0 && (
-                            <td className="px-2 py-1 text-neutral-500">
-                              {item.estimateId ? (estimateNameById.get(item.estimateId) ?? "Unknown estimate") : "Shared"}
-                              {item.classificationUncertain && (
-                                <span
-                                  className="ml-1 text-amber-600"
-                                  title="A second, independent AI pass disagreed with this classification -- verify carefully before committing."
-                                >
-                                  ⚠
-                                </span>
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <form action={commitScopeItemsAction.bind(null, estimate.id, currentVersion!.id, proposeDocument.id)}>
-                <Button>Commit {proposedItems.length} draft line items</Button>
-              </form>
-            </div>
-          )}
-        </Card>
-      )}
-
       {!currentVersion ? (
         <Card className="p-6">
           <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">
@@ -754,34 +321,82 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           </form>
         </Card>
       ) : (
-        <EstimateVersionCard
-          estimateId={estimate.id}
-          opportunityId={estimate.opportunityId}
-          version={currentVersion}
-          users={users}
-          proposalTemplates={proposalTemplates}
-          attachments={attachments}
-          laborRates={laborRateOptions}
-          categoryOptions={categoryOptions}
-        />
-      )}
+        <>
+          <VersionSummaryBar estimateId={estimate.id} version={currentVersion} />
 
-      {olderVersions.length > 0 && (
-        <Card className="p-6">
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Earlier versions
-          </h2>
-          <ul className="flex flex-col gap-2 text-sm">
-            {olderVersions.map((v) => (
-              <li key={v.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
-                <span>
-                  Version {v.versionNumber} {v.isLocked ? "· locked" : "· unlocked"}
-                </span>
-                <span className="font-medium">{money(v.grandTotal)}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
+          <Suspense fallback={null}>
+            <Tabs
+              tabs={[
+                { id: "line-items", label: "Line Items" },
+                { id: "documents", label: "Documents" },
+                { id: "review", label: "Review", count: reviewIssueCount },
+                { id: "proposal", label: "Proposal & Approval" },
+                { id: "cut-list", label: "Cut List" },
+              ]}
+              content={{
+                "line-items": (
+                  <LineItemsTab
+                    estimateId={estimate.id}
+                    opportunityId={estimate.opportunityId}
+                    version={currentVersion}
+                    categories={categories}
+                    categoryOptions={categoryOptions}
+                    laborRates={laborRateOptions}
+                    attachments={attachments}
+                    users={users}
+                  />
+                ),
+                documents: (
+                  <DocumentsTab
+                    estimateId={estimate.id}
+                    opportunityId={estimate.opportunity.id}
+                    users={users}
+                    attachments={attachments}
+                    addAttachmentAction={addAttachmentWithId}
+                    canImport={canImport}
+                    buildEstimateAction={buildEstimateWithIds}
+                    buildResult={buildResult}
+                    pricingScheduleDocuments={pricingScheduleDocuments}
+                    previewImportAction={previewImportWithId}
+                    importDocumentId={importDocumentId}
+                    importPreview={importPreview}
+                    currentVersion={currentVersion}
+                    scopeDocuments={scopeDocuments}
+                    proposeScopeItemsAction={proposeScopeItemsWithId}
+                    proposeDocumentId={proposeDocumentId}
+                    proposeDocument={proposeDocument ?? null}
+                    proposedItems={proposedItems}
+                    proposeCatalog={proposeCatalog}
+                    estimateNameById={estimateNameById}
+                  />
+                ),
+                review: (
+                  <ReviewTab
+                    estimateId={estimate.id}
+                    opportunityId={estimate.opportunityId}
+                    riskFlags={riskFlags}
+                    categoryAudit={categoryAudit}
+                    currentVersion={currentVersion}
+                    scopeDocuments={scopeDocuments}
+                    runCoverageAnalysisAction={runCoverageAnalysisWithIds}
+                    coverageAnalysis={coverageAnalysis}
+                    coverageGapsWithDocs={coverageGapsWithDocs}
+                  />
+                ),
+                proposal: (
+                  <ProposalApprovalTab
+                    estimateId={estimate.id}
+                    version={currentVersion}
+                    users={users}
+                    proposalTemplates={proposalTemplates}
+                    olderVersions={olderVersions}
+                  />
+                ),
+                "cut-list": <CutListTab estimateId={estimate.id} versionId={currentVersion.id} />,
+              }}
+            />
+          </Suspense>
+        </>
       )}
     </div>
   );
@@ -802,6 +417,51 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
     changeOrdersAsBase: true;
   };
 }>;
+
+// The always-visible header/summary -- title, lock status, totals -- kept
+// outside the tab system entirely (not one of the five tabs' content)
+// since it's context relevant regardless of which tab is open, the same
+// reasoning the design note gave for keeping it out: "context, not a
+// section."
+function VersionSummaryBar({ estimateId, version }: { estimateId: string; version: VersionWithSections }) {
+  const lockVersionWithIds = lockVersionAction.bind(null, estimateId, version.id);
+  const createNewVersionWithIds = createNewVersionAction.bind(null, estimateId, version.id);
+
+  return (
+    <Card className="p-6">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          Version {version.versionNumber} {version.isLocked ? "· locked" : "· editing"}
+        </h2>
+        {version.isLocked && !version.isApproved && (
+          <form action={createNewVersionWithIds}>
+            <Button variant="secondary">Create new version</Button>
+          </form>
+        )}
+        {!version.isLocked && (
+          <form action={lockVersionWithIds}>
+            <Button variant="secondary">Lock version</Button>
+          </form>
+        )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 rounded-md bg-neutral-50 p-4 text-sm">
+        <div>
+          <div className="text-neutral-500">Total cost</div>
+          <div className="text-lg font-semibold">{money(version.totalCost)}</div>
+        </div>
+        <div>
+          <div className="text-neutral-500">Grand total</div>
+          <div className="text-lg font-semibold text-brand-navy">{money(version.grandTotal)}</div>
+        </div>
+        <div>
+          <div className="text-neutral-500">Gross margin</div>
+          <div className="text-lg font-semibold">{version.grossMarginPct.toFixed(1)}%</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 // Real XLSX pricing-schedule imports can list one row per physical booth
 // instance (113 rows for one section, on the real Super Bowl 2026 job) --
@@ -973,350 +633,227 @@ function LineItemsTable({
   );
 }
 
-function EstimateVersionCard({
+// One section's worth of line items, rendered wherever it shows up (used
+// both per-category in the category board below, and inside an Option).
+// Booth-grouping/rollup, the Actual-cost entry list, and Add Line Item
+// are all unchanged from before this file had tabs -- only where this
+// gets called from changed.
+function SectionLineItemsBlock({
+  lineItems,
+  version,
+  estimateId,
+  opportunityId,
+  laborRates,
+  categoryOptions,
+}: {
+  lineItems: SectionLineItem[];
+  version: VersionWithSections;
+  estimateId: string;
+  opportunityId: string;
+  laborRates: LaborRateOption[];
+  categoryOptions: { value: string; label: string }[];
+}) {
+  if (lineItems.length === 0) return null;
+  const boothGroups =
+    lineItems.length > BOOTH_GROUP_ROW_THRESHOLD ? groupLineItemsByBoothInstance(lineItems) : null;
+
+  if (!boothGroups) {
+    return (
+      <div className="mb-1 overflow-x-auto rounded-md border border-neutral-200">
+        <LineItemsTable
+          lineItems={lineItems}
+          version={version}
+          estimateId={estimateId}
+          opportunityId={opportunityId}
+          laborRates={laborRates}
+          categoryOptions={categoryOptions}
+        />
+      </div>
+    );
+  }
+
+  const rollup = summarizeRepeatedDescriptions(lineItems);
+  return (
+    <div className="mb-1 flex flex-col gap-3">
+      {rollup.length > 0 && (
+        <div className="flex flex-wrap gap-2 rounded-md bg-neutral-50 p-3 text-xs text-neutral-600">
+          {rollup.map((r) => (
+            <span key={r.description} className="rounded-full border border-neutral-200 bg-white px-2 py-1">
+              {r.description} — {r.count} instances, {r.qtyTotal} total
+            </span>
+          ))}
+        </div>
+      )}
+      {boothGroups.map((group, i) => (
+        <details key={i} className="rounded-md border border-neutral-200">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium marker:content-none [&::-webkit-details-marker]:hidden">
+            {group.label}
+            <span className="text-xs font-normal text-neutral-400">({group.items.length} items)</span>
+          </summary>
+          <div className="overflow-x-auto border-t border-neutral-200">
+            <LineItemsTable
+              lineItems={group.items}
+              version={version}
+              estimateId={estimateId}
+              opportunityId={opportunityId}
+              laborRates={laborRates}
+              categoryOptions={categoryOptions}
+            />
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+interface CategorySectionGroup {
+  sectionId: string;
+  sectionName: string;
+  groupLabel: string | null;
+  lineItems: SectionLineItem[];
+}
+
+interface CategoryBucket {
+  category: { id: string; name: string };
+  totalItems: number;
+  sectionGroups: CategorySectionGroup[];
+}
+
+// The category board's data shape -- every live Category (Labor,
+// Structure, Furniture, ...) always gets a bucket, even an empty one, so
+// it always shows as a tab (matches Tabs' own header comment on why: a
+// blank Excel sheet still has a tab). Buckets by section too, not just
+// category, since a category's items still need their originating
+// booth/component visible for production tracking and Add Line Item's
+// own sectionId -- this only changes what's grouped together for
+// display, not the underlying per-section data model LineItem/
+// EstimateSection already are.
+//
+// Deliberately does NOT merge/sum identical line items across sections
+// the way proposal-view-model.ts's aggregateByCategory does for the
+// client-facing PDF -- that's a read-only summary view; this is for
+// editing, which needs every raw LineItem individually addressable
+// (its own id, its own move/update/delete actions).
+function bucketLineItemsByCategory(
+  sections: VersionWithSections["sections"],
+  categories: { id: string; name: string }[],
+): CategoryBucket[] {
+  const byCategoryThenSection = new Map<string, Map<string, CategorySectionGroup>>();
+
+  for (const section of sections) {
+    for (const li of section.lineItems) {
+      const categoryName = isKnownCategory(categories, li.category) ? li.category! : "Other";
+      let sectionMap = byCategoryThenSection.get(categoryName);
+      if (!sectionMap) {
+        sectionMap = new Map();
+        byCategoryThenSection.set(categoryName, sectionMap);
+      }
+      let group = sectionMap.get(section.id);
+      if (!group) {
+        group = { sectionId: section.id, sectionName: section.name, groupLabel: section.groupLabel, lineItems: [] };
+        sectionMap.set(section.id, group);
+      }
+      group.lineItems.push(li);
+    }
+  }
+
+  return categories.map((category) => {
+    const sectionMap = byCategoryThenSection.get(category.name);
+    const sectionGroups = sectionMap ? [...sectionMap.values()] : [];
+    return {
+      category,
+      totalItems: sectionGroups.reduce((sum, g) => sum + g.lineItems.length, 0),
+      sectionGroups,
+    };
+  });
+}
+
+// The "Line Items" tab: the category board itself (Excel-sheet-tab-style
+// navigation across Labor/Structure/Furniture/...), plus the structural
+// controls that used to sit below the old flat section list -- Add
+// section and Options (alternates). Section reordering (the old ▲▼ next
+// to a section heading) is deliberately dropped from this pass rather
+// than half-ported into a category-filtered view where "up" wouldn't
+// reliably mean what it used to -- a real follow-up, not an oversight.
+function LineItemsTab({
   estimateId,
   opportunityId,
   version,
-  users,
-  proposalTemplates,
-  attachments,
-  laborRates,
+  categories,
   categoryOptions,
+  laborRates,
+  attachments,
+  users,
 }: {
   estimateId: string;
   opportunityId: string;
   version: VersionWithSections;
-  users: { id: string; name: string }[];
-  proposalTemplates: { id: string; name: string }[];
-  attachments: { id: string; fileRef: string }[];
-  laborRates: { id: string; label: string; department: string | null; rate: number }[];
+  categories: { id: string; name: string }[];
   categoryOptions: { value: string; label: string }[];
+  laborRates: LaborRateOption[];
+  attachments: { id: string; fileRef: string }[];
+  users: { id: string; name: string }[];
 }) {
-  const updateMarginTargetWithIds = updateMarginTargetAction.bind(null, estimateId, version.id);
+  const buckets = bucketLineItemsByCategory(version.sections, categories);
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
   const addOptionWithIds = addOptionAction.bind(null, estimateId, version.id);
-  const lockVersionWithIds = lockVersionAction.bind(null, estimateId, version.id);
-  const createNewVersionWithIds = createNewVersionAction.bind(null, estimateId, version.id);
-  const approveVersionWithIds = approveVersionAction.bind(null, estimateId, version.id);
-  const generateProposalWithIds = generateProposalAction.bind(null, estimateId, version.id);
-  const createChangeOrderWithIds = createChangeOrderAction.bind(null, estimateId, version.id);
 
   return (
-    <Card className="p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Version {version.versionNumber} {version.isLocked ? "· locked" : "· editing"}
-        </h2>
-        {version.isLocked && !version.isApproved && (
-          <form action={createNewVersionWithIds}>
-            <Button variant="secondary">Create new version</Button>
-          </form>
-        )}
-        {!version.isLocked && (
-          <form action={lockVersionWithIds}>
-            <Button variant="secondary">Lock version</Button>
-          </form>
-        )}
-      </div>
-
-      <div className="mb-6 grid grid-cols-3 gap-4 rounded-md bg-neutral-50 p-4 text-sm">
-        <div>
-          <div className="text-neutral-500">Total cost</div>
-          <div className="text-lg font-semibold">{money(version.totalCost)}</div>
-        </div>
-        <div>
-          <div className="text-neutral-500">Grand total</div>
-          <div className="text-lg font-semibold text-brand-navy">{money(version.grandTotal)}</div>
-        </div>
-        <div>
-          <div className="text-neutral-500">Gross margin</div>
-          <div className="text-lg font-semibold">{version.grossMarginPct.toFixed(1)}%</div>
-        </div>
-      </div>
-
-      <div className="mb-6 rounded-md border border-dashed border-neutral-300 p-4">
-        <p className="mb-3 text-sm text-neutral-500">
-          Check the branded PDF format anytime, even while this version is still unlocked and
-          changing — this doesn&apos;t create a real Proposal record, just renders current numbers.
-        </p>
-        {proposalTemplates.length === 0 ? (
-          <Notice
-            message="Previewing a PDF needs a branded template, and there are no templates yet."
-            actionHref="/catalog/proposal-templates/new"
-            actionLabel="Add a template"
-          />
+    <div className="flex flex-col gap-6">
+      <Card className="p-6">
+        {version.isLocked ? (
+          <VarianceByDepartment sections={version.sections} />
         ) : (
-          <form
-            action={`/estimates/${estimateId}/versions/${version.id}/preview-pdf`}
-            method="get"
-            target="_blank"
-            className="flex items-end gap-3"
-          >
-            <div className="w-56">
-              <SelectField
-                label="Proposal template"
-                name="templateId"
+          <form action={updateMarginTargetAction.bind(null, estimateId, version.id)} className="mb-6 flex items-end gap-3">
+            <div className="w-40">
+              <Field
+                label="Margin target (%)"
+                name="marginTargetPct"
+                type="number"
+                defaultValue={version.marginTargetPct.toString()}
                 required
-                options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
               />
             </div>
-            <Button variant="secondary">Preview PDF</Button>
+            <Button variant="secondary">Update margin</Button>
           </form>
         )}
-      </div>
 
-      {version.isLocked && <VarianceByDepartment sections={version.sections} />}
-
-      {version.isLocked ? (
-        <>
-          <p className="mb-4 text-sm text-neutral-500">
-            Margin target: {version.marginTargetPct.toFixed(1)}% (locked{" "}
-            {version.lockedAt ? version.lockedAt.toISOString().slice(0, 16).replace("T", " ") : ""})
-          </p>
-
-          <div className="mb-6 rounded-md border border-neutral-200 p-4">
-            {!version.isApproved ? (
-              users.length === 0 ? (
-                <Notice
-                  message="Approving a version needs an approver on file, and there are no users yet."
-                  actionHref="/admin/users/new"
-                  actionLabel="Add a user"
-                />
-              ) : (
-                <form action={approveVersionWithIds} className="flex items-end gap-3">
-                  <div className="w-56">
-                    <SelectField
-                      label="Approved by"
-                      name="approvedById"
-                      required
-                      options={users.map((u) => ({ value: u.id, label: u.name }))}
-                    />
-                  </div>
-                  <Button variant="secondary">Approve version</Button>
-                </form>
-              )
-            ) : (
-              <>
-                <p className="mb-3 text-sm text-neutral-500">
-                  Approved by {version.approvedBy?.name ?? "unknown"}
-                  {version.approvedAt
-                    ? ` on ${version.approvedAt.toISOString().slice(0, 16).replace("T", " ")}`
-                    : ""}
-                </p>
-                {proposalTemplates.length === 0 ? (
-                  <Notice
-                    message="Generating a proposal needs a branded template, and there are no templates yet."
-                    actionHref="/catalog/proposal-templates/new"
-                    actionLabel="Add a template"
-                  />
-                ) : (
-                  <form action={generateProposalWithIds} className="flex items-end gap-3">
-                    <div className="w-56">
-                      <SelectField
-                        label="Proposal template"
-                        name="templateId"
-                        required
-                        options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
-                      />
-                    </div>
-                    <SubmitButton pendingText="Generating…" variant="secondary">
-                      Generate proposal
-                    </SubmitButton>
-                  </form>
-                )}
-                {version.proposals.length > 0 && (
-                  <ul className="mt-4 flex flex-col gap-1 border-t border-neutral-200 pt-3 text-sm">
-                    {version.proposals.map((p) => (
-                      <li key={p.id} className="flex items-center justify-between">
-                        <Link href={`/proposals/${p.id}`} className="text-neutral-900 hover:underline">
-                          Proposal {p.id.slice(0, 8)}
-                        </Link>
-                        <span className="text-neutral-500">
-                          {p.signedAt ? "Signed" : p.sentAt ? "Sent" : "Draft"}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                <form action={createChangeOrderWithIds} className="mt-4 flex items-end gap-3 border-t border-neutral-200 pt-3">
-                  <div className="flex-1">
-                    <Field
-                      label="Start a change order"
-                      name="description"
-                      placeholder="What's changing? e.g. Upgrade flooring"
-                      required
-                    />
-                  </div>
-                  <Button variant="secondary">Start change order</Button>
-                </form>
-                {version.changeOrdersAsBase.length > 0 && (
-                  <ul className="mt-4 flex flex-col gap-1 border-t border-neutral-200 pt-3 text-sm">
-                    {version.changeOrdersAsBase.map((co) => (
-                      <li key={co.id} className="flex items-center justify-between">
-                        <Link href={`/change-orders/${co.id}`} className="text-neutral-900 hover:underline">
-                          {co.description}
-                        </Link>
-                        <span className="text-neutral-500">{co.status}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            )}
-          </div>
-        </>
-      ) : (
-        <form action={updateMarginTargetWithIds} className="mb-6 flex items-end gap-3">
-          <div className="w-40">
-            <Field
-              label="Margin target (%)"
-              name="marginTargetPct"
-              type="number"
-              defaultValue={version.marginTargetPct.toString()}
-              required
-            />
-          </div>
-          <Button variant="secondary">Update margin</Button>
-        </form>
-      )}
-
-      <div className="flex flex-col gap-6">
-        {version.sections.map((section, sectionIndex) => (
-          <div key={section.id} className="border-t border-neutral-200 pt-4">
-            <h3 className="mb-3 flex flex-wrap items-center gap-2 font-medium">
-              {section.name}
-              {section.groupLabel && (
-                <span className="text-sm font-normal text-neutral-500">— {section.groupLabel}</span>
-              )}
-              <span className="text-xs font-normal uppercase text-neutral-400">
-                {section.sectionType}
-              </span>
-              {!version.isLocked && (
-                <span className="flex gap-1">
-                  <form action={moveSectionAction.bind(null, estimateId, section.id, "up")} className="inline">
-                    <button
-                      disabled={sectionIndex === 0}
-                      className="text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
-                      title="Move section up"
-                    >
-                      ▲
-                    </button>
-                  </form>
-                  <form action={moveSectionAction.bind(null, estimateId, section.id, "down")} className="inline">
-                    <button
-                      disabled={sectionIndex === version.sections.length - 1}
-                      className="text-xs text-neutral-400 hover:text-neutral-700 disabled:opacity-30 disabled:hover:text-neutral-400"
-                      title="Move section down"
-                    >
-                      ▼
-                    </button>
-                  </form>
-                </span>
-              )}
-            </h3>
-            {section.lineItems.length > 0 &&
-              (() => {
-                const boothGroups =
-                  section.lineItems.length > BOOTH_GROUP_ROW_THRESHOLD
-                    ? groupLineItemsByBoothInstance(section.lineItems)
-                    : null;
-
-                // No booth marker found, or the section is small enough to
-                // just read as-is -- today's flat table, unchanged.
-                if (!boothGroups) {
-                  return (
-                    <div className="mb-1 overflow-x-auto rounded-md border border-neutral-200">
-                      <LineItemsTable
-                        lineItems={section.lineItems}
-                        version={version}
-                        estimateId={estimateId}
-                        opportunityId={opportunityId}
-                        laborRates={laborRates}
-                        categoryOptions={categoryOptions}
-                      />
-                    </div>
-                  );
-                }
-
-                const rollup = summarizeRepeatedDescriptions(section.lineItems);
-                return (
-                  <div className="mb-1 flex flex-col gap-3">
-                    {rollup.length > 0 && (
-                      <div className="flex flex-wrap gap-2 rounded-md bg-neutral-50 p-3 text-xs text-neutral-600">
-                        {rollup.map((r) => (
-                          <span
-                            key={r.description}
-                            className="rounded-full border border-neutral-200 bg-white px-2 py-1"
-                          >
-                            {r.description} — {r.count} instances, {r.qtyTotal} total
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {boothGroups.map((group, i) => (
-                      <details key={i} className="rounded-md border border-neutral-200">
-                        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium marker:content-none [&::-webkit-details-marker]:hidden">
-                          {group.label}
-                          <span className="text-xs font-normal text-neutral-400">
-                            ({group.items.length} items)
-                          </span>
-                        </summary>
-                        <div className="overflow-x-auto border-t border-neutral-200">
-                          <LineItemsTable
-                            lineItems={group.items}
-                            version={version}
-                            estimateId={estimateId}
-                            opportunityId={opportunityId}
-                            laborRates={laborRates}
-                            categoryOptions={categoryOptions}
-                          />
-                        </div>
-                      </details>
-                    ))}
-                  </div>
-                );
-              })()}
-            {version.isLocked && section.lineItems.length > 0 && (
-              <p className="mb-3 text-xs text-neutral-400 sm:hidden">
-                ← Scroll the table for Actual &amp; Variance
-              </p>
-            )}
-            {version.isLocked && section.lineItems.length > 0 && (
-              <div className="mb-3 flex flex-col gap-2">
-                {section.lineItems.map((li) => (
-                  <RecordActualForm key={li.id} estimateId={estimateId} lineItem={li} users={users} />
-                ))}
-              </div>
-            )}
-            {!version.isLocked && (
-              <AddLineItemForm
+        <Tabs
+          paramName="category"
+          tabs={buckets.map((b) => ({ id: b.category.id, label: b.category.name, count: b.totalItems }))}
+          content={Object.fromEntries(
+            buckets.map((bucket) => [
+              bucket.category.id,
+              <CategoryTabContent
+                key={bucket.category.id}
+                bucket={bucket}
+                version={version}
                 estimateId={estimateId}
-                versionId={version.id}
-                sectionId={section.id}
-                attachments={attachments}
+                opportunityId={opportunityId}
                 laborRates={laborRates}
                 categoryOptions={categoryOptions}
-              />
-            )}
-          </div>
-        ))}
-      </div>
+                attachments={attachments}
+                users={users}
+              />,
+            ]),
+          )}
+        />
 
-      {!version.isLocked && (
-        <form action={addSectionWithIds} className="mt-6 flex items-end gap-3 border-t border-neutral-200 pt-4">
-          <div className="flex-1">
-            <Field label="New section name" name="name" placeholder="e.g. COMPONENT 1" required />
-          </div>
-          <div className="w-48">
-            <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
-          </div>
-          <Button variant="secondary">Add section</Button>
-        </form>
-      )}
+        {!version.isLocked && (
+          <form action={addSectionWithIds} className="mt-6 flex items-end gap-3 border-t border-neutral-200 pt-4">
+            <div className="flex-1">
+              <Field label="New section name" name="name" placeholder="e.g. COMPONENT 1" required />
+            </div>
+            <div className="w-48">
+              <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
+            </div>
+            <Button variant="secondary">Add section</Button>
+          </form>
+        )}
+      </Card>
 
       {(version.options.length > 0 || !version.isLocked) && (
-        <div className="mt-8 border-t-2 border-neutral-200 pt-6">
+        <Card className="p-6">
           <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
             Options (alternates)
           </h3>
@@ -1341,9 +878,94 @@ function EstimateVersionCard({
               <Button variant="secondary">Add option</Button>
             </form>
           )}
-        </div>
+        </Card>
       )}
-    </Card>
+    </div>
+  );
+}
+
+function CategoryTabContent({
+  bucket,
+  version,
+  estimateId,
+  opportunityId,
+  laborRates,
+  categoryOptions,
+  attachments,
+  users,
+}: {
+  bucket: CategoryBucket;
+  version: VersionWithSections;
+  estimateId: string;
+  opportunityId: string;
+  laborRates: LaborRateOption[];
+  categoryOptions: { value: string; label: string }[];
+  attachments: { id: string; fileRef: string }[];
+  users: { id: string; name: string }[];
+}) {
+  if (bucket.sectionGroups.length === 0) {
+    const firstSection = version.sections[0];
+    return (
+      <div className="pt-2">
+        <p className="mb-4 text-sm text-neutral-500">No {bucket.category.name} line items yet.</p>
+        {!version.isLocked &&
+          (firstSection ? (
+            <AddLineItemForm
+              estimateId={estimateId}
+              versionId={version.id}
+              sectionId={firstSection.id}
+              attachments={attachments}
+              laborRates={laborRates}
+              categoryOptions={categoryOptions}
+              defaultCategory={bucket.category.name}
+            />
+          ) : (
+            <p className="text-sm text-neutral-400">Add a section below before adding line items.</p>
+          ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6 pt-2">
+      {bucket.sectionGroups.map((group) => (
+        <div key={group.sectionId} className="border-t border-neutral-200 pt-4 first:border-t-0 first:pt-0">
+          <h4 className="mb-3 flex flex-wrap items-center gap-2 text-sm font-medium text-neutral-700">
+            {group.sectionName}
+            {group.groupLabel && <span className="font-normal text-neutral-500">— {group.groupLabel}</span>}
+          </h4>
+          <SectionLineItemsBlock
+            lineItems={group.lineItems}
+            version={version}
+            estimateId={estimateId}
+            opportunityId={opportunityId}
+            laborRates={laborRates}
+            categoryOptions={categoryOptions}
+          />
+          {version.isLocked && (
+            <>
+              <p className="mb-3 text-xs text-neutral-400 sm:hidden">← Scroll the table for Actual &amp; Variance</p>
+              <div className="mb-3 flex flex-col gap-2">
+                {group.lineItems.map((li) => (
+                  <RecordActualForm key={li.id} estimateId={estimateId} lineItem={li} users={users} />
+                ))}
+              </div>
+            </>
+          )}
+          {!version.isLocked && (
+            <AddLineItemForm
+              estimateId={estimateId}
+              versionId={version.id}
+              sectionId={group.sectionId}
+              attachments={attachments}
+              laborRates={laborRates}
+              categoryOptions={categoryOptions}
+              defaultCategory={bucket.category.name}
+            />
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1511,6 +1133,7 @@ function AddLineItemForm({
   attachments = [],
   laborRates = [],
   categoryOptions,
+  defaultCategory = "",
 }: {
   estimateId: string;
   versionId: string;
@@ -1518,6 +1141,12 @@ function AddLineItemForm({
   attachments?: { id: string; fileRef: string }[];
   laborRates?: { id: string; label: string; department: string | null; rate: number }[];
   categoryOptions: { value: string; label: string }[];
+  // Prefills the category (and, via LaborRateLineItemFields, whether the
+  // labor-rate picker shows) when adding from a specific category tab --
+  // e.g. inside the "Labor" tab, a new line item should default to
+  // Labor, not fall through to auto-detect the way the old flat
+  // per-section form always did.
+  defaultCategory?: string;
 }) {
   const addLineItemWithIds = addLineItemAction.bind(null, estimateId, versionId, sectionId);
   return (
@@ -1532,7 +1161,7 @@ function AddLineItemForm({
         <div className="sm:order-1 sm:w-36">
           <SelectField label="Type" name="lineType" defaultValue="MATERIAL" options={LINE_TYPE_OPTIONS} />
         </div>
-        <LaborRateLineItemFields categoryOptions={categoryOptions} laborRates={laborRates} />
+        <LaborRateLineItemFields categoryOptions={categoryOptions} laborRates={laborRates} defaultCategory={defaultCategory} />
         <div className="sm:order-5 sm:w-24">
           <Field label="Qty" name="qty" type="number" defaultValue="1" required />
         </div>
@@ -1562,5 +1191,722 @@ function AddLineItemForm({
         </div>
       </form>
     </div>
+  );
+}
+
+// "Documents" tab: everything that reads source documents to populate or
+// support line items -- Attachments (referenced design files), Build
+// from all documents, Import from a Pricing Schedule, Propose from a
+// Scope of Work/drawing. Grouped together because they're all inputs
+// into the estimate, distinct from Review's audits of what's already
+// there.
+function DocumentsTab({
+  estimateId,
+  opportunityId,
+  users,
+  attachments,
+  addAttachmentAction,
+  canImport,
+  buildEstimateAction,
+  buildResult,
+  pricingScheduleDocuments,
+  previewImportAction,
+  importDocumentId,
+  importPreview,
+  currentVersion,
+  scopeDocuments,
+  proposeScopeItemsAction,
+  proposeDocumentId,
+  proposeDocument,
+  proposedItems,
+  proposeCatalog,
+  estimateNameById,
+}: {
+  estimateId: string;
+  opportunityId: string;
+  users: { id: string; name: string }[];
+  attachments: { id: string; fileRef: string; uploadedBy: { name: string } | null }[];
+  addAttachmentAction: (formData: FormData) => void | Promise<void>;
+  canImport: boolean;
+  buildEstimateAction: ((formData: FormData) => void | Promise<void>) | null;
+  buildResult: BuildEstimateResult | null;
+  pricingScheduleDocuments: { id: string; filename: string }[];
+  previewImportAction: (formData: FormData) => void | Promise<void>;
+  importDocumentId: string | undefined;
+  importPreview: Awaited<ReturnType<typeof previewPricingImport>> | Error | null;
+  currentVersion: VersionWithSections;
+  scopeDocuments: { id: string; filename: string }[];
+  proposeScopeItemsAction: (formData: FormData) => void | Promise<void>;
+  proposeDocumentId: string | undefined;
+  proposeDocument: { id: string; filename: string } | null;
+  proposedItems: ProposedLineItem[] | null;
+  proposeCatalog: Awaited<ReturnType<typeof loadCatalogForMatching>>;
+  estimateNameById: Map<string, string>;
+}) {
+  return (
+    <div className="flex flex-col gap-6">
+      <Card className="p-6">
+        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Attachments</h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Design files (pull sheets, artwork) referenced by filename or an external link -- ForgeOS doesn&apos;t
+          host files yet, matching how artwork already moves via FTP/WeTransfer outside the workbook.
+        </p>
+        {attachments.length > 0 && (
+          <ul className="mb-4 flex flex-col gap-1 text-sm">
+            {attachments.map((a) => (
+              <li key={a.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
+                <span>{a.fileRef}</span>
+                <span className="text-neutral-500">{a.uploadedBy?.name ?? "unknown"}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <form action={addAttachmentAction} className="flex items-end gap-3">
+          <div className="flex-1">
+            <Field label="File reference" name="fileRef" placeholder="e.g. pull-sheet-v1.pdf or a WeTransfer link" required />
+          </div>
+          <div className="w-48">
+            <SelectField
+              label="Uploaded by"
+              name="uploadedById"
+              options={[{ value: "", label: "— unspecified —" }, ...users.map((u) => ({ value: u.id, label: u.name }))]}
+            />
+          </div>
+          <Button variant="secondary">Add attachment</Button>
+        </form>
+      </Card>
+
+      {canImport && buildEstimateAction && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Build estimate from all documents
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Runs the Pricing Schedule import and Scope of Work proposal below across every analyzed document for
+            this Opportunity in one pass, instead of picking one at a time -- skips anything already imported, not
+            yet analyzed, or that turns up nothing to propose.
+          </p>
+          {buildResult && (
+            <div className="mb-4 flex flex-col gap-2 text-sm">
+              {buildResult.imported.length > 0 && (
+                <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2">
+                  <p className="mb-1 font-medium text-green-900">Imported {buildResult.imported.length} document(s):</p>
+                  <ul className="flex flex-col gap-0.5 text-green-800">
+                    {buildResult.imported.map((r, i) => (
+                      <li key={i}>
+                        {r.filename} — {r.rowsImported} {r.kind === "pricing" ? "pricing rows" : "proposed items"}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {buildResult.skipped.length > 0 && (
+                <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2">
+                  <p className="mb-1 font-medium text-neutral-700">Skipped {buildResult.skipped.length} document(s):</p>
+                  <ul className="flex flex-col gap-0.5 text-neutral-600">
+                    {buildResult.skipped.map((r, i) => (
+                      <li key={i}>
+                        {r.filename} — {r.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {buildResult.imported.length === 0 && buildResult.skipped.length === 0 && (
+                <p className="text-neutral-500">No documents found for this Opportunity yet.</p>
+              )}
+            </div>
+          )}
+          <form action={buildEstimateAction}>
+            <SubmitButton pendingText="Building…" variant="primary">
+              Build from all analyzed documents
+            </SubmitButton>
+          </form>
+        </Card>
+      )}
+
+      {canImport && (
+        <Card className="p-6">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Import from document
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Parses a Pricing Schedule spreadsheet (uploaded on the Opportunity&apos;s Documents card) straight
+            into draft line items with qty/unit already filled in. A row seeds its Unit Rate from a confident
+            catalog match when one exists (shown below) — otherwise it starts at $0, pending review either way.
+          </p>
+          {pricingScheduleDocuments.length === 0 ? (
+            <Notice
+              message="No pricing-schedule documents uploaded yet."
+              actionHref={`/opportunities/${opportunityId}`}
+              actionLabel="Go to Opportunity"
+            />
+          ) : (
+            <form action={previewImportAction} className="flex items-end gap-3">
+              <div className="flex-1">
+                <SelectField
+                  label="Document"
+                  name="documentId"
+                  defaultValue={importDocumentId ?? ""}
+                  options={pricingScheduleDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+                />
+              </div>
+              <Button variant="secondary">Preview import</Button>
+            </form>
+          )}
+
+          {importPreview instanceof Error && (
+            <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {importPreview.message}
+            </p>
+          )}
+
+          {importPreview && !(importPreview instanceof Error) && (
+            <div className="mt-4 border-t border-neutral-200 pt-4">
+              <p className="mb-3 text-sm text-neutral-700">
+                <span className="font-medium">{importPreview.rows.length}</span> line items across{" "}
+                <span className="font-medium">{importPreview.categories.length}</span> categories in{" "}
+                <span className="font-medium">{importPreview.filename}</span> ({importPreview.sheetName}).
+              </p>
+              <div className="mb-4 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-neutral-50">
+                    <tr className="text-left text-neutral-500">
+                      <th className="px-2 py-1.5 font-normal">Category</th>
+                      <th className="px-2 py-1.5 font-normal">Description</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Unit</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importPreview.rows.map((row) => (
+                      <tr key={row.rowNumber} className="border-t border-neutral-100">
+                        <td className="px-2 py-1 text-neutral-500">{row.category}</td>
+                        <td className="max-w-[24rem] truncate px-2 py-1" title={row.description}>
+                          {row.description.split("\n")[0]}
+                        </td>
+                        <td className="px-2 py-1 text-right">{row.unit}</td>
+                        <td className="px-2 py-1 text-right">{row.qty}</td>
+                        <td className="px-2 py-1 text-right">
+                          {row.catalogMatch ? (
+                            <span
+                              className="text-brand-navy"
+                              title={`Matched to ${row.catalogMatch.source} catalog: "${row.catalogMatch.name}" -- verify before relying on it.`}
+                            >
+                              ${row.catalogMatch.unitCost.toFixed(2)}
+                            </span>
+                          ) : (
+                            <span className="text-neutral-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <form action={commitImportAction.bind(null, estimateId, currentVersion.id, importPreview.documentId)}>
+                <Button>
+                  Commit {importPreview.rows.length} draft line items
+                </Button>
+              </form>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {canImport && (
+        <Card className="p-6">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Propose line items from a document
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            For an RFP with no pre-built pricing schedule -- reads an analyzed Scope of Work (or the page images of
+            a drawing/rendering) and proposes draft line items. Unlike a real pricing schedule, quantities here are
+            often AI-inferred, not read from the source: rows marked{" "}
+            <span className="italic">(qty estimated — verify)</span> had no explicit quantity in the document at
+            all. Verify every row against the source before relying on it.
+          </p>
+          {scopeDocuments.length === 0 ? (
+            <Notice
+              message="No analyzed documents yet -- click Analyze on a document from the Opportunity page first."
+              actionHref={`/opportunities/${opportunityId}`}
+              actionLabel="Go to Opportunity"
+            />
+          ) : (
+            <form action={proposeScopeItemsAction} className="flex items-end gap-3">
+              <div className="flex-1">
+                <SelectField
+                  label="Document"
+                  name="documentId"
+                  defaultValue={proposeDocumentId ?? ""}
+                  options={scopeDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+                />
+              </div>
+              <SubmitButton pendingText="Proposing…" variant="secondary">
+                Propose items
+              </SubmitButton>
+            </form>
+          )}
+
+          {proposeDocument && proposedItems && proposedItems.length === 0 && (
+            <p className="mt-4 text-sm text-neutral-500">
+              No concrete scope items found in &quot;{proposeDocument.filename}&quot;.
+            </p>
+          )}
+
+          {proposeDocument && proposedItems && proposedItems.length > 0 && (
+            <div className="mt-4 border-t border-neutral-200 pt-4">
+              <p className="mb-3 text-sm text-neutral-700">
+                <span className="font-medium">{proposedItems.length}</span> proposed line items in{" "}
+                <span className="font-medium">{proposeDocument.filename}</span> — AI-drafted, verify before
+                committing.
+              </p>
+              <div className="mb-4 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-neutral-50">
+                    <tr className="text-left text-neutral-500">
+                      <th className="px-2 py-1.5 font-normal">Category</th>
+                      <th className="px-2 py-1.5 font-normal">Description</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Unit</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                      <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
+                      {estimateNameById.size > 0 && <th className="px-2 py-1.5 font-normal">Project</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {proposedItems.map((item, i) => {
+                      const catalogMatch = matchDescription(item.description, proposeCatalog);
+                      return (
+                        <tr key={i} className="border-t border-neutral-100">
+                          <td className="px-2 py-1 text-neutral-500">{item.category}</td>
+                          <td className="max-w-[24rem] truncate px-2 py-1" title={item.sourceQuote}>
+                            {item.description}
+                          </td>
+                          <td className="px-2 py-1 text-right">{item.unit}</td>
+                          <td className="px-2 py-1 text-right">
+                            {item.qty}
+                            {!item.qtyIsExplicit && (
+                              <span className="ml-1 text-amber-600" title="Not stated in the source -- a placeholder, not a real quantity.">
+                                *
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1 text-right">
+                            {catalogMatch ? (
+                              <span
+                                className="text-brand-navy"
+                                title={`Matched to ${catalogMatch.source} catalog: "${catalogMatch.name}" -- verify before relying on it.`}
+                              >
+                                ${catalogMatch.unitCost.toFixed(2)}
+                              </span>
+                            ) : (
+                              <span className="text-neutral-400">—</span>
+                            )}
+                          </td>
+                          {estimateNameById.size > 0 && (
+                            <td className="px-2 py-1 text-neutral-500">
+                              {item.estimateId ? (estimateNameById.get(item.estimateId) ?? "Unknown estimate") : "Shared"}
+                              {item.classificationUncertain && (
+                                <span
+                                  className="ml-1 text-amber-600"
+                                  title="A second, independent AI pass disagreed with this classification -- verify carefully before committing."
+                                >
+                                  ⚠
+                                </span>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <form action={commitScopeItemsAction.bind(null, estimateId, currentVersion.id, proposeDocument.id)}>
+                <Button>Commit {proposedItems.length} draft line items</Button>
+              </form>
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// "Review" tab: read-only/advisory audits of what's already in the
+// estimate -- risk flags surfaced from source documents, categories that
+// won't bucket correctly on the client-facing proposal, and scope
+// coverage gaps. None of these mutate line items directly; they point at
+// what to go fix elsewhere (mostly back in Line Items).
+function ReviewTab({
+  estimateId,
+  opportunityId,
+  riskFlags,
+  categoryAudit,
+  currentVersion,
+  scopeDocuments,
+  runCoverageAnalysisAction,
+  coverageAnalysis,
+  coverageGapsWithDocs,
+}: {
+  estimateId: string;
+  opportunityId: string;
+  riskFlags: (DocumentSummary["riskFlags"][number] & { doc: { id: string; filename: string; mimeType: string } })[];
+  categoryAudit: ReturnType<typeof auditLineItemCategories>;
+  currentVersion: VersionWithSections;
+  scopeDocuments: { id: string; filename: string }[];
+  runCoverageAnalysisAction: ((formData: FormData) => void | Promise<void>) | null;
+  coverageAnalysis: { generatedAt: string; lineItemCount: number; gaps: CoverageGap[] } | null;
+  coverageGapsWithDocs: (CoverageGap & { doc: { id: string; filename: string; mimeType: string } })[];
+}) {
+  const hasAnyReview = riskFlags.length > 0 || categoryAudit.issues.length > 0 || (scopeDocuments.length > 0 && runCoverageAnalysisAction);
+
+  if (!hasAnyReview) {
+    return (
+      <div className="pt-2 text-sm text-neutral-500">
+        Nothing to review yet -- risk flags and category issues show up here once documents are analyzed and line
+        items are added.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      {riskFlags.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Risk &amp; compliance flags
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Extracted from this job&apos;s analyzed documents — verify against the source before pricing or
+            signing off around these terms.
+          </p>
+          <ul className="flex flex-col gap-2 text-sm">
+            {riskFlags.map((flag, i) => {
+              const href = citationHref(opportunityId, flag.doc, flag, `/estimates/${estimateId}#risk-flag-${i}`);
+              return (
+                <li
+                  key={i}
+                  id={`risk-flag-${i}`}
+                  className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
+                >
+                  <span className="flex items-start gap-2 text-amber-900">
+                    <span aria-hidden>⚠</span>
+                    {flag.text}
+                  </span>
+                  {href ? (
+                    <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
+                      {flag.doc.filename} →
+                    </Link>
+                  ) : (
+                    <span className="shrink-0 text-xs text-neutral-400">{flag.doc.filename}</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
+
+      {categoryAudit.issues.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Category review
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            These line items won&apos;t bucket correctly on the client-facing proposal — they&apos;ll fall
+            into &quot;Other&quot; instead of their real category. Fix them here before sending.
+          </p>
+          <ul className="flex flex-col gap-2 text-sm">
+            {categoryAudit.issues.map((issue) => (
+              <li
+                key={issue.lineItemId}
+                className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
+              >
+                <span className="flex items-start gap-2 text-amber-900">
+                  <span aria-hidden>⚠</span>
+                  {issue.description}
+                  {issue.reason === "orphaned" && (
+                    <span className="text-amber-700"> — category &quot;{issue.category}&quot; no longer exists</span>
+                  )}
+                </span>
+                <a href={`#line-item-${issue.lineItemId}`} className="shrink-0 text-xs text-brand-navy hover:underline">
+                  {issue.sectionName}
+                  {issue.groupLabel ? ` — ${issue.groupLabel}` : ""} →
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {currentVersion && scopeDocuments.length > 0 && runCoverageAnalysisAction && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Scope coverage
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Checks this version&apos;s line items against its scope documents for requirements that don&apos;t
+            appear to be priced anywhere -- advisory only, never adds line items automatically. Verify every
+            flag against the source before treating it as a real gap.
+          </p>
+          <form action={runCoverageAnalysisAction}>
+            <SubmitButton pendingText={coverageAnalysis ? "Re-running…" : "Running…"} variant="secondary">
+              {coverageAnalysis ? "Re-run coverage analysis" : "Run coverage analysis"}
+            </SubmitButton>
+          </form>
+
+          {coverageAnalysis && (
+            <div className="mt-4 border-t border-neutral-200 pt-4">
+              <p className="mb-3 text-xs text-neutral-400">
+                Generated {new Date(coverageAnalysis.generatedAt).toLocaleString()}, based on{" "}
+                {coverageAnalysis.lineItemCount} line item(s) -- re-run after making changes to the estimate or
+                its documents.
+              </p>
+              {coverageGapsWithDocs.length === 0 ? (
+                <p className="text-sm text-neutral-500">No coverage gaps found.</p>
+              ) : (
+                <ul className="flex flex-col gap-2 text-sm">
+                  {coverageGapsWithDocs.map((gap, i) => {
+                    const href = citationHref(
+                      opportunityId,
+                      gap.doc,
+                      gap,
+                      `/estimates/${estimateId}#coverage-gap-${i}`,
+                    );
+                    return (
+                      <li
+                        key={i}
+                        id={`coverage-gap-${i}`}
+                        className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
+                      >
+                        <span className="flex items-start gap-2 text-amber-900">
+                          <span aria-hidden>⚠</span>
+                          {gap.requirement}
+                        </span>
+                        {href ? (
+                          <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
+                            {gap.doc.filename} →
+                          </Link>
+                        ) : (
+                          <span className="shrink-0 text-xs text-neutral-400">{gap.doc.filename}</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// "Proposal & Approval" tab: PDF preview, lock/approve lifecycle,
+// generating a real Proposal record, change orders, and version
+// history -- everything about turning this version into something sent
+// to a client and tracked afterward.
+function ProposalApprovalTab({
+  estimateId,
+  version,
+  users,
+  proposalTemplates,
+  olderVersions,
+}: {
+  estimateId: string;
+  version: VersionWithSections;
+  users: { id: string; name: string }[];
+  proposalTemplates: { id: string; name: string }[];
+  olderVersions: VersionWithSections[];
+}) {
+  const approveVersionWithIds = approveVersionAction.bind(null, estimateId, version.id);
+  const generateProposalWithIds = generateProposalAction.bind(null, estimateId, version.id);
+  const createChangeOrderWithIds = createChangeOrderAction.bind(null, estimateId, version.id);
+
+  return (
+    <div className="flex flex-col gap-6">
+      <Card className="p-6">
+        <div className="rounded-md border border-dashed border-neutral-300 p-4">
+          <p className="mb-3 text-sm text-neutral-500">
+            Check the branded PDF format anytime, even while this version is still unlocked and
+            changing — this doesn&apos;t create a real Proposal record, just renders current numbers.
+          </p>
+          {proposalTemplates.length === 0 ? (
+            <Notice
+              message="Previewing a PDF needs a branded template, and there are no templates yet."
+              actionHref="/catalog/proposal-templates/new"
+              actionLabel="Add a template"
+            />
+          ) : (
+            <form
+              action={`/estimates/${estimateId}/versions/${version.id}/preview-pdf`}
+              method="get"
+              target="_blank"
+              className="flex items-end gap-3"
+            >
+              <div className="w-56">
+                <SelectField
+                  label="Proposal template"
+                  name="templateId"
+                  required
+                  options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
+                />
+              </div>
+              <Button variant="secondary">Preview PDF</Button>
+            </form>
+          )}
+        </div>
+
+        {version.isLocked ? (
+          <div className="mt-6">
+            <p className="mb-4 text-sm text-neutral-500">
+              Margin target: {version.marginTargetPct.toFixed(1)}% (locked{" "}
+              {version.lockedAt ? version.lockedAt.toISOString().slice(0, 16).replace("T", " ") : ""})
+            </p>
+
+            <div className="rounded-md border border-neutral-200 p-4">
+              {!version.isApproved ? (
+                users.length === 0 ? (
+                  <Notice
+                    message="Approving a version needs an approver on file, and there are no users yet."
+                    actionHref="/admin/users/new"
+                    actionLabel="Add a user"
+                  />
+                ) : (
+                  <form action={approveVersionWithIds} className="flex items-end gap-3">
+                    <div className="w-56">
+                      <SelectField
+                        label="Approved by"
+                        name="approvedById"
+                        required
+                        options={users.map((u) => ({ value: u.id, label: u.name }))}
+                      />
+                    </div>
+                    <Button variant="secondary">Approve version</Button>
+                  </form>
+                )
+              ) : (
+                <>
+                  <p className="mb-3 text-sm text-neutral-500">
+                    Approved by {version.approvedBy?.name ?? "unknown"}
+                    {version.approvedAt
+                      ? ` on ${version.approvedAt.toISOString().slice(0, 16).replace("T", " ")}`
+                      : ""}
+                  </p>
+                  {proposalTemplates.length === 0 ? (
+                    <Notice
+                      message="Generating a proposal needs a branded template, and there are no templates yet."
+                      actionHref="/catalog/proposal-templates/new"
+                      actionLabel="Add a template"
+                    />
+                  ) : (
+                    <form action={generateProposalWithIds} className="flex items-end gap-3">
+                      <div className="w-56">
+                        <SelectField
+                          label="Proposal template"
+                          name="templateId"
+                          required
+                          options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
+                        />
+                      </div>
+                      <SubmitButton pendingText="Generating…" variant="secondary">
+                        Generate proposal
+                      </SubmitButton>
+                    </form>
+                  )}
+                  {version.proposals.length > 0 && (
+                    <ul className="mt-4 flex flex-col gap-1 border-t border-neutral-200 pt-3 text-sm">
+                      {version.proposals.map((p) => (
+                        <li key={p.id} className="flex items-center justify-between">
+                          <Link href={`/proposals/${p.id}`} className="text-neutral-900 hover:underline">
+                            Proposal {p.id.slice(0, 8)}
+                          </Link>
+                          <span className="text-neutral-500">
+                            {p.signedAt ? "Signed" : p.sentAt ? "Sent" : "Draft"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <form action={createChangeOrderWithIds} className="mt-4 flex items-end gap-3 border-t border-neutral-200 pt-3">
+                    <div className="flex-1">
+                      <Field
+                        label="Start a change order"
+                        name="description"
+                        placeholder="What's changing? e.g. Upgrade flooring"
+                        required
+                      />
+                    </div>
+                    <Button variant="secondary">Start change order</Button>
+                  </form>
+                  {version.changeOrdersAsBase.length > 0 && (
+                    <ul className="mt-4 flex flex-col gap-1 border-t border-neutral-200 pt-3 text-sm">
+                      {version.changeOrdersAsBase.map((co) => (
+                        <li key={co.id} className="flex items-center justify-between">
+                          <Link href={`/change-orders/${co.id}`} className="text-neutral-900 hover:underline">
+                            {co.description}
+                          </Link>
+                          <span className="text-neutral-500">{co.status}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-6 text-sm text-neutral-500">
+            Lock this version (in the header above) to unlock approval, proposal generation, and change orders.
+          </p>
+        )}
+      </Card>
+
+      {olderVersions.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Earlier versions
+          </h2>
+          <ul className="flex flex-col gap-2 text-sm">
+            {olderVersions.map((v) => (
+              <li key={v.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
+                <span>
+                  Version {v.versionNumber} {v.isLocked ? "· locked" : "· unlocked"}
+                </span>
+                <span className="font-medium">{money(v.grandTotal)}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// "Cut List" tab: thin wrapper around the existing dedicated cut-list
+// page -- that page is a substantial tool in its own right (material
+// calculator, nesting, DXF export), so this stays a link-out rather than
+// folding its whole UI inline. Kept as a tab (not a stray button) so it
+// lives in the same navigation paradigm as everything else here.
+function CutListTab({ estimateId, versionId }: { estimateId: string; versionId: string }) {
+  return (
+    <Card className="p-6">
+      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Cut list</h2>
+      <p className="mb-4 text-sm text-neutral-500">
+        Material calculator, sheet-nesting optimization, printable cutting diagrams, and CNC DXF export for this
+        estimate&apos;s fabrication -- a shop-floor planning tool, separate from this estimate&apos;s priced line
+        items.
+      </p>
+      <Link
+        href={`/estimates/${estimateId}/versions/${versionId}/cut-list`}
+        className="text-sm font-medium text-brand-navy hover:underline"
+      >
+        Manage cut list →
+      </Link>
+    </Card>
   );
 }
