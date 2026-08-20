@@ -50,10 +50,17 @@ const nextConfig: NextConfig = {
           // different content type than the server declared (e.g.
           // treating an uploaded document as executable script).
           { key: "X-Content-Type-Options", value: "nosniff" },
-          // Blocks this app from being framed by another site at all --
-          // no legitimate reason for ForgeOS to be embedded in an
-          // <iframe> elsewhere, so DENY over the narrower SAMEORIGIN.
-          { key: "X-Frame-Options", value: "DENY" },
+          // Blocks this app from being framed by another SITE, but not by
+          // itself -- the document /view page iframes its own raw
+          // byte-serving route to show a PDF inline (view/page.tsx's
+          // `<iframe src={inlineUrl}>`, same-origin, no third party
+          // involved), which DENY blocks unconditionally regardless of
+          // origin. Confirmed live: every PDF view failed with "Refused
+          // to display ... because it set 'X-Frame-Options' to 'deny'"
+          // once this rolled out. SAMEORIGIN still blocks every actual
+          // clickjacking scenario (a different site framing this app);
+          // it just stops blocking the app framing itself.
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
           // Sends the full referrer on a same-origin navigation, only the
           // origin (no path/query) cross-origin -- balances analytics/
           // debugging usefulness against leaking this app's internal URL
