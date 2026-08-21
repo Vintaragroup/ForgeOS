@@ -54,6 +54,7 @@ import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
 import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
+import { SectionScopedForm } from "@/components/section-scoped-form";
 
 const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
@@ -328,6 +329,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             <Tabs
               tabs={[
                 { id: "line-items", label: "Line Items" },
+                { id: "options", label: "Options (alternates)", count: currentVersion.options.length },
                 { id: "documents", label: "Documents" },
                 { id: "review", label: "Review", count: reviewIssueCount },
                 { id: "proposal", label: "Proposal & Approval" },
@@ -344,6 +346,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     laborRates={laborRateOptions}
                     attachments={attachments}
                     users={users}
+                  />
+                ),
+                options: (
+                  <OptionsTab
+                    estimateId={estimate.id}
+                    version={currentVersion}
+                    laborRates={laborRateOptions}
+                    categoryOptions={categoryOptions}
                   />
                 ),
                 documents: (
@@ -815,12 +825,15 @@ function bucketLineItemsByCategory(
 }
 
 // The "Line Items" tab: the category board itself (Excel-sheet-tab-style
-// navigation across Labor/Structure/Furniture/...), plus the structural
-// controls that used to sit below the old flat section list -- Add
-// section and Options (alternates). Section reordering (the old ▲▼ next
-// to a section heading) is deliberately dropped from this pass rather
-// than half-ported into a category-filtered view where "up" wouldn't
-// reliably mean what it used to -- a real follow-up, not an oversight.
+// navigation across Labor/Structure/Furniture/...), plus Add section, the
+// one structural control that still applies across every category. Options
+// (alternates) used to be a card stacked below this instead -- it's now
+// its own top-level tab (see OptionsTab) so it's a peer of Documents/
+// Review/Proposal/Cut List rather than a visually different secondary
+// block bolted onto Line Items. Section reordering (the old ▲▼ next to a
+// section heading) is deliberately dropped from this pass rather than
+// half-ported into a category-filtered view where "up" wouldn't reliably
+// mean what it used to -- a real follow-up, not an oversight.
 function LineItemsTab({
   estimateId,
   opportunityId,
@@ -842,7 +855,6 @@ function LineItemsTab({
 }) {
   const buckets = bucketLineItemsByCategory(version.sections, categories);
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
-  const addOptionWithIds = addOptionAction.bind(null, estimateId, version.id);
 
   return (
     <div className="flex flex-col gap-6">
@@ -897,36 +909,60 @@ function LineItemsTab({
           </form>
         )}
       </Card>
-
-      {(version.options.length > 0 || !version.isLocked) && (
-        <Card className="p-6">
-          <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Options (alternates)
-          </h3>
-          <div className="flex flex-col gap-6">
-            {version.options.map((option) => (
-              <OptionCard
-                key={option.id}
-                estimateId={estimateId}
-                versionId={version.id}
-                option={option}
-                isLocked={version.isLocked}
-                laborRates={laborRates}
-                categoryOptions={categoryOptions}
-              />
-            ))}
-          </div>
-          {!version.isLocked && (
-            <form action={addOptionWithIds} className="mt-6 flex items-end gap-3">
-              <div className="flex-1">
-                <Field label="New option name" name="name" placeholder="e.g. Option 1: Upgraded flooring" required />
-              </div>
-              <Button variant="secondary">Add option</Button>
-            </form>
-          )}
-        </Card>
-      )}
     </div>
+  );
+}
+
+// Promoted out of LineItemsTab into its own top-level tab -- see this
+// file's estimate-page Tabs call. Options (alternates) is a peer tool
+// (like Documents/Review/Cut List), not a secondary block that belongs
+// visually subordinate to the line-items category board.
+function OptionsTab({
+  estimateId,
+  version,
+  laborRates,
+  categoryOptions,
+}: {
+  estimateId: string;
+  version: VersionWithSections;
+  laborRates: LaborRateOption[];
+  categoryOptions: { value: string; label: string }[];
+}) {
+  const addOptionWithIds = addOptionAction.bind(null, estimateId, version.id);
+
+  return (
+    <Card className="p-6">
+      <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+        Options (alternates)
+      </h3>
+      {version.options.length === 0 ? (
+        <p className="text-sm text-neutral-500">
+          {version.isLocked ? "No alternate options on this version." : "No alternate options yet."}
+        </p>
+      ) : (
+        <div className="flex flex-col gap-6">
+          {version.options.map((option) => (
+            <OptionCard
+              key={option.id}
+              estimateId={estimateId}
+              versionId={version.id}
+              option={option}
+              isLocked={version.isLocked}
+              laborRates={laborRates}
+              categoryOptions={categoryOptions}
+            />
+          ))}
+        </div>
+      )}
+      {!version.isLocked && (
+        <form action={addOptionWithIds} className="mt-6 flex items-end gap-3 border-t border-neutral-200 pt-4">
+          <div className="flex-1">
+            <Field label="New option name" name="name" placeholder="e.g. Option 1: Upgraded flooring" required />
+          </div>
+          <Button variant="secondary">Add option</Button>
+        </form>
+      )}
+    </Card>
   );
 }
 
@@ -955,7 +991,31 @@ function CategoryTabContent({
       <div className="pt-2">
         <p className="mb-4 text-sm text-neutral-500">No {bucket.category.name} line items yet.</p>
         {!version.isLocked &&
-          (firstSection ? (
+          (!firstSection ? (
+            <p className="text-sm text-neutral-400">Add a section below before adding line items.</p>
+          ) : version.sections.length > 1 ? (
+            // More than one section exists -- don't silently attach the
+            // first item in an empty category to whichever section
+            // happens to be first. Let the user pick.
+            <SectionScopedForm
+              sections={version.sections.map((s) => ({ id: s.id, name: s.name }))}
+              content={Object.fromEntries(
+                version.sections.map((s) => [
+                  s.id,
+                  <AddLineItemForm
+                    key={s.id}
+                    estimateId={estimateId}
+                    versionId={version.id}
+                    sectionId={s.id}
+                    attachments={attachments}
+                    laborRates={laborRates}
+                    categoryOptions={categoryOptions}
+                    defaultCategory={bucket.category.name}
+                  />,
+                ]),
+              )}
+            />
+          ) : (
             <AddLineItemForm
               estimateId={estimateId}
               versionId={version.id}
@@ -965,8 +1025,6 @@ function CategoryTabContent({
               categoryOptions={categoryOptions}
               defaultCategory={bucket.category.name}
             />
-          ) : (
-            <p className="text-sm text-neutral-400">Add a section below before adding line items.</p>
           ))}
       </div>
     );

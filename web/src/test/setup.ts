@@ -46,3 +46,41 @@ vi.mock("@vercel/blob", () => {
     }),
   };
 });
+
+// Mock next/headers globally, not per-file -- cookies() relies on Next's
+// request-scoped AsyncLocalStorage, which plain vitest (no request ever
+// starts) doesn't provide. Without this, any code on the auth.ts path
+// (createSession/getCurrentUser/destroySession, and therefore every
+// Server Action that calls requireAdmin/requireSuperAdmin/loginAction)
+// throws "`cookies` was called outside a request scope" immediately,
+// which is exactly why that whole action layer had zero tests before.
+const mockCookieJar = new Map<string, { value: string }>();
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) => mockCookieJar.get(name),
+    set: (name: string, value: string) => {
+      mockCookieJar.set(name, { value });
+    },
+    delete: (name: string) => {
+      mockCookieJar.delete(name);
+    },
+  }),
+}));
+
+export function resetMockCookies() {
+  mockCookieJar.clear();
+}
+
+export function getMockCookie(name: string) {
+  return mockCookieJar.get(name)?.value;
+}
+
+// revalidatePath/revalidateTag also require Next's request-scoped static
+// generation store (same underlying reason as the cookies() mock above) --
+// every Server Action that mutates data and then revalidates its own page
+// would otherwise throw "static generation store missing" the moment a
+// test calls it directly instead of through a real request.
+vi.mock("next/cache", () => ({
+  revalidatePath: () => {},
+  revalidateTag: () => {},
+}));
