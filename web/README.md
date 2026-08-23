@@ -88,6 +88,14 @@ for a Server Action.
   hidden in the UI. Deactivate reuses the existing `deletedAt` soft-delete
   (a user can't deactivate themselves, and the last remaining
   `SUPER_ADMIN` can't be demoted or deactivated, to avoid a full lockout).
+- **`/admin/users/[id]`** — `SUPER_ADMIN` only, a "Reset password" card
+  sets a locked-out user's password directly, no old password needed. Same
+  effect as running `set-password` from the host, just reachable from the
+  UI: bumps `passwordChangedAt`, which immediately signs the user out of
+  every device, so only use it when they're actually locked out. The new
+  password is never displayed back — tell the user through a different
+  channel than this page. Logged to `AdminAuditLog` like every other admin
+  mutation here.
 
 Bootstrapping the first super admin has the same chicken-and-egg problem
 `set-password` solves for passwords — the admin UI needs an admin to
