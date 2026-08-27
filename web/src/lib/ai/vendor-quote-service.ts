@@ -111,6 +111,15 @@ export async function proposeVendorQuoteLineItems(
     // creative writing, same reasoning as scope-line-item-service.ts's
     // identical pin.
     temperature: 0.2,
+    // Confirmed necessary against a real quote: a 217-line vendor binder
+    // (ShowRig's Super Bowl scaffolding quote) produces a JSON response
+    // long enough that, without this, the completion sometimes gets cut
+    // off mid-string before the array closes -- JSON.parse below then
+    // throws an opaque "Unterminated string" instead of a usable error.
+    // gpt-4o-mini's real output ceiling is 16384 tokens; asking for the
+    // full budget explicitly removes any smaller implicit default as a
+    // variable, whether or not that was the actual cause this time.
+    max_completion_tokens: 16384,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: `Document: ${document.filename}\n\n${truncatedText}` },
@@ -127,8 +136,19 @@ export async function proposeVendorQuoteLineItems(
     opportunityId: document.opportunityId,
   });
 
-  const content = completion.choices[0]?.message?.content;
+  const choice = completion.choices[0];
+  const content = choice?.message?.content;
   if (!content) throw new Error("OpenAI returned an empty response.");
+  // A truncated response is a real, distinguishable outcome (finish_reason
+  // "length"), not a parse bug -- give the user something actionable
+  // instead of a raw SyntaxError, since JSON.parse on a cut-off string
+  // always fails and the real cause (too many priced lines for one pass)
+  // is a document-size limit, not a code defect to retry blindly against.
+  if (choice.finish_reason === "length") {
+    throw new Error(
+      `"${document.filename}" has too many priced lines to extract in a single pass -- the response was cut off before finishing. Splitting this document (or the relevant pages) into a smaller upload would let this complete.`,
+    );
+  }
   const parsed = JSON.parse(content) as { items: VendorQuoteLineFromAI[] };
 
   // Same discipline as scope-line-item-service.ts: resolve every quote
