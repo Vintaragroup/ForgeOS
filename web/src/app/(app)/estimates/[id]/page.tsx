@@ -1116,6 +1116,16 @@ const CONFIDENCE_BADGE_CLASS: Record<string, string> = {
   low: "bg-red-50 text-red-700",
 };
 
+// proposeVendorQuoteLineItems extracts qty/unit for every vendor line but
+// the match review table previously showed only the bare description --
+// a reviewer had no way to see "3 EA" vs "1 EA" without opening the
+// source document.
+function vendorLineQtyUnit(vendorLine: { qty: number | null; unit: string | null }): string | null {
+  if (vendorLine.qty != null && vendorLine.unit) return `${vendorLine.qty} ${vendorLine.unit}`;
+  if (vendorLine.qty != null) return `Qty ${vendorLine.qty}`;
+  return vendorLine.unit || null;
+}
+
 function BidPackageCard({
   estimateId,
   versionId,
@@ -1284,6 +1294,7 @@ function BidPackageCard({
                 // posture as the rest of this file.
                 const alreadyApplied = matchedItem?.documentId === quoteDocument.id;
                 const applyWithIds = applyVendorMatchAction.bind(null, estimateId, versionId, bidPackage.id);
+                const qtyUnit = vendorLineQtyUnit(match.vendorLine);
                 return (
                   <tr key={i} className="border-t border-neutral-100">
                     <td className="px-3 py-2 align-top">
@@ -1300,6 +1311,7 @@ function BidPackageCard({
                         </span>
                       )}
                       {match.vendorLine.description}
+                      {qtyUnit && <span className="ml-1.5 text-xs text-neutral-400">({qtyUnit})</span>}
                     </td>
                     <td className="px-3 py-2 text-right align-top">{money(match.vendorLine.unitPrice)}</td>
                     <td className="px-3 py-2 align-top">
