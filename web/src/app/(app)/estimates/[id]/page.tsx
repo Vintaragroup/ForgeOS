@@ -1211,9 +1211,24 @@ function BidPackageCard({
 
       {quoteDocument && matches && (
         <div className="border-t border-neutral-200 pt-4">
-          <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Match review — {quoteDocument.filename}
-          </h4>
+          <div className="mb-3 flex items-center justify-between gap-4">
+            <h4 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
+              Match review — {quoteDocument.filename}
+            </h4>
+            {/* Once a document has any stored vendorQuoteLineItems,
+                SubmitVendorQuoteExtractForm above never renders again --
+                this is the only way to re-run extraction against updated
+                document text or an updated extraction schema (e.g. after
+                unitCode was added, existing quotes needed this to pick it
+                up rather than staying frozen on their first-ever result). */}
+            <SubmitVendorQuoteExtractForm
+              estimateId={estimateId}
+              bidPackageId={bidPackage.id}
+              documentId={quoteDocument.id}
+              label="Re-extract"
+              pendingLabel="Extracting…"
+            />
+          </div>
           <table className="mb-4 w-full text-sm">
             <thead>
               <tr className="text-left text-neutral-500">
@@ -1301,16 +1316,20 @@ function SubmitVendorQuoteExtractForm({
   estimateId,
   bidPackageId,
   documentId,
+  label = "Extract prices",
+  pendingLabel = "Extracting…",
 }: {
   estimateId: string;
   bidPackageId: string;
   documentId: string;
+  label?: string;
+  pendingLabel?: string;
 }) {
   const extractWithIds = proposeVendorQuoteItemsAction.bind(null, estimateId, bidPackageId, documentId);
   return (
     <form action={extractWithIds}>
-      <SubmitButton pendingText="Extracting…" variant="secondary">
-        Extract prices
+      <SubmitButton pendingText={pendingLabel} variant="secondary">
+        {label}
       </SubmitButton>
     </form>
   );
