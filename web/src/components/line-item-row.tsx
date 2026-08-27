@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Button, Field, SelectField } from "@/components/ui";
 import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
+import { useBidPackageSelection } from "@/components/bid-package-selection";
 
 // Seventh client component (see document-upload-form.tsx's header
 // comment on the fourth, project-type-fields.tsx on the fifth,
@@ -36,6 +37,7 @@ export function LineItemRow({
   lineTypeOptions,
   categoryOptions,
   laborRates,
+  bidPackageName,
   deleteAction,
   confirmAction,
   updateAction,
@@ -63,12 +65,20 @@ export function LineItemRow({
   lineTypeOptions: { value: string; label: string }[];
   categoryOptions: { value: string; label: string }[];
   laborRates: LaborRateOption[];
+  // Null = in-house/undecided (BidPackage.name once assigned) -- see
+  // bid-package-selection.tsx's header comment for why this row renders
+  // a selection checkbox instead whenever it's null AND a
+  // BidPackageSelectionProvider is wrapping this table (a no-op render
+  // everywhere else, including every existing caller that predates this
+  // prop).
+  bidPackageName?: string | null;
   deleteAction: (formData: FormData) => void | Promise<void>;
   confirmAction: (formData: FormData) => void | Promise<void>;
   updateAction: (formData: FormData) => void | Promise<void>;
   moveUpAction: (formData: FormData) => void | Promise<void>;
   moveDownAction: (formData: FormData) => void | Promise<void>;
 }) {
+  const selection = useBidPackageSelection();
   const [isEditing, setIsEditing] = useState(false);
 
   if (isEditing) {
@@ -124,9 +134,23 @@ export function LineItemRow({
   return (
     <tr id={`line-item-${id}`} className="border-t border-neutral-100">
       <td className="px-2 py-1.5">
+        {selection && !isLocked && !bidPackageName && (
+          <input
+            type="checkbox"
+            className="mr-2 align-middle"
+            checked={selection.selectedIds.has(id)}
+            onChange={() => selection.toggle(id)}
+            aria-label="Select for a bid package"
+          />
+        )}
         {description}
         {isDraft && (
           <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">draft</span>
+        )}
+        {bidPackageName && (
+          <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
+            In package: {bidPackageName}
+          </span>
         )}
         {sourceHref && (
           <Link href={sourceHref} className="ml-2 text-xs text-brand-navy hover:underline" title="Verify against source">

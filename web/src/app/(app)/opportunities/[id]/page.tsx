@@ -54,6 +54,7 @@ const DOCUMENT_TYPE_OPTIONS = [
   { value: "CONTRACT", label: "Contract" },
   { value: "SCHEDULE", label: "Schedule" },
   { value: "MEETING_NOTES", label: "Meeting notes / transcript" },
+  { value: "VENDOR_QUOTE", label: "Vendor quote" },
   { value: "OTHER", label: "Other" },
 ];
 

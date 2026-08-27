@@ -327,6 +327,7 @@ enum AiFeature {
   DRAWING_SUMMARY
   SCOPE_LINE_ITEMS
   DRAWING_LINE_ITEMS
+  VENDOR_QUOTE_LINE_ITEMS
   CHAT
   SCOPE_COVERAGE_ANALYSIS
   RFP_CLARIFICATION_QUESTIONS
@@ -393,6 +394,13 @@ enum DocumentType {
   // summarizer would happily extract as if it were scope. See
   // meeting-notes-summary-service.ts.
   MEETING_NOTES
+  // A third party's priced bid for a BidPackage -- see vendor-match-
+  // service.ts and Document.vendorQuoteLineItems. Handled generically by
+  // the existing Analyze pipeline (analyze-document.ts's dispatch falls
+  // through to the same text summarizer every non-DRAWING/MEETING_NOTES
+  // type already uses), so nothing else in the extraction pipeline needs
+  // to special-case this value.
+  VENDOR_QUOTE
   OTHER
 }
 
@@ -439,6 +447,24 @@ model Document {
   // through. Cached here so re-opening the Estimate's proposal preview
   // doesn't re-run the OpenAI call on every page load.
   proposedLineItems Json?
+
+  // Parallel to proposedLineItems above, but a distinct shape (includes
+  // unitPrice/totalPrice) -- populated only for a VENDOR_QUOTE document
+  // by vendor-quote-service.ts's proposeVendorQuoteLineItems, matched at
+  // render time against a BidPackage's line items rather than committed
+  // as new rows the way proposedLineItems is. See BidPackage's own
+  // comment for why a vendor quote's price never gets read through the
+  // proposedLineItems/commitScopeLineItems path -- that schema has no
+  // price field at all, by design, for ExpoCCI's own scope documents.
+  vendorQuoteLineItems Json?
+
+  // Set once this document is attached to a BidPackage as its vendor's
+  // quote -- null until then, same as estimateId above. A VENDOR_QUOTE
+  // document is uploaded generically (Opportunity Documents card, same
+  // as every other document type) and attached to a package afterward,
+  // not uploaded through a package-specific form.
+  bidPackageId String?
+  bidPackage   BidPackage? @relation(fields: [bidPackageId], references: [id])
 
   uploadedById String?
   uploadedBy   User?   @relation(fields: [uploadedById], references: [id])
@@ -800,6 +826,7 @@ model EstimateVersion {
 
   sections            EstimateSection[]
   options             Option[]
+  bidPackages         BidPackage[]
   proposals           Proposal[]
   changeOrdersAsBase  ChangeOrder[]     @relation("ChangeOrderBaseVersion")
   changeOrderAsResult ChangeOrder?      @relation("ChangeOrderResultVersion")
@@ -918,6 +945,19 @@ model LineItem {
   // added line item -- there's no document to check it against.
   sourceQuote      String?
   sourcePageNumber Int?
+
+  // Null (the default, unchanged behavior for every row that predates
+  // this column) means "in-house / not yet decided" -- estimated
+  // internally rather than sent out for a vendor to price. Set once a
+  // user groups this item into a BidPackage (freeform, cross-category --
+  // a real vendor package like a scaffolding/rigging bid routinely spans
+  // Structure, Flooring, and Labor line items at once, so this is
+  // intentionally not scoped to one EstimateSection). One package per
+  // item, not a join table -- matches how freeform selection actually
+  // works (an item is either being bid out as part of this package or it
+  // isn't) and keeps un-assigning a single `bidPackageId: null` write.
+  bidPackageId String?
+  bidPackage   BidPackage? @relation(fields: [bidPackageId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1162,6 +1202,40 @@ model Option {
   sections EstimateSection[]
 
   @@map("options")
+}
+
+enum BidPackageStatus {
+  AWAITING_QUOTE
+  QUOTE_RECEIVED
+  REVIEWED
+}
+
+// A user-defined, freeform cross-category subset of one EstimateVersion's
+// LineItems sent out to a single vendor for pricing -- NOT a pricing
+// alternate like Option above (same {id, estimateVersionId, name} shape,
+// but this groups EXISTING line items for procurement, never creates new
+// sections/totals of its own). v1 is one vendor quote per package (see
+// LineItem.bidPackageId and Document.bidPackageId below) -- multi-vendor
+// comparison is a plausible fast-follow but isn't built yet, so don't
+// assume a package's documents list is meant to hold more than one
+// VENDOR_QUOTE document today even though nothing here enforces that.
+model BidPackage {
+  id                String          @id @default(cuid())
+  estimateVersionId String
+  estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
+
+  name       String
+  vendorName String?
+  status     BidPackageStatus @default(AWAITING_QUOTE)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  lineItems LineItem[]
+  documents Document[]
+
+  @@map("bid_packages")
 }
 
 enum ChangeOrderStatus {

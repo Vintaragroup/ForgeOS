@@ -12,6 +12,7 @@ import {
   computeSectionTotal,
   computeVersionTotals,
   confirmDraftLineItem,
+  createBidPackage,
   createEstimateVersion,
   createNewVersionFromLocked,
   deleteLineItem,
@@ -20,6 +21,8 @@ import {
   moveLineItemWithinSection,
   moveSectionOrder,
   recomputeVersionTotals,
+  removeLineItemFromBidPackage,
+  setBidPackageStatus,
   updateLineItem,
   updateMarginTarget,
 } from "@/lib/estimate-service";
@@ -27,6 +30,8 @@ import {
 afterEach(async () => {
   await db.lineItem.deleteMany();
   await db.attachment.deleteMany();
+  await db.document.deleteMany();
+  await db.bidPackage.deleteMany();
   await db.estimateSection.deleteMany();
   await db.option.deleteMany();
   await db.estimateVersion.deleteMany();
@@ -334,6 +339,141 @@ describe("Option (alternates)", () => {
     expect(v2Options[0].sections[0].lineItems[0].description).toBe("Premium flooring");
     // copied sections stay linked to the copied estimate version too
     expect(v2Options[0].sections[0].estimateVersionId).toBe(v2.id);
+  });
+});
+
+describe("Bid packages", () => {
+  it("groups a freeform, cross-category set of line items into a bid package", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const structureSection = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    const laborSection = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY" });
+    const structureItem = await addLineItem(version.id, structureSection.id, {
+      lineType: "MATERIAL",
+      description: "Truss accessories",
+      qty: 1,
+      unitCost: 0,
+    });
+    const laborItem = await addLineItem(version.id, laborSection.id, {
+      lineType: "LABOR",
+      description: "Installation labor for scaffolding",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    const bidPackage = await createBidPackage(version.id, {
+      name: "Scaffolding, Platforms & Truss",
+      vendorName: "ShowRig",
+      lineItemIds: [structureItem.id, laborItem.id],
+    });
+
+    expect(bidPackage.status).toBe("AWAITING_QUOTE");
+    const updated = await db.lineItem.findMany({ where: { id: { in: [structureItem.id, laborItem.id] } } });
+    expect(updated.every((li) => li.bidPackageId === bidPackage.id)).toBe(true);
+  });
+
+  it("rejects an empty selection", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    await expect(createBidPackage(version.id, { name: "Empty", lineItemIds: [] })).rejects.toThrow(
+      "Select at least one line item",
+    );
+  });
+
+  it("rejects a line item that belongs to a different estimate version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "A", qty: 1, unitCost: 0 });
+
+    const otherEstimate = await makeEstimate();
+    const otherVersion = await createEstimateVersion(otherEstimate.id, 0);
+    const otherSection = await addSection(otherVersion.id, { name: "Structure", sectionType: "CATEGORY" });
+    const otherItem = await addLineItem(otherVersion.id, otherSection.id, {
+      lineType: "MATERIAL",
+      description: "B",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    await expect(
+      createBidPackage(version.id, { name: "Cross-version", lineItemIds: [item.id, otherItem.id] }),
+    ).rejects.toThrow("don't belong to this estimate version");
+  });
+
+  it("rejects creating a bid package on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "A", qty: 1, unitCost: 0 });
+    await lockEstimateVersion(version.id);
+
+    await expect(createBidPackage(version.id, { name: "Locked", lineItemIds: [item.id] })).rejects.toThrow(/locked/);
+  });
+
+  it("removeLineItemFromBidPackage clears only the targeted item's assignment", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    const itemA = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "A", qty: 1, unitCost: 0 });
+    const itemB = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "B", qty: 1, unitCost: 0 });
+    await createBidPackage(version.id, { name: "Package", lineItemIds: [itemA.id, itemB.id] });
+
+    await removeLineItemFromBidPackage(estimate.opportunityId, itemA.id);
+
+    const [refreshedA, refreshedB] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: itemA.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: itemB.id } }),
+    ]);
+    expect(refreshedA.bidPackageId).toBeNull();
+    expect(refreshedB.bidPackageId).not.toBeNull();
+  });
+
+  it("setBidPackageStatus updates the package's status", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "A", qty: 1, unitCost: 0 });
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+
+    const updated = await setBidPackageStatus(bidPackage.id, "QUOTE_RECEIVED");
+    expect(updated.status).toBe("QUOTE_RECEIVED");
+  });
+
+  it("updateLineItem stamps vendor-match provenance and flips isDraft on apply", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Flooring", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Sleeper Floor Required",
+      qty: 1,
+      unitCost: 0,
+      isDraft: true,
+    });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+      },
+    });
+
+    const updated = await updateLineItem(estimate.opportunityId, item.id, {
+      unitCost: 840,
+      documentId: document.id,
+      sourceQuote: "Sleeper Floor",
+      isDraft: false,
+    });
+
+    expect(updated.unitCost.toNumber()).toBe(840);
+    expect(updated.totalCost.toNumber()).toBe(840);
+    expect(updated.documentId).toBe(document.id);
+    expect(updated.sourceQuote).toBe("Sleeper Floor");
+    expect(updated.isDraft).toBe(false);
   });
 });
 

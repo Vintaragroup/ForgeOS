@@ -1,14 +1,18 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  assertBidPackageBelongsToEstimate,
   assertVersionBelongsToEstimate,
   canAccessOpportunity,
   estimateOpportunityId,
   opportunityAccessWhere,
 } from "@/lib/opportunity-access";
-import { createEstimateVersion } from "@/lib/estimate-service";
+import { addLineItem, addSection, createBidPackage, createEstimateVersion } from "@/lib/estimate-service";
 
 afterEach(async () => {
+  await db.lineItem.deleteMany();
+  await db.bidPackage.deleteMany();
+  await db.estimateSection.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.opportunityCollaborator.deleteMany();
@@ -146,6 +150,34 @@ describe("assertVersionBelongsToEstimate", () => {
   it("throws when versionId belongs to a DIFFERENT estimate than the one supplied", async () => {
     const { estimateA, versionB } = await makeTwoEstimates();
     await expect(assertVersionBelongsToEstimate(estimateA.id, versionB.id)).rejects.toThrow();
+  });
+});
+
+describe("assertBidPackageBelongsToEstimate", () => {
+  async function makeTwoEstimatesWithBidPackages() {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const estimateA = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const estimateB = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const versionA = await createEstimateVersion(estimateA.id, 0);
+    const versionB = await createEstimateVersion(estimateB.id, 0);
+    const sectionA = await addSection(versionA.id, { name: "Structure", sectionType: "CATEGORY" });
+    const sectionB = await addSection(versionB.id, { name: "Structure", sectionType: "CATEGORY" });
+    const itemA = await addLineItem(versionA.id, sectionA.id, { lineType: "MATERIAL", description: "A", qty: 1, unitCost: 0 });
+    const itemB = await addLineItem(versionB.id, sectionB.id, { lineType: "MATERIAL", description: "B", qty: 1, unitCost: 0 });
+    const bidPackageA = await createBidPackage(versionA.id, { name: "Package A", lineItemIds: [itemA.id] });
+    const bidPackageB = await createBidPackage(versionB.id, { name: "Package B", lineItemIds: [itemB.id] });
+    return { estimateA, estimateB, bidPackageA, bidPackageB };
+  }
+
+  it("resolves silently when bidPackageId genuinely belongs to estimateId", async () => {
+    const { estimateA, bidPackageA } = await makeTwoEstimatesWithBidPackages();
+    await expect(assertBidPackageBelongsToEstimate(estimateA.id, bidPackageA.id)).resolves.toBeUndefined();
+  });
+
+  it("throws when bidPackageId belongs to a DIFFERENT estimate than the one supplied", async () => {
+    const { estimateA, bidPackageB } = await makeTwoEstimatesWithBidPackages();
+    await expect(assertBidPackageBelongsToEstimate(estimateA.id, bidPackageB.id)).rejects.toThrow();
   });
 });
 

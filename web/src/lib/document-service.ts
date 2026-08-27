@@ -178,3 +178,14 @@ export async function assignDocumentEstimate(opportunityId: string, documentId: 
     },
   });
 }
+
+// Unlike updateDocumentType/assignDocumentEstimate above, this does NOT
+// reset extractionStatus/extractedText -- proposeVendorQuoteLineItems
+// extracts whatever priced lines are in the document's text regardless
+// of which BidPackage it ends up attached to, so which package a
+// VENDOR_QUOTE document belongs to has no bearing on how it gets read.
+// opportunityId ownership check -- see deleteDocument's header comment.
+export async function assignDocumentBidPackage(opportunityId: string, documentId: string, bidPackageId: string | null) {
+  const existing = await db.document.findFirstOrThrow({ where: { id: documentId, opportunityId, deletedAt: null } });
+  return db.document.update({ where: { id: existing.id }, data: { bidPackageId } });
+}

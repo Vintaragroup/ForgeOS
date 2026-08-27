@@ -55,6 +55,17 @@ import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/componen
 import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
 import { SectionScopedForm } from "@/components/section-scoped-form";
+import { matchVendorQuoteLines, type VendorQuoteLine } from "@/lib/vendor-match-service";
+import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
+import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
+import {
+  applyVendorMatchAction,
+  attachVendorQuoteDocumentAction,
+  createBidPackageAction,
+  markBidPackageReviewedAction,
+  proposeVendorQuoteItemsAction,
+  removeLineItemFromBidPackageAction,
+} from "./bid-package-actions";
 
 const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
@@ -111,13 +122,25 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         include: {
           lineItems: {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-            include: { costActuals: true, document: { select: { id: true, mimeType: true, filename: true } } },
+            include: {
+              costActuals: true,
+              document: { select: { id: true, mimeType: true, filename: true } },
+              bidPackage: { select: { id: true, name: true } },
+            },
           },
         },
       },
       options: {
         orderBy: { sortOrder: "asc" },
         include: { sections: { orderBy: { sortOrder: "asc" }, include: { lineItems: true } } },
+      },
+      bidPackages: {
+        where: { deletedAt: null },
+        orderBy: { createdAt: "asc" },
+        include: {
+          lineItems: { select: { id: true, description: true, category: true, unitCost: true, documentId: true } },
+          documents: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
+        },
       },
       approvedBy: true,
       proposals: { orderBy: { createdAt: "desc" } },
@@ -128,7 +151,17 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const currentVersion = versions.find((v) => v.isCurrent) ?? versions[0];
   const olderVersions = versions.filter((v) => v.id !== currentVersion?.id);
 
-  const [users, proposalTemplates, taxRates, laborRates, categories, attachments, pricingScheduleDocuments, scopeDocuments] = await Promise.all([
+  const [
+    users,
+    proposalTemplates,
+    taxRates,
+    laborRates,
+    categories,
+    attachments,
+    pricingScheduleDocuments,
+    scopeDocuments,
+    vendorQuoteDocuments,
+  ] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.proposalTemplate.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
@@ -158,6 +191,15 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         extractionStatus: "COMPLETE",
         documentType: { notIn: ["PRICING_SCHEDULE"] },
       },
+      orderBy: { createdAt: "desc" },
+    }),
+    // Unattached VENDOR_QUOTE documents -- feeds the Bid Packages tab's
+    // "attach an already-uploaded quote" picker (attachVendorQuoteDocumentAction).
+    // Uploaded generically via the Opportunity page's DocumentUploadForm,
+    // same as every other document type -- not a package-specific upload
+    // widget (see document-service.ts's assignDocumentBidPackage).
+    db.document.findMany({
+      where: { opportunityId: estimate.opportunityId, documentType: "VENDOR_QUOTE", bidPackageId: null, deletedAt: null },
       orderBy: { createdAt: "desc" },
     }),
   ]);
@@ -261,7 +303,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       })
     : [];
 
-  const reviewIssueCount = riskFlags.length + categoryAudit.issues.length + coverageGapsWithDocs.length;
+  // Count, not just presence -- shown on both the Bid Packages tab badge
+  // and folded into reviewIssueCount below, same "something needs your
+  // attention" signal every other Review-tab flag already gives.
+  const bidPackagesAwaitingReview = currentVersion
+    ? currentVersion.bidPackages.filter((p) => p.status === "QUOTE_RECEIVED").length
+    : 0;
+
+  const reviewIssueCount = riskFlags.length + categoryAudit.issues.length + coverageGapsWithDocs.length + bidPackagesAwaitingReview;
 
   return (
     <div className="flex flex-col gap-8">
@@ -330,6 +379,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
               tabs={[
                 { id: "line-items", label: "Line Items" },
                 { id: "options", label: "Options (alternates)", count: currentVersion.options.length },
+                { id: "bid-packages", label: "Bid Packages", count: currentVersion.bidPackages.length },
                 { id: "documents", label: "Documents" },
                 { id: "review", label: "Review", count: reviewIssueCount },
                 { id: "proposal", label: "Proposal & Approval" },
@@ -354,6 +404,13 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     version={currentVersion}
                     laborRates={laborRateOptions}
                     categoryOptions={categoryOptions}
+                  />
+                ),
+                "bid-packages": (
+                  <BidPackagesTab
+                    estimateId={estimate.id}
+                    version={currentVersion}
+                    vendorQuoteDocuments={vendorQuoteDocuments}
                   />
                 ),
                 documents: (
@@ -417,11 +474,21 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
     sections: {
       include: {
         lineItems: {
-          include: { costActuals: true; document: { select: { id: true; mimeType: true; filename: true } } };
+          include: {
+            costActuals: true;
+            document: { select: { id: true; mimeType: true; filename: true } };
+            bidPackage: { select: { id: true; name: true } };
+          };
         };
       };
     };
     options: { include: { sections: { include: { lineItems: true } } } };
+    bidPackages: {
+      include: {
+        lineItems: { select: { id: true; description: true; category: true; unitCost: true; documentId: true } };
+        documents: true;
+      };
+    };
     approvedBy: true;
     proposals: true;
     changeOrdersAsBase: true;
@@ -676,6 +743,7 @@ function LineItemsTable({
               lineTypeOptions={LINE_TYPE_OPTIONS}
               categoryOptions={categoryOptions}
               laborRates={laborRates}
+              bidPackageName={li.bidPackage?.name ?? null}
               deleteAction={deleteWithIds}
               confirmAction={confirmWithIds}
               updateAction={updateWithIds}
@@ -876,26 +944,29 @@ function LineItemsTab({
           </form>
         )}
 
-        <Tabs
-          paramName="category"
-          tabs={buckets.map((b) => ({ id: b.category.id, label: b.category.name, count: b.totalItems }))}
-          content={Object.fromEntries(
-            buckets.map((bucket) => [
-              bucket.category.id,
-              <CategoryTabContent
-                key={bucket.category.id}
-                bucket={bucket}
-                version={version}
-                estimateId={estimateId}
-                opportunityId={opportunityId}
-                laborRates={laborRates}
-                categoryOptions={categoryOptions}
-                attachments={attachments}
-                users={users}
-              />,
-            ]),
-          )}
-        />
+        <BidPackageSelectionProvider>
+          <Tabs
+            paramName="category"
+            tabs={buckets.map((b) => ({ id: b.category.id, label: b.category.name, count: b.totalItems }))}
+            content={Object.fromEntries(
+              buckets.map((bucket) => [
+                bucket.category.id,
+                <CategoryTabContent
+                  key={bucket.category.id}
+                  bucket={bucket}
+                  version={version}
+                  estimateId={estimateId}
+                  opportunityId={opportunityId}
+                  laborRates={laborRates}
+                  categoryOptions={categoryOptions}
+                  attachments={attachments}
+                  users={users}
+                />,
+              ]),
+            )}
+          />
+          <CreateBidPackageBar createBidPackage={createBidPackageAction.bind(null, estimateId, version.id)} />
+        </BidPackageSelectionProvider>
 
         {!version.isLocked && (
           <form action={addSectionWithIds} className="mt-6 flex items-end gap-3 border-t border-neutral-200 pt-4">
@@ -963,6 +1034,232 @@ function OptionsTab({
         </form>
       )}
     </Card>
+  );
+}
+
+// Groups an outsourced-to-a-vendor subset of this version's line items
+// (created from the Line Items tab's checkbox/CreateBidPackageBar --
+// see bid-package-selection.tsx) and, once a vendor's quote is attached
+// and its priced lines extracted, shows a match/review table pairing
+// the vendor's own lines against this package's line items --
+// vendor-match-service.ts's matchVendorQuoteLines, recomputed fresh on
+// every render (never persisted -- see bid-package-actions.ts's own
+// header comment on why "applied" is derived from documentId equality
+// instead of a decision log).
+function BidPackagesTab({
+  estimateId,
+  version,
+  vendorQuoteDocuments,
+}: {
+  estimateId: string;
+  version: VersionWithSections;
+  vendorQuoteDocuments: { id: string; filename: string }[];
+}) {
+  return (
+    <div className="flex flex-col gap-6">
+      {version.bidPackages.length === 0 ? (
+        <Card className="p-6">
+          <p className="text-sm text-neutral-500">
+            No bid packages yet. In the Line Items tab, check off the items you want a vendor to bid on (any
+            category, any section) and name the package at the bottom of the screen.
+          </p>
+        </Card>
+      ) : (
+        version.bidPackages.map((bidPackage) => (
+          <BidPackageCard
+            key={bidPackage.id}
+            estimateId={estimateId}
+            versionId={version.id}
+            bidPackage={bidPackage}
+            vendorQuoteDocuments={vendorQuoteDocuments}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+const BID_PACKAGE_STATUS_LABELS: Record<string, string> = {
+  AWAITING_QUOTE: "Awaiting quote",
+  QUOTE_RECEIVED: "Quote received — needs review",
+  REVIEWED: "Reviewed",
+};
+
+function BidPackageCard({
+  estimateId,
+  versionId,
+  bidPackage,
+  vendorQuoteDocuments,
+}: {
+  estimateId: string;
+  versionId: string;
+  bidPackage: VersionWithSections["bidPackages"][number];
+  vendorQuoteDocuments: { id: string; filename: string }[];
+}) {
+  const attachWithIds = attachVendorQuoteDocumentAction.bind(null, estimateId, bidPackage.id);
+  const markReviewedWithIds = markBidPackageReviewedAction.bind(null, estimateId, bidPackage.id);
+  const quoteDocument = bidPackage.documents[0] ?? null;
+  const vendorLines = (quoteDocument?.vendorQuoteLineItems as unknown as VendorQuoteLine[] | null) ?? null;
+  const matches = vendorLines
+    ? matchVendorQuoteLines(
+        vendorLines,
+        bidPackage.lineItems.map((li) => ({ id: li.id, description: li.description })),
+      )
+    : null;
+  const matchedLineItemIds = new Set((matches ?? []).flatMap((m) => (m.lineItemId ? [m.lineItemId] : [])));
+  const unmatchedPackageItems = bidPackage.lineItems.filter((li) => !matchedLineItemIds.has(li.id));
+
+  return (
+    <Card className="p-6">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="font-medium">{bidPackage.name}</h3>
+          {bidPackage.vendorName && <p className="text-sm text-neutral-500">{bidPackage.vendorName}</p>}
+        </div>
+        <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs text-neutral-600">
+          {BID_PACKAGE_STATUS_LABELS[bidPackage.status] ?? bidPackage.status}
+        </span>
+      </div>
+
+      <table className="mb-4 w-full text-sm">
+        <tbody>
+          {bidPackage.lineItems.map((li) => {
+            const removeWithIds = removeLineItemFromBidPackageAction.bind(null, estimateId, li.id);
+            return (
+              <tr key={li.id} className="border-t border-neutral-100">
+                <td className="py-1.5">{li.description}</td>
+                <td className="py-1.5 text-neutral-400">{li.category ?? ""}</td>
+                <td className="py-1.5 text-right">{money(li.unitCost)}</td>
+                <td className="py-1.5 text-right">
+                  <form action={removeWithIds} className="inline">
+                    <button className="text-xs text-neutral-400 hover:text-red-600" title="Remove from package">
+                      ✕
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {!quoteDocument && (
+        <div className="border-t border-neutral-200 pt-4">
+          {vendorQuoteDocuments.length === 0 ? (
+            <p className="text-sm text-neutral-500">
+              No vendor quote uploaded yet. Upload one from the Opportunity page&apos;s Documents card, tagged
+              &quot;Vendor Quote,&quot; then attach it here.
+            </p>
+          ) : (
+            <form action={attachWithIds} className="flex items-end gap-3">
+              <div className="flex-1">
+                <SelectField
+                  label="Attach an uploaded vendor quote"
+                  name="documentId"
+                  options={vendorQuoteDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+                />
+              </div>
+              <Button variant="secondary">Attach</Button>
+            </form>
+          )}
+        </div>
+      )}
+
+      {quoteDocument && !vendorLines && (
+        <div className="border-t border-neutral-200 pt-4">
+          <p className="mb-3 text-sm text-neutral-500">
+            &quot;{quoteDocument.filename}&quot; is attached. {quoteDocument.extractionStatus === "COMPLETE" ? "" : "Click Analyze on it from the Opportunity page first, then "}
+            extract its priced line items to match them against this package.
+          </p>
+          <SubmitVendorQuoteExtractForm
+            estimateId={estimateId}
+            bidPackageId={bidPackage.id}
+            documentId={quoteDocument.id}
+          />
+        </div>
+      )}
+
+      {quoteDocument && matches && (
+        <div className="border-t border-neutral-200 pt-4">
+          <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Match review — {quoteDocument.filename}
+          </h4>
+          <table className="mb-4 w-full text-sm">
+            <thead>
+              <tr className="text-left text-neutral-500">
+                <th className="pb-1.5 font-normal">Vendor line</th>
+                <th className="pb-1.5 text-right font-normal">Vendor price</th>
+                <th className="pb-1.5 font-normal">Matched to</th>
+                <th className="pb-1.5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {matches.map((match, i) => {
+                const matchedItem = bidPackage.lineItems.find((li) => li.id === match.lineItemId);
+                // "Applied" is derived from provenance (this line item's
+                // own documentId equals this quote's), not from a
+                // persisted decision -- see this function's own header
+                // comment. A price that happens to already match by
+                // coincidence, before ever applying, is NOT "applied."
+                const alreadyApplied = matchedItem?.documentId === quoteDocument.id;
+                const applyWithIds = matchedItem
+                  ? applyVendorMatchAction.bind(null, estimateId, versionId, matchedItem.id)
+                  : null;
+                return (
+                  <tr key={i} className="border-t border-neutral-100">
+                    <td className="py-1.5">{match.vendorLine.description}</td>
+                    <td className="py-1.5 text-right">${match.vendorLine.unitPrice.toFixed(2)}</td>
+                    <td className="py-1.5">
+                      {matchedItem ? matchedItem.description : <span className="text-amber-700">No match — review manually</span>}
+                    </td>
+                    <td className="py-1.5 text-right">
+                      {applyWithIds && (
+                        <form action={applyWithIds} className="inline">
+                          <input type="hidden" name="unitCost" value={match.vendorLine.unitPrice} />
+                          <input type="hidden" name="documentId" value={quoteDocument.id} />
+                          <input type="hidden" name="sourceQuote" value={match.vendorLine.sourceQuote} />
+                          <Button variant="secondary" type="submit">
+                            {alreadyApplied ? "Re-apply" : "Apply"}
+                          </Button>
+                        </form>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {unmatchedPackageItems.length > 0 && (
+            <p className="mb-4 text-sm text-amber-700">
+              {unmatchedPackageItems.length} package item{unmatchedPackageItems.length === 1 ? "" : "s"} weren&apos;t
+              covered by this quote: {unmatchedPackageItems.map((li) => li.description).join(", ")}.
+            </p>
+          )}
+          <form action={markReviewedWithIds}>
+            <Button variant="secondary">Mark reviewed</Button>
+          </form>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function SubmitVendorQuoteExtractForm({
+  estimateId,
+  bidPackageId,
+  documentId,
+}: {
+  estimateId: string;
+  bidPackageId: string;
+  documentId: string;
+}) {
+  const extractWithIds = proposeVendorQuoteItemsAction.bind(null, estimateId, bidPackageId, documentId);
+  return (
+    <form action={extractWithIds}>
+      <SubmitButton pendingText="Extracting…" variant="secondary">
+        Extract prices
+      </SubmitButton>
+    </form>
   );
 }
 
@@ -1664,7 +1961,12 @@ function ReviewTab({
   coverageAnalysis: { generatedAt: string; lineItemCount: number; gaps: CoverageGap[] } | null;
   coverageGapsWithDocs: (CoverageGap & { doc: { id: string; filename: string; mimeType: string } })[];
 }) {
-  const hasAnyReview = riskFlags.length > 0 || categoryAudit.issues.length > 0 || (scopeDocuments.length > 0 && runCoverageAnalysisAction);
+  const bidPackagesAwaitingReview = currentVersion.bidPackages.filter((p) => p.status === "QUOTE_RECEIVED");
+  const hasAnyReview =
+    riskFlags.length > 0 ||
+    categoryAudit.issues.length > 0 ||
+    bidPackagesAwaitingReview.length > 0 ||
+    (scopeDocuments.length > 0 && runCoverageAnalysisAction);
 
   if (!hasAnyReview) {
     return (
@@ -1739,6 +2041,32 @@ function ReviewTab({
                   {issue.sectionName}
                   {issue.groupLabel ? ` — ${issue.groupLabel}` : ""} →
                 </a>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {bidPackagesAwaitingReview.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Vendor pricing
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            These bid packages have a vendor quote extracted but haven&apos;t been reviewed yet -- open each one to
+            match its priced lines against this package&apos;s line items and apply what looks right.
+          </p>
+          <ul className="flex flex-col gap-2 text-sm">
+            {bidPackagesAwaitingReview.map((pkg) => (
+              <li key={pkg.id} className="flex items-center justify-between gap-3 rounded-md bg-amber-50 px-3 py-2">
+                <span className="flex items-center gap-2 text-amber-900">
+                  <span aria-hidden>⚠</span>
+                  {pkg.name}
+                  {pkg.vendorName && <span className="text-amber-700"> — {pkg.vendorName}</span>}
+                </span>
+                <Link href={`/estimates/${estimateId}?tab=bid-packages`} className="shrink-0 text-xs text-brand-navy hover:underline">
+                  Review →
+                </Link>
               </li>
             ))}
           </ul>

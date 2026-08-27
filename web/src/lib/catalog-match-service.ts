@@ -37,7 +37,11 @@ const STOPWORDS = new Set([
   "with", "and", "the", "for", "of", "a", "an", "to", "in", "on", "or", "high", "incl", "including",
 ]);
 
-function significantTokens(text: string): string[] {
+// Exported for vendor-match-service.ts -- same tokenizer, different
+// scoring algorithm (that module's matching problem is symmetric, this
+// one's is asymmetric containment), so both matchers treat text
+// identically even though they answer different questions.
+export function significantTokens(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")

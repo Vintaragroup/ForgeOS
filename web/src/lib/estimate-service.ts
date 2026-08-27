@@ -8,7 +8,7 @@
 
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
-import type { LineItemType, SectionType } from "@/generated/prisma/enums";
+import type { BidPackageStatus, LineItemType, SectionType } from "@/generated/prisma/enums";
 
 type Decimal = Prisma.Decimal;
 type DecimalInput = Decimal | number | string;
@@ -204,6 +204,54 @@ export function computeOptionTotal(sections: { lineItems: { totalCost: DecimalIn
   return sections.reduce((sum, section) => sum.plus(computeSectionTotal(section.lineItems)), new Prisma.Decimal(0));
 }
 
+// Groups a freeform, cross-category set of an EstimateVersion's own
+// LineItems as "going out to bid" to one vendor -- see schema.prisma's
+// BidPackage comment for why this is a real model (mirrors Option's own
+// shape) rather than a bare string field, and why membership is a single
+// nullable FK on LineItem rather than a join table. lineItemIds is
+// verified against estimateVersionId here, not trusted from the caller
+// alone -- the same cross-resource gap deleteLineItem's header comment
+// describes, just checked against a whole set instead of one id.
+export async function createBidPackage(
+  estimateVersionId: string,
+  data: { name: string; vendorName?: string | null; lineItemIds: string[] },
+) {
+  await assertUnlocked(estimateVersionId);
+  if (data.lineItemIds.length === 0) throw new Error("Select at least one line item for this bid package.");
+
+  const ownedCount = await db.lineItem.count({
+    where: { id: { in: data.lineItemIds }, section: { estimateVersionId } },
+  });
+  if (ownedCount !== data.lineItemIds.length) {
+    throw new Error("One or more selected line items don't belong to this estimate version.");
+  }
+
+  return db.$transaction(async (tx) => {
+    const bidPackage = await tx.bidPackage.create({
+      data: { estimateVersionId, name: data.name, vendorName: data.vendorName ?? null },
+    });
+    await tx.lineItem.updateMany({
+      where: { id: { in: data.lineItemIds } },
+      data: { bidPackageId: bidPackage.id },
+    });
+    return bidPackage;
+  });
+}
+
+// opportunityId ownership check -- see deleteLineItem's header comment.
+export async function removeLineItemFromBidPackage(opportunityId: string, lineItemId: string) {
+  const existing = await db.lineItem.findFirstOrThrow({
+    where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
+    include: { section: true },
+  });
+  await assertUnlocked(existing.section.estimateVersionId);
+  return db.lineItem.update({ where: { id: lineItemId }, data: { bidPackageId: null } });
+}
+
+export async function setBidPackageStatus(bidPackageId: string, status: BidPackageStatus) {
+  return db.bidPackage.update({ where: { id: bidPackageId }, data: { status } });
+}
+
 // estimateVersionId is the caller's already-verified version (see
 // opportunity-access.ts's assertVersionBelongsToEstimate) -- sectionId
 // alone doesn't prove it belongs to that version, the same cross-
@@ -328,6 +376,15 @@ export async function updateLineItem(
     qty?: DecimalInput;
     unit?: string | null;
     unitCost?: DecimalInput;
+    // Provenance for an applied vendor-quote match (bid-package-actions.ts's
+    // applyVendorMatchAction) -- same fields addLineItemsBulk already
+    // stamps on a document-sourced row, just settable on an EXISTING row
+    // here instead of only at creation. isDraft flips to false on apply:
+    // the vendor-match review the user just did *is* the human-review
+    // step, not a separate confirmDraftLineItem click after it.
+    documentId?: string | null;
+    sourceQuote?: string | null;
+    isDraft?: boolean;
   },
 ) {
   const existing = await db.lineItem.findFirstOrThrow({
@@ -351,6 +408,9 @@ export async function updateLineItem(
       unit: data.unit !== undefined ? data.unit : existing.unit,
       unitCost: new Prisma.Decimal(unitCost),
       totalCost: computeLineItemTotal(qty, unitCost),
+      documentId: data.documentId !== undefined ? data.documentId : existing.documentId,
+      sourceQuote: data.sourceQuote !== undefined ? data.sourceQuote : existing.sourceQuote,
+      isDraft: data.isDraft ?? existing.isDraft,
     },
   });
 }

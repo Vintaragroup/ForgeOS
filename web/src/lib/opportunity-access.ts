@@ -79,6 +79,18 @@ export async function assertVersionBelongsToEstimate(estimateId: string, version
   if (!version) throw new Error("This estimate version doesn't belong to the given estimate.");
 }
 
+// Same cross-resource gap as assertVersionBelongsToEstimate above, one
+// level further down the chain -- a bid-package-actions.ts action that
+// takes a bidPackageId could otherwise be pointed at a DIFFERENT
+// estimate's package just by supplying its ID.
+export async function assertBidPackageBelongsToEstimate(estimateId: string, bidPackageId: string): Promise<void> {
+  const bidPackage = await db.bidPackage.findFirst({
+    where: { id: bidPackageId, estimateVersion: { estimateId } },
+    select: { id: true },
+  });
+  if (!bidPackage) throw new Error("This bid package doesn't belong to the given estimate.");
+}
+
 // Resolves an estimateId to its owning opportunityId -- for a caller that
 // already called requireEstimateAccess and now needs the opportunityId
 // itself to scope a nested-ID ownership check (see estimate-service.ts's

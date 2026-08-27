@@ -6,6 +6,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { XLSX_MIME } from "@/lib/ai/text-extraction";
 import { getObject } from "@/lib/storage";
 import {
+  assignDocumentBidPackage,
   assignDocumentEstimate,
   deleteDocument,
   getDocumentBytes,
@@ -13,6 +14,7 @@ import {
   updateDocumentType,
   uploadDocument,
 } from "@/lib/document-service";
+import { addLineItem, addSection, createBidPackage, createEstimateVersion } from "@/lib/estimate-service";
 
 // Real fixture from Phase 7's roadmap RFP package -- see data/RFP/superbowl.
 // Small (~170KB), so it's fast to round-trip in a test.
@@ -23,6 +25,11 @@ const FIXTURE_PATH = path.resolve(
 
 afterEach(async () => {
   await db.document.deleteMany();
+  await db.lineItem.deleteMany();
+  await db.bidPackage.deleteMany();
+  await db.estimateSection.deleteMany();
+  await db.estimateVersion.deleteMany();
+  await db.estimate.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
 });
@@ -159,5 +166,34 @@ describe("opportunity-ownership checks (cross-resource ID authorization)", () =>
     const document = await uploadDocument(owner.id, { file, documentType: "SCHEDULE" });
 
     await expect(assignDocumentEstimate(attacker.id, document.id, null)).rejects.toThrow();
+  });
+
+  it("assignDocumentBidPackage rejects a documentId that belongs to a different opportunity", async () => {
+    const owner = await makeOpportunity();
+    const attacker = await makeOpportunity();
+    const file = await makeFile(FIXTURE_PATH, "schedule.pdf", "application/pdf");
+    const document = await uploadDocument(owner.id, { file, documentType: "VENDOR_QUOTE" });
+
+    await expect(assignDocumentBidPackage(attacker.id, document.id, null)).rejects.toThrow();
+  });
+});
+
+describe("assignDocumentBidPackage", () => {
+  it("attaches a VENDOR_QUOTE document to a bid package without resetting its extraction state", async () => {
+    const opportunity = await makeOpportunity();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "A", qty: 1, unitCost: 0 });
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+
+    const file = await makeFile(FIXTURE_PATH, "quote.pdf", "application/pdf");
+    const document = await uploadDocument(opportunity.id, { file, documentType: "VENDOR_QUOTE" });
+    await db.document.update({ where: { id: document.id }, data: { extractedText: "already analyzed" } });
+
+    const updated = await assignDocumentBidPackage(opportunity.id, document.id, bidPackage.id);
+
+    expect(updated.bidPackageId).toBe(bidPackage.id);
+    expect(updated.extractedText).toBe("already analyzed");
   });
 });
