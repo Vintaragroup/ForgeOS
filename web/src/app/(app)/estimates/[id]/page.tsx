@@ -138,7 +138,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         where: { deletedAt: null },
         orderBy: { createdAt: "asc" },
         include: {
-          lineItems: { select: { id: true, description: true, category: true, unitCost: true, documentId: true } },
+          lineItems: {
+            select: {
+              id: true,
+              description: true,
+              category: true,
+              unitCost: true,
+              documentId: true,
+              section: { select: { name: true, groupLabel: true } },
+            },
+          },
           documents: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
         },
       },
@@ -485,7 +494,16 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
     options: { include: { sections: { include: { lineItems: true } } } };
     bidPackages: {
       include: {
-        lineItems: { select: { id: true; description: true; category: true; unitCost: true; documentId: true } };
+        lineItems: {
+          select: {
+            id: true;
+            description: true;
+            category: true;
+            unitCost: true;
+            documentId: true;
+            section: { select: { name: true; groupLabel: true } };
+          };
+        };
         documents: true;
       };
     };
@@ -1107,7 +1125,15 @@ function BidPackageCard({
       )
     : null;
   const matchedLineItemIds = new Set((matches ?? []).flatMap((m) => (m.lineItemId ? [m.lineItemId] : [])));
-  const unmatchedPackageItems = bidPackage.lineItems.filter((li) => !matchedLineItemIds.has(li.id));
+  // A line item a reviewer manually applied a price to (picking a
+  // different row than the algorithm suggested, or resolving one it left
+  // unmatched entirely) is just as "covered" as an algorithm-suggested
+  // one -- matchedLineItemIds alone would keep flagging it as uncovered
+  // forever, even after it has a real price and provenance from this
+  // exact quote.
+  const unmatchedPackageItems = bidPackage.lineItems.filter(
+    (li) => !matchedLineItemIds.has(li.id) && li.documentId !== quoteDocument?.id,
+  );
 
   return (
     <Card className="p-6">
@@ -1125,9 +1151,13 @@ function BidPackageCard({
         <tbody>
           {bidPackage.lineItems.map((li) => {
             const removeWithIds = removeLineItemFromBidPackageAction.bind(null, estimateId, li.id);
+            const sectionLabel = li.section.groupLabel ?? li.section.name;
             return (
               <tr key={li.id} className="border-t border-neutral-100">
-                <td className="py-1.5">{li.description}</td>
+                <td className="py-1.5">
+                  {li.description}
+                  {sectionLabel && <span className="ml-2 text-xs text-neutral-400">{sectionLabel}</span>}
+                </td>
                 <td className="py-1.5 text-neutral-400">{li.category ?? ""}</td>
                 <td className="py-1.5 text-right">{money(li.unitCost)}</td>
                 <td className="py-1.5 text-right">
@@ -1199,30 +1229,53 @@ function BidPackageCard({
                 // "Applied" is derived from provenance (this line item's
                 // own documentId equals this quote's), not from a
                 // persisted decision -- see this function's own header
-                // comment. A price that happens to already match by
-                // coincidence, before ever applying, is NOT "applied."
+                // comment. Reflects the row's DEFAULT/suggested target
+                // only -- there's no client JS here to re-derive this
+                // live as the select below changes, same plain-forms
+                // posture as the rest of this file.
                 const alreadyApplied = matchedItem?.documentId === quoteDocument.id;
-                const applyWithIds = matchedItem
-                  ? applyVendorMatchAction.bind(null, estimateId, versionId, matchedItem.id)
-                  : null;
+                const applyWithIds = applyVendorMatchAction.bind(null, estimateId, versionId, bidPackage.id);
                 return (
                   <tr key={i} className="border-t border-neutral-100">
-                    <td className="py-1.5">{match.vendorLine.description}</td>
+                    <td className="py-1.5">
+                      {match.vendorLine.unitCode && (
+                        <span className="mr-1.5 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">
+                          {match.vendorLine.unitCode}
+                        </span>
+                      )}
+                      {match.vendorLine.description}
+                    </td>
                     <td className="py-1.5 text-right">${match.vendorLine.unitPrice.toFixed(2)}</td>
                     <td className="py-1.5">
-                      {matchedItem ? matchedItem.description : <span className="text-amber-700">No match — review manually</span>}
+                      <select
+                        name="lineItemId"
+                        form={`apply-match-${i}`}
+                        defaultValue={match.lineItemId ?? ""}
+                        className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      >
+                        <option value="" disabled={!!match.lineItemId}>
+                          — choose one —
+                        </option>
+                        {bidPackage.lineItems.map((li) => (
+                          <option key={li.id} value={li.id}>
+                            {li.description}
+                            {li.section.groupLabel ?? li.section.name ? ` — ${li.section.groupLabel ?? li.section.name}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                      {!matchedItem && (
+                        <p className="mt-1 text-xs text-amber-700">No match — review and pick one manually</p>
+                      )}
                     </td>
                     <td className="py-1.5 text-right">
-                      {applyWithIds && (
-                        <form action={applyWithIds} className="inline">
-                          <input type="hidden" name="unitCost" value={match.vendorLine.unitPrice} />
-                          <input type="hidden" name="documentId" value={quoteDocument.id} />
-                          <input type="hidden" name="sourceQuote" value={match.vendorLine.sourceQuote} />
-                          <Button variant="secondary" type="submit">
-                            {alreadyApplied ? "Re-apply" : "Apply"}
-                          </Button>
-                        </form>
-                      )}
+                      <form id={`apply-match-${i}`} action={applyWithIds} className="inline">
+                        <input type="hidden" name="unitCost" value={match.vendorLine.unitPrice} />
+                        <input type="hidden" name="documentId" value={quoteDocument.id} />
+                        <input type="hidden" name="sourceQuote" value={match.vendorLine.sourceQuote} />
+                        <Button variant="secondary" type="submit">
+                          {alreadyApplied ? "Re-apply" : "Apply"}
+                        </Button>
+                      </form>
                     </td>
                   </tr>
                 );

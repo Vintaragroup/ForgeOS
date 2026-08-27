@@ -81,10 +81,11 @@ describe("createBidPackageAction", () => {
 });
 
 describe("applyVendorMatchAction", () => {
-  it("applies a vendor price onto the real line item, stamps provenance, and updates version totals", async () => {
+  it("applies a vendor price onto the line item chosen in the form, stamps provenance, and updates version totals", async () => {
     const admin = await makeAdmin();
     await createSession(admin.id);
     const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
     const document = await db.document.create({
       data: {
         opportunityId: estimate.opportunityId,
@@ -97,10 +98,11 @@ describe("applyVendorMatchAction", () => {
     });
 
     const formData = new FormData();
+    formData.set("lineItemId", item.id);
     formData.set("unitCost", "840");
     formData.set("documentId", document.id);
     formData.set("sourceQuote", "Sleeper Floor");
-    await applyVendorMatchAction(estimate.id, version.id, item.id, formData);
+    await applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData);
 
     const updatedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
     expect(updatedItem.unitCost.toNumber()).toBe(840);
@@ -112,15 +114,55 @@ describe("applyVendorMatchAction", () => {
     expect(updatedVersion.totalCost.toNumber()).toBe(840);
   });
 
+  it("rejects a lineItemId that doesn't belong to this bid package", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    // A second, unrelated line item that was never added to this package.
+    const section = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY" });
+    const outsideItem = await addLineItem(version.id, section.id, {
+      lineType: "LABOR",
+      description: "Unrelated item",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    const formData = new FormData();
+    formData.set("lineItemId", outsideItem.id);
+    formData.set("unitCost", "840");
+    formData.set("documentId", "doc-1");
+    await expect(applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow();
+
+    const stillZero = await db.lineItem.findUniqueOrThrow({ where: { id: outsideItem.id } });
+    expect(stillZero.unitCost.toNumber()).toBe(0);
+  });
+
+  it("rejects a missing lineItemId", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+
+    const formData = new FormData();
+    formData.set("unitCost", "840");
+    formData.set("documentId", "doc-1");
+    await expect(applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
+      "Choose which line item",
+    );
+  });
+
   it("rejects a non-numeric unit cost", async () => {
     const admin = await makeAdmin();
     await createSession(admin.id);
     const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
 
     const formData = new FormData();
+    formData.set("lineItemId", item.id);
     formData.set("unitCost", "not a number");
     formData.set("documentId", "doc-1");
-    await expect(applyVendorMatchAction(estimate.id, version.id, item.id, formData)).rejects.toThrow(
+    await expect(applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
       "Unit cost must be a number",
     );
   });

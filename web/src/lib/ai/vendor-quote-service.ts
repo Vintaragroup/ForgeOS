@@ -51,8 +51,13 @@ function buildVendorQuoteSchema() {
                 description: "This line's own stated total/extended price, or null if the document doesn't show one separately from unitPrice.",
               },
               sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+              unitCode: {
+                type: ["string", "null"],
+                description:
+                  "The nearest preceding unit/section header this line is grouped under, if the document organizes its priced lines into labeled blocks (e.g. \"CAM-06\", \"BTH-04\", \"Section 203\") -- copy the header exactly as written. Null if the document has no such per-item grouping structure.",
+              },
             },
-            required: ["description", "unit", "qty", "unitPrice", "totalPrice", "sourceQuote"],
+            required: ["description", "unit", "qty", "unitPrice", "totalPrice", "sourceQuote", "unitCode"],
           },
         },
       },
@@ -70,6 +75,7 @@ For each item:
 - unitPrice: the per-unit dollar price for this line.
 - totalPrice: this line's own stated extended/total price if the document shows one separately from unitPrice, otherwise null.
 - sourceQuote: a short verbatim quote copied EXACTLY from the document showing where this item and its price come from.
+- unitCode: if this document organizes its priced lines into labeled blocks (a unit or section code like "CAM-06", "BTH-04", "Section 203" that several consecutive lines fall under), copy that block's own header exactly. Otherwise null -- don't invent a code the document doesn't actually use.
 
 Only extract lines that represent an actual priced item -- skip subtotals, section headers, terms and conditions, and narrative text entirely. If the document has no priced line items at all, return an empty items array rather than inventing something.`;
 
@@ -84,6 +90,7 @@ type VendorQuoteLineFromAI = {
   unitPrice: number;
   totalPrice: number | null;
   sourceQuote: string;
+  unitCode: string | null;
 };
 
 // opportunityId is the caller's already-access-checked opportunity, NOT
@@ -161,6 +168,7 @@ export async function proposeVendorQuoteLineItems(
     unitPrice: item.unitPrice,
     totalPrice: item.totalPrice,
     sourceQuote: resolveHighlightableQuote(document.extractedText!, item.sourceQuote),
+    unitCode: item.unitCode || null,
   }));
 
   return db.document.update({

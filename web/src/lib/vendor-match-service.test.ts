@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { matchVendorQuoteLines, type VendorQuoteLine } from "@/lib/vendor-match-service";
 
 function vendorLine(description: string, unitPrice: number): VendorQuoteLine {
-  return { description, unit: null, qty: 1, unitPrice, totalPrice: unitPrice, sourceQuote: description };
+  return { description, unit: null, qty: 1, unitPrice, totalPrice: unitPrice, sourceQuote: description, unitCode: null };
 }
 
 describe("matchVendorQuoteLines", () => {

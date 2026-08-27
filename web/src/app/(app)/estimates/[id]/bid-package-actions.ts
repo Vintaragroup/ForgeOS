@@ -84,21 +84,35 @@ export async function proposeVendorQuoteItemsAction(estimateId: string, bidPacka
 // header comment), and isDraft flips to false: the vendor-match review
 // the user just did *is* the human-review step, not a separate
 // confirmDraftLineItem click after it.
+// lineItemId comes from the row's own <select> now, not a value baked
+// into the bound action at render time -- a match review row lets the
+// user pick a DIFFERENT line item than the one matchVendorQuoteLines
+// suggested (there's no reliable way to auto-resolve the vendor's own
+// unit code against this app's section labels, see vendor-match-
+// service.ts's own header comment), so the actual target has to be
+// read from the submitted form. Verified against bidPackageId here --
+// not trusted from the form alone -- same cross-resource-ID discipline
+// every other action in this file follows: a tampered lineItemId could
+// otherwise be pointed at a line item outside this package entirely.
 export async function applyVendorMatchAction(
   estimateId: string,
   versionId: string,
-  lineItemId: string,
+  bidPackageId: string,
   formData: FormData,
 ) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
+  await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
   const opportunityId = await estimateOpportunityId(estimateId);
 
+  const lineItemId = String(formData.get("lineItemId") ?? "").trim();
   const unitCost = Number(formData.get("unitCost"));
   const documentId = String(formData.get("documentId") ?? "").trim();
   const sourceQuote = String(formData.get("sourceQuote") ?? "");
+  if (!lineItemId) throw new Error("Choose which line item this vendor price applies to.");
   if (!Number.isFinite(unitCost)) throw new Error("Unit cost must be a number.");
   if (!documentId) throw new Error("Missing vendor quote document reference.");
+  await db.lineItem.findFirstOrThrow({ where: { id: lineItemId, bidPackageId } });
 
   await updateLineItem(opportunityId, lineItemId, { unitCost, documentId, sourceQuote, isDraft: false });
   await recomputeVersionTotals(versionId);

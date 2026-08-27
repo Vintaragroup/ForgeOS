@@ -26,6 +26,16 @@ export interface VendorQuoteLine {
   unitPrice: number;
   totalPrice: number | null;
   sourceQuote: string;
+  // The vendor's own unit/section header this line falls under in the
+  // source document (e.g. "CAM-06", "BTH-04") -- null when the document
+  // has no such per-item grouping. Presentational only: shown next to
+  // this line in the match review UI so a human reviewer has the same
+  // structural context the vendor's own document uses, but NOT fed into
+  // matchVendorQuoteLines's scoring below -- there's no reliable way to
+  // map a vendor's internal code onto this app's own EstimateSection
+  // groupLabel (independent naming schemes, no shared string), so that
+  // correspondence is left to the human, not guessed at.
+  unitCode: string | null;
 }
 
 export interface VendorLineMatch {
