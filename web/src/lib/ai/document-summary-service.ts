@@ -134,6 +134,7 @@ export const SUGGESTABLE_DOCUMENT_TYPES = [
   "SCHEDULE",
   "DRAWING",
   "MEETING_NOTES",
+  "VENDOR_QUOTE",
   "OTHER",
 ] as const;
 export type SuggestableDocumentType = (typeof SUGGESTABLE_DOCUMENT_TYPES)[number];
@@ -300,7 +301,7 @@ function buildSummarySchema(projectNames: string[]) {
           type: "string",
           enum: SUGGESTABLE_DOCUMENT_TYPES,
           description:
-            "The document TYPE this content actually reads as, regardless of how it's currently filed. RFP: an invitation/instructions to bid. SCOPE_OF_WORK: describes the deliverables/work to be done. CONTRACT: a services agreement, terms and conditions, or legal agreement. SCHEDULE: primarily a timeline, event schedule, or list of dates. DRAWING: primarily dimensions/technical drawing callouts (rare for a text document -- most drawings are images). MEETING_NOTES: a meeting transcript, recap, or email thread -- conversational or narrative, not a formal deliverable. OTHER: none of the above fit well.",
+            "The document TYPE this content actually reads as, regardless of how it's currently filed. RFP: an invitation/instructions to bid. SCOPE_OF_WORK: describes the deliverables/work to be done. CONTRACT: a services agreement, terms and conditions, or legal agreement. SCHEDULE: primarily a timeline, event schedule, or list of dates. DRAWING: primarily dimensions/technical drawing callouts (rare for a text document -- most drawings are images). MEETING_NOTES: a meeting transcript, recap, or email thread -- conversational or narrative, not a formal deliverable. VENDOR_QUOTE: a third party's own priced bid/quote for goods, labor, or services -- lists line items with unit prices or a total cost the vendor is charging, distinct from CONTRACT (terms/agreement language, not itemized pricing) and from this contractor's own outgoing RFP. OTHER: none of the above fit well.",
         },
       },
       required: ["eventOrProjectName", "venue", "submissionDeadline", "keyDates", "scopeSummary", "riskFlags", "candidateGaps", "extractedFields", "suggestedDocumentType"],
