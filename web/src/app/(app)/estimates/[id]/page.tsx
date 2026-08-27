@@ -81,7 +81,7 @@ const LINE_TYPE_OPTIONS = [
 ];
 
 function money(d: { toFixed(n: number): string }): string {
-  return `$${d.toFixed(2)}`;
+  return `$${Number(d.toFixed(2)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export default async function EstimateDetailPage(props: PageProps<"/estimates/[id]">) {
@@ -1163,13 +1163,13 @@ function BidPackageCard({
             const sectionLabel = li.section.groupLabel ?? li.section.name;
             return (
               <tr key={li.id} className="border-t border-neutral-100">
-                <td className="py-1.5">
+                <td className="px-3 py-1.5">
                   {li.description}
                   {sectionLabel && <span className="ml-2 text-xs text-neutral-400">{sectionLabel}</span>}
                 </td>
-                <td className="py-1.5 text-neutral-400">{li.category ?? ""}</td>
-                <td className="py-1.5 text-right">{money(li.unitCost)}</td>
-                <td className="py-1.5 text-right">
+                <td className="px-3 py-1.5 text-neutral-400">{li.category ?? ""}</td>
+                <td className="px-3 py-1.5 text-right">{money(li.unitCost)}</td>
+                <td className="py-1.5 pl-3 text-right">
                   <form action={removeWithIds} className="inline">
                     <button className="text-xs text-neutral-400 hover:text-red-600" title="Remove from package">
                       ✕
@@ -1266,10 +1266,10 @@ function BidPackageCard({
           <table className="mb-4 w-full text-sm">
             <thead>
               <tr className="text-left text-neutral-500">
-                <th className="pb-1.5 font-normal">Vendor line</th>
-                <th className="pb-1.5 text-right font-normal">Vendor price</th>
-                <th className="pb-1.5 font-normal">Matched to</th>
-                <th className="pb-1.5"></th>
+                <th className="px-3 pb-1.5 font-normal">Vendor line</th>
+                <th className="px-3 pb-1.5 text-right font-normal">Vendor price</th>
+                <th className="px-3 pb-1.5 font-normal">Matched to</th>
+                <th className="pb-1.5 pl-3"></th>
               </tr>
             </thead>
             <tbody>
@@ -1286,7 +1286,7 @@ function BidPackageCard({
                 const applyWithIds = applyVendorMatchAction.bind(null, estimateId, versionId, bidPackage.id);
                 return (
                   <tr key={i} className="border-t border-neutral-100">
-                    <td className="py-1.5">
+                    <td className="px-3 py-2 align-top">
                       {match.confidence && (
                         <span
                           className={`mr-1.5 rounded px-1.5 py-0.5 text-xs ${CONFIDENCE_BADGE_CLASS[match.confidence] ?? ""}`}
@@ -1301,13 +1301,13 @@ function BidPackageCard({
                       )}
                       {match.vendorLine.description}
                     </td>
-                    <td className="py-1.5 text-right">${match.vendorLine.unitPrice.toFixed(2)}</td>
-                    <td className="py-1.5">
+                    <td className="px-3 py-2 text-right align-top">{money(match.vendorLine.unitPrice)}</td>
+                    <td className="px-3 py-2 align-top">
                       <select
                         name="lineItemId"
                         form={`apply-match-${i}`}
                         defaultValue={match.lineItemId ?? ""}
-                        className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                        className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
                       >
                         <option value="" disabled={!!match.lineItemId}>
                           — choose one —
@@ -1319,12 +1319,12 @@ function BidPackageCard({
                           </option>
                         ))}
                       </select>
-                      {match.reasoning && <p className="mt-1 text-xs text-neutral-400">{match.reasoning}</p>}
+                      {match.reasoning && <p className="mt-1.5 text-xs text-neutral-400">{match.reasoning}</p>}
                       {!matchedItem && (
-                        <p className="mt-1 text-xs text-amber-700">No match — review and pick one manually</p>
+                        <p className="mt-1.5 text-xs text-amber-700">No match — review and pick one manually</p>
                       )}
                     </td>
-                    <td className="py-1.5 text-right">
+                    <td className="py-2 pl-3 text-right align-top">
                       <form id={`apply-match-${i}`} action={applyWithIds} className="inline">
                         <input type="hidden" name="unitCost" value={match.vendorLine.unitPrice} />
                         <input type="hidden" name="documentId" value={quoteDocument.id} />
