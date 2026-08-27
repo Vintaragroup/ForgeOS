@@ -318,7 +318,7 @@ Also extract candidateGaps: specific things stated in THIS document alone that a
 
 Also extract extractedFields: onboarding facts about the job itself (booth number, booth size, ship date, event start/end dates, jobsite address) whenever the document states them plainly -- these get proposed to a human as suggestions to accept or ignore, never applied automatically, so extract anything genuinely stated even if you're not certain it's the final value.
 
-Also classify suggestedDocumentType: what this document's content actually IS, independent of how it happens to be filed right now -- a vendor services agreement is a CONTRACT even if it was uploaded as a generic RFP attachment.`;
+Also classify suggestedDocumentType: what this document's content actually IS, independent of how it happens to be filed right now -- a vendor services agreement is a CONTRACT even if it was uploaded as a generic RFP attachment. A document that is itself mostly a table of priced line items -- a third-party supplier's own quote, bid, or invoice, charging the reader for goods/labor/services -- is VENDOR_QUOTE, even if it also mentions dates or scope in passing; don't classify it as SCHEDULE or SCOPE_OF_WORK just because it contains some of those facts too.`;
 
   if (projectNames.length === 0) return base;
 
