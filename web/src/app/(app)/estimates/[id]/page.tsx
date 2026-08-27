@@ -55,9 +55,10 @@ import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/componen
 import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
 import { SectionScopedForm } from "@/components/section-scoped-form";
-import { matchVendorQuoteLines, type VendorQuoteLine } from "@/lib/vendor-match-service";
+import type { VendorLineMatch } from "@/lib/ai/vendor-match-ai-service";
 import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
+import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
   applyVendorMatchAction,
   attachVendorQuoteDocumentAction,
@@ -1060,10 +1061,12 @@ function OptionsTab({
 // see bid-package-selection.tsx) and, once a vendor's quote is attached
 // and its priced lines extracted, shows a match/review table pairing
 // the vendor's own lines against this package's line items --
-// vendor-match-service.ts's matchVendorQuoteLines, recomputed fresh on
-// every render (never persisted -- see bid-package-actions.ts's own
-// header comment on why "applied" is derived from documentId equality
-// instead of a decision log).
+// vendor-match-ai-service.ts's matchVendorQuoteLinesWithAi, run once in
+// the background (bid-package-actions.ts's runVendorExtractionAndMatch)
+// and persisted on BidPackage.matchResult, not recomputed on every
+// render (see bid-package-actions.ts's own header comment on why
+// "applied" is derived from documentId equality instead of a decision
+// log).
 function BidPackagesTab({
   estimateId,
   version,
@@ -1103,6 +1106,16 @@ const BID_PACKAGE_STATUS_LABELS: Record<string, string> = {
   REVIEWED: "Reviewed",
 };
 
+// matchVendorQuoteLinesWithAi's own confidence, surfaced so a reviewer
+// can tell an assignment it's confident in from one it flagged as a
+// guess worth double-checking, instead of every suggestion looking
+// equally authoritative.
+const CONFIDENCE_BADGE_CLASS: Record<string, string> = {
+  high: "bg-green-50 text-green-700",
+  medium: "bg-amber-50 text-amber-700",
+  low: "bg-red-50 text-red-700",
+};
+
 function BidPackageCard({
   estimateId,
   versionId,
@@ -1117,13 +1130,9 @@ function BidPackageCard({
   const attachWithIds = attachVendorQuoteDocumentAction.bind(null, estimateId, bidPackage.id);
   const markReviewedWithIds = markBidPackageReviewedAction.bind(null, estimateId, bidPackage.id);
   const quoteDocument = bidPackage.documents[0] ?? null;
-  const vendorLines = (quoteDocument?.vendorQuoteLineItems as unknown as VendorQuoteLine[] | null) ?? null;
-  const matches = vendorLines
-    ? matchVendorQuoteLines(
-        vendorLines,
-        bidPackage.lineItems.map((li) => ({ id: li.id, description: li.description })),
-      )
-    : null;
+  const phase = bidPackage.vendorExtractionPhase;
+  const isExtracting = phase === "READING_DOCUMENT" || phase === "EXTRACTING_LINES" || phase === "MATCHING";
+  const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? null;
   const matchedLineItemIds = new Set((matches ?? []).flatMap((m) => (m.lineItemId ? [m.lineItemId] : [])));
   // A line item a reviewer manually applied a price to (picking a
   // different row than the algorithm suggested, or resolving one it left
@@ -1195,7 +1204,32 @@ function BidPackageCard({
         </div>
       )}
 
-      {quoteDocument && !vendorLines && (
+      {quoteDocument && isExtracting && (
+        <div className="border-t border-neutral-200 pt-4">
+          <VendorExtractionProgress
+            estimateId={estimateId}
+            bidPackageId={bidPackage.id}
+            initialPhase={phase}
+            initialError={bidPackage.vendorExtractionError}
+          />
+        </div>
+      )}
+
+      {quoteDocument && !isExtracting && phase === "FAILED" && (
+        <div className="border-t border-neutral-200 pt-4">
+          <p className="mb-3 text-sm text-red-700">
+            Extraction failed{bidPackage.vendorExtractionError ? `: ${bidPackage.vendorExtractionError}` : "."}
+          </p>
+          <SubmitVendorQuoteExtractForm
+            estimateId={estimateId}
+            bidPackageId={bidPackage.id}
+            documentId={quoteDocument.id}
+            label="Retry extraction"
+          />
+        </div>
+      )}
+
+      {quoteDocument && !isExtracting && phase !== "FAILED" && !matches && (
         <div className="border-t border-neutral-200 pt-4">
           <p className="mb-3 text-sm text-neutral-500">
             &quot;{quoteDocument.filename}&quot; is attached. {quoteDocument.extractionStatus === "COMPLETE" ? "" : "Click Analyze on it from the Opportunity page first, then "}
@@ -1209,7 +1243,7 @@ function BidPackageCard({
         </div>
       )}
 
-      {quoteDocument && matches && (
+      {quoteDocument && !isExtracting && matches && (
         <div className="border-t border-neutral-200 pt-4">
           <div className="mb-3 flex items-center justify-between gap-4">
             <h4 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
@@ -1253,6 +1287,13 @@ function BidPackageCard({
                 return (
                   <tr key={i} className="border-t border-neutral-100">
                     <td className="py-1.5">
+                      {match.confidence && (
+                        <span
+                          className={`mr-1.5 rounded px-1.5 py-0.5 text-xs ${CONFIDENCE_BADGE_CLASS[match.confidence] ?? ""}`}
+                        >
+                          {match.confidence}
+                        </span>
+                      )}
                       {match.vendorLine.unitCode && (
                         <span className="mr-1.5 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">
                           {match.vendorLine.unitCode}
@@ -1278,6 +1319,7 @@ function BidPackageCard({
                           </option>
                         ))}
                       </select>
+                      {match.reasoning && <p className="mt-1 text-xs text-neutral-400">{match.reasoning}</p>}
                       {!matchedItem && (
                         <p className="mt-1 text-xs text-amber-700">No match — review and pick one manually</p>
                       )}

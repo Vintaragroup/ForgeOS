@@ -331,6 +331,7 @@ enum AiFeature {
   CHAT
   SCOPE_COVERAGE_ANALYSIS
   RFP_CLARIFICATION_QUESTIONS
+  VENDOR_LINE_MATCH
 }
 
 // One row per OpenAI call, for case-based model routing's cost/token
@@ -1210,6 +1211,22 @@ enum BidPackageStatus {
   REVIEWED
 }
 
+// Extract prices / Re-extract runs a real ~30-100+ second AI call
+// (extraction, then a holistic match pass) backgrounded via next/server's
+// after() so the Server Action itself returns fast -- this is what the
+// client-side progress poller reads to show real phase text instead of a
+// static "Extracting..." label the whole time. IDLE is the never-run /
+// steady-state-after-COMPLETE-was-observed value; COMPLETE and FAILED are
+// both terminal (the poller stops on either).
+enum VendorExtractionPhase {
+  IDLE
+  READING_DOCUMENT
+  EXTRACTING_LINES
+  MATCHING
+  COMPLETE
+  FAILED
+}
+
 // A user-defined, freeform cross-category subset of one EstimateVersion's
 // LineItems sent out to a single vendor for pricing -- NOT a pricing
 // alternate like Option above (same {id, estimateVersionId, name} shape,
@@ -1227,6 +1244,16 @@ model BidPackage {
   name       String
   vendorName String?
   status     BidPackageStatus @default(AWAITING_QUOTE)
+
+  // See VendorExtractionPhase's own comment -- tracks the backgrounded
+  // Extract-prices/Re-extract run so the client can poll real progress
+  // instead of blocking on one long request. matchResult is the AI match
+  // service's persisted output (see vendor-match-ai-service.ts), read
+  // directly at render time instead of recomputed live on every request.
+  vendorExtractionPhase     VendorExtractionPhase @default(IDLE)
+  vendorExtractionStartedAt DateTime?
+  vendorExtractionError     String?
+  matchResult               Json?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

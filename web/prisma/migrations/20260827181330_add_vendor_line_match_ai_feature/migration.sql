@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "AiFeature" ADD VALUE 'VENDOR_LINE_MATCH';

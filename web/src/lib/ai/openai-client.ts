@@ -19,15 +19,18 @@ export class AiNotConfiguredError extends Error {
 // (document summary, scope proposals, chat) -- cheap, and plenty capable
 // for extracting facts from already-extracted plain text. ADVANCED_MODEL
 // is reserved for genuinely harder cases, not just "this one matters
-// more" -- two so far: drawing/CAD vision analysis
+// more" -- three so far: drawing/CAD vision analysis
 // (drawing-summary-service.ts), which needs multimodal image
-// understanding a cheap text model can't do at all; and scope coverage
+// understanding a cheap text model can't do at all; scope coverage
 // analysis (scope-coverage-service.ts), which holds an entire scope
 // document AND an entire current line-item list in context at once and
-// reasons about the *absence* of a match for each requirement -- a much
-// harder judgment than the presence-detection every BASIC_MODEL call
-// does, closer in kind to the vision case's "needs real reasoning" than
-// to straightforward extraction.
+// reasons about the *absence* of a match for each requirement; and
+// vendor-quote line matching (vendor-match-ai-service.ts), the same
+// "reason jointly over two full lists at once" shape -- disambiguating
+// many near-identical vendor lines against many near-identical estimate
+// line items needs a genuine judgment call a per-pair token-overlap
+// formula can't make, closer in kind to the vision case's "needs real
+// reasoning" than to straightforward extraction.
 
 export const BASIC_MODEL = process.env.OPENAI_MODEL_BASIC || "gpt-4o-mini";
 export const ADVANCED_MODEL = process.env.OPENAI_MODEL_ADVANCED || "gpt-4o";

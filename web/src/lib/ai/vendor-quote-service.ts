@@ -12,7 +12,7 @@
 // BidPackage's line items by the time this runs (see bid-package-
 // actions.ts), no cross-project ambiguity to resolve -- and no
 // category/lineType, since this is matched against EXISTING line items
-// (vendor-match-service.ts) to propose a price update, never used to
+// (vendor-match-ai-service.ts) to propose a price update, never used to
 // create new sections the way a scope proposal is.
 
 import { db } from "@/lib/db";
@@ -20,7 +20,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { resolveHighlightableQuote } from "@/lib/ai/text-extraction";
 import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
-import type { VendorQuoteLine } from "@/lib/vendor-match-service";
+import type { VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
 
 const SOURCE_QUOTE_DESCRIPTION =
   "A short (under 150 characters) quote copied EXACTLY, character-for-character, from the document text above, showing where this line item and its price come from. Never paraphrase or summarize the quote itself.";

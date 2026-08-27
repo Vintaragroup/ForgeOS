@@ -7,6 +7,7 @@ import {
   applyVendorMatchAction,
   attachVendorQuoteDocumentAction,
   createBidPackageAction,
+  getBidPackageExtractionStatusAction,
   markBidPackageReviewedAction,
   proposeVendorQuoteItemsAction,
   removeLineItemFromBidPackageAction,
@@ -211,6 +212,38 @@ describe("proposeVendorQuoteItemsAction", () => {
 
     await expect(proposeVendorQuoteItemsAction(estimate.id, bidPackage.id, document.id)).rejects.toThrow(
       "AI features aren't configured yet",
+    );
+
+    // The AI-configured check happens before the phase is ever written --
+    // this fails loudly and synchronously, not silently after already
+    // looking like it started.
+    const unchanged = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    expect(unchanged.vendorExtractionPhase).toBe("IDLE");
+  });
+});
+
+describe("getBidPackageExtractionStatusAction", () => {
+  it("returns the bid package's current phase and error", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    await db.bidPackage.update({
+      where: { id: bidPackage.id },
+      data: { vendorExtractionPhase: "MATCHING", vendorExtractionError: null },
+    });
+
+    const status = await getBidPackageExtractionStatusAction(estimate.id, bidPackage.id);
+
+    expect(status).toEqual({ phase: "MATCHING", error: null });
+  });
+
+  it("rejects an unauthenticated caller", async () => {
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+
+    await expect(getBidPackageExtractionStatusAction(estimate.id, bidPackage.id)).rejects.toThrow(
+      /access|authenticated/i,
     );
   });
 });
