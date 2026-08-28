@@ -13,6 +13,15 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
 interface MatchSelectionContextValue {
   selected: Set<number>;
   toggle: (index: number) => void;
+  // For a "select this whole group" checkbox (see match-group-checkbox.tsx)
+  // -- a bulk match suggestion covers several vendor-line indices sharing
+  // one target, and checking/unchecking it should move all of them
+  // together, not just one. Any index not yet selected means "select the
+  // rest" (matches the everyday checkbox-group convention: a partially-
+  // checked group's box selects everything on the next click, not clears
+  // it), so this only ever clears the whole set when every member was
+  // already selected.
+  toggleMany: (indices: number[]) => void;
   clear: () => void;
 }
 
@@ -30,9 +39,21 @@ export function MatchSelectionProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const toggleMany = useCallback((indices: number[]) => {
+    setSelected((prev) => {
+      const allSelected = indices.every((i) => prev.has(i));
+      const next = new Set(prev);
+      for (const i of indices) {
+        if (allSelected) next.delete(i);
+        else next.add(i);
+      }
+      return next;
+    });
+  }, []);
+
   const clear = useCallback(() => setSelected(new Set()), []);
 
-  const value = useMemo(() => ({ selected, toggle, clear }), [selected, toggle, clear]);
+  const value = useMemo(() => ({ selected, toggle, toggleMany, clear }), [selected, toggle, toggleMany, clear]);
 
   return <MatchSelectionContext.Provider value={value}>{children}</MatchSelectionContext.Provider>;
 }

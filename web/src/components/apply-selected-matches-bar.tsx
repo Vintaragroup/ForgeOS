@@ -53,7 +53,7 @@ export function ApplySelectedMatchesBar({
   }
 
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-neutral-300 bg-neutral-50 p-3">
+    <div className="sticky bottom-4 z-10 mb-3 flex flex-wrap items-center gap-3 rounded-md border border-neutral-300 bg-white p-3 shadow-lg">
       <span className="text-sm font-medium text-neutral-700">
         {selection.selected.size} match{selection.selected.size === 1 ? "" : "es"} selected
       </span>
