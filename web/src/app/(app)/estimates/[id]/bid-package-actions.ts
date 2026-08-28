@@ -210,6 +210,23 @@ export async function getBidPackageExtractionStatusAction(estimateId: string, bi
 // pointed at a line item on a completely different estimate. Applying a
 // match to a line item outside this package moves it in: a vendor price
 // now applies to it, so it belongs to this vendor's package.
+// Builds the post-apply redirect target, accumulating every line item id
+// already flashed this session (read back from the form's own
+// priorApplied hidden field, which the page renders from its current
+// ?applied= list) with the one just applied, deduped. A single
+// `?applied=<id>` would get clobbered by the very next apply -- fixed
+// after a live report where a second Apply made the first row's "✓
+// Applied" badge disappear (the data itself was never affected, only
+// this confirmation).
+function appliedRedirectUrl(estimateId: string, bidPackageId: string, lineItemId: string, formData: FormData) {
+  const priorApplied = String(formData.get("priorApplied") ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const appliedIds = Array.from(new Set([...priorApplied, lineItemId]));
+  return `/estimates/${estimateId}?tab=bid-packages&applied=${encodeURIComponent(appliedIds.join(","))}#bid-package-${bidPackageId}`;
+}
+
 export async function applyVendorMatchAction(
   estimateId: string,
   versionId: string,
@@ -241,7 +258,15 @@ export async function applyVendorMatchAction(
   // price produces an identical page, which without this looked
   // indistinguishable from the click doing nothing at all (confirmed
   // live: a real user report that turned out to be exactly this).
-  redirect(`/estimates/${estimateId}?tab=bid-packages&applied=${encodeURIComponent(lineItemId)}#bid-package-${bidPackageId}`);
+  //
+  // priorApplied carries forward every id already flashed this session
+  // (the page renders it back into this same form as a hidden field) so
+  // applying a SECOND row doesn't blow away the first one's badge -- a
+  // real regression a live user hit, and worth being explicit about: the
+  // underlying data was never at risk (each apply is an independent
+  // write to its own row), only the confirmation badge was being
+  // overwritten instead of accumulated.
+  redirect(appliedRedirectUrl(estimateId, bidPackageId, lineItemId, formData));
 }
 
 // Applies several vendor lines to ONE line item at once, summing their
@@ -322,12 +347,14 @@ export async function applyVendorMatchGroupAction(
 
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
-  // Same "✓ Applied" flash as applyVendorMatchAction's own -- doubly
-  // important here since Re-apply all N is the case most likely to be
-  // clicked as a genuine no-op (reaffirming an already-correct group
-  // sum), where the page renders byte-identical before and after with
-  // nothing else to signal the click actually did something.
-  redirect(`/estimates/${estimateId}?tab=bid-packages&applied=${encodeURIComponent(lineItemId)}#bid-package-${bidPackageId}`);
+  // Same "✓ Applied" flash as applyVendorMatchAction's own (see
+  // appliedRedirectUrl's own comment on why it accumulates rather than
+  // overwrites) -- doubly important here since Re-apply all N is the
+  // case most likely to be clicked as a genuine no-op (reaffirming an
+  // already-correct group sum), where the page renders byte-identical
+  // before and after with nothing else to signal the click actually did
+  // something.
+  redirect(appliedRedirectUrl(estimateId, bidPackageId, lineItemId, formData));
 }
 
 // Turns one AI-proposed section (vendor-match-ai-service.ts's own header

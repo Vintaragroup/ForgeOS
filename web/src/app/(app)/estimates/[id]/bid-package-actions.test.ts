@@ -146,6 +146,68 @@ describe("applyVendorMatchAction", () => {
     expect(updatedVersion.totalCost.toNumber()).toBe(840);
   });
 
+  it("accumulates the applied flash across two applies instead of the second clobbering the first -- reproduces a live report where the first row's \"Applied\" badge disappeared", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const section = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY" });
+    const secondItem = await addLineItem(version.id, section.id, {
+      lineType: "LABOR",
+      description: "Second item",
+      qty: 1,
+      unitCost: 0,
+    });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+      },
+    });
+
+    const firstFormData = new FormData();
+    firstFormData.set("lineItemId", item.id);
+    firstFormData.set("unitCost", "840");
+    firstFormData.set("documentId", document.id);
+    // No priorApplied -- this is the first apply this session, same as
+    // the page renders an empty hidden field when appliedLineItemIds is
+    // still empty.
+    let firstDigest = "";
+    try {
+      await applyVendorMatchAction(estimate.id, version.id, bidPackage.id, firstFormData);
+    } catch (err) {
+      firstDigest = (err as { digest?: string }).digest ?? "";
+    }
+    expect(firstDigest).toContain(`applied=${encodeURIComponent(item.id)}`);
+
+    // Second apply carries the FIRST id forward via priorApplied, the
+    // same way the page renders it back into the next form's hidden
+    // field from the URL the first redirect just produced.
+    const secondFormData = new FormData();
+    secondFormData.set("lineItemId", secondItem.id);
+    secondFormData.set("unitCost", "500");
+    secondFormData.set("documentId", document.id);
+    secondFormData.set("priorApplied", item.id);
+    await expect(
+      applyVendorMatchAction(estimate.id, version.id, bidPackage.id, secondFormData),
+    ).rejects.toMatchObject({
+      digest: expect.stringContaining(
+        `applied=${encodeURIComponent(`${item.id},${secondItem.id}`)}`,
+      ),
+    });
+
+    // Both rows' own data is independently correct -- the accumulator is
+    // purely a display concern, never a data one.
+    const updatedFirst = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    const updatedSecond = await db.lineItem.findUniqueOrThrow({ where: { id: secondItem.id } });
+    expect(updatedFirst.unitCost.toNumber()).toBe(840);
+    expect(updatedSecond.unitCost.toNumber()).toBe(500);
+  });
+
   it("applies a vendor price to a line item NOT yet in this bid package, and adds it to the package -- the candidate pool is now version-wide, not package-scoped", async () => {
     const admin = await makeAdmin();
     await createSession(admin.id);

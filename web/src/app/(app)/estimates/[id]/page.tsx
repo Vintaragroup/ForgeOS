@@ -98,11 +98,18 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
   const buildResultRaw = Array.isArray(buildResultParam) ? buildResultParam[0] : buildResultParam;
-  // Flash confirmation for a just-applied vendor match (see
-  // applyVendorMatchAction/applyVendorMatchGroupAction's own comments) --
-  // threaded down to BidPackageCard so it can render a "✓ Applied" badge
-  // next to whichever row(s) resolved to this line item id.
-  const appliedLineItemId = Array.isArray(appliedParam) ? appliedParam[0] : appliedParam;
+  // Flash confirmation for every vendor match applied so far this
+  // session (see appliedRedirectUrl's own comment in bid-package-actions.ts
+  // on why this is a comma-joined accumulator, not a single id -- a
+  // single value got clobbered by the next Apply click, making the
+  // FIRST row's "✓ Applied" badge disappear even though its data was
+  // untouched). Threaded down to BidPackageCard so it can render the
+  // badge next to every row (and bulk-apply block) resolved to any of
+  // these ids, and rendered back into each form as a hidden field so the
+  // next apply can append to it instead of overwriting it.
+  const appliedLineItemIds = new Set(
+    (Array.isArray(appliedParam) ? appliedParam[0] : appliedParam)?.split(",").filter(Boolean) ?? [],
+  );
   let buildResult: BuildEstimateResult | null = null;
   if (buildResultRaw) {
     try {
@@ -434,7 +441,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     opportunityId={estimate.opportunity.id}
                     version={currentVersion}
                     vendorQuoteDocuments={vendorQuoteDocuments}
-                    appliedLineItemId={appliedLineItemId}
+                    appliedLineItemIds={appliedLineItemIds}
                   />
                 ),
                 documents: (
@@ -1089,13 +1096,13 @@ function BidPackagesTab({
   opportunityId,
   version,
   vendorQuoteDocuments,
-  appliedLineItemId,
+  appliedLineItemIds,
 }: {
   estimateId: string;
   opportunityId: string;
   version: VersionWithSections;
   vendorQuoteDocuments: { id: string; filename: string }[];
-  appliedLineItemId?: string;
+  appliedLineItemIds: Set<string>;
 }) {
   // Every line item on the CURRENT version, not just ones already added
   // to a given bid package -- the "Matched to" dropdown offers this full
@@ -1131,7 +1138,7 @@ function BidPackagesTab({
             bidPackage={bidPackage}
             vendorQuoteDocuments={vendorQuoteDocuments}
             allLineItems={allLineItems}
-            appliedLineItemId={appliedLineItemId}
+            appliedLineItemIds={appliedLineItemIds}
           />
         ))
       )}
@@ -1172,7 +1179,7 @@ function BidPackageCard({
   bidPackage,
   vendorQuoteDocuments,
   allLineItems,
-  appliedLineItemId,
+  appliedLineItemIds,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -1186,8 +1193,9 @@ function BidPackageCard({
     documentId: string | null;
     bidPackageId: string | null;
   }[];
-  appliedLineItemId?: string;
+  appliedLineItemIds: Set<string>;
 }) {
+  const priorAppliedValue = Array.from(appliedLineItemIds).join(",");
   const attachWithIds = attachVendorQuoteDocumentAction.bind(null, estimateId, bidPackage.id);
   const markReviewedWithIds = markBidPackageReviewedAction.bind(null, estimateId, bidPackage.id);
   const quoteDocument = bidPackage.documents[0] ?? null;
@@ -1411,10 +1419,11 @@ function BidPackageCard({
                     <input type="hidden" name="lineItemId" value={group.targetId} />
                     <input type="hidden" name="matchIndices" value={group.matchIndices.join(",")} />
                     <input type="hidden" name="documentId" value={quoteDocument.id} />
+                    <input type="hidden" name="priorApplied" value={priorAppliedValue} />
                     <Button variant="secondary" type="submit">
                       {alreadyApplied ? "Re-apply" : "Apply"} all {vendorLines.length} (sum {money(total)})
                     </Button>
-                    {appliedLineItemId === group.targetId && (
+                    {appliedLineItemIds.has(group.targetId) && (
                       <span className="text-xs font-medium text-green-700">✓ Applied</span>
                     )}
                   </form>
@@ -1506,7 +1515,7 @@ function BidPackageCard({
                           {match.vendorLine.unitCode}
                         </span>
                       )}
-                      {appliedLineItemId && match.lineItemId === appliedLineItemId && (
+                      {match.lineItemId && appliedLineItemIds.has(match.lineItemId) && (
                         <span className="mr-1.5 text-xs font-medium text-green-700">✓ Applied</span>
                       )}
                       {sourceHref ? (
@@ -1550,6 +1559,7 @@ function BidPackageCard({
                         <input type="hidden" name="unitCost" value={match.vendorLine.unitPrice} />
                         <input type="hidden" name="documentId" value={quoteDocument.id} />
                         <input type="hidden" name="sourceQuote" value={match.vendorLine.sourceQuote} />
+                        <input type="hidden" name="priorApplied" value={priorAppliedValue} />
                         <Button variant="secondary" type="submit">
                           {alreadyApplied ? "Re-apply" : "Apply"}
                         </Button>
