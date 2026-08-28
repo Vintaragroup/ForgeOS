@@ -246,10 +246,18 @@ function buildCandidatesBlock(candidates: MatchCandidate[]): string {
 
 // Deduplicated section labels already on the estimate -- lets the model
 // check "does a section like this already exist?" before proposing a new
-// one, without re-deriving it from every individual candidate line.
-function buildExistingSectionsBlock(candidates: MatchCandidate[]): string {
-  const labels = Array.from(new Set(candidates.map((c) => c.sectionLabel).filter((label): label is string => !!label)));
-  return labels.length > 0 ? labels.map((label) => `- ${label}`).join("\n") : "(none)";
+// one, without re-deriving it from every individual candidate line. Also
+// reused as a deterministic post-filter in resolveProposedVendorSections
+// below -- the model is TOLD about these labels in the prompt, but proven
+// live not to reliably honor "skip if it already exists," so this same
+// set is used again after the fact rather than trusted on the model's
+// word alone.
+function existingSectionLabels(candidates: MatchCandidate[]): Set<string> {
+  return new Set(candidates.map((c) => c.sectionLabel).filter((label): label is string => !!label));
+}
+
+function buildExistingSectionsBlock(labels: Set<string>): string {
+  return labels.size > 0 ? Array.from(labels).map((label) => `- ${label}`).join("\n") : "(none)";
 }
 
 export interface RawVendorLineMatch {
@@ -305,6 +313,8 @@ export async function matchVendorQuoteLinesWithAi(
   // other AI-proposal function in this app.
   const client = getOpenAiClient();
 
+  const sectionLabels = existingSectionLabels(candidates);
+
   const completion = await client.chat.completions.create({
     model: ADVANCED_MODEL,
     // Low, not zero -- a structured judgment call over a fixed shape, not
@@ -316,7 +326,7 @@ export async function matchVendorQuoteLinesWithAi(
       { role: "system", content: SYSTEM_PROMPT },
       {
         role: "user",
-        content: `VENDOR LINES:\n${buildVendorLinesBlock(vendorLines)}\n\nCANDIDATE LINE ITEMS:\n${buildCandidatesBlock(candidates)}\n\nEXISTING SECTIONS:\n${buildExistingSectionsBlock(candidates)}`,
+        content: `VENDOR LINES:\n${buildVendorLinesBlock(vendorLines)}\n\nCANDIDATE LINE ITEMS:\n${buildCandidatesBlock(candidates)}\n\nEXISTING SECTIONS:\n${buildExistingSectionsBlock(sectionLabels)}`,
       },
     ],
     response_format: { type: "json_schema", json_schema: MATCH_SCHEMA },
@@ -340,9 +350,10 @@ export async function matchVendorQuoteLinesWithAi(
     );
   }
   const parsed = JSON.parse(content) as { matches: RawVendorLineMatch[]; proposedSections: RawProposedVendorSection[] };
+  const resolvedMatches = resolveVendorLineMatches(parsed.matches, vendorLines, candidates);
   return {
-    matches: resolveVendorLineMatches(parsed.matches, vendorLines, candidates),
-    proposedSections: resolveProposedVendorSections(parsed.proposedSections, vendorLines.length),
+    matches: resolvedMatches,
+    proposedSections: resolveProposedVendorSections(parsed.proposedSections, resolvedMatches, sectionLabels),
   };
 }
 
@@ -414,16 +425,42 @@ export function resolveVendorLineMatches(
 // ProposedVendorSection's own comment on why), and drops a proposal
 // entirely if none of its indices were valid (nothing real left to
 // create a section for).
+//
+// Two deterministic backstops, added after a live production incident
+// where the model re-proposed "One Time Service Costs" on a re-extract
+// even though it already existed as a real section with real, already-
+// matched line items -- despite the prompt telling it not to (see
+// SYSTEM_PROMPT and EXISTING SECTIONS). The model's own judgment alone
+// proved unreliable, so this no longer trusts it on either count:
+//   1. Drop any vendorLineIndex whose match already resolved to a real
+//      lineItemId -- a proposal should only ever cover vendor lines that
+//      don't already have a confident match (this mirrors what the
+//      prompt already asks for, just enforced in code instead of hoped
+//      for).
+//   2. Drop the whole proposal if its name collides (case/whitespace
+//      insensitive) with a section that already exists on the estimate.
+// Neither backstop is a substitute for commitProposedVendorSectionAction
+// ALSO being idempotent (see its own header comment) -- this filter
+// reduces how often a stale proposal is even offered, the commit action
+// is what guarantees clicking "Create section" can never duplicate real
+// priced line items even if a proposal slips through anyway.
 export function resolveProposedVendorSections(
   raw: RawProposedVendorSection[],
-  vendorLineCount: number,
+  matches: VendorLineMatch[],
+  existingSectionNames: Set<string>,
 ): ProposedVendorSection[] {
+  const existingNamesLower = new Set(Array.from(existingSectionNames, (n) => n.trim().toLowerCase()));
   return raw
     .map((proposal) => ({
       name: proposal.name,
       lineType: proposal.lineType,
       reasoning: proposal.reasoning,
-      vendorLineIndices: proposal.vendorLineIndices.filter((i) => i >= 0 && i < vendorLineCount),
+      vendorLineIndices: proposal.vendorLineIndices.filter(
+        (i) => i >= 0 && i < matches.length && !matches[i].lineItemId,
+      ),
     }))
-    .filter((proposal) => proposal.vendorLineIndices.length > 0);
+    .filter(
+      (proposal) =>
+        proposal.vendorLineIndices.length > 0 && !existingNamesLower.has(proposal.name.trim().toLowerCase()),
+    );
 }

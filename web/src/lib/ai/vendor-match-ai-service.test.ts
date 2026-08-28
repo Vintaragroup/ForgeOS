@@ -8,6 +8,7 @@ import {
   type MatchCandidate,
   type RawProposedVendorSection,
   type RawVendorLineMatch,
+  type VendorLineMatch,
   type VendorQuoteLine,
 } from "@/lib/ai/vendor-match-ai-service";
 
@@ -203,6 +204,17 @@ describe("resolveVendorLineMatches", () => {
   });
 });
 
+function fakeMatches(lineItemIds: (string | null)[]): VendorLineMatch[] {
+  return lineItemIds.map((lineItemId, i) => ({
+    vendorLine: vendorLine(`Line ${i}`, 100),
+    lineItemId,
+    confidence: lineItemId ? "high" : null,
+    reasoning: null,
+    needsClarification: false,
+    suggestedLineItemId: lineItemId,
+  }));
+}
+
 describe("resolveProposedVendorSections", () => {
   it("resolves vendorLineIndices for a real category grouping several vendor lines", () => {
     const raw: RawProposedVendorSection[] = [
@@ -214,7 +226,7 @@ describe("resolveProposedVendorSections", () => {
       },
     ];
 
-    const proposals = resolveProposedVendorSections(raw, 3);
+    const proposals = resolveProposedVendorSections(raw, fakeMatches([null, null, null]), new Set());
 
     expect(proposals).toEqual([
       {
@@ -231,7 +243,7 @@ describe("resolveProposedVendorSections", () => {
       { name: "One Time Service Costs", lineType: "FEE", reasoning: "x", vendorLineIndices: [0, 99] },
     ];
 
-    const proposals = resolveProposedVendorSections(raw, 1);
+    const proposals = resolveProposedVendorSections(raw, fakeMatches([null]), new Set());
 
     expect(proposals[0].vendorLineIndices).toEqual([0]);
   });
@@ -241,7 +253,31 @@ describe("resolveProposedVendorSections", () => {
       { name: "Ghost Section", lineType: "FEE", reasoning: "x", vendorLineIndices: [5, 6] },
     ];
 
-    const proposals = resolveProposedVendorSections(raw, 3);
+    const proposals = resolveProposedVendorSections(raw, fakeMatches([null, null, null]), new Set());
+
+    expect(proposals).toEqual([]);
+  });
+
+  it("drops a vendorLineIndex whose match already resolved to a real lineItemId -- a live incident where a re-extract re-proposed a section for vendor lines that were already matched", () => {
+    const raw: RawProposedVendorSection[] = [
+      { name: "One Time Service Costs", lineType: "FEE", reasoning: "x", vendorLineIndices: [0, 1] },
+    ];
+
+    const proposals = resolveProposedVendorSections(raw, fakeMatches(["li-1", null]), new Set());
+
+    expect(proposals[0].vendorLineIndices).toEqual([1]);
+  });
+
+  it("drops the whole proposal when its name collides (case/whitespace insensitive) with an existing section", () => {
+    const raw: RawProposedVendorSection[] = [
+      { name: "  one time service costs ", lineType: "FEE", reasoning: "x", vendorLineIndices: [0] },
+    ];
+
+    const proposals = resolveProposedVendorSections(
+      raw,
+      fakeMatches([null]),
+      new Set(["One Time Service Costs"]),
+    );
 
     expect(proposals).toEqual([]);
   });

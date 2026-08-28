@@ -392,6 +392,46 @@ describe("commitProposedVendorSectionAction", () => {
     expect(updated.proposedSections).toEqual([]);
   });
 
+  it("does not duplicate line items when the same proposal is committed twice -- reproduces a live incident where a re-extract re-proposed an already-committed section", async () => {
+    const { estimate, version, bidPackage } = await makePackageWithProposal();
+
+    const formData1 = new FormData();
+    formData1.set("proposedSectionIndex", "0");
+    await commitProposedVendorSectionAction(estimate.id, version.id, bidPackage.id, formData1);
+
+    const section = await db.estimateSection.findFirstOrThrow({
+      where: { estimateVersionId: version.id, name: "One Time Service Costs" },
+    });
+    const firstCommitItems = await db.lineItem.findMany({ where: { sectionId: section.id } });
+    expect(firstCommitItems).toHaveLength(2);
+
+    // Simulate a re-extract overwriting matchResult/proposedSections
+    // with a fresh AI pass that (incorrectly) re-proposes the exact same
+    // section for the exact same vendor lines (same sourceQuote).
+    const lines = [vendorLine("Test and adjust", 189000), vendorLine("Trucking", 25000)];
+    const freshMatches: VendorLineMatch[] = lines.map((vl) => match(vl));
+    const freshProposal: ProposedVendorSection[] = [
+      { name: "One Time Service Costs", lineType: "FEE", reasoning: "Real cost category, no matching section.", vendorLineIndices: [0, 1] },
+    ];
+    await db.bidPackage.update({
+      where: { id: bidPackage.id },
+      data: { matchResult: freshMatches as object[], proposedSections: freshProposal as object[] },
+    });
+
+    const formData2 = new FormData();
+    formData2.set("proposedSectionIndex", "0");
+    await commitProposedVendorSectionAction(estimate.id, version.id, bidPackage.id, formData2);
+
+    const afterSecondCommit = await db.lineItem.findMany({ where: { sectionId: section.id } });
+    expect(afterSecondCommit).toHaveLength(2);
+    expect(afterSecondCommit.map((li) => li.id).sort()).toEqual(firstCommitItems.map((li) => li.id).sort());
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    const updatedMatches = updated.matchResult as unknown as VendorLineMatch[];
+    const testAndAdjustId = firstCommitItems.find((li) => li.description === "Test and adjust")!.id;
+    expect(updatedMatches[0].lineItemId).toBe(testAndAdjustId);
+  });
+
   it("rejects a missing/invalid proposedSectionIndex", async () => {
     const { estimate, version, bidPackage } = await makePackageWithProposal();
 

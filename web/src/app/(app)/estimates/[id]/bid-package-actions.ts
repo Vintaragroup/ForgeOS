@@ -325,12 +325,28 @@ export async function applyVendorMatchGroupAction(
 // partial commit or another bid package's own proposal for the same
 // category.
 //
+// Idempotency is enforced a SECOND way beyond findOrCreateSection, after
+// a live production incident: a re-extract re-proposed this same
+// section (a model prompt-following miss, see
+// resolveProposedVendorSections's own header comment for the
+// deterministic filter added to reduce that), and clicking "Create
+// section" again duplicated $326,000 of real priced line items because
+// nothing here checked whether they already existed. Before creating
+// anything, this now looks up the target section's OWN existing line
+// items by sourceQuote (the exact vendor quote text this line was
+// extracted from -- the strongest signal that it's the SAME vendor line,
+// stronger than description alone since two truly different lines can
+// coincidentally share wording) and reuses that item's id instead of
+// creating a duplicate. Only vendor lines with no such match get a real
+// new LineItem.
+//
 // proposal.vendorLineIndices are positions in the SAME vendorLines/
 // matches array (see ProposedVendorSection's own comment) -- used here
 // to pull the real vendor line data straight from the persisted
 // matchResult, and again afterward to patch those exact matches entries
-// to point at the newly created line items, so the review table shows
-// them resolved immediately instead of merely newly selectable.
+// to point at the (newly created OR already-existing) line items, so the
+// review table shows them resolved immediately instead of merely newly
+// selectable.
 export async function commitProposedVendorSectionAction(
   estimateId: string,
   versionId: string,
@@ -367,32 +383,57 @@ export async function commitProposedVendorSectionAction(
   if (validVendorIndices.length === 0) {
     throw new Error("None of this proposal's vendor lines are still available -- try Re-extract.");
   }
-  const vendorLinesToCreate = validVendorIndices.map((i) => matches[i].vendorLine);
 
   const section = await findOrCreateSection(versionId, { name: proposal.name, sectionType: "CATEGORY" });
-  const created = await addLineItemsBulk(
-    versionId,
-    section.id,
-    vendorLinesToCreate.map((vl) => ({
-      lineType: proposal.lineType,
-      description: vl.description,
-      qty: vl.qty ?? 1,
-      unit: vl.unit,
-      unitCost: vl.unitPrice,
-      documentId: quoteDocument.id,
-      sourceQuote: vl.sourceQuote,
-      sourcePageNumber: vl.pageNumber,
-    })),
-    { isDraft: false, bidPackageId },
-  );
 
-  const createdIdByVendorIndex = new Map(validVendorIndices.map((vendorIndex, k) => [vendorIndex, created[k]?.id]));
+  const existingSectionItems = await db.lineItem.findMany({
+    where: { sectionId: section.id, sourceQuote: { not: null } },
+    select: { id: true, sourceQuote: true },
+  });
+  const existingIdBySourceQuote = new Map(existingSectionItems.map((li) => [li.sourceQuote, li.id]));
+
+  const resolvedIdByVendorIndex = new Map<number, string>();
+  const vendorIndicesToCreate: number[] = [];
+  for (const i of validVendorIndices) {
+    const existingId = existingIdBySourceQuote.get(matches[i].vendorLine.sourceQuote);
+    if (existingId) {
+      resolvedIdByVendorIndex.set(i, existingId);
+    } else {
+      vendorIndicesToCreate.push(i);
+    }
+  }
+
+  if (vendorIndicesToCreate.length > 0) {
+    const created = await addLineItemsBulk(
+      versionId,
+      section.id,
+      vendorIndicesToCreate.map((i) => {
+        const vl = matches[i].vendorLine;
+        return {
+          lineType: proposal.lineType,
+          description: vl.description,
+          qty: vl.qty ?? 1,
+          unit: vl.unit,
+          unitCost: vl.unitPrice,
+          documentId: quoteDocument.id,
+          sourceQuote: vl.sourceQuote,
+          sourcePageNumber: vl.pageNumber,
+        };
+      }),
+      { isDraft: false, bidPackageId },
+    );
+    vendorIndicesToCreate.forEach((vendorIndex, k) => {
+      const id = created[k]?.id;
+      if (id) resolvedIdByVendorIndex.set(vendorIndex, id);
+    });
+  }
+
   const updatedMatches = matches.map((m, i) => {
-    const newLineItemId = createdIdByVendorIndex.get(i);
-    if (!newLineItemId) return m;
+    const lineItemId = resolvedIdByVendorIndex.get(i);
+    if (!lineItemId) return m;
     return {
       ...m,
-      lineItemId: newLineItemId,
+      lineItemId,
       confidence: "high" as const,
       reasoning: `Matched to newly created section "${proposal.name}".`,
       needsClarification: false,

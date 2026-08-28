@@ -147,7 +147,10 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
               id: true,
               description: true,
               category: true,
+              qty: true,
+              unit: true,
               unitCost: true,
+              totalCost: true,
               documentId: true,
               section: { select: { name: true, groupLabel: true } },
             },
@@ -504,7 +507,10 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
             id: true;
             description: true;
             category: true;
+            qty: true;
+            unit: true;
             unitCost: true;
+            totalCost: true;
             documentId: true;
             section: { select: { name: true; groupLabel: true } };
           };
@@ -1225,14 +1231,27 @@ function BidPackageCard({
           {bidPackage.lineItems.map((li) => {
             const removeWithIds = removeLineItemFromBidPackageAction.bind(null, estimateId, li.id);
             const sectionLabel = li.section.groupLabel ?? li.section.name;
+            const qtyNum = Number(li.qty);
             return (
               <tr key={li.id} className="border-t border-neutral-100">
                 <td className="px-3 py-1.5">
                   {li.description}
                   {sectionLabel && <span className="ml-2 text-xs text-neutral-400">{sectionLabel}</span>}
+                  {/* Most line items are qty 1, where unit cost and total
+                      cost are the same number -- only worth calling out
+                      qty/unit cost separately once bulk-apply (see
+                      applyVendorMatchGroupAction) has set a real qty > 1
+                      with a blended per-unit price, so the total column
+                      alone doesn't read as an unexplained lump sum. */}
+                  {qtyNum !== 1 && (
+                    <span className="ml-2 text-xs text-neutral-400">
+                      ({qtyNum}
+                      {li.unit ? ` ${li.unit}` : ""} &times; {money(li.unitCost)})
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-1.5 text-neutral-400">{li.category ?? ""}</td>
-                <td className="px-3 py-1.5 text-right">{money(li.unitCost)}</td>
+                <td className="px-3 py-1.5 text-right">{money(li.totalCost)}</td>
                 <td className="py-1.5 pl-3 text-right">
                   <form action={removeWithIds} className="inline">
                     <button className="text-xs text-neutral-400 hover:text-red-600" title="Remove from package">
