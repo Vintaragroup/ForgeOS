@@ -49,6 +49,7 @@ import { citationHref } from "@/lib/citation";
 import { auditLineItemCategories } from "@/lib/category-audit";
 import { isKnownCategory } from "@/lib/line-item-category";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
+import { getVendorMatchApplyLog } from "@/lib/vendor-match-apply-log-service";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
@@ -203,6 +204,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     pricingScheduleDocuments,
     scopeDocuments,
     vendorQuoteDocuments,
+    vendorMatchApplyLog,
   ] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.proposalTemplate.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -244,6 +246,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       where: { opportunityId: estimate.opportunityId, documentType: "VENDOR_QUOTE", bidPackageId: null, deletedAt: null },
       orderBy: { createdAt: "desc" },
     }),
+    currentVersion ? getVendorMatchApplyLog(currentVersion.id) : Promise.resolve([]),
   ]);
 
   // Only non-empty once this Opportunity has 2+ named Estimates (see
@@ -426,6 +429,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                 { id: "review", label: "Review", count: reviewIssueCount },
                 { id: "proposal", label: "Proposal & Approval" },
                 { id: "cut-list", label: "Cut List" },
+                { id: "history", label: "History", count: vendorMatchApplyLog.length },
               ]}
               content={{
                 "line-items": (
@@ -505,6 +509,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                   />
                 ),
                 "cut-list": <CutListTab estimateId={estimate.id} versionId={currentVersion.id} />,
+                history: <HistoryTab log={vendorMatchApplyLog} />,
               }}
             />
           </Suspense>
@@ -1248,9 +1253,18 @@ function BidPackageCard({
       if (!targetId) return;
       byTarget.set(targetId, [...(byTarget.get(targetId) ?? []), i]);
     });
-    return Array.from(byTarget.entries())
-      .filter(([, indices]) => indices.length > 1)
-      .map(([targetId, matchIndices]) => ({ targetId, matchIndices }));
+    return (
+      Array.from(byTarget.entries())
+        .filter(([, indices]) => indices.length > 1)
+        // Once applied, a group is done -- it no longer needs a
+        // reviewer's decision, so it's removed from this active
+        // suggestions list entirely rather than sitting here permanently
+        // with just a "✓ Applied" badge. The real, permanent record of
+        // what was applied now lives on the History tab
+        // (vendor-match-apply-log-service.ts), not here.
+        .filter(([targetId]) => allLineItems.find((li) => li.id === targetId)?.documentId !== quoteDocument?.id)
+        .map(([targetId, matchIndices]) => ({ targetId, matchIndices }))
+    );
   })();
 
   // Every "high" confidence match, for the single "Apply all
@@ -2764,6 +2778,114 @@ function CutListTab({ estimateId, versionId }: { estimateId: string; versionId: 
       >
         Manage cut list →
       </Link>
+    </Card>
+  );
+}
+
+const APPLY_METHOD_LABELS: Record<string, string> = {
+  single: "Single apply",
+  group: "Bulk group",
+  all_high_confidence: "All high-confidence",
+  selected: "Selected (checkboxes)",
+};
+
+// The real, durable point-in-time audit trail for every vendor-match
+// apply -- see VendorMatchApplyLog's own schema comment for why this is
+// a separate table from BidPackage.matchResult (which only ever holds
+// current state, and where an applied match now disappears from the
+// active review view once it's been committed -- see this tab's own
+// reason for existing). Every row is a snapshot taken at apply time, so
+// it stays legible even after the LineItem/BidPackage/Document it
+// references is later deleted -- targetDescription etc. are real
+// stored text, not live joins that could go blank.
+function HistoryTab({
+  log,
+}: {
+  log: Awaited<ReturnType<typeof getVendorMatchApplyLog>>;
+}) {
+  if (log.length === 0) {
+    return (
+      <Card className="p-6">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          Vendor match apply history
+        </h2>
+        <p className="text-sm text-neutral-500">
+          Nothing applied yet. Every vendor-match Apply click -- single row, bulk group, &quot;all high-confidence,&quot;
+          or a hand-picked selection -- will show up here permanently, even after the estimate itself changes.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-6">
+      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+        Vendor match apply history
+      </h2>
+      <p className="mb-4 text-sm text-neutral-500">
+        A permanent record of every vendor price applied to this estimate -- who, what, and when. Unlike the Bid
+        Packages tab (which only shows current state), a row here never disappears, even if the line item it priced
+        is later renamed, deleted, or re-priced.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-neutral-500">
+              <th className="px-3 pb-1.5 font-normal">When</th>
+              <th className="px-3 pb-1.5 font-normal">Who</th>
+              <th className="px-3 pb-1.5 font-normal">How</th>
+              <th className="px-3 pb-1.5 font-normal">Bid package</th>
+              <th className="px-3 pb-1.5 font-normal">Applied to</th>
+              <th className="px-3 pb-1.5 font-normal">From vendor line(s)</th>
+              <th className="px-3 pb-1.5 text-right font-normal">Qty</th>
+              <th className="px-3 pb-1.5 text-right font-normal">Unit cost</th>
+              <th className="px-3 pb-1.5 text-right font-normal">Total</th>
+              <th className="px-3 pb-1.5 font-normal">Source document</th>
+            </tr>
+          </thead>
+          <tbody>
+            {log.map((entry) => (
+              <tr key={entry.id} className="border-t border-neutral-100 align-top">
+                <td className="whitespace-nowrap px-3 py-2 text-neutral-500">
+                  {entry.createdAt.toLocaleString("en-US", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                </td>
+                <td className="px-3 py-2">{entry.actor.name}</td>
+                <td className="px-3 py-2">{APPLY_METHOD_LABELS[entry.method] ?? entry.method}</td>
+                <td className="px-3 py-2 text-neutral-500">{entry.bidPackageName}</td>
+                <td className="px-3 py-2">
+                  {entry.targetDescription}
+                  {entry.targetSectionLabel && (
+                    <span className="ml-1.5 text-xs text-neutral-400">{entry.targetSectionLabel}</span>
+                  )}
+                  {!entry.lineItemId && (
+                    <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
+                      line item since deleted
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-neutral-500">
+                  {entry.vendorLineDescriptions}
+                  {entry.vendorLineCount > 1 && (
+                    <span className="ml-1.5 text-xs text-neutral-400">({entry.vendorLineCount} lines)</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right">{entry.qty.toNumber()}</td>
+                <td className="px-3 py-2 text-right">{money(entry.unitCost)}</td>
+                <td className="px-3 py-2 text-right">{money(entry.totalCost)}</td>
+                <td className="px-3 py-2 text-neutral-500">
+                  {entry.documentFilename}
+                  {!entry.documentId && (
+                    <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">deleted</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }

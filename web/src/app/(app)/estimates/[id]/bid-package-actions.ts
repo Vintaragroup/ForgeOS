@@ -29,6 +29,7 @@ import {
   estimateOpportunityId,
   requireEstimateAccess,
 } from "@/lib/opportunity-access";
+import { recordVendorMatchApply, type VendorMatchApplyMethod } from "@/lib/vendor-match-apply-log-service";
 
 // Called directly as a function from create-bid-package-bar.tsx, not
 // bound to a <form action> -- the selected line-item ids live in client
@@ -242,7 +243,7 @@ export async function applyVendorMatchAction(
   bidPackageId: string,
   formData: FormData,
 ) {
-  await requireEstimateAccess(estimateId);
+  const user = await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
   const opportunityId = await estimateOpportunityId(estimateId);
@@ -254,10 +255,40 @@ export async function applyVendorMatchAction(
   if (!lineItemId) throw new Error("Choose which line item this vendor price applies to.");
   if (!Number.isFinite(unitCost)) throw new Error("Unit cost must be a number.");
   if (!documentId) throw new Error("Missing vendor quote document reference.");
-  await db.lineItem.findFirstOrThrow({ where: { id: lineItemId, section: { estimateVersionId: versionId } } });
+  const targetLineItem = await db.lineItem.findFirstOrThrow({
+    where: { id: lineItemId, section: { estimateVersionId: versionId } },
+    include: { section: { select: { name: true, groupLabel: true } } },
+  });
 
   await updateLineItem(opportunityId, lineItemId, { unitCost, documentId, sourceQuote, isDraft: false, bidPackageId });
   await recomputeVersionTotals(versionId);
+
+  const [bidPackage, document] = await Promise.all([
+    db.bidPackage.findUniqueOrThrow({ where: { id: bidPackageId }, select: { name: true } }),
+    db.document.findUniqueOrThrow({ where: { id: documentId }, select: { filename: true } }),
+  ]);
+  // This action never passes qty (see updateLineItem's own `data.qty ??
+  // existing.qty`) -- the existing qty, fetched before the write above,
+  // is the real number that landed, not an assumption.
+  const appliedQty = targetLineItem.qty.toNumber();
+  await recordVendorMatchApply({
+    estimateVersionId: versionId,
+    bidPackageId,
+    bidPackageName: bidPackage.name,
+    lineItemId,
+    targetDescription: targetLineItem.description,
+    targetSectionLabel: targetLineItem.section.groupLabel ?? targetLineItem.section.name,
+    vendorLineDescriptions: [sourceQuote || targetLineItem.description],
+    qty: appliedQty,
+    unitCost,
+    totalCost: appliedQty * unitCost,
+    confidence: null,
+    documentId,
+    documentFilename: document.filename,
+    method: "single",
+    actorId: user.id,
+  });
+
   revalidatePath(`/estimates/${estimateId}`);
   // Flashes a "✓ Applied" confirmation next to this row -- same
   // ?success= convention account/actions.ts already uses for the same
@@ -300,7 +331,7 @@ export async function applyVendorMatchGroupAction(
   bidPackageId: string,
   formData: FormData,
 ) {
-  await requireEstimateAccess(estimateId);
+  const user = await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
   const opportunityId = await estimateOpportunityId(estimateId);
@@ -314,7 +345,10 @@ export async function applyVendorMatchGroupAction(
   if (!lineItemId) throw new Error("Missing target line item.");
   if (!documentId) throw new Error("Missing vendor quote document reference.");
   if (matchIndices.length < 2) throw new Error("Select at least two vendor lines to bulk apply.");
-  await db.lineItem.findFirstOrThrow({ where: { id: lineItemId, section: { estimateVersionId: versionId } } });
+  const targetLineItem = await db.lineItem.findFirstOrThrow({
+    where: { id: lineItemId, section: { estimateVersionId: versionId } },
+    include: { section: { select: { name: true, groupLabel: true } } },
+  });
 
   const bidPackage = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackageId } });
   const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? [];
@@ -355,6 +389,26 @@ export async function applyVendorMatchGroupAction(
   });
 
   await recomputeVersionTotals(versionId);
+
+  const document = await db.document.findUniqueOrThrow({ where: { id: documentId }, select: { filename: true } });
+  await recordVendorMatchApply({
+    estimateVersionId: versionId,
+    bidPackageId,
+    bidPackageName: bidPackage.name,
+    lineItemId,
+    targetDescription: targetLineItem.description,
+    targetSectionLabel: targetLineItem.section.groupLabel ?? targetLineItem.section.name,
+    vendorLineDescriptions: vendorLines.map((vl) => vl.description),
+    qty,
+    unitCost,
+    totalCost: total,
+    confidence: "high",
+    documentId,
+    documentFilename: document.filename,
+    method: "group",
+    actorId: user.id,
+  });
+
   revalidatePath(`/estimates/${estimateId}`);
   // Same "✓ Applied" flash as applyVendorMatchAction's own (see
   // appliedRedirectUrl's own comment on why it accumulates rather than
@@ -405,10 +459,14 @@ interface ApplyMatchesResult {
 async function applyMatchesByIndices(
   versionId: string,
   bidPackageId: string,
+  bidPackageName: string,
   documentId: string,
+  documentFilename: string,
   opportunityId: string,
   matches: VendorLineMatch[],
   indices: number[],
+  method: VendorMatchApplyMethod,
+  actorId: string,
 ): Promise<ApplyMatchesResult> {
   const byTarget = new Map<string, number[]>();
   for (const i of indices) {
@@ -436,7 +494,10 @@ async function applyMatchesByIndices(
     // to X" for a target that's actually gone, and the caller is told
     // how many were skipped instead of finding out by counting silently
     // missing dollars.
-    const exists = await db.lineItem.findFirst({ where: { id: lineItemId, section: { estimateVersionId: versionId } } });
+    const exists = await db.lineItem.findFirst({
+      where: { id: lineItemId, section: { estimateVersionId: versionId } },
+      include: { section: { select: { name: true, groupLabel: true } } },
+    });
     if (!exists) {
       staleCount += targetIndices.length;
       for (const i of targetIndices) {
@@ -460,6 +521,24 @@ async function applyMatchesByIndices(
 
     await updateLineItem(opportunityId, lineItemId, { qty, unitCost, documentId, sourceQuote, isDraft: false, bidPackageId });
     appliedTargetIds.push(lineItemId);
+
+    await recordVendorMatchApply({
+      estimateVersionId: versionId,
+      bidPackageId,
+      bidPackageName,
+      lineItemId,
+      targetDescription: exists.description,
+      targetSectionLabel: exists.section.groupLabel ?? exists.section.name,
+      vendorLineDescriptions: vendorLines.map((vl) => vl.description),
+      qty,
+      unitCost,
+      totalCost: total,
+      confidence: "high",
+      documentId,
+      documentFilename,
+      method,
+      actorId,
+    });
 
     for (const i of targetIndices) {
       updatedMatches[i] = {
@@ -501,7 +580,7 @@ export async function applyAllHighConfidenceMatchesAction(
   bidPackageId: string,
   formData: FormData,
 ) {
-  await requireEstimateAccess(estimateId);
+  const user = await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
   const opportunityId = await estimateOpportunityId(estimateId);
@@ -517,13 +596,18 @@ export async function applyAllHighConfidenceMatchesAction(
     .filter((i) => i !== -1);
   if (indices.length === 0) throw new Error("No high-confidence matches to apply.");
 
+  const document = await db.document.findUniqueOrThrow({ where: { id: documentId }, select: { filename: true } });
   const { appliedLineItemIds, staleCount } = await applyMatchesByIndices(
     versionId,
     bidPackageId,
+    bidPackage.name,
     documentId,
+    document.filename,
     opportunityId,
     matches,
     indices,
+    "all_high_confidence",
+    user.id,
   );
 
   revalidatePath(`/estimates/${estimateId}`);
@@ -560,7 +644,7 @@ export async function applySelectedVendorMatchesAction(
   documentId: string,
   selectedIndices: number[],
 ): Promise<ApplyMatchesResult> {
-  await requireEstimateAccess(estimateId);
+  const user = await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
   const opportunityId = await estimateOpportunityId(estimateId);
@@ -578,13 +662,18 @@ export async function applySelectedVendorMatchesAction(
   const validIndices = [...new Set(selectedIndices)].filter((i) => Number.isInteger(i) && i >= 0 && i < matches.length);
   if (validIndices.length === 0) throw new Error("Select at least one match to apply.");
 
+  const document = await db.document.findUniqueOrThrow({ where: { id: trimmedDocumentId }, select: { filename: true } });
   const result = await applyMatchesByIndices(
     versionId,
     bidPackageId,
+    bidPackage.name,
     trimmedDocumentId,
+    document.filename,
     opportunityId,
     matches,
     validIndices,
+    "selected",
+    user.id,
   );
   revalidatePath(`/estimates/${estimateId}`);
   return result;

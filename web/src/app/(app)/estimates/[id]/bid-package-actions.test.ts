@@ -51,6 +51,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await db.vendorMatchApplyLog.deleteMany();
   await db.lineItem.deleteMany();
   await db.document.deleteMany();
   await db.bidPackage.deleteMany();
@@ -304,6 +305,45 @@ describe("applyVendorMatchAction", () => {
       "Unit cost must be a number",
     );
   });
+
+  it("records a durable audit log row for the apply, snapshotting who/what/when", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "ShowRig Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+      },
+    });
+
+    const formData = new FormData();
+    formData.set("lineItemId", item.id);
+    formData.set("unitCost", "840");
+    formData.set("documentId", document.id);
+    formData.set("sourceQuote", "Sleeper Floor");
+    await expectAppliedRedirect(applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData), item.id);
+
+    const logs = await db.vendorMatchApplyLog.findMany({ where: { estimateVersionId: version.id } });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      method: "single",
+      actorId: admin.id,
+      bidPackageId: bidPackage.id,
+      bidPackageName: "ShowRig Package",
+      lineItemId: item.id,
+      targetDescription: "Sleeper Floor Required",
+      documentId: document.id,
+      documentFilename: "ShowRig quote.pdf",
+    });
+    expect(logs[0].unitCost.toNumber()).toBe(840);
+    expect(logs[0].vendorLineDescriptions).toContain("Sleeper Floor");
+  });
 });
 
 describe("applyVendorMatchGroupAction", () => {
@@ -385,6 +425,28 @@ describe("applyVendorMatchGroupAction", () => {
 
     const updatedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
     expect(updatedVersion.totalCost.toNumber()).toBe(900);
+  });
+
+  it("records one audit log row for the whole group, listing both contributing vendor lines", async () => {
+    const { admin, estimate, version, item, bidPackage, document } = await makePackageWithGroupedMatches();
+
+    const formData = new FormData();
+    formData.set("lineItemId", item.id);
+    formData.set("matchIndices", "0,1");
+    formData.set("documentId", document.id);
+    await expectAppliedRedirect(applyVendorMatchGroupAction(estimate.id, version.id, bidPackage.id, formData), item.id);
+
+    const logs = await db.vendorMatchApplyLog.findMany({ where: { estimateVersionId: version.id } });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      method: "group",
+      actorId: admin.id,
+      lineItemId: item.id,
+      confidence: "high",
+      vendorLineCount: 2,
+    });
+    expect(logs[0].vendorLineDescriptions).toBe("Non Slip Paint [CAM-01] | Non Slip Paint [CAM-02]");
+    expect(logs[0].totalCost.toNumber()).toBe(900);
   });
 
   it("rejects a matchIndices entry that doesn't actually share the claimed target", async () => {
@@ -471,6 +533,46 @@ describe("applyAllHighConfidenceMatchesAction", () => {
 
     const updatedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
     expect(updatedVersion.totalCost.toNumber()).toBe(1340);
+  });
+
+  it("records one audit log row per applied target -- not one for the low-confidence row that was skipped", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const section = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY" });
+    const secondItem = await addLineItem(version.id, section.id, {
+      lineType: "LABOR",
+      description: "Second item",
+      qty: 1,
+      unitCost: 0,
+    });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Sleeper Floor Required", 840), { lineItemId: item.id, confidence: "high" }),
+      match(vendorLine("Second Item Charge", 500), { lineItemId: secondItem.id, confidence: "high" }),
+      match(vendorLine("Soft Goods", 800), { confidence: "low" }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const formData = new FormData();
+    formData.set("documentId", document.id);
+    await expect(applyAllHighConfidenceMatchesAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow();
+
+    const logs = await db.vendorMatchApplyLog.findMany({ where: { estimateVersionId: version.id } });
+    expect(logs).toHaveLength(2);
+    expect(logs.every((l) => l.method === "all_high_confidence" && l.actorId === admin.id)).toBe(true);
+    expect(logs.map((l) => l.lineItemId).sort()).toEqual([item.id, secondItem.id].sort());
   });
 
   it("rejects when there are no high-confidence matches", async () => {
@@ -650,6 +752,17 @@ describe("applySelectedVendorMatchesAction", () => {
 
     const updatedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
     expect(updatedVersion.totalCost.toNumber()).toBe(1340);
+
+    const logs = await db.vendorMatchApplyLog.findMany({ where: { estimateVersionId: version.id } });
+    expect(logs).toHaveLength(2);
+    expect(logs.every((l) => l.method === "selected" && l.actorId === admin.id)).toBe(true);
+    // The medium-confidence row (index 1) had no resolved lineItemId at
+    // all, only a suggestion -- confirms the log reflects what was
+    // ACTUALLY written (via lineItemId ?? suggestedLineItemId), not just
+    // what the match row's confidence label said going in.
+    const secondLog = logs.find((l) => l.lineItemId === secondItem.id);
+    expect(secondLog?.confidence).toBe("high");
+    expect(secondLog?.unitCost.toNumber()).toBe(500);
   });
 
   it("sums qty/price across two checked rows that share the same target", async () => {

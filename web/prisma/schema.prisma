@@ -115,6 +115,7 @@ model User {
   uploadedDocuments        Document[]
   deadlineActionsTaken     DeadlineAction[]
   aiUsageEvents            AiUsageEvent[]
+  vendorMatchApplyLogs     VendorMatchApplyLog[]
 
   @@map("users")
 }
@@ -476,8 +477,9 @@ model Document {
   // Sibling to LineItem.attachmentId's existing isDraft/confirm flow --
   // a document-sourced draft line item reviews through the exact same
   // mechanism, not a new one.
-  lineItems     LineItem[]
-  aiUsageEvents AiUsageEvent[]
+  lineItems            LineItem[]
+  aiUsageEvents        AiUsageEvent[]
+  vendorMatchApplyLogs VendorMatchApplyLog[]
 
   @@map("documents")
 }
@@ -825,14 +827,15 @@ model EstimateVersion {
   // shows generatedAt/lineItemCount so staleness is visible, not hidden).
   coverageAnalysis Json?
 
-  sections            EstimateSection[]
-  options             Option[]
-  bidPackages         BidPackage[]
-  proposals           Proposal[]
-  changeOrdersAsBase  ChangeOrder[]     @relation("ChangeOrderBaseVersion")
-  changeOrderAsResult ChangeOrder?      @relation("ChangeOrderResultVersion")
-  cutListParts        CutListPart[]
-  cutSheets           CutSheet[]
+  sections             EstimateSection[]
+  options              Option[]
+  bidPackages          BidPackage[]
+  proposals            Proposal[]
+  changeOrdersAsBase   ChangeOrder[]         @relation("ChangeOrderBaseVersion")
+  changeOrderAsResult  ChangeOrder?          @relation("ChangeOrderResultVersion")
+  cutListParts         CutListPart[]
+  cutSheets            CutSheet[]
+  vendorMatchApplyLogs VendorMatchApplyLog[]
 
   @@map("estimate_versions")
 }
@@ -975,8 +978,9 @@ model LineItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  costActuals  CostActual[]
-  cutListParts CutListPart[]
+  costActuals          CostActual[]
+  cutListParts         CutListPart[]
+  vendorMatchApplyLogs VendorMatchApplyLog[]
 
   @@map("line_items")
 }
@@ -1282,8 +1286,74 @@ model BidPackage {
 
   lineItems LineItem[]
   documents Document[]
+  applyLogs VendorMatchApplyLog[]
 
   @@map("bid_packages")
+}
+
+// A durable, point-in-time record of every vendor-match "apply" event --
+// BidPackage.matchResult (see its own comment) only ever holds CURRENT
+// state, so once a reviewer applied a match there was previously no way
+// to see what was actually written, by whom, or when, short of trusting
+// a reasoning string that a later Re-extract could overwrite. One row
+// per apply click (single row, a bulk group, "all high-confidence," or a
+// hand-picked "selected" checkbox submission -- see `method`).
+//
+// Every meaningful fact is snapshotted directly on the row (target/
+// vendor-line descriptions, dollar amounts, document filename), not just
+// derived from live relations, so the record stays legible even after
+// the LineItem it priced is later deleted (a real, already-seen case --
+// see the stale-match self-healing this session's own work added to
+// bid-package-actions.ts) or the BidPackage/Document is removed.
+// lineItemId/bidPackageId/documentId are therefore all optional with
+// implicit ON DELETE SET NULL, same posture AiUsageEvent already takes
+// toward Document/Opportunity -- the log row itself is never deleted
+// just because something it once pointed at was.
+model VendorMatchApplyLog {
+  id String @id @default(cuid())
+
+  estimateVersionId String
+  estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
+
+  bidPackageId   String?
+  bidPackage     BidPackage? @relation(fields: [bidPackageId], references: [id])
+  bidPackageName String
+
+  lineItemId         String?
+  lineItem           LineItem? @relation(fields: [lineItemId], references: [id])
+  targetDescription  String
+  targetSectionLabel String?
+
+  // The vendor line(s) that rolled up into this one apply -- count > 1
+  // means several vendor lines were summed onto one target (a bulk group
+  // or a multi-row "selected" apply), matching applyMatchesByIndices's
+  // own grouping in bid-package-actions.ts.
+  vendorLineDescriptions String
+  vendorLineCount        Int
+  qty                    Decimal @db.Decimal(10, 2)
+  unitCost               Decimal @db.Decimal(10, 2)
+  totalCost              Decimal @db.Decimal(12, 2)
+  confidence             String?
+
+  documentId       String?
+  document         Document? @relation(fields: [documentId], references: [id])
+  documentFilename String
+
+  // Which UI action produced this apply -- "single" | "group" |
+  // "all_high_confidence" | "selected". A real audit trail's own
+  // question is as much "was this reviewed one at a time or trusted in
+  // bulk?" as it is "what changed."
+  method String
+
+  actorId String
+  actor   User   @relation(fields: [actorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([estimateVersionId])
+  @@index([bidPackageId])
+  @@index([createdAt])
+  @@map("vendor_match_apply_logs")
 }
 
 enum ChangeOrderStatus {
