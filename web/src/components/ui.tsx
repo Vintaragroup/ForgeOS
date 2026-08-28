@@ -64,13 +64,15 @@ export function Card({
   children,
   className = "",
   style,
+  id,
 }: {
   children: ReactNode;
   className?: string;
   style?: CSSProperties;
+  id?: string;
 }) {
   return (
-    <div className={`rounded-lg border border-neutral-200 bg-white ${className}`} style={style}>
+    <div id={id} className={`rounded-lg border border-neutral-200 bg-white ${className}`} style={style}>
       {children}
     </div>
   );

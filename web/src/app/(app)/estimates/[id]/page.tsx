@@ -1185,7 +1185,7 @@ function BidPackageCard({
   );
 
   return (
-    <Card className="p-6">
+    <Card id={`bid-package-${bidPackage.id}`} className="p-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="font-medium">{bidPackage.name}</h3>
@@ -1335,10 +1335,12 @@ function BidPackageCard({
                 // description like "Test and adjust" can't carry on its
                 // own. Null (no link, plain text) for a non-PDF document
                 // or a quote/page that couldn't be resolved.
-                const sourceHref = citationHref(opportunityId, quoteDocument, {
-                  sourceQuote: match.vendorLine.sourceQuote,
-                  pageNumber: match.vendorLine.pageNumber,
-                });
+                const sourceHref = citationHref(
+                  opportunityId,
+                  quoteDocument,
+                  { sourceQuote: match.vendorLine.sourceQuote, pageNumber: match.vendorLine.pageNumber },
+                  `/estimates/${estimateId}?tab=bid-packages#bid-package-${bidPackage.id}`,
+                );
                 return (
                   <tr key={i} className="border-t border-neutral-100">
                     <td className="px-3 py-2 align-top">
