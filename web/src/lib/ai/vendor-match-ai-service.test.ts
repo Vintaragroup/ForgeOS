@@ -3,8 +3,10 @@ import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import {
   MATCH_SCHEMA,
   matchVendorQuoteLinesWithAi,
+  resolveProposedVendorSections,
   resolveVendorLineMatches,
   type MatchCandidate,
+  type RawProposedVendorSection,
   type RawVendorLineMatch,
   type VendorQuoteLine,
 } from "@/lib/ai/vendor-match-ai-service";
@@ -33,17 +35,20 @@ function candidate(id: string, description: string, sectionLabel: string | null 
 }
 
 describe("matchVendorQuoteLinesWithAi", () => {
-  it("returns an empty array with no vendor lines, before ever touching the OpenAI client", async () => {
-    const matches = await matchVendorQuoteLinesWithAi([], [candidate("li-1", "Sleeper Floor Required")], "opp-1");
-    expect(matches).toEqual([]);
+  it("returns no matches and no proposed sections with no vendor lines, before ever touching the OpenAI client", async () => {
+    const result = await matchVendorQuoteLinesWithAi([], [candidate("li-1", "Sleeper Floor Required")], "opp-1");
+    expect(result).toEqual({ matches: [], proposedSections: [] });
   });
 
   it("returns every vendor line unmatched, with no OpenAI call, when there are no candidates", async () => {
     const lines = [vendorLine("Sleeper Floor", 840)];
-    const matches = await matchVendorQuoteLinesWithAi(lines, [], "opp-1");
-    expect(matches).toEqual([
-      { vendorLine: lines[0], lineItemId: null, confidence: null, reasoning: null, needsClarification: false },
-    ]);
+    const result = await matchVendorQuoteLinesWithAi(lines, [], "opp-1");
+    expect(result).toEqual({
+      matches: [
+        { vendorLine: lines[0], lineItemId: null, confidence: null, reasoning: null, needsClarification: false },
+      ],
+      proposedSections: [],
+    });
   });
 
   it("throws AiNotConfiguredError once there's real work to do -- .env.test deliberately has no OPENAI_API_KEY", async () => {
@@ -170,6 +175,50 @@ describe("resolveVendorLineMatches", () => {
   });
 });
 
+describe("resolveProposedVendorSections", () => {
+  it("resolves vendorLineIndices for a real category grouping several vendor lines", () => {
+    const raw: RawProposedVendorSection[] = [
+      {
+        name: "One Time Service Costs",
+        lineType: "FEE",
+        reasoning: "Real cost category with no corresponding estimate section.",
+        vendorLineIndices: [0, 2],
+      },
+    ];
+
+    const proposals = resolveProposedVendorSections(raw, 3);
+
+    expect(proposals).toEqual([
+      {
+        name: "One Time Service Costs",
+        lineType: "FEE",
+        reasoning: "Real cost category with no corresponding estimate section.",
+        vendorLineIndices: [0, 2],
+      },
+    ]);
+  });
+
+  it("drops a hallucinated/out-of-range vendorLineIndex instead of trusting it", () => {
+    const raw: RawProposedVendorSection[] = [
+      { name: "One Time Service Costs", lineType: "FEE", reasoning: "x", vendorLineIndices: [0, 99] },
+    ];
+
+    const proposals = resolveProposedVendorSections(raw, 1);
+
+    expect(proposals[0].vendorLineIndices).toEqual([0]);
+  });
+
+  it("drops a proposal entirely when none of its indices are valid", () => {
+    const raw: RawProposedVendorSection[] = [
+      { name: "Ghost Section", lineType: "FEE", reasoning: "x", vendorLineIndices: [5, 6] },
+    ];
+
+    const proposals = resolveProposedVendorSections(raw, 3);
+
+    expect(proposals).toEqual([]);
+  });
+});
+
 describe("MATCH_SCHEMA", () => {
   it("is a strict JSON schema with every match field required -- proves the shape is actually wired into the request, not just documented in the type", () => {
     expect(MATCH_SCHEMA.strict).toBe(true);
@@ -181,5 +230,13 @@ describe("MATCH_SCHEMA", () => {
       "needsClarification",
     ]);
     expect(MATCH_SCHEMA.schema.properties.matches.items.additionalProperties).toBe(false);
+    expect(MATCH_SCHEMA.schema.properties.proposedSections.items.required).toEqual([
+      "name",
+      "lineType",
+      "reasoning",
+      "vendorLineIndices",
+    ]);
+    expect(MATCH_SCHEMA.schema.properties.proposedSections.items.additionalProperties).toBe(false);
+    expect(MATCH_SCHEMA.schema.required).toEqual(["matches", "proposedSections"]);
   });
 });

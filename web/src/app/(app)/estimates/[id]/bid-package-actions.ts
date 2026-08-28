@@ -5,7 +5,9 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import {
+  addLineItemsBulk,
   createBidPackage,
+  findOrCreateSection,
   recomputeVersionTotals,
   removeLineItemFromBidPackage,
   setBidPackageStatus,
@@ -13,7 +15,12 @@ import {
 } from "@/lib/estimate-service";
 import { assignDocumentBidPackage } from "@/lib/document-service";
 import { proposeVendorQuoteLineItems } from "@/lib/ai/vendor-quote-service";
-import { matchVendorQuoteLinesWithAi, type VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
+import {
+  matchVendorQuoteLinesWithAi,
+  type ProposedVendorSection,
+  type VendorLineMatch,
+  type VendorQuoteLine,
+} from "@/lib/ai/vendor-match-ai-service";
 import { AiNotConfiguredError, getOpenAiClient } from "@/lib/ai/openai-client";
 import {
   assertBidPackageBelongsToEstimate,
@@ -139,11 +146,21 @@ async function runVendorExtractionAndMatch(params: {
       qty: li.qty.toNumber(),
       unit: li.unit,
     }));
-    const matches = await matchVendorQuoteLinesWithAi(vendorLines, candidates, opportunityId, documentId, userId);
+    const { matches, proposedSections } = await matchVendorQuoteLinesWithAi(
+      vendorLines,
+      candidates,
+      opportunityId,
+      documentId,
+      userId,
+    );
 
     await db.bidPackage.update({
       where: { id: bidPackageId },
-      data: { matchResult: matches as unknown as Prisma.InputJsonValue, vendorExtractionPhase: "COMPLETE" },
+      data: {
+        matchResult: matches as unknown as Prisma.InputJsonValue,
+        proposedSections: proposedSections as unknown as Prisma.InputJsonValue,
+        vendorExtractionPhase: "COMPLETE",
+      },
     });
     await setBidPackageStatus(bidPackageId, "QUOTE_RECEIVED");
   } catch (err) {
@@ -214,6 +231,130 @@ export async function applyVendorMatchAction(
 
   await updateLineItem(opportunityId, lineItemId, { unitCost, documentId, sourceQuote, isDraft: false, bidPackageId });
   await recomputeVersionTotals(versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Turns one AI-proposed section (vendor-match-ai-service.ts's own header
+// comment explains why this is judged in the same matching call, not a
+// second pass) into a real EstimateSection + priced, non-draft
+// LineItems. Clicking "Create section" IS the human review step, same
+// posture applyVendorMatchAction already established for an
+// existing-candidate match -- not a draft awaiting a later confirm.
+// findOrCreateSection is idempotent (matches on name + groupLabel), so
+// this is safe even if the section already exists from an earlier
+// partial commit or another bid package's own proposal for the same
+// category.
+//
+// proposal.vendorLineIndices are positions in the SAME vendorLines/
+// matches array (see ProposedVendorSection's own comment) -- used here
+// to pull the real vendor line data straight from the persisted
+// matchResult, and again afterward to patch those exact matches entries
+// to point at the newly created line items, so the review table shows
+// them resolved immediately instead of merely newly selectable.
+export async function commitProposedVendorSectionAction(
+  estimateId: string,
+  versionId: string,
+  bidPackageId: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
+
+  const rawProposedSectionIndex = formData.get("proposedSectionIndex");
+  const proposedSectionIndex = rawProposedSectionIndex !== null ? Number(rawProposedSectionIndex) : NaN;
+  if (!Number.isInteger(proposedSectionIndex) || proposedSectionIndex < 0) {
+    throw new Error("Missing or invalid proposed section reference.");
+  }
+
+  const bidPackage = await db.bidPackage.findUniqueOrThrow({
+    where: { id: bidPackageId },
+    include: { documents: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } } },
+  });
+  const proposedSections = (bidPackage.proposedSections as unknown as ProposedVendorSection[] | null) ?? [];
+  const proposal = proposedSections[proposedSectionIndex];
+  if (!proposal) throw new Error("This proposed section no longer exists -- try Re-extract.");
+  const quoteDocument = bidPackage.documents[0];
+  if (!quoteDocument) throw new Error("No vendor quote document attached to this package.");
+
+  const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? [];
+  // Filtered and mapped together, in lockstep, so `created[k]` is
+  // guaranteed to correspond to `validVendorIndices[k]` even if some
+  // index in the proposal no longer resolves -- a plain re-map back
+  // through the ORIGINAL (unfiltered) vendorLineIndices below would
+  // misalign every entry after the first gap.
+  const validVendorIndices = proposal.vendorLineIndices.filter((i) => !!matches[i]?.vendorLine);
+  if (validVendorIndices.length === 0) {
+    throw new Error("None of this proposal's vendor lines are still available -- try Re-extract.");
+  }
+  const vendorLinesToCreate = validVendorIndices.map((i) => matches[i].vendorLine);
+
+  const section = await findOrCreateSection(versionId, { name: proposal.name, sectionType: "CATEGORY" });
+  const created = await addLineItemsBulk(
+    versionId,
+    section.id,
+    vendorLinesToCreate.map((vl) => ({
+      lineType: proposal.lineType,
+      description: vl.description,
+      qty: vl.qty ?? 1,
+      unit: vl.unit,
+      unitCost: vl.unitPrice,
+      documentId: quoteDocument.id,
+      sourceQuote: vl.sourceQuote,
+      sourcePageNumber: vl.pageNumber,
+    })),
+    { isDraft: false, bidPackageId },
+  );
+
+  const createdIdByVendorIndex = new Map(validVendorIndices.map((vendorIndex, k) => [vendorIndex, created[k]?.id]));
+  const updatedMatches = matches.map((m, i) => {
+    const newLineItemId = createdIdByVendorIndex.get(i);
+    if (!newLineItemId) return m;
+    return {
+      ...m,
+      lineItemId: newLineItemId,
+      confidence: "high" as const,
+      reasoning: `Matched to newly created section "${proposal.name}".`,
+      needsClarification: false,
+    };
+  });
+  const remainingProposals = proposedSections.filter((_, i) => i !== proposedSectionIndex);
+
+  await db.bidPackage.update({
+    where: { id: bidPackageId },
+    data: {
+      matchResult: updatedMatches as unknown as Prisma.InputJsonValue,
+      proposedSections: remainingProposals as unknown as Prisma.InputJsonValue,
+    },
+  });
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// An explicit decline, not silent -- just removes the entry so it stops
+// being offered. Doesn't touch matchResult; those vendor lines stay
+// exactly as flagged (needsClarification etc.) for manual resolution via
+// the per-row dropdown instead.
+export async function dismissProposedVendorSectionAction(estimateId: string, bidPackageId: string, formData: FormData) {
+  await requireEstimateAccess(estimateId);
+  await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
+
+  const rawProposedSectionIndex = formData.get("proposedSectionIndex");
+  const proposedSectionIndex = rawProposedSectionIndex !== null ? Number(rawProposedSectionIndex) : NaN;
+  if (!Number.isInteger(proposedSectionIndex) || proposedSectionIndex < 0) {
+    throw new Error("Missing or invalid proposed section reference.");
+  }
+
+  const bidPackage = await db.bidPackage.findUniqueOrThrow({
+    where: { id: bidPackageId },
+    select: { proposedSections: true },
+  });
+  const proposedSections = (bidPackage.proposedSections as unknown as ProposedVendorSection[] | null) ?? [];
+  const remainingProposals = proposedSections.filter((_, i) => i !== proposedSectionIndex);
+
+  await db.bidPackage.update({
+    where: { id: bidPackageId },
+    data: { proposedSections: remainingProposals as unknown as Prisma.InputJsonValue },
+  });
   revalidatePath(`/estimates/${estimateId}`);
 }
 

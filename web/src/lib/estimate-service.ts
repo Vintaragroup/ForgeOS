@@ -305,8 +305,13 @@ export async function addLineItem(
 // schedule runs ~185 rows -- see data/RFP/superbowl). One $transaction +
 // one recomputeVersionTotals call at the end, rather than looping
 // addLineItem's single-row create + implicit per-row totals recompute
-// callers do today (see addLineItemAction). Every row is unconditionally
-// isDraft: true -- this path never exposes a way to skip human review.
+// callers do today (see addLineItemAction). Every row defaults to
+// isDraft: true -- still needs a human review step before it counts
+// toward committed pricing -- unless a caller explicitly opts out via
+// options.isDraft: false, e.g. bid-package-actions.ts's
+// commitProposedVendorSectionAction, where accepting the proposal *is*
+// the review step (same posture applyVendorMatchAction already
+// established for an existing-candidate match).
 export async function addLineItemsBulk(
   estimateVersionId: string,
   sectionId: string,
@@ -331,11 +336,18 @@ export async function addLineItemsBulk(
     sourceQuote?: string | null;
     sourcePageNumber?: number | null;
   }[],
+  options?: { isDraft?: boolean; bidPackageId?: string | null },
 ) {
   await assertUnlocked(estimateVersionId);
   if (items.length === 0) return [];
 
-  await db.$transaction(
+  const isDraft = options?.isDraft ?? true;
+  // Prisma's array form of $transaction resolves in the same order as
+  // the input array -- returned directly instead of a findMany() re-query
+  // afterward, since a caller (commitProposedVendorSectionAction) needs
+  // each created row to line up index-for-index with its own input item,
+  // which an unordered-by-default findMany can't guarantee.
+  const created = await db.$transaction(
     items.map((item) =>
       db.lineItem.create({
         data: {
@@ -349,17 +361,18 @@ export async function addLineItemsBulk(
           unit: item.unit ?? null,
           unitCost: new Prisma.Decimal(item.unitCost),
           totalCost: computeLineItemTotal(item.qty, item.unitCost),
-          isDraft: true,
+          isDraft,
           documentId: item.documentId,
           sourceQuote: item.sourceQuote ?? null,
           sourcePageNumber: item.sourcePageNumber ?? null,
+          bidPackageId: options?.bidPackageId ?? null,
         },
       }),
     ),
   );
 
   await recomputeVersionTotals(estimateVersionId);
-  return db.lineItem.findMany({ where: { sectionId, documentId: items[0].documentId } });
+  return created;
 }
 
 // opportunityId is the caller's already-access-checked opportunity, NOT

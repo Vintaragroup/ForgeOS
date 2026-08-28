@@ -22,6 +22,16 @@
 // guess when several vendor lines and candidates are truly
 // indistinguishable. A wrong auto-suggested price is worse than a
 // visible "no match" that prompts a human to pick manually.
+//
+// Same call also proposes NEW estimate sections (see ProposedVendorSection
+// below) for a vendor grouping that reads as a real cost category (e.g.
+// "One Time Service Costs") rather than an opaque positional code (e.g.
+// "CAM-06") and has nothing on the estimate corresponding to it -- a
+// distinct judgment from candidate matching, bundled into this same call
+// rather than a second full-document AI pass, since it needs the same
+// joint view of every vendor line and every existing section to decide.
+// Bid-package-actions.ts's commit/dismiss actions are what actually turn
+// a proposal into a real section -- this function only proposes.
 
 import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
@@ -82,6 +92,33 @@ export interface MatchCandidate {
   unit: string | null;
 }
 
+// Reuses ProposedLineItem's fixed lineType vocabulary from
+// scope-line-item-service.ts, since a committed proposal creates real
+// LineItem rows the same way that flow does.
+export type ProposedLineType = "MATERIAL" | "LABOR" | "FEE";
+
+export interface ProposedVendorSection {
+  // The section name to create, as the vendor's own document names the
+  // category (e.g. "One Time Service Costs") -- shown as-is, not
+  // editable before commit (see bid-package-actions.ts's commit action).
+  name: string;
+  lineType: ProposedLineType;
+  // Why this deserves a new section -- e.g. what real category it is and
+  // why nothing on the estimate already covers it.
+  reasoning: string;
+  // Indices into the SAME vendorLines array (and therefore the same
+  // positions in the persisted matches array) this proposal was resolved
+  // against -- kept as indices, not resolved VendorQuoteLine objects,
+  // specifically so a caller can look them up again in the persisted
+  // matchResult at commit time and know EXACTLY which matches entry each
+  // newly created LineItem corresponds to. Resolving to full objects here
+  // instead would silently break that correspondence for two vendor
+  // lines that happen to share an identical description/sourceQuote (a
+  // real case in this app's own fixture data -- multiple "Non Slip
+  // Paint" lines under different CAM codes).
+  vendorLineIndices: number[];
+}
+
 const REASONING_DESCRIPTION =
   "Under 100 characters: the specific reason for this match (or non-match) -- what distinguished it from other candidates.";
 
@@ -122,8 +159,32 @@ export const MATCH_SCHEMA = {
           required: ["vendorLineIndex", "candidateIndex", "confidence", "reasoning", "needsClarification"],
         },
       },
+      proposedSections: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: {
+              type: "string",
+              description: "The new section name, exactly as the vendor's own document names this category (e.g. \"One Time Service Costs\").",
+            },
+            lineType: { type: "string", enum: ["MATERIAL", "LABOR", "FEE"], description: "The best-fitting type for the line items this section would hold." },
+            reasoning: {
+              type: "string",
+              description: "Under 150 characters: what real category this is, and why nothing in EXISTING SECTIONS already covers it.",
+            },
+            vendorLineIndices: {
+              type: "array",
+              items: { type: "integer" },
+              description: "The vendorLineIndex of every vendor line that belongs under this proposed section -- every line sharing this real category, not one proposal per line.",
+            },
+          },
+          required: ["name", "lineType", "reasoning", "vendorLineIndices"],
+        },
+      },
     },
-    required: ["matches"],
+    required: ["matches", "proposedSections"],
   },
 } as const;
 
@@ -132,6 +193,7 @@ const SYSTEM_PROMPT = `You are matching a vendor's own priced quote line items a
 Below you'll see:
 - VENDOR LINES: every priced line item from the vendor's quote, numbered, each with its own unit/section code if the vendor's document uses one (e.g. "CAM-06", "BTH-04") and its price/quantity.
 - CANDIDATE LINE ITEMS: every line item on the estimate this package covers, numbered, each with its own section label if grouped, and quantity/unit.
+- EXISTING SECTIONS: every distinct section label already on the estimate.
 
 For EACH vendor line, decide which candidate (if any) it's actually pricing, using:
 - Description similarity -- usually the most reliable signal.
@@ -142,7 +204,9 @@ Each candidate should be matched to at most one vendor line. When several vendor
 
 Separately from matching, set needsClarification true for a vendor line whose OWN description doesn't state enough to know what it actually is -- a bare service/action label with no object ("Test and adjust", "Miscellaneous", "Adjustment") that could mean almost anything without more context from the vendor. This is about the description's own clarity, not whether it matched: a well-described line with no matching candidate is needsClarification false (it's just genuinely not on this estimate); a vague line is needsClarification true even if you found a plausible candidate for it, because the match itself is only a guess at what the vendor meant.
 
-Return one entry per vendor line, using its exact vendorLineIndex.`;
+Also propose new sections: some vendor lines are grouped under a header that is a REAL cost category (e.g. "One Time Service Costs", "General Conditions") rather than an opaque positional/internal code (e.g. "CAM-06", "BTH-04" -- codes like these are never worth proposing a section for, even when their lines are unmatched). When a real category groups vendor lines that don't already have a confident match, and nothing in EXISTING SECTIONS already corresponds to that category, propose ONE new section covering every vendor line in that category (not one proposal per line). Skip this entirely if the category already has a clear home in EXISTING SECTIONS, or if the grouping is just a positional code.
+
+Return one matches entry per vendor line, using its exact vendorLineIndex. Return an empty proposedSections array if nothing qualifies.`;
 
 // Same ceiling and truncation guard as vendor-quote-service.ts's own
 // extraction call -- a full-package match response (one entry per vendor
@@ -170,12 +234,32 @@ function buildCandidatesBlock(candidates: MatchCandidate[]): string {
     .join("\n");
 }
 
+// Deduplicated section labels already on the estimate -- lets the model
+// check "does a section like this already exist?" before proposing a new
+// one, without re-deriving it from every individual candidate line.
+function buildExistingSectionsBlock(candidates: MatchCandidate[]): string {
+  const labels = Array.from(new Set(candidates.map((c) => c.sectionLabel).filter((label): label is string => !!label)));
+  return labels.length > 0 ? labels.map((label) => `- ${label}`).join("\n") : "(none)";
+}
+
 export interface RawVendorLineMatch {
   vendorLineIndex: number;
   candidateIndex: number | null;
   confidence: MatchConfidence;
   reasoning: string;
   needsClarification: boolean;
+}
+
+export interface RawProposedVendorSection {
+  name: string;
+  lineType: ProposedLineType;
+  reasoning: string;
+  vendorLineIndices: number[];
+}
+
+export interface VendorMatchResult {
+  matches: VendorLineMatch[];
+  proposedSections: ProposedVendorSection[];
 }
 
 // documentId/opportunityId are for AI-usage tracking only (recordAiUsage);
@@ -187,19 +271,23 @@ export async function matchVendorQuoteLinesWithAi(
   opportunityId: string,
   documentId: string | null = null,
   userId: string | null = null,
-): Promise<VendorLineMatch[]> {
-  if (vendorLines.length === 0) return [];
+): Promise<VendorMatchResult> {
+  if (vendorLines.length === 0) return { matches: [], proposedSections: [] };
   if (candidates.length === 0) {
     // Never called the AI, so clarity of the description was never
     // judged -- false, not a guess, same "we don't know" posture as
-    // confidence: null here.
-    return vendorLines.map((vendorLine) => ({
-      vendorLine,
-      lineItemId: null,
-      confidence: null,
-      reasoning: null,
-      needsClarification: false,
-    }));
+    // confidence: null here. No existing sections to compare against
+    // either, so no section proposals.
+    return {
+      matches: vendorLines.map((vendorLine) => ({
+        vendorLine,
+        lineItemId: null,
+        confidence: null,
+        reasoning: null,
+        needsClarification: false,
+      })),
+      proposedSections: [],
+    };
   }
 
   // Throws AiNotConfiguredError before any work -- same posture as every
@@ -217,7 +305,7 @@ export async function matchVendorQuoteLinesWithAi(
       { role: "system", content: SYSTEM_PROMPT },
       {
         role: "user",
-        content: `VENDOR LINES:\n${buildVendorLinesBlock(vendorLines)}\n\nCANDIDATE LINE ITEMS:\n${buildCandidatesBlock(candidates)}`,
+        content: `VENDOR LINES:\n${buildVendorLinesBlock(vendorLines)}\n\nCANDIDATE LINE ITEMS:\n${buildCandidatesBlock(candidates)}\n\nEXISTING SECTIONS:\n${buildExistingSectionsBlock(candidates)}`,
       },
     ],
     response_format: { type: "json_schema", json_schema: MATCH_SCHEMA },
@@ -240,8 +328,11 @@ export async function matchVendorQuoteLinesWithAi(
       "Matching this many vendor lines against the estimate exceeded a single AI pass -- the response was cut off before finishing.",
     );
   }
-  const parsed = JSON.parse(content) as { matches: RawVendorLineMatch[] };
-  return resolveVendorLineMatches(parsed.matches, vendorLines, candidates);
+  const parsed = JSON.parse(content) as { matches: RawVendorLineMatch[]; proposedSections: RawProposedVendorSection[] };
+  return {
+    matches: resolveVendorLineMatches(parsed.matches, vendorLines, candidates),
+    proposedSections: resolveProposedVendorSections(parsed.proposedSections, vendorLines.length),
+  };
 }
 
 // Separated from matchVendorQuoteLinesWithAi above so it's directly
@@ -302,4 +393,25 @@ export function resolveVendorLineMatches(
     const isWinner = winnerIndexByLineItemId.get(match.lineItemId) === i;
     return isWinner ? match : { ...match, lineItemId: null, confidence: "low" as const };
   });
+}
+
+// Same testable-without-a-live-call split as resolveVendorLineMatches --
+// validates each proposal's vendorLineIndices against the real vendor
+// line count, dropping any hallucinated/out-of-range index rather than
+// trusting it (kept as indices, not resolved objects -- see
+// ProposedVendorSection's own comment on why), and drops a proposal
+// entirely if none of its indices were valid (nothing real left to
+// create a section for).
+export function resolveProposedVendorSections(
+  raw: RawProposedVendorSection[],
+  vendorLineCount: number,
+): ProposedVendorSection[] {
+  return raw
+    .map((proposal) => ({
+      name: proposal.name,
+      lineType: proposal.lineType,
+      reasoning: proposal.reasoning,
+      vendorLineIndices: proposal.vendorLineIndices.filter((i) => i >= 0 && i < vendorLineCount),
+    }))
+    .filter((proposal) => proposal.vendorLineIndices.length > 0);
 }

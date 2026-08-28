@@ -3,15 +3,26 @@ import { db } from "@/lib/db";
 import { createSession } from "@/lib/auth";
 import { addLineItem, addSection, createBidPackage, createEstimateVersion } from "@/lib/estimate-service";
 import { resetMockCookies } from "@/test/setup";
+import type { ProposedVendorSection, VendorLineMatch, VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
 import {
   applyVendorMatchAction,
   attachVendorQuoteDocumentAction,
+  commitProposedVendorSectionAction,
   createBidPackageAction,
+  dismissProposedVendorSectionAction,
   getBidPackageExtractionStatusAction,
   markBidPackageReviewedAction,
   proposeVendorQuoteItemsAction,
   removeLineItemFromBidPackageAction,
 } from "./bid-package-actions";
+
+function vendorLine(description: string, unitPrice: number): VendorQuoteLine {
+  return { description, unit: "EA", qty: 1, unitPrice, totalPrice: unitPrice, sourceQuote: description, unitCode: "One Time Service Costs", pageNumber: 1 };
+}
+
+function match(vendorLine: VendorQuoteLine): VendorLineMatch {
+  return { vendorLine, lineItemId: null, confidence: "low", reasoning: "No candidate matches.", needsClarification: true };
+}
 
 beforeEach(() => {
   resetMockCookies();
@@ -205,6 +216,104 @@ describe("applyVendorMatchAction", () => {
     await expect(applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
       "Unit cost must be a number",
     );
+  });
+});
+
+describe("commitProposedVendorSectionAction", () => {
+  async function makePackageWithProposal() {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    const lines = [vendorLine("Test and adjust", 189000), vendorLine("Trucking", 25000)];
+    const matches: VendorLineMatch[] = lines.map(match);
+    const proposedSections: ProposedVendorSection[] = [
+      { name: "One Time Service Costs", lineType: "FEE", reasoning: "Real cost category, no matching section.", vendorLineIndices: [0, 1] },
+    ];
+    await db.bidPackage.update({
+      where: { id: bidPackage.id },
+      data: { matchResult: matches as object[], proposedSections: proposedSections as object[] },
+    });
+    return { admin, estimate, version, bidPackage, document };
+  }
+
+  it("creates a real section with priced, non-draft line items, and patches matchResult to show them matched", async () => {
+    const { estimate, version, bidPackage } = await makePackageWithProposal();
+
+    const formData = new FormData();
+    formData.set("proposedSectionIndex", "0");
+    await commitProposedVendorSectionAction(estimate.id, version.id, bidPackage.id, formData);
+
+    const section = await db.estimateSection.findFirstOrThrow({
+      where: { estimateVersionId: version.id, name: "One Time Service Costs" },
+      include: { lineItems: true },
+    });
+    expect(section.sectionType).toBe("CATEGORY");
+    expect(section.lineItems).toHaveLength(2);
+    const testAndAdjust = section.lineItems.find((li) => li.description === "Test and adjust")!;
+    expect(testAndAdjust.unitCost.toNumber()).toBe(189000);
+    expect(testAndAdjust.isDraft).toBe(false);
+    expect(testAndAdjust.bidPackageId).toBe(bidPackage.id);
+    expect(testAndAdjust.lineType).toBe("FEE");
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    const updatedMatches = updated.matchResult as unknown as VendorLineMatch[];
+    expect(updatedMatches[0].lineItemId).toBe(testAndAdjust.id);
+    expect(updatedMatches[0].confidence).toBe("high");
+    expect(updatedMatches[0].needsClarification).toBe(false);
+    expect(updated.proposedSections).toEqual([]);
+  });
+
+  it("rejects a missing/invalid proposedSectionIndex", async () => {
+    const { estimate, version, bidPackage } = await makePackageWithProposal();
+
+    const formData = new FormData();
+    await expect(commitProposedVendorSectionAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
+      "Missing or invalid",
+    );
+  });
+
+  it("rejects a proposedSectionIndex that no longer exists", async () => {
+    const { estimate, version, bidPackage } = await makePackageWithProposal();
+
+    const formData = new FormData();
+    formData.set("proposedSectionIndex", "5");
+    await expect(commitProposedVendorSectionAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
+      "no longer exists",
+    );
+  });
+});
+
+describe("dismissProposedVendorSectionAction", () => {
+  it("removes the entry from proposedSections without creating anything", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const proposedSections: ProposedVendorSection[] = [
+      { name: "One Time Service Costs", lineType: "FEE", reasoning: "x", vendorLineIndices: [0] },
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { proposedSections: proposedSections as object[] } });
+
+    const formData = new FormData();
+    formData.set("proposedSectionIndex", "0");
+    await dismissProposedVendorSectionAction(estimate.id, bidPackage.id, formData);
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    expect(updated.proposedSections).toEqual([]);
+    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
+    expect(sections.map((s) => s.name)).not.toContain("One Time Service Costs");
   });
 });
 

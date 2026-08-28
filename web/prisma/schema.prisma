@@ -1254,6 +1254,15 @@ model BidPackage {
   vendorExtractionStartedAt DateTime?
   vendorExtractionError     String?
   matchResult               Json?
+  // Sections matchVendorQuoteLinesWithAi judged worth creating -- a
+  // vendor grouping that reads as a real cost category (e.g. "One Time
+  // Service Costs"), not an opaque positional code (e.g. "CAM-06"), with
+  // nothing on the estimate corresponding to it yet. A separate field
+  // from matchResult (not folded into it) so existing extracted data
+  // never needs a shape migration -- see vendor-match-ai-service.ts's
+  // own header comment. Kept only for entries not yet committed or
+  // dismissed (see bid-package-actions.ts's commit/dismiss actions).
+  proposedSections          Json?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

@@ -55,14 +55,16 @@ import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/componen
 import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
 import { SectionScopedForm } from "@/components/section-scoped-form";
-import type { VendorLineMatch } from "@/lib/ai/vendor-match-ai-service";
+import type { ProposedVendorSection, VendorLineMatch } from "@/lib/ai/vendor-match-ai-service";
 import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
   applyVendorMatchAction,
   attachVendorQuoteDocumentAction,
+  commitProposedVendorSectionAction,
   createBidPackageAction,
+  dismissProposedVendorSectionAction,
   markBidPackageReviewedAction,
   proposeVendorQuoteItemsAction,
   removeLineItemFromBidPackageAction,
@@ -1173,6 +1175,7 @@ function BidPackageCard({
   const phase = bidPackage.vendorExtractionPhase;
   const isExtracting = phase === "READING_DOCUMENT" || phase === "EXTRACTING_LINES" || phase === "MATCHING";
   const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? null;
+  const proposedSections = (bidPackage.proposedSections as unknown as ProposedVendorSection[] | null) ?? [];
   const matchedLineItemIds = new Set((matches ?? []).flatMap((m) => (m.lineItemId ? [m.lineItemId] : [])));
   // A line item a reviewer manually applied a price to (picking a
   // different row than the algorithm suggested, or resolving one it left
@@ -1280,6 +1283,52 @@ function BidPackageCard({
             bidPackageId={bidPackage.id}
             documentId={quoteDocument.id}
           />
+        </div>
+      )}
+
+      {quoteDocument && !isExtracting && proposedSections.length > 0 && (
+        <div className="border-t border-neutral-200 pt-4">
+          <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Suggested new sections</h4>
+          <div className="flex flex-col gap-3">
+            {proposedSections.map((proposal, i) => {
+              // Same index-based lookup as commitProposedVendorSectionAction
+              // itself -- proposal.vendorLineIndices are positions in the
+              // SAME matches array (see ProposedVendorSection's own
+              // comment), so this is real vendor line data, not a guess.
+              const vendorLines = proposal.vendorLineIndices
+                .map((vi) => matches?.[vi]?.vendorLine)
+                .filter((vl): vl is NonNullable<typeof vl> => !!vl);
+              const total = vendorLines.reduce((sum, vl) => sum + vl.unitPrice, 0);
+              const commitWithIds = commitProposedVendorSectionAction.bind(null, estimateId, versionId, bidPackage.id);
+              const dismissWithIds = dismissProposedVendorSectionAction.bind(null, estimateId, bidPackage.id);
+              return (
+                <div key={i} className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-sm font-medium">
+                    &quot;{proposal.name}&quot;{" "}
+                    <span className="font-normal text-neutral-500">
+                      ({vendorLines.length} vendor line{vendorLines.length === 1 ? "" : "s"}, {money(total)})
+                    </span>
+                  </p>
+                  <p className="mt-1 text-xs text-neutral-600">{proposal.reasoning}</p>
+                  <p className="mt-2 text-xs text-neutral-500">{vendorLines.map((vl) => vl.description).join(", ")}</p>
+                  <div className="mt-3 flex gap-2">
+                    <form action={commitWithIds}>
+                      <input type="hidden" name="proposedSectionIndex" value={i} />
+                      <Button variant="secondary" type="submit">
+                        Create section
+                      </Button>
+                    </form>
+                    <form action={dismissWithIds}>
+                      <input type="hidden" name="proposedSectionIndex" value={i} />
+                      <Button variant="secondary" type="submit">
+                        Dismiss
+                      </Button>
+                    </form>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
