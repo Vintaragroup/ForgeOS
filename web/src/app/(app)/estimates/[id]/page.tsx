@@ -1486,11 +1486,18 @@ function BidPackageCard({
                 // description like "Test and adjust" can't carry on its
                 // own. Null (no link, plain text) for a non-PDF document
                 // or a quote/page that couldn't be resolved.
+                // returnTo carries the current ?applied= confirmation list
+                // forward -- without this, clicking a citation link and
+                // then Back landed on a URL with no applied= param at
+                // all, so every "✓ Applied" badge vanished even though
+                // the underlying prices were never touched (confirmed
+                // live: a real user report that read as data loss but
+                // was purely this return link losing the flash).
                 const sourceHref = citationHref(
                   opportunityId,
                   quoteDocument,
                   { sourceQuote: match.vendorLine.sourceQuote, pageNumber: match.vendorLine.pageNumber },
-                  `/estimates/${estimateId}?tab=bid-packages#bid-package-${bidPackage.id}`,
+                  `/estimates/${estimateId}?tab=bid-packages${priorAppliedValue ? `&applied=${encodeURIComponent(priorAppliedValue)}` : ""}#bid-package-${bidPackage.id}`,
                 );
                 // Deterministic, non-AI last resort so the dropdown is
                 // never a cold "— choose one —" against 30-40+ items with
