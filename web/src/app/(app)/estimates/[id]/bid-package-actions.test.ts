@@ -497,6 +497,101 @@ describe("applyAllHighConfidenceMatchesAction", () => {
       "No high-confidence matches",
     );
   });
+
+  it("self-heals a match pointing at a deleted line item -- applies the still-valid targets, clears the stale one, downgrades it to low confidence, and reports stale=1", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+
+    // Reproduces the live production bug: matchResult's stored
+    // lineItemId references a LineItem that was deleted via the Line
+    // Items tab after the match was made, leaving a dangling reference
+    // the app never scans/cleans up.
+    const deletedTargetId = "deleted-line-item-does-not-exist";
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Sleeper Floor Required", 840), { lineItemId: item.id, confidence: "high" }),
+      match(vendorLine("Trucking", 25000), {
+        lineItemId: deletedTargetId,
+        suggestedLineItemId: deletedTargetId,
+        confidence: "high",
+      }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const formData = new FormData();
+    formData.set("documentId", document.id);
+    await expect(
+      applyAllHighConfidenceMatchesAction(estimate.id, version.id, bidPackage.id, formData),
+    ).rejects.toMatchObject({
+      digest: expect.stringMatching(
+        new RegExp(`applied=${item.id}.*stale=1|stale=1.*applied=${item.id}`),
+      ),
+    });
+
+    const updatedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(updatedItem.unitCost.toNumber()).toBe(840);
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    const updatedMatches = updated.matchResult as unknown as VendorLineMatch[];
+    expect(updatedMatches[1].lineItemId).toBeNull();
+    expect(updatedMatches[1].suggestedLineItemId).toBeNull();
+    expect(updatedMatches[1].confidence).toBe("low");
+    expect(updatedMatches[1].reasoning).toMatch(/no longer exists/i);
+
+    // The valid target's total (840) is on the version; the stale
+    // target's $25,000 was never silently written anywhere.
+    const updatedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(updatedVersion.totalCost.toNumber()).toBe(840);
+  });
+
+  it("rejects with an explanatory message when every high-confidence match points at a deleted line item", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    const deletedTargetId = "deleted-line-item-does-not-exist";
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Trucking", 25000), { lineItemId: deletedTargetId, confidence: "high" }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const formData = new FormData();
+    formData.set("documentId", document.id);
+    await expect(applyAllHighConfidenceMatchesAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
+      /no longer exist/i,
+    );
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    const updatedMatches = updated.matchResult as unknown as VendorLineMatch[];
+    // Even on the throw-because-nothing-applied path, the stale entry is
+    // still self-healed in matchResult -- a reviewer reloading the page
+    // sees an honest "no match" row instead of the misleading stale one.
+    expect(updatedMatches[0].lineItemId).toBeNull();
+    expect(updatedMatches[0].confidence).toBe("low");
+  });
 });
 
 describe("commitProposedVendorSectionAction", () => {

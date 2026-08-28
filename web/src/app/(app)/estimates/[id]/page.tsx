@@ -95,6 +95,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     proposeDocumentId: proposeDocumentIdParam,
     buildResult: buildResultParam,
     applied: appliedParam,
+    stale: staleParam,
   } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
@@ -111,6 +112,12 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const appliedLineItemIds = new Set(
     (Array.isArray(appliedParam) ? appliedParam[0] : appliedParam)?.split(",").filter(Boolean) ?? [],
   );
+  // How many high-confidence matches applyAllHighConfidenceMatchesAction
+  // just found pointing at a deleted line item and had to skip -- see
+  // that action's own comment on why this needed reporting: silently
+  // skipping was indistinguishable from the button doing nothing at all
+  // (confirmed live).
+  const staleMatchCount = Number(Array.isArray(staleParam) ? staleParam[0] : staleParam) || 0;
   let buildResult: BuildEstimateResult | null = null;
   if (buildResultRaw) {
     try {
@@ -443,6 +450,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     version={currentVersion}
                     vendorQuoteDocuments={vendorQuoteDocuments}
                     appliedLineItemIds={appliedLineItemIds}
+                    staleMatchCount={staleMatchCount}
                   />
                 ),
                 documents: (
@@ -1098,12 +1106,14 @@ function BidPackagesTab({
   version,
   vendorQuoteDocuments,
   appliedLineItemIds,
+  staleMatchCount,
 }: {
   estimateId: string;
   opportunityId: string;
   version: VersionWithSections;
   vendorQuoteDocuments: { id: string; filename: string }[];
   appliedLineItemIds: Set<string>;
+  staleMatchCount: number;
 }) {
   // Every line item on the CURRENT version, not just ones already added
   // to a given bid package -- the "Matched to" dropdown offers this full
@@ -1140,6 +1150,7 @@ function BidPackagesTab({
             vendorQuoteDocuments={vendorQuoteDocuments}
             allLineItems={allLineItems}
             appliedLineItemIds={appliedLineItemIds}
+            staleMatchCount={staleMatchCount}
           />
         ))
       )}
@@ -1181,6 +1192,7 @@ function BidPackageCard({
   vendorQuoteDocuments,
   allLineItems,
   appliedLineItemIds,
+  staleMatchCount,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -1195,6 +1207,7 @@ function BidPackageCard({
     bidPackageId: string | null;
   }[];
   appliedLineItemIds: Set<string>;
+  staleMatchCount: number;
 }) {
   const priorAppliedValue = Array.from(appliedLineItemIds).join(",");
   const attachWithIds = attachVendorQuoteDocumentAction.bind(null, estimateId, bidPackage.id);
@@ -1483,6 +1496,13 @@ function BidPackageCard({
               />
             </div>
           </div>
+          {staleMatchCount > 0 && (
+            <p className="mb-3 text-sm text-amber-700">
+              {staleMatchCount} match{staleMatchCount === 1 ? "" : "es"} couldn&apos;t be applied -- the line
+              item{staleMatchCount === 1 ? " it" : "s they"} pointed to no longer exists (deleted since the match
+              was made). Cleared below; try Re-extract or pick a new target manually.
+            </p>
+          )}
           <table className="mb-4 w-full text-sm">
             <thead>
               <tr className="text-left text-neutral-500">
@@ -1500,6 +1520,19 @@ function BidPackageCard({
                 // not be a package member yet (applying it is what adds
                 // it, see applyVendorMatchAction's own header comment).
                 const matchedItem = allLineItems.find((li) => li.id === match.lineItemId);
+                // A stale lineItemId (target row deleted since the match
+                // was made -- see applyAllHighConfidenceMatchesAction's own
+                // self-healing) must never be treated as a real match: it
+                // still reads truthy but has no corresponding <option>, so
+                // an uncontrolled <select defaultValue={staleId}> would
+                // silently render the FIRST option in the whole list
+                // instead of erroring, which looks like a real (wrong)
+                // selection rather than a missing one.
+                const lineItemIdStale = !!match.lineItemId && !matchedItem;
+                const resolvedLineItemId = lineItemIdStale ? null : match.lineItemId;
+                const suggestedItemExists =
+                  !!match.suggestedLineItemId && allLineItems.some((li) => li.id === match.suggestedLineItemId);
+                const resolvedSuggestedId = suggestedItemExists ? match.suggestedLineItemId : null;
                 // "Applied" is derived from provenance (this line item's
                 // own documentId equals this quote's), not from a
                 // persisted decision. Reflects the row's DEFAULT/suggested
@@ -1536,7 +1569,7 @@ function BidPackageCard({
                 // can override, never a confidence claim or an
                 // auto-applied price).
                 const fallbackCandidateId =
-                  !match.lineItemId && !match.suggestedLineItemId
+                  !resolvedLineItemId && !resolvedSuggestedId
                     ? findClosestCandidateId(match.vendorLine.description, allLineItems)
                     : null;
                 return (
@@ -1579,10 +1612,10 @@ function BidPackageCard({
                       <select
                         name="lineItemId"
                         form={`apply-match-${i}`}
-                        defaultValue={match.lineItemId ?? match.suggestedLineItemId ?? fallbackCandidateId ?? ""}
+                        defaultValue={resolvedLineItemId ?? resolvedSuggestedId ?? fallbackCandidateId ?? ""}
                         className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
                       >
-                        <option value="" disabled={!!(match.lineItemId ?? match.suggestedLineItemId ?? fallbackCandidateId)}>
+                        <option value="" disabled={!!(resolvedLineItemId ?? resolvedSuggestedId ?? fallbackCandidateId)}>
                           — choose one —
                         </option>
                         {allLineItems.map((li) => (
@@ -1593,14 +1626,21 @@ function BidPackageCard({
                           </option>
                         ))}
                       </select>
-                      {match.reasoning && <p className="mt-1.5 text-xs text-neutral-400">{match.reasoning}</p>}
-                      {!match.lineItemId && match.suggestedLineItemId && (
+                      {lineItemIdStale && (
+                        <p className="mt-1.5 text-xs text-amber-700">
+                          This match&apos;s target line item no longer exists (deleted) — pick one manually
+                        </p>
+                      )}
+                      {!lineItemIdStale && match.reasoning && (
+                        <p className="mt-1.5 text-xs text-neutral-400">{match.reasoning}</p>
+                      )}
+                      {!lineItemIdStale && !resolvedLineItemId && resolvedSuggestedId && (
                         <p className="mt-1.5 text-xs text-amber-700">Suggested match pre-filled — review before applying</p>
                       )}
-                      {!match.lineItemId && !match.suggestedLineItemId && fallbackCandidateId && (
+                      {!lineItemIdStale && !resolvedLineItemId && !resolvedSuggestedId && fallbackCandidateId && (
                         <p className="mt-1.5 text-xs text-amber-700">Best guess by description similarity — review before applying</p>
                       )}
-                      {!match.lineItemId && !match.suggestedLineItemId && !fallbackCandidateId && (
+                      {!lineItemIdStale && !resolvedLineItemId && !resolvedSuggestedId && !fallbackCandidateId && (
                         <p className="mt-1.5 text-xs text-amber-700">No match — review and pick one manually</p>
                       )}
                     </td>

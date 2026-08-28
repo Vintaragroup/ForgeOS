@@ -218,13 +218,21 @@ export async function getBidPackageExtractionStatusAction(estimateId: string, bi
 // after a live report where a second Apply made the first row's "✓
 // Applied" badge disappear (the data itself was never affected, only
 // this confirmation).
-function appliedRedirectUrl(estimateId: string, bidPackageId: string, newLineItemIds: string[], formData: FormData) {
+function appliedRedirectUrl(
+  estimateId: string,
+  bidPackageId: string,
+  newLineItemIds: string[],
+  formData: FormData,
+  extraParams: Record<string, string> = {},
+) {
   const priorApplied = String(formData.get("priorApplied") ?? "")
     .split(",")
     .map((id) => id.trim())
     .filter(Boolean);
   const appliedIds = Array.from(new Set([...priorApplied, ...newLineItemIds]));
-  return `/estimates/${estimateId}?tab=bid-packages&applied=${encodeURIComponent(appliedIds.join(","))}#bid-package-${bidPackageId}`;
+  const params = new URLSearchParams({ tab: "bid-packages", applied: appliedIds.join(",") });
+  for (const [key, value] of Object.entries(extraParams)) params.set(key, value);
+  return `/estimates/${estimateId}?${params.toString()}#bid-package-${bidPackageId}`;
 }
 
 export async function applyVendorMatchAction(
@@ -402,13 +410,37 @@ export async function applyAllHighConfidenceMatchesAction(
 
   const updatedMatches = [...matches];
   const appliedTargetIds: string[] = [];
+  let staleCount = 0;
   for (const [lineItemId, indices] of byTarget) {
-    // A target that no longer exists (deleted since the match was
-    // computed) is skipped, not fatal to the whole batch -- same
-    // "drop, don't trust blindly" posture the rest of this file uses
-    // for stale/hallucinated ids.
+    // A target that no longer exists (its LineItem was deleted, e.g. via
+    // the Line Items tab's own delete button, sometime after this match
+    // was computed) is skipped, not fatal to the whole batch -- same
+    // "drop, don't trust blindly" posture the rest of this file uses for
+    // stale/hallucinated ids. Confirmed live: a real bid package had 4
+    // "high" confidence matches left pointing at line items deleted
+    // during an earlier cleanup, and this action silently skipped all
+    // four with zero indication anything was wrong -- indistinguishable
+    // from the button doing nothing at all. The stale entries are now
+    // cleared here (lineItemId nulled, confidence downgraded) so the
+    // match table stops showing a misleading "high confidence, matched
+    // to X" for a target that's actually gone, and the caller is told
+    // how many were skipped instead of finding out by counting silently
+    // missing dollars.
     const exists = await db.lineItem.findFirst({ where: { id: lineItemId, section: { estimateVersionId: versionId } } });
-    if (!exists) continue;
+    if (!exists) {
+      staleCount += indices.length;
+      for (const i of indices) {
+        updatedMatches[i] = {
+          ...updatedMatches[i],
+          lineItemId: null,
+          suggestedLineItemId: updatedMatches[i].suggestedLineItemId === lineItemId ? null : updatedMatches[i].suggestedLineItemId,
+          confidence: "low",
+          reasoning: "Previously matched line item no longer exists (deleted) -- try Re-extract or pick one manually.",
+          needsClarification: false,
+        };
+      }
+      continue;
+    }
 
     const vendorLines = indices.map((i) => matches[i].vendorLine);
     const qty = vendorLines.reduce((sum, vl) => sum + (vl.qty ?? 1), 0);
@@ -432,17 +464,36 @@ export async function applyAllHighConfidenceMatchesAction(
       };
     }
   }
-  if (appliedTargetIds.length === 0) {
-    throw new Error("No high-confidence matches are still available to apply -- try Re-extract.");
-  }
-
+  // Persisted before the throw check below: even when NOTHING could be
+  // applied (every high-confidence target was stale), the self-heal on
+  // those entries still needs to stick -- otherwise a reviewer who
+  // retries after seeing the error hits the exact same silent-looking
+  // failure again, and the match table keeps showing a dead "high
+  // confidence" row instead of the corrected "no longer exists" one.
   await db.bidPackage.update({
     where: { id: bidPackageId },
     data: { matchResult: updatedMatches as unknown as Prisma.InputJsonValue },
   });
+
+  if (appliedTargetIds.length === 0) {
+    throw new Error(
+      staleCount > 0
+        ? `None of these matches could be applied -- all ${staleCount} pointed at line items that no longer exist. Try Re-extract.`
+        : "No high-confidence matches are still available to apply -- try Re-extract.",
+    );
+  }
+
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
-  redirect(appliedRedirectUrl(estimateId, bidPackageId, appliedTargetIds, formData));
+  redirect(
+    appliedRedirectUrl(
+      estimateId,
+      bidPackageId,
+      appliedTargetIds,
+      formData,
+      staleCount > 0 ? { stale: String(staleCount) } : {},
+    ),
+  );
 }
 
 // Turns one AI-proposed section (vendor-match-ai-service.ts's own header
