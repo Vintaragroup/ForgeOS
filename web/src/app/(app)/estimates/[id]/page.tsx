@@ -93,10 +93,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     importDocumentId: importDocumentIdParam,
     proposeDocumentId: proposeDocumentIdParam,
     buildResult: buildResultParam,
+    applied: appliedParam,
   } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
   const buildResultRaw = Array.isArray(buildResultParam) ? buildResultParam[0] : buildResultParam;
+  // Flash confirmation for a just-applied vendor match (see
+  // applyVendorMatchAction/applyVendorMatchGroupAction's own comments) --
+  // threaded down to BidPackageCard so it can render a "✓ Applied" badge
+  // next to whichever row(s) resolved to this line item id.
+  const appliedLineItemId = Array.isArray(appliedParam) ? appliedParam[0] : appliedParam;
   let buildResult: BuildEstimateResult | null = null;
   if (buildResultRaw) {
     try {
@@ -428,6 +434,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     opportunityId={estimate.opportunity.id}
                     version={currentVersion}
                     vendorQuoteDocuments={vendorQuoteDocuments}
+                    appliedLineItemId={appliedLineItemId}
                   />
                 ),
                 documents: (
@@ -1082,11 +1089,13 @@ function BidPackagesTab({
   opportunityId,
   version,
   vendorQuoteDocuments,
+  appliedLineItemId,
 }: {
   estimateId: string;
   opportunityId: string;
   version: VersionWithSections;
   vendorQuoteDocuments: { id: string; filename: string }[];
+  appliedLineItemId?: string;
 }) {
   // Every line item on the CURRENT version, not just ones already added
   // to a given bid package -- the "Matched to" dropdown offers this full
@@ -1122,6 +1131,7 @@ function BidPackagesTab({
             bidPackage={bidPackage}
             vendorQuoteDocuments={vendorQuoteDocuments}
             allLineItems={allLineItems}
+            appliedLineItemId={appliedLineItemId}
           />
         ))
       )}
@@ -1162,6 +1172,7 @@ function BidPackageCard({
   bidPackage,
   vendorQuoteDocuments,
   allLineItems,
+  appliedLineItemId,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -1175,6 +1186,7 @@ function BidPackageCard({
     documentId: string | null;
     bidPackageId: string | null;
   }[];
+  appliedLineItemId?: string;
 }) {
   const attachWithIds = attachVendorQuoteDocumentAction.bind(null, estimateId, bidPackage.id);
   const markReviewedWithIds = markBidPackageReviewedAction.bind(null, estimateId, bidPackage.id);
@@ -1395,13 +1407,16 @@ function BidPackageCard({
                       .map((vl) => (vl.unitCode ? `${vl.description} [${vl.unitCode}]` : vl.description))
                       .join(", ")}
                   </p>
-                  <form action={applyGroupWithIds} className="mt-3">
+                  <form action={applyGroupWithIds} className="mt-3 flex items-center gap-2">
                     <input type="hidden" name="lineItemId" value={group.targetId} />
                     <input type="hidden" name="matchIndices" value={group.matchIndices.join(",")} />
                     <input type="hidden" name="documentId" value={quoteDocument.id} />
                     <Button variant="secondary" type="submit">
                       {alreadyApplied ? "Re-apply" : "Apply"} all {vendorLines.length} (sum {money(total)})
                     </Button>
+                    {appliedLineItemId === group.targetId && (
+                      <span className="text-xs font-medium text-green-700">✓ Applied</span>
+                    )}
                   </form>
                 </div>
               );
@@ -1490,6 +1505,9 @@ function BidPackageCard({
                         <span className="mr-1.5 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">
                           {match.vendorLine.unitCode}
                         </span>
+                      )}
+                      {appliedLineItemId && match.lineItemId === appliedLineItemId && (
+                        <span className="mr-1.5 text-xs font-medium text-green-700">✓ Applied</span>
                       )}
                       {sourceHref ? (
                         <Link href={sourceHref} className="text-brand-navy hover:underline">

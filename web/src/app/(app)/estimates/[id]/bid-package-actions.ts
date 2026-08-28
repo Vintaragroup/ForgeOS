@@ -2,6 +2,7 @@
 
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import {
@@ -232,6 +233,15 @@ export async function applyVendorMatchAction(
   await updateLineItem(opportunityId, lineItemId, { unitCost, documentId, sourceQuote, isDraft: false, bidPackageId });
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
+  // Flashes a "✓ Applied" confirmation next to this row -- same
+  // ?success= convention account/actions.ts already uses for the same
+  // problem (a plain-forms page has no other way to signal "this just
+  // happened" back to the user). Needed here specifically because
+  // Apply/Re-apply is often idempotent -- re-applying an already-correct
+  // price produces an identical page, which without this looked
+  // indistinguishable from the click doing nothing at all (confirmed
+  // live: a real user report that turned out to be exactly this).
+  redirect(`/estimates/${estimateId}?tab=bid-packages&applied=${encodeURIComponent(lineItemId)}#bid-package-${bidPackageId}`);
 }
 
 // Applies several vendor lines to ONE line item at once, summing their
@@ -312,6 +322,12 @@ export async function applyVendorMatchGroupAction(
 
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
+  // Same "✓ Applied" flash as applyVendorMatchAction's own -- doubly
+  // important here since Re-apply all N is the case most likely to be
+  // clicked as a genuine no-op (reaffirming an already-correct group
+  // sum), where the page renders byte-identical before and after with
+  // nothing else to signal the click actually did something.
+  redirect(`/estimates/${estimateId}?tab=bid-packages&applied=${encodeURIComponent(lineItemId)}#bid-package-${bidPackageId}`);
 }
 
 // Turns one AI-proposed section (vendor-match-ai-service.ts's own header

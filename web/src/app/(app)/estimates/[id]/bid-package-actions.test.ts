@@ -21,6 +21,17 @@ function vendorLine(description: string, unitPrice: number, qty: number | null =
   return { description, unit: "EA", qty, unitPrice, totalPrice: unitPrice, sourceQuote: description, unitCode: "One Time Service Costs", pageNumber: 1 };
 }
 
+// A successful Apply/Re-apply now redirects to flash a "✓ Applied"
+// confirmation (see applyVendorMatchAction's own comment on why) --
+// Next.js implements redirect() by throwing, so the success path is
+// asserted by catching that throw and checking its digest carries the
+// expected lineItemId, rather than awaiting a normal return.
+async function expectAppliedRedirect(promise: Promise<unknown>, lineItemId: string) {
+  await expect(promise).rejects.toMatchObject({
+    digest: expect.stringContaining(`applied=${encodeURIComponent(lineItemId)}`),
+  });
+}
+
 function match(vendorLine: VendorQuoteLine, overrides: Partial<VendorLineMatch> = {}): VendorLineMatch {
   return {
     vendorLine,
@@ -123,7 +134,7 @@ describe("applyVendorMatchAction", () => {
     formData.set("unitCost", "840");
     formData.set("documentId", document.id);
     formData.set("sourceQuote", "Sleeper Floor");
-    await applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData);
+    await expectAppliedRedirect(applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData), item.id);
 
     const updatedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
     expect(updatedItem.unitCost.toNumber()).toBe(840);
@@ -163,7 +174,10 @@ describe("applyVendorMatchAction", () => {
     formData.set("lineItemId", outsideItem.id);
     formData.set("unitCost", "840");
     formData.set("documentId", document.id);
-    await applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData);
+    await expectAppliedRedirect(
+      applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData),
+      outsideItem.id,
+    );
 
     const updated = await db.lineItem.findUniqueOrThrow({ where: { id: outsideItem.id } });
     expect(updated.unitCost.toNumber()).toBe(840);
@@ -283,7 +297,10 @@ describe("applyVendorMatchGroupAction", () => {
     formData.set("lineItemId", item.id);
     formData.set("matchIndices", "0,1");
     formData.set("documentId", document.id);
-    await applyVendorMatchGroupAction(estimate.id, version.id, bidPackage.id, formData);
+    await expectAppliedRedirect(
+      applyVendorMatchGroupAction(estimate.id, version.id, bidPackage.id, formData),
+      item.id,
+    );
 
     const updatedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
     expect(updatedItem.qty.toNumber()).toBe(2);
