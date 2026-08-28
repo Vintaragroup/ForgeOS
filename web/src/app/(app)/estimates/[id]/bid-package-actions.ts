@@ -116,8 +116,20 @@ async function runVendorExtractionAndMatch(params: {
     await db.bidPackage.update({ where: { id: bidPackageId }, data: { vendorExtractionPhase: "MATCHING" } });
     const document = await db.document.findUniqueOrThrow({ where: { id: documentId } });
     const vendorLines = (document.vendorQuoteLineItems as unknown as VendorQuoteLine[] | null) ?? [];
+    // Candidates are every line item on the CURRENT ESTIMATE VERSION, not
+    // just ones already added to this bid package -- the version (built
+    // from the client's own source-of-truth spreadsheet import) is almost
+    // always far bigger than the handful of items a reviewer happened to
+    // check off into one bid package. applyVendorMatchAction below adds a
+    // matched item to this package at apply time, so scoping candidates
+    // this way is what actually lets a vendor line reach the real
+    // corresponding item instead of only ever the pre-selected few.
+    const { estimateVersionId } = await db.bidPackage.findUniqueOrThrow({
+      where: { id: bidPackageId },
+      select: { estimateVersionId: true },
+    });
     const lineItems = await db.lineItem.findMany({
-      where: { bidPackageId },
+      where: { section: { estimateVersionId } },
       include: { section: { select: { name: true, groupLabel: true } } },
     });
     const candidates = lineItems.map((li) => ({
@@ -163,21 +175,23 @@ export async function getBidPackageExtractionStatusAction(estimateId: string, bi
 
 // Applies one accepted vendor-line match onto a real LineItem row --
 // unitCost/documentId/sourceQuote come from hidden fields baked into the
-// match row at render time (the match table itself is recomputed live
-// on every render, never persisted -- see vendor-match-service.ts's own
-// header comment), and isDraft flips to false: the vendor-match review
-// the user just did *is* the human-review step, not a separate
+// match row at render time, and isDraft flips to false: the vendor-match
+// review the user just did *is* the human-review step, not a separate
 // confirmDraftLineItem click after it.
 // lineItemId comes from the row's own <select> now, not a value baked
 // into the bound action at render time -- a match review row lets the
-// user pick a DIFFERENT line item than the one matchVendorQuoteLines
-// suggested (there's no reliable way to auto-resolve the vendor's own
-// unit code against this app's section labels, see vendor-match-
-// service.ts's own header comment), so the actual target has to be
-// read from the submitted form. Verified against bidPackageId here --
-// not trusted from the form alone -- same cross-resource-ID discipline
-// every other action in this file follows: a tampered lineItemId could
-// otherwise be pointed at a line item outside this package entirely.
+// user pick ANY line item on the current estimate version, not just ones
+// already added to this bid package (see runVendorExtractionAndMatch's
+// own comment on why the candidate pool is version-wide: the version,
+// built from the client's own source-of-truth spreadsheet import, is
+// almost always far bigger than the handful of items originally checked
+// into one bid package). Ownership is checked against versionId here --
+// not bidPackageId, and not trusted from the form alone -- same
+// cross-resource-ID discipline every other action in this file follows,
+// just scoped one level up: a tampered lineItemId could otherwise be
+// pointed at a line item on a completely different estimate. Applying a
+// match to a line item outside this package moves it in: a vendor price
+// now applies to it, so it belongs to this vendor's package.
 export async function applyVendorMatchAction(
   estimateId: string,
   versionId: string,
@@ -196,9 +210,9 @@ export async function applyVendorMatchAction(
   if (!lineItemId) throw new Error("Choose which line item this vendor price applies to.");
   if (!Number.isFinite(unitCost)) throw new Error("Unit cost must be a number.");
   if (!documentId) throw new Error("Missing vendor quote document reference.");
-  await db.lineItem.findFirstOrThrow({ where: { id: lineItemId, bidPackageId } });
+  await db.lineItem.findFirstOrThrow({ where: { id: lineItemId, section: { estimateVersionId: versionId } } });
 
-  await updateLineItem(opportunityId, lineItemId, { unitCost, documentId, sourceQuote, isDraft: false });
+  await updateLineItem(opportunityId, lineItemId, { unitCost, documentId, sourceQuote, isDraft: false, bidPackageId });
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }

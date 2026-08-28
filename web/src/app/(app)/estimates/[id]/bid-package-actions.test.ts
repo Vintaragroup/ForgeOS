@@ -115,12 +115,12 @@ describe("applyVendorMatchAction", () => {
     expect(updatedVersion.totalCost.toNumber()).toBe(840);
   });
 
-  it("rejects a lineItemId that doesn't belong to this bid package", async () => {
+  it("applies a vendor price to a line item NOT yet in this bid package, and adds it to the package -- the candidate pool is now version-wide, not package-scoped", async () => {
     const admin = await makeAdmin();
     await createSession(admin.id);
     const { estimate, version, item } = await makeEstimateWithLineItem();
     const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
-    // A second, unrelated line item that was never added to this package.
+    // A second line item on the same version, never added to this package.
     const section = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY" });
     const outsideItem = await addLineItem(version.id, section.id, {
       lineType: "LABOR",
@@ -128,14 +128,53 @@ describe("applyVendorMatchAction", () => {
       qty: 1,
       unitCost: 0,
     });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+      },
+    });
 
     const formData = new FormData();
     formData.set("lineItemId", outsideItem.id);
     formData.set("unitCost", "840");
-    formData.set("documentId", "doc-1");
+    formData.set("documentId", document.id);
+    await applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData);
+
+    const updated = await db.lineItem.findUniqueOrThrow({ where: { id: outsideItem.id } });
+    expect(updated.unitCost.toNumber()).toBe(840);
+    expect(updated.bidPackageId).toBe(bidPackage.id);
+  });
+
+  it("rejects a lineItemId from a DIFFERENT estimate version", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    // A line item on a completely different estimate/version.
+    const other = await makeEstimateWithLineItem();
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+      },
+    });
+
+    const formData = new FormData();
+    formData.set("lineItemId", other.item.id);
+    formData.set("unitCost", "840");
+    formData.set("documentId", document.id);
     await expect(applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow();
 
-    const stillZero = await db.lineItem.findUniqueOrThrow({ where: { id: outsideItem.id } });
+    const stillZero = await db.lineItem.findUniqueOrThrow({ where: { id: other.item.id } });
     expect(stillZero.unitCost.toNumber()).toBe(0);
   });
 

@@ -385,6 +385,12 @@ export async function updateLineItem(
     documentId?: string | null;
     sourceQuote?: string | null;
     isDraft?: boolean;
+    // Also settable here for the same reason as documentId/sourceQuote
+    // above: applyVendorMatchAction can now apply a vendor price to ANY
+    // line item on the current estimate version, not just ones already
+    // added to this bid package (see its own header comment) -- applying
+    // a match is what adds it.
+    bidPackageId?: string | null;
   },
 ) {
   const existing = await db.lineItem.findFirstOrThrow({
@@ -411,6 +417,7 @@ export async function updateLineItem(
       documentId: data.documentId !== undefined ? data.documentId : existing.documentId,
       sourceQuote: data.sourceQuote !== undefined ? data.sourceQuote : existing.sourceQuote,
       isDraft: data.isDraft ?? existing.isDraft,
+      bidPackageId: data.bidPackageId !== undefined ? data.bidPackageId : existing.bidPackageId,
     },
   });
 }

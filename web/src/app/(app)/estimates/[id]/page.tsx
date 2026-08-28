@@ -1076,6 +1076,21 @@ function BidPackagesTab({
   version: VersionWithSections;
   vendorQuoteDocuments: { id: string; filename: string }[];
 }) {
+  // Every line item on the CURRENT version, not just ones already added
+  // to a given bid package -- the "Matched to" dropdown offers this full
+  // set (see bid-package-actions.ts's runVendorExtractionAndMatch and
+  // applyVendorMatchAction for why: the version, built from the client's
+  // own source-of-truth spreadsheet import, is almost always far bigger
+  // than the handful of items originally checked into one bid package).
+  const allLineItems = version.sections.flatMap((s) =>
+    s.lineItems.map((li) => ({
+      id: li.id,
+      description: li.description,
+      sectionLabel: s.groupLabel ?? s.name,
+      documentId: li.documentId,
+      bidPackageId: li.bidPackageId,
+    })),
+  );
   return (
     <div className="flex flex-col gap-6">
       {version.bidPackages.length === 0 ? (
@@ -1093,6 +1108,7 @@ function BidPackagesTab({
             versionId={version.id}
             bidPackage={bidPackage}
             vendorQuoteDocuments={vendorQuoteDocuments}
+            allLineItems={allLineItems}
           />
         ))
       )}
@@ -1131,11 +1147,19 @@ function BidPackageCard({
   versionId,
   bidPackage,
   vendorQuoteDocuments,
+  allLineItems,
 }: {
   estimateId: string;
   versionId: string;
   bidPackage: VersionWithSections["bidPackages"][number];
   vendorQuoteDocuments: { id: string; filename: string }[];
+  allLineItems: {
+    id: string;
+    description: string;
+    sectionLabel: string | null;
+    documentId: string | null;
+    bidPackageId: string | null;
+  }[];
 }) {
   const attachWithIds = attachVendorQuoteDocumentAction.bind(null, estimateId, bidPackage.id);
   const markReviewedWithIds = markBidPackageReviewedAction.bind(null, estimateId, bidPackage.id);
@@ -1284,13 +1308,17 @@ function BidPackageCard({
             </thead>
             <tbody>
               {matches.map((match, i) => {
-                const matchedItem = bidPackage.lineItems.find((li) => li.id === match.lineItemId);
+                // Looked up against allLineItems (every item on the
+                // version), not just bidPackage.lineItems -- the AI match
+                // pool is version-wide now, so a suggested lineItemId may
+                // not be a package member yet (applying it is what adds
+                // it, see applyVendorMatchAction's own header comment).
+                const matchedItem = allLineItems.find((li) => li.id === match.lineItemId);
                 // "Applied" is derived from provenance (this line item's
                 // own documentId equals this quote's), not from a
-                // persisted decision -- see this function's own header
-                // comment. Reflects the row's DEFAULT/suggested target
-                // only -- there's no client JS here to re-derive this
-                // live as the select below changes, same plain-forms
+                // persisted decision. Reflects the row's DEFAULT/suggested
+                // target only -- there's no client JS here to re-derive
+                // this live as the select below changes, same plain-forms
                 // posture as the rest of this file.
                 const alreadyApplied = matchedItem?.documentId === quoteDocument.id;
                 const applyWithIds = applyVendorMatchAction.bind(null, estimateId, versionId, bidPackage.id);
@@ -1324,15 +1352,16 @@ function BidPackageCard({
                         <option value="" disabled={!!match.lineItemId}>
                           — choose one —
                         </option>
-                        {bidPackage.lineItems.map((li) => (
+                        {allLineItems.map((li) => (
                           <option key={li.id} value={li.id}>
                             {li.description}
-                            {li.section.groupLabel ?? li.section.name ? ` — ${li.section.groupLabel ?? li.section.name}` : ""}
+                            {li.sectionLabel ? ` — ${li.sectionLabel}` : ""}
+                            {li.bidPackageId && li.bidPackageId !== bidPackage.id ? " (assigned elsewhere)" : ""}
                           </option>
                         ))}
                       </select>
                       {match.reasoning && <p className="mt-1.5 text-xs text-neutral-400">{match.reasoning}</p>}
-                      {!matchedItem && (
+                      {!match.lineItemId && (
                         <p className="mt-1.5 text-xs text-amber-700">No match — review and pick one manually</p>
                       )}
                     </td>
