@@ -60,6 +60,7 @@ import { BidPackageSelectionProvider } from "@/components/bid-package-selection"
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
+  applyAllHighConfidenceMatchesAction,
   applyVendorMatchAction,
   applyVendorMatchGroupAction,
   attachVendorQuoteDocumentAction,
@@ -1234,6 +1235,20 @@ function BidPackageCard({
       .map(([targetId, matchIndices]) => ({ targetId, matchIndices }));
   })();
 
+  // Every "high" confidence match, for the single "Apply all
+  // high-confidence matches" button -- deliberately excludes
+  // medium/low, mirroring the same split a reviewer would draw by hand
+  // (apply what the AI is confident about, review the rest). Distinct
+  // from alreadyApplied per group above: this counts how many are still
+  // PENDING a real price write, so the button can say "N still need
+  // applying" rather than re-offering matches already resolved.
+  const highConfidenceMatches = (matches ?? []).filter((m) => m.confidence === "high" && m.lineItemId);
+  const highConfidencePendingCount = highConfidenceMatches.filter((m) => {
+    const target = allLineItems.find((li) => li.id === m.lineItemId);
+    return target?.documentId !== quoteDocument?.id;
+  }).length;
+  const highConfidenceTotal = highConfidenceMatches.reduce((sum, m) => sum + m.vendorLine.unitPrice, 0);
+
   return (
     <Card id={`bid-package-${bidPackage.id}`} className="p-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -1436,23 +1451,37 @@ function BidPackageCard({
 
       {quoteDocument && !isExtracting && matches && (
         <div className="border-t border-neutral-200 pt-4">
-          <div className="mb-3 flex items-center justify-between gap-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-4">
             <h4 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
               Match review — {quoteDocument.filename}
             </h4>
-            {/* Once a document has any stored vendorQuoteLineItems,
-                SubmitVendorQuoteExtractForm above never renders again --
-                this is the only way to re-run extraction against updated
-                document text or an updated extraction schema (e.g. after
-                unitCode was added, existing quotes needed this to pick it
-                up rather than staying frozen on their first-ever result). */}
-            <SubmitVendorQuoteExtractForm
-              estimateId={estimateId}
-              bidPackageId={bidPackage.id}
-              documentId={quoteDocument.id}
-              label="Re-extract"
-              pendingLabel="Extracting…"
-            />
+            <div className="flex items-center gap-2">
+              {highConfidenceMatches.length > 0 && (
+                <form
+                  action={applyAllHighConfidenceMatchesAction.bind(null, estimateId, versionId, bidPackage.id)}
+                >
+                  <input type="hidden" name="documentId" value={quoteDocument.id} />
+                  <input type="hidden" name="priorApplied" value={priorAppliedValue} />
+                  <Button variant="secondary" type="submit">
+                    {highConfidencePendingCount > 0 ? "Apply" : "Re-apply"} all {highConfidenceMatches.length}{" "}
+                    high-confidence matches (sum {money(highConfidenceTotal)})
+                  </Button>
+                </form>
+              )}
+              {/* Once a document has any stored vendorQuoteLineItems,
+                  SubmitVendorQuoteExtractForm above never renders again --
+                  this is the only way to re-run extraction against updated
+                  document text or an updated extraction schema (e.g. after
+                  unitCode was added, existing quotes needed this to pick it
+                  up rather than staying frozen on their first-ever result). */}
+              <SubmitVendorQuoteExtractForm
+                estimateId={estimateId}
+                bidPackageId={bidPackage.id}
+                documentId={quoteDocument.id}
+                label="Re-extract"
+                pendingLabel="Extracting…"
+              />
+            </div>
           </div>
           <table className="mb-4 w-full text-sm">
             <thead>

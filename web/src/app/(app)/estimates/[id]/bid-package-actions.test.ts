@@ -5,6 +5,7 @@ import { addLineItem, addSection, createBidPackage, createEstimateVersion } from
 import { resetMockCookies } from "@/test/setup";
 import type { ProposedVendorSection, VendorLineMatch, VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
 import {
+  applyAllHighConfidenceMatchesAction,
   applyVendorMatchAction,
   applyVendorMatchGroupAction,
   attachVendorQuoteDocumentAction,
@@ -411,6 +412,89 @@ describe("applyVendorMatchGroupAction", () => {
     formData.set("documentId", document.id);
     await expect(applyVendorMatchGroupAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
       "Select at least two",
+    );
+  });
+});
+
+describe("applyAllHighConfidenceMatchesAction", () => {
+  it("applies every high-confidence match and leaves medium/low ones untouched", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const section = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY" });
+    const secondItem = await addLineItem(version.id, section.id, {
+      lineType: "LABOR",
+      description: "Second item",
+      qty: 1,
+      unitCost: 0,
+    });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Sleeper Floor Required", 840), { lineItemId: item.id, confidence: "high" }),
+      match(vendorLine("Second Item Charge", 500), { lineItemId: secondItem.id, confidence: "high" }),
+      match(vendorLine("Soft Goods", 800), { confidence: "low" }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const formData = new FormData();
+    formData.set("documentId", document.id);
+    await expect(
+      applyAllHighConfidenceMatchesAction(estimate.id, version.id, bidPackage.id, formData),
+    ).rejects.toMatchObject({
+      digest: expect.stringContaining(`applied=${encodeURIComponent(`${item.id},${secondItem.id}`)}`),
+    });
+
+    const updatedFirst = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    const updatedSecond = await db.lineItem.findUniqueOrThrow({ where: { id: secondItem.id } });
+    expect(updatedFirst.unitCost.toNumber()).toBe(840);
+    expect(updatedFirst.isDraft).toBe(false);
+    expect(updatedSecond.unitCost.toNumber()).toBe(500);
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    const updatedMatches = updated.matchResult as unknown as VendorLineMatch[];
+    // The low-confidence, unmatched third row is completely untouched.
+    expect(updatedMatches[2].lineItemId).toBeNull();
+    expect(updatedMatches[2].confidence).toBe("low");
+
+    const updatedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(updatedVersion.totalCost.toNumber()).toBe(1340);
+  });
+
+  it("rejects when there are no high-confidence matches", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    const matches: VendorLineMatch[] = [match(vendorLine("Soft Goods", 800), { confidence: "low" })];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const formData = new FormData();
+    formData.set("documentId", document.id);
+    await expect(applyAllHighConfidenceMatchesAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
+      "No high-confidence matches",
     );
   });
 });

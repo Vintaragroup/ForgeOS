@@ -218,12 +218,12 @@ export async function getBidPackageExtractionStatusAction(estimateId: string, bi
 // after a live report where a second Apply made the first row's "✓
 // Applied" badge disappear (the data itself was never affected, only
 // this confirmation).
-function appliedRedirectUrl(estimateId: string, bidPackageId: string, lineItemId: string, formData: FormData) {
+function appliedRedirectUrl(estimateId: string, bidPackageId: string, newLineItemIds: string[], formData: FormData) {
   const priorApplied = String(formData.get("priorApplied") ?? "")
     .split(",")
     .map((id) => id.trim())
     .filter(Boolean);
-  const appliedIds = Array.from(new Set([...priorApplied, lineItemId]));
+  const appliedIds = Array.from(new Set([...priorApplied, ...newLineItemIds]));
   return `/estimates/${estimateId}?tab=bid-packages&applied=${encodeURIComponent(appliedIds.join(","))}#bid-package-${bidPackageId}`;
 }
 
@@ -266,7 +266,7 @@ export async function applyVendorMatchAction(
   // underlying data was never at risk (each apply is an independent
   // write to its own row), only the confirmation badge was being
   // overwritten instead of accumulated.
-  redirect(appliedRedirectUrl(estimateId, bidPackageId, lineItemId, formData));
+  redirect(appliedRedirectUrl(estimateId, bidPackageId, [lineItemId], formData));
 }
 
 // Applies several vendor lines to ONE line item at once, summing their
@@ -354,7 +354,95 @@ export async function applyVendorMatchGroupAction(
   // already-correct group sum), where the page renders byte-identical
   // before and after with nothing else to signal the click actually did
   // something.
-  redirect(appliedRedirectUrl(estimateId, bidPackageId, lineItemId, formData));
+  redirect(appliedRedirectUrl(estimateId, bidPackageId, [lineItemId], formData));
+}
+
+// Walks the WHOLE match review table and applies every vendor line the
+// AI itself judged "high" confidence, in one click -- confirmed live
+// that a real reviewer had a long tail of individually-high-confidence
+// rows they hadn't gotten around to clicking Apply on one by one.
+// Deliberately scoped to "high" only, never "medium"/"low": the user's
+// own framing was "apply high confidence, low confidence needs review,"
+// and a wrong auto-applied price is worse than a visible row still
+// waiting on a human -- same posture every other action in this file
+// takes toward anything not backed by a strong real signal.
+//
+// Reuses the exact same per-target summing logic as
+// applyVendorMatchGroupAction (group by lineItemId, sum qty/price) --
+// almost every "high" row already has a unique target (dedup demotes a
+// losing duplicate to "low", see resolveVendorLineMatches's own
+// comment), but grouping first keeps this correct on the rare case two
+// high-confidence rows do share one target, and makes this a strict
+// superset of what the per-group bulk button already does rather than a
+// parallel implementation that could drift from it.
+export async function applyAllHighConfidenceMatchesAction(
+  estimateId: string,
+  versionId: string,
+  bidPackageId: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+
+  const documentId = String(formData.get("documentId") ?? "").trim();
+  if (!documentId) throw new Error("Missing vendor quote document reference.");
+
+  const bidPackage = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackageId } });
+  const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? [];
+
+  const byTarget = new Map<string, number[]>();
+  matches.forEach((m, i) => {
+    if (m.confidence === "high" && m.lineItemId) {
+      byTarget.set(m.lineItemId, [...(byTarget.get(m.lineItemId) ?? []), i]);
+    }
+  });
+  if (byTarget.size === 0) throw new Error("No high-confidence matches to apply.");
+
+  const updatedMatches = [...matches];
+  const appliedTargetIds: string[] = [];
+  for (const [lineItemId, indices] of byTarget) {
+    // A target that no longer exists (deleted since the match was
+    // computed) is skipped, not fatal to the whole batch -- same
+    // "drop, don't trust blindly" posture the rest of this file uses
+    // for stale/hallucinated ids.
+    const exists = await db.lineItem.findFirst({ where: { id: lineItemId, section: { estimateVersionId: versionId } } });
+    if (!exists) continue;
+
+    const vendorLines = indices.map((i) => matches[i].vendorLine);
+    const qty = vendorLines.reduce((sum, vl) => sum + (vl.qty ?? 1), 0);
+    const total = vendorLines.reduce((sum, vl) => sum + vl.unitPrice, 0);
+    const unitCost = total / qty;
+    const sourceQuote = vendorLines.map((vl) => vl.sourceQuote).join(" | ");
+
+    await updateLineItem(opportunityId, lineItemId, { qty, unitCost, documentId, sourceQuote, isDraft: false, bidPackageId });
+    appliedTargetIds.push(lineItemId);
+
+    for (const i of indices) {
+      updatedMatches[i] = {
+        ...updatedMatches[i],
+        lineItemId,
+        confidence: "high",
+        reasoning:
+          indices.length > 1
+            ? `Bulk-applied with ${indices.length - 1} other matching vendor line(s), summing to $${total.toFixed(2)}.`
+            : updatedMatches[i].reasoning,
+        needsClarification: false,
+      };
+    }
+  }
+  if (appliedTargetIds.length === 0) {
+    throw new Error("No high-confidence matches are still available to apply -- try Re-extract.");
+  }
+
+  await db.bidPackage.update({
+    where: { id: bidPackageId },
+    data: { matchResult: updatedMatches as unknown as Prisma.InputJsonValue },
+  });
+  await recomputeVersionTotals(versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(appliedRedirectUrl(estimateId, bidPackageId, appliedTargetIds, formData));
 }
 
 // Turns one AI-proposed section (vendor-match-ai-service.ts's own header
