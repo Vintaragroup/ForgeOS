@@ -6,6 +6,7 @@ import { resetMockCookies } from "@/test/setup";
 import type { ProposedVendorSection, VendorLineMatch, VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
 import {
   applyAllHighConfidenceMatchesAction,
+  applySelectedVendorMatchesAction,
   applyVendorMatchAction,
   applyVendorMatchGroupAction,
   attachVendorQuoteDocumentAction,
@@ -591,6 +592,184 @@ describe("applyAllHighConfidenceMatchesAction", () => {
     // sees an honest "no match" row instead of the misleading stale one.
     expect(updatedMatches[0].lineItemId).toBeNull();
     expect(updatedMatches[0].confidence).toBe("low");
+  });
+});
+
+describe("applySelectedVendorMatchesAction", () => {
+  it("applies exactly the checked subset and leaves unchecked rows -- of any confidence -- untouched", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const section = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY" });
+    const secondItem = await addLineItem(version.id, section.id, {
+      lineType: "LABOR",
+      description: "Second item",
+      qty: 1,
+      unitCost: 0,
+    });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Sleeper Floor Required", 840), { lineItemId: item.id, confidence: "high" }),
+      // Only a suggestion, never a resolved lineItemId -- exactly the
+      // "medium/low confidence" case applyAllHighConfidenceMatchesAction
+      // can never reach, and the whole point of letting a reviewer
+      // hand-pick which suggestions to trust.
+      match(vendorLine("Second Item Charge", 500), { suggestedLineItemId: secondItem.id, confidence: "medium" }),
+      match(vendorLine("Soft Goods", 800), { confidence: "low" }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const result = await applySelectedVendorMatchesAction(estimate.id, version.id, bidPackage.id, document.id, [0, 1]);
+
+    expect(result.staleCount).toBe(0);
+    expect(result.appliedLineItemIds.sort()).toEqual([item.id, secondItem.id].sort());
+
+    const updatedFirst = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    const updatedSecond = await db.lineItem.findUniqueOrThrow({ where: { id: secondItem.id } });
+    expect(updatedFirst.unitCost.toNumber()).toBe(840);
+    expect(updatedSecond.unitCost.toNumber()).toBe(500);
+    expect(updatedSecond.isDraft).toBe(false);
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    const updatedMatches = updated.matchResult as unknown as VendorLineMatch[];
+    // The unchecked low-confidence row is completely untouched.
+    expect(updatedMatches[2].lineItemId).toBeNull();
+    expect(updatedMatches[2].confidence).toBe("low");
+
+    const updatedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(updatedVersion.totalCost.toNumber()).toBe(1340);
+  });
+
+  it("sums qty/price across two checked rows that share the same target", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Non Slip Paint", 450, 1), { lineItemId: item.id, confidence: "high" }),
+      match(vendorLine("Guardrail", 425, 1), { lineItemId: item.id, confidence: "high" }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const result = await applySelectedVendorMatchesAction(estimate.id, version.id, bidPackage.id, document.id, [0, 1]);
+
+    expect(result.appliedLineItemIds).toEqual([item.id]);
+    const updatedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    // qty sums to 2 (1 + 1), price sums to $875 -- unitCost is the
+    // resulting per-unit average ($437.50), and totalCost (qty x
+    // unitCost) is what actually has to equal the combined $875.
+    expect(updatedItem.qty.toNumber()).toBe(2);
+    expect(updatedItem.unitCost.toNumber()).toBe(437.5);
+    expect(updatedItem.totalCost.toNumber()).toBe(875);
+  });
+
+  it("self-heals a checked match pointing at a deleted line item while still applying the rest", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    const deletedTargetId = "deleted-line-item-does-not-exist";
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Sleeper Floor Required", 840), { lineItemId: item.id, confidence: "high" }),
+      match(vendorLine("Trucking", 25000), { lineItemId: deletedTargetId, confidence: "high" }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const result = await applySelectedVendorMatchesAction(estimate.id, version.id, bidPackage.id, document.id, [0, 1]);
+
+    expect(result.appliedLineItemIds).toEqual([item.id]);
+    expect(result.staleCount).toBe(1);
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    const updatedMatches = updated.matchResult as unknown as VendorLineMatch[];
+    expect(updatedMatches[1].lineItemId).toBeNull();
+    expect(updatedMatches[1].confidence).toBe("low");
+  });
+
+  it("rejects an empty selection", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    await db.bidPackage.update({
+      where: { id: bidPackage.id },
+      data: { matchResult: [match(vendorLine("Soft Goods", 800), { confidence: "low" })] as object[] },
+    });
+
+    await expect(applySelectedVendorMatchesAction(estimate.id, version.id, bidPackage.id, document.id, [])).rejects.toThrow(
+      "Select at least one match",
+    );
+  });
+
+  it("drops an out-of-range index instead of trusting it -- selectedIndices is untrusted client input", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    const matches: VendorLineMatch[] = [match(vendorLine("Sleeper Floor Required", 840), { lineItemId: item.id, confidence: "high" })];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    // Index 0 is real; 99 and -1 are hallucinated/out-of-range and must
+    // be silently dropped, not crash or apply something unintended.
+    const result = await applySelectedVendorMatchesAction(estimate.id, version.id, bidPackage.id, document.id, [0, 99, -1]);
+
+    expect(result.appliedLineItemIds).toEqual([item.id]);
   });
 });
 

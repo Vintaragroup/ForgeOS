@@ -384,6 +384,117 @@ export async function applyVendorMatchGroupAction(
 // high-confidence rows do share one target, and makes this a strict
 // superset of what the per-group bulk button already does rather than a
 // parallel implementation that could drift from it.
+interface ApplyMatchesResult {
+  appliedLineItemIds: string[];
+  staleCount: number;
+}
+
+// Shared core of applyAllHighConfidenceMatchesAction and
+// applySelectedVendorMatchesAction below -- both need the exact same
+// self-healing/grouping/persistence behavior for an arbitrary set of
+// match indices, just arrive at that set differently (a confidence
+// filter vs. an explicit user selection). Resolves each index's target
+// as lineItemId ?? suggestedLineItemId (the two are equal whenever
+// lineItemId is set -- see resolveVendorLineMatches's own comment --  so
+// this only ever adds coverage for a not-yet-resolved suggestion, never
+// overrides a real match), then applies exactly like
+// applyVendorMatchGroupAction: grouped by target, qty/price summed
+// across every index sharing one. Does not redirect or build a URL --
+// callers have different response shapes (redirect vs. plain return), so
+// that stays each caller's own responsibility.
+async function applyMatchesByIndices(
+  versionId: string,
+  bidPackageId: string,
+  documentId: string,
+  opportunityId: string,
+  matches: VendorLineMatch[],
+  indices: number[],
+): Promise<ApplyMatchesResult> {
+  const byTarget = new Map<string, number[]>();
+  for (const i of indices) {
+    const m = matches[i];
+    const lineItemId = m?.lineItemId ?? m?.suggestedLineItemId ?? null;
+    if (lineItemId) byTarget.set(lineItemId, [...(byTarget.get(lineItemId) ?? []), i]);
+  }
+  if (byTarget.size === 0) throw new Error("None of these matches have a target to apply.");
+
+  const updatedMatches = [...matches];
+  const appliedTargetIds: string[] = [];
+  let staleCount = 0;
+  for (const [lineItemId, targetIndices] of byTarget) {
+    // A target that no longer exists (its LineItem was deleted, e.g. via
+    // the Line Items tab's own delete button, sometime after this match
+    // was computed) is skipped, not fatal to the whole batch -- same
+    // "drop, don't trust blindly" posture the rest of this file uses for
+    // stale/hallucinated ids. Confirmed live: a real bid package had 4
+    // "high" confidence matches left pointing at line items deleted
+    // during an earlier cleanup, and this action silently skipped all
+    // four with zero indication anything was wrong -- indistinguishable
+    // from the button doing nothing at all. The stale entries are now
+    // cleared here (lineItemId nulled, confidence downgraded) so the
+    // match table stops showing a misleading "high confidence, matched
+    // to X" for a target that's actually gone, and the caller is told
+    // how many were skipped instead of finding out by counting silently
+    // missing dollars.
+    const exists = await db.lineItem.findFirst({ where: { id: lineItemId, section: { estimateVersionId: versionId } } });
+    if (!exists) {
+      staleCount += targetIndices.length;
+      for (const i of targetIndices) {
+        updatedMatches[i] = {
+          ...updatedMatches[i],
+          lineItemId: null,
+          suggestedLineItemId: updatedMatches[i].suggestedLineItemId === lineItemId ? null : updatedMatches[i].suggestedLineItemId,
+          confidence: "low",
+          reasoning: "Previously matched line item no longer exists (deleted) -- try Re-extract or pick one manually.",
+          needsClarification: false,
+        };
+      }
+      continue;
+    }
+
+    const vendorLines = targetIndices.map((i) => matches[i].vendorLine);
+    const qty = vendorLines.reduce((sum, vl) => sum + (vl.qty ?? 1), 0);
+    const total = vendorLines.reduce((sum, vl) => sum + vl.unitPrice, 0);
+    const unitCost = total / qty;
+    const sourceQuote = vendorLines.map((vl) => vl.sourceQuote).join(" | ");
+
+    await updateLineItem(opportunityId, lineItemId, { qty, unitCost, documentId, sourceQuote, isDraft: false, bidPackageId });
+    appliedTargetIds.push(lineItemId);
+
+    for (const i of targetIndices) {
+      updatedMatches[i] = {
+        ...updatedMatches[i],
+        lineItemId,
+        confidence: "high",
+        reasoning:
+          targetIndices.length > 1
+            ? `Bulk-applied with ${targetIndices.length - 1} other matching vendor line(s), summing to $${total.toFixed(2)}.`
+            : updatedMatches[i].reasoning,
+        needsClarification: false,
+      };
+    }
+  }
+  // Persisted before the throw check below: even when NOTHING could be
+  // applied (every target was stale), the self-heal on those entries
+  // still needs to stick -- otherwise a reviewer who retries after
+  // seeing the error hits the exact same silent-looking failure again,
+  // and the match table keeps showing a dead "matched to X" row instead
+  // of the corrected "no longer exists" one.
+  await db.bidPackage.update({
+    where: { id: bidPackageId },
+    data: { matchResult: updatedMatches as unknown as Prisma.InputJsonValue },
+  });
+
+  if (appliedTargetIds.length === 0) {
+    throw new Error(
+      `None of these matches could be applied -- all ${staleCount} pointed at line items that no longer exist. Try Re-extract.`,
+    );
+  }
+
+  await recomputeVersionTotals(versionId);
+  return { appliedLineItemIds: appliedTargetIds, staleCount };
+}
+
 export async function applyAllHighConfidenceMatchesAction(
   estimateId: string,
   versionId: string,
@@ -401,100 +512,82 @@ export async function applyAllHighConfidenceMatchesAction(
   const bidPackage = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackageId } });
   const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? [];
 
-  const byTarget = new Map<string, number[]>();
-  matches.forEach((m, i) => {
-    if (m.confidence === "high" && m.lineItemId) {
-      byTarget.set(m.lineItemId, [...(byTarget.get(m.lineItemId) ?? []), i]);
-    }
-  });
-  if (byTarget.size === 0) throw new Error("No high-confidence matches to apply.");
+  const indices = matches
+    .map((m, i) => (m.confidence === "high" && m.lineItemId ? i : -1))
+    .filter((i) => i !== -1);
+  if (indices.length === 0) throw new Error("No high-confidence matches to apply.");
 
-  const updatedMatches = [...matches];
-  const appliedTargetIds: string[] = [];
-  let staleCount = 0;
-  for (const [lineItemId, indices] of byTarget) {
-    // A target that no longer exists (its LineItem was deleted, e.g. via
-    // the Line Items tab's own delete button, sometime after this match
-    // was computed) is skipped, not fatal to the whole batch -- same
-    // "drop, don't trust blindly" posture the rest of this file uses for
-    // stale/hallucinated ids. Confirmed live: a real bid package had 4
-    // "high" confidence matches left pointing at line items deleted
-    // during an earlier cleanup, and this action silently skipped all
-    // four with zero indication anything was wrong -- indistinguishable
-    // from the button doing nothing at all. The stale entries are now
-    // cleared here (lineItemId nulled, confidence downgraded) so the
-    // match table stops showing a misleading "high confidence, matched
-    // to X" for a target that's actually gone, and the caller is told
-    // how many were skipped instead of finding out by counting silently
-    // missing dollars.
-    const exists = await db.lineItem.findFirst({ where: { id: lineItemId, section: { estimateVersionId: versionId } } });
-    if (!exists) {
-      staleCount += indices.length;
-      for (const i of indices) {
-        updatedMatches[i] = {
-          ...updatedMatches[i],
-          lineItemId: null,
-          suggestedLineItemId: updatedMatches[i].suggestedLineItemId === lineItemId ? null : updatedMatches[i].suggestedLineItemId,
-          confidence: "low",
-          reasoning: "Previously matched line item no longer exists (deleted) -- try Re-extract or pick one manually.",
-          needsClarification: false,
-        };
-      }
-      continue;
-    }
+  const { appliedLineItemIds, staleCount } = await applyMatchesByIndices(
+    versionId,
+    bidPackageId,
+    documentId,
+    opportunityId,
+    matches,
+    indices,
+  );
 
-    const vendorLines = indices.map((i) => matches[i].vendorLine);
-    const qty = vendorLines.reduce((sum, vl) => sum + (vl.qty ?? 1), 0);
-    const total = vendorLines.reduce((sum, vl) => sum + vl.unitPrice, 0);
-    const unitCost = total / qty;
-    const sourceQuote = vendorLines.map((vl) => vl.sourceQuote).join(" | ");
-
-    await updateLineItem(opportunityId, lineItemId, { qty, unitCost, documentId, sourceQuote, isDraft: false, bidPackageId });
-    appliedTargetIds.push(lineItemId);
-
-    for (const i of indices) {
-      updatedMatches[i] = {
-        ...updatedMatches[i],
-        lineItemId,
-        confidence: "high",
-        reasoning:
-          indices.length > 1
-            ? `Bulk-applied with ${indices.length - 1} other matching vendor line(s), summing to $${total.toFixed(2)}.`
-            : updatedMatches[i].reasoning,
-        needsClarification: false,
-      };
-    }
-  }
-  // Persisted before the throw check below: even when NOTHING could be
-  // applied (every high-confidence target was stale), the self-heal on
-  // those entries still needs to stick -- otherwise a reviewer who
-  // retries after seeing the error hits the exact same silent-looking
-  // failure again, and the match table keeps showing a dead "high
-  // confidence" row instead of the corrected "no longer exists" one.
-  await db.bidPackage.update({
-    where: { id: bidPackageId },
-    data: { matchResult: updatedMatches as unknown as Prisma.InputJsonValue },
-  });
-
-  if (appliedTargetIds.length === 0) {
-    throw new Error(
-      staleCount > 0
-        ? `None of these matches could be applied -- all ${staleCount} pointed at line items that no longer exist. Try Re-extract.`
-        : "No high-confidence matches are still available to apply -- try Re-extract.",
-    );
-  }
-
-  await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(
     appliedRedirectUrl(
       estimateId,
       bidPackageId,
-      appliedTargetIds,
+      appliedLineItemIds,
       formData,
       staleCount > 0 ? { stale: String(staleCount) } : {},
     ),
   );
+}
+
+// Direct-call action (see createBidPackageAction's own header comment
+// for why -- the checked row indices live in MatchSelectionProvider's
+// client state, not real form fields), invoked from
+// ApplySelectedMatchesBar. Lets a reviewer hand-pick an arbitrary subset
+// of matches -- any confidence, any target -- and commit exactly those in
+// one action, instead of being limited to one row at a time or "every
+// high-confidence match."
+//
+// Returns a plain result instead of calling redirect(): the client
+// component necessarily wraps this direct call in a try/catch to show a
+// real error on failure, and Next's own guidance is that redirect's
+// thrown control-flow exception must be called OUTSIDE a try/catch --
+// wrapped, it would silently get treated as a caught error instead of a
+// navigation. The caller builds the same ?applied=&stale= URL itself and
+// navigates via router.push once this resolves.
+export async function applySelectedVendorMatchesAction(
+  estimateId: string,
+  versionId: string,
+  bidPackageId: string,
+  documentId: string,
+  selectedIndices: number[],
+): Promise<ApplyMatchesResult> {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+
+  const trimmedDocumentId = documentId.trim();
+  if (!trimmedDocumentId) throw new Error("Missing vendor quote document reference.");
+
+  const bidPackage = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackageId } });
+  const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? [];
+
+  // selectedIndices is untrusted client input (see this file's own
+  // recurring discipline on cross-resource ids) -- out-of-range ones are
+  // dropped, not trusted, same posture resolveVendorLineMatches already
+  // uses for a hallucinated candidateIndex.
+  const validIndices = [...new Set(selectedIndices)].filter((i) => Number.isInteger(i) && i >= 0 && i < matches.length);
+  if (validIndices.length === 0) throw new Error("Select at least one match to apply.");
+
+  const result = await applyMatchesByIndices(
+    versionId,
+    bidPackageId,
+    trimmedDocumentId,
+    opportunityId,
+    matches,
+    validIndices,
+  );
+  revalidatePath(`/estimates/${estimateId}`);
+  return result;
 }
 
 // Turns one AI-proposed section (vendor-match-ai-service.ts's own header

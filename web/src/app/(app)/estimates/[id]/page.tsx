@@ -61,6 +61,7 @@ import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
   applyAllHighConfidenceMatchesAction,
+  applySelectedVendorMatchesAction,
   applyVendorMatchAction,
   applyVendorMatchGroupAction,
   attachVendorQuoteDocumentAction,
@@ -71,6 +72,9 @@ import {
   proposeVendorQuoteItemsAction,
   removeLineItemFromBidPackageAction,
 } from "./bid-package-actions";
+import { MatchSelectionProvider } from "@/components/match-selection";
+import { MatchRowCheckbox } from "@/components/match-row-checkbox";
+import { ApplySelectedMatchesBar } from "@/components/apply-selected-matches-bar";
 
 const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
@@ -1463,6 +1467,7 @@ function BidPackageCard({
       )}
 
       {quoteDocument && !isExtracting && matches && (
+        <MatchSelectionProvider>
         <div className="border-t border-neutral-200 pt-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-4">
             <h4 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
@@ -1503,9 +1508,16 @@ function BidPackageCard({
               was made). Cleared below; try Re-extract or pick a new target manually.
             </p>
           )}
+          <ApplySelectedMatchesBar
+            applySelected={applySelectedVendorMatchesAction.bind(null, estimateId, versionId, bidPackage.id, quoteDocument.id)}
+            estimateId={estimateId}
+            bidPackageId={bidPackage.id}
+            priorAppliedIds={Array.from(appliedLineItemIds)}
+          />
           <table className="mb-4 w-full text-sm">
             <thead>
               <tr className="text-left text-neutral-500">
+                <th className="pb-1.5 pr-1"></th>
                 <th className="px-3 pb-1.5 font-normal">Vendor line</th>
                 <th className="px-3 pb-1.5 text-right font-normal">Vendor price</th>
                 <th className="px-3 pb-1.5 font-normal">Matched to</th>
@@ -1574,6 +1586,9 @@ function BidPackageCard({
                     : null;
                 return (
                   <tr key={i} className="border-t border-neutral-100">
+                    <td className="py-2 pr-1 align-top">
+                      <MatchRowCheckbox index={i} />
+                    </td>
                     <td className="px-3 py-2 align-top">
                       {match.confidence && (
                         <span
@@ -1670,6 +1685,7 @@ function BidPackageCard({
             <Button variant="secondary">Mark reviewed</Button>
           </form>
         </div>
+        </MatchSelectionProvider>
       )}
     </Card>
   );
