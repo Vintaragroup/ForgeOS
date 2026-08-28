@@ -70,11 +70,17 @@ function findColumnMap(row: ExcelJS.Row): ColumnMap | null {
 
   row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
     const text = normalizeHeader(cell.value);
+    // Known label variants actually observed across real client RFP
+    // templates in data/RFP/superbowl (Arena's own revised schedule uses
+    // "Notes"/"Planning Qty"/"Location / Item" instead of this sheet's
+    // usual "Description"/"Qty"/"Item") -- kept as an explicit alias list,
+    // not fuzzy/substring matching, so this only widens to wording
+    // actually seen in the wild rather than guessing at one.
     if (text === "category") category = colNumber;
-    else if (text === "description") description = colNumber;
+    else if (text === "description" || text === "notes") description = colNumber;
     else if (text === "unit") unit = colNumber;
-    else if (text === "qty") qty = colNumber;
-    else if (item === null && text.startsWith("item")) item = colNumber;
+    else if (text === "qty" || text === "planning qty") qty = colNumber;
+    else if (item === null && (text.startsWith("item") || text === "location / item")) item = colNumber;
   });
 
   if (category === null || description === null || unit === null || qty === null) return null;
@@ -132,7 +138,18 @@ export async function previewPricingImport(documentId: string, opportunityId: st
   let lastCategory = "";
   for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber++) {
     const row = sheet.getRow(rowNumber);
-    const description = cellText(row.getCell(columns.description).value);
+    const item = columns.item ? cellText(row.getCell(columns.item).value) || null : null;
+    const rawDescription = cellText(row.getCell(columns.description).value);
+    // Some RFP shapes (e.g. Arena's own template) put the row's real
+    // identifying text in the Item column -- "Right Endzone Camera
+    // Platform" -- and leave Description blank except for a supplementary
+    // note on a handful of rows. Verified live: without this fallback, 78
+    // of that template's 96 candidate rows (including nearly all 44 named
+    // camera/booth/auxiliary positions) were silently dropped as "spacer
+    // rows" below. Falls back to Item's own text so this stays a single,
+    // verbatim, one-cell value -- sourceQuote below (and its citation
+    // highlight in the spreadsheet viewer) depends on that.
+    const description = rawDescription || item || "";
     const qtyRaw = row.getCell(columns.qty).value;
     const qty = typeof qtyRaw === "number" ? qtyRaw : Number(cellText(qtyRaw));
 
@@ -143,7 +160,6 @@ export async function previewPricingImport(documentId: string, opportunityId: st
 
     const category = cellText(row.getCell(columns.category).value) || lastCategory;
     lastCategory = category;
-    const item = columns.item ? cellText(row.getCell(columns.item).value) || null : null;
 
     rows.push({
       rowNumber,
@@ -152,7 +168,10 @@ export async function previewPricingImport(documentId: string, opportunityId: st
       description,
       unit: cellText(row.getCell(columns.unit).value),
       qty,
-      catalogMatch: matchDescription(item ? `${item} ${description}` : description, catalog),
+      // Guarded against item === description (the fallback above already
+      // used item verbatim) -- otherwise this would duplicate it, e.g.
+      // "Right Endzone Camera Platform Right Endzone Camera Platform".
+      catalogMatch: matchDescription(item && item !== description ? `${item} ${description}` : description, catalog),
     });
   }
 

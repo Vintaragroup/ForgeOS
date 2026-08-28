@@ -7,14 +7,53 @@ import { createEstimateVersion } from "@/lib/estimate-service";
 import { commitPricingImport, previewPricingImport } from "@/lib/pricing-import-service";
 
 // Real fixture from Phase 7's roadmap RFP package -- see data/RFP/superbowl.
-// Ground truth (149 rows / 5 categories) independently verified against
+// Ground truth (162 rows / 5 categories) independently verified against
 // the workbook with openpyxl before writing this test, the same
 // "verified against real data" standard as Yoku Moku's total in
-// estimate-service.test.ts.
+// estimate-service.test.ts. (162, not the 149 an earlier version of this
+// importer produced -- 13 real TemporaryBooth_ADD ON alternates, e.g.
+// "Rex-Frame temporary wall system" and "Sleeper Floor - 1\" H", carry
+// their own text in the Item column with Description left blank, and were
+// silently dropped as spacer rows before the Item-column fallback below.)
 const FIXTURE_PATH = path.resolve(
   import.meta.dirname,
   "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Exhibit 1 - SBLXI - Financial Proposal Schedule Temporary Booth Build.xlsx",
 );
+
+// Two more real fixtures, both from the Super Bowl LXI Scaffolding RFP
+// (data/RFP/superbowl/RFP-submission-comparison), each exercising one of
+// this file's two real-world header shapes:
+// - Arena-template.xlsx: the blank RFP Arena sends OUT to bidders. Its 44
+//   named camera/booth/auxiliary positions carry their real name in the
+//   Item column ("Right Endzone Camera Platform") and leave Description
+//   blank except for a "Sleeper Floor Required" note on a handful of rows
+//   -- exercises the Item-column fallback.
+// - expocci-revised-rfp-withsgpspricing.xlsx: Arena's own later revision
+//   of that same template, filled in with SGPS/ShowRig pricing. Renamed
+//   headers ("Location / Item", "Notes", "Planning Qty") -- exercises the
+//   header-label synonym matching.
+// Ground truth (77 / 76 rows) independently verified against both
+// workbooks with openpyxl, and cross-checked live against this service's
+// own previewPricingImport before writing these tests.
+const ARENA_TEMPLATE_PATH = path.resolve(
+  import.meta.dirname,
+  "../../../data/RFP/superbowl/RFP-submission-comparison/Arena-template.xlsx",
+);
+const ARENA_REVISED_WITH_PRICING_PATH = path.resolve(
+  import.meta.dirname,
+  "../../../data/RFP/superbowl/RFP-submission-comparison/expocci-revised-rfp-withsgpspricing.xlsx",
+);
+
+async function makeDocumentFrom(filePath: string, filename: string) {
+  const company = await db.company.create({ data: { name: "Test Co" } });
+  const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+  const bytes = await readFile(filePath);
+  const file = new File([bytes], filename, {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const document = await uploadDocument(opportunity.id, { file, documentType: "PRICING_SCHEDULE" });
+  return { opportunity, document };
+}
 
 afterEach(async () => {
   await db.lineItem.deleteMany();
@@ -44,12 +83,12 @@ async function makeDocument() {
 }
 
 describe("previewPricingImport", () => {
-  it("parses the real Exhibit 1 pricing schedule into 149 rows across 5 categories", async () => {
+  it("parses the real Exhibit 1 pricing schedule into 162 rows across 5 categories", async () => {
     const { opportunity, document } = await makeDocument();
 
     const preview = await previewPricingImport(document.id, opportunity.id);
 
-    expect(preview.rows).toHaveLength(149);
+    expect(preview.rows).toHaveLength(162);
     expect(preview.categories.sort()).toEqual(
       ["BOOTH_PLATFORM", "CAMERA_PLATFORM", "TemporaryBooth_ADD ON", "TemporaryBooth_BUILD", "TemporaryBooth_SERVICE"].sort(),
     );
@@ -130,7 +169,7 @@ describe("commitPricingImport", () => {
     // Show Services) -- not just 5 flat categories -- see
     // pricing-import-service.ts's groupLabel comment.
     expect(result.sectionsCreated).toBe(36);
-    expect(result.rowsImported).toBe(149);
+    expect(result.rowsImported).toBe(162);
 
     const sections = await db.estimateSection.findMany({
       where: { estimateVersionId: version.id },
@@ -153,7 +192,7 @@ describe("commitPricingImport", () => {
     expect(standalone.map((s) => s.name).sort()).toEqual(["Add-Ons & Alternates", "Show Services"]);
 
     const allLineItems = sections.flatMap((s) => s.lineItems);
-    expect(allLineItems).toHaveLength(149);
+    expect(allLineItems).toHaveLength(162);
     expect(allLineItems.every((li) => li.isDraft)).toBe(true);
     expect(allLineItems.every((li) => li.documentId === document.id)).toBe(true);
     // No catalog rows exist in this test's DB state, so every match is
@@ -208,11 +247,11 @@ describe("commitPricingImport", () => {
 
     // The real bug this guards against: a real Super Bowl 2026 estimate
     // had this exact document imported twice before this check existed,
-    // doubling all 149 rows to 298.
+    // doubling all 162 rows to 324.
     const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
     expect(sections).toHaveLength(36);
     const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
-    expect(lineItemCount).toBe(149);
+    expect(lineItemCount).toBe(162);
   });
 
   it("rejects committing a document that belongs to a different opportunity than the target estimate", async () => {
@@ -228,5 +267,62 @@ describe("commitPricingImport", () => {
 
     const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: otherVersion.id } } });
     expect(lineItemCount).toBe(0);
+  });
+});
+
+describe("previewPricingImport -- Arena RFP header shape variants", () => {
+  it("recovers all 44 named positions from Arena-template.xlsx by falling back to the Item column when Description is blank", async () => {
+    const { opportunity, document } = await makeDocumentFrom(ARENA_TEMPLATE_PATH, "Arena-template.xlsx");
+
+    const preview = await previewPricingImport(document.id, opportunity.id);
+
+    // Before the Item-column fallback, 78 of these 96 candidate rows were
+    // silently dropped as spacer rows (verified live against this exact
+    // file) -- only the 18 rows with a real Description-cell note
+    // survived. 77 is the corrected, verified total.
+    expect(preview.rows).toHaveLength(77);
+    const byCategory = Object.fromEntries(
+      preview.categories.map((c) => [c, preview.rows.filter((r) => r.category === c).length]),
+    );
+    expect(byCategory["CAMERA_PLATFORM"]).toBe(20);
+    expect(byCategory["BOOTH_PLATFORM"]).toBe(14);
+    expect(byCategory["AUXILLARY_PLATFORM"]).toBe(10);
+
+    // A named position with NO Description-cell note at all -- this row
+    // would have been dropped entirely before the fallback.
+    const namedPosition = preview.rows.find((r) => r.item === "Right Endzone Camera Platform");
+    expect(namedPosition).toBeDefined();
+    expect(namedPosition?.description).toBe("Right Endzone Camera Platform");
+
+    // A row where Description DOES hold real (non-blank) text keeps using
+    // it verbatim, unaffected by the fallback -- sourceQuote's own
+    // one-real-cell citation guarantee depends on this staying untouched.
+    const sleeperNote = preview.rows.find((r) => r.item === "Section 203 - Main Far Left Slash Camera");
+    expect(sleeperNote?.description).toBe('Sleeper Floor Required 1"');
+  });
+
+  it("recognizes expocci-revised-rfp-withsgpspricing.xlsx despite its renamed headers (Location / Item, Notes, Planning Qty)", async () => {
+    const { opportunity, document } = await makeDocumentFrom(
+      ARENA_REVISED_WITH_PRICING_PATH,
+      "expocci-revised-rfp-withsgpspricing.xlsx",
+    );
+
+    // Before the header-synonym matching, this threw "doesn't contain a
+    // recognizable Pricing Schedule sheet" -- verified live against this
+    // exact file, which was otherwise byte-for-byte the same RFP shape.
+    const preview = await previewPricingImport(document.id, opportunity.id);
+
+    expect(preview.rows).toHaveLength(76);
+    const byCategory = Object.fromEntries(
+      preview.categories.map((c) => [c, preview.rows.filter((r) => r.category === c).length]),
+    );
+    expect(byCategory["CAMERA_PLATFORM"]).toBe(20);
+    expect(byCategory["BOOTH_PLATFORM"]).toBe(14);
+
+    // Confirms the renamed Unit/Planning-Qty columns resolved to the
+    // right column offsets, not just that a header row was found at all.
+    const priced = preview.rows.find((r) => r.item === "Right Endzone Camera Platform — Near");
+    expect(priced?.unit).toBe("SF");
+    expect(priced?.qty).toBe(1);
   });
 });
