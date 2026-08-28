@@ -17,7 +17,8 @@
 
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
-import { resolveHighlightableQuote } from "@/lib/ai/text-extraction";
+import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MIME } from "@/lib/ai/text-extraction";
+import { getDocumentBytes } from "@/lib/document-service";
 import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import type { VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
@@ -158,18 +159,31 @@ export async function proposeVendorQuoteLineItems(
   }
   const parsed = JSON.parse(content) as { items: VendorQuoteLineFromAI[] };
 
+  // Same "→" citation link this app already uses elsewhere (see
+  // citation.ts's citationHref) needs a real PDF page number, not just
+  // the quote string -- resolved once per document, same lazy PDF-only
+  // pattern as scope-coverage-service.ts's resolveCoverageGaps. A
+  // reviewer looking at a bare "Test and adjust" line can click through
+  // to the actual page and see the surrounding table for context this
+  // app can't itself infer.
+  const pageTexts = document.mimeType === PDF_MIME ? await extractPdfPageTexts((await getDocumentBytes(documentId)).bytes) : null;
+
   // Same discipline as scope-line-item-service.ts: resolve every quote
   // against the real extracted text so the review table's "Source" link
   // is a genuine excerpt, not whatever the model happened to return.
-  const items: VendorQuoteLine[] = parsed.items.map((item) => ({
-    description: item.description,
-    unit: item.unit || null,
-    qty: item.qty,
-    unitPrice: item.unitPrice,
-    totalPrice: item.totalPrice,
-    sourceQuote: resolveHighlightableQuote(document.extractedText!, item.sourceQuote),
-    unitCode: item.unitCode || null,
-  }));
+  const items: VendorQuoteLine[] = parsed.items.map((item) => {
+    const sourceQuote = resolveHighlightableQuote(document.extractedText!, item.sourceQuote);
+    return {
+      description: item.description,
+      unit: item.unit || null,
+      qty: item.qty,
+      unitPrice: item.unitPrice,
+      totalPrice: item.totalPrice,
+      sourceQuote,
+      unitCode: item.unitCode || null,
+      pageNumber: pageTexts ? locateQuotePage(pageTexts, sourceQuote) : null,
+    };
+  });
 
   return db.document.update({
     where: { id: documentId },

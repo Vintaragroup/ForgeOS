@@ -39,6 +39,14 @@ export interface VendorQuoteLine {
   // help distinguish otherwise-identical lines) AND to the human reviewer
   // in the match UI, but never treated as a deterministic key.
   unitCode: string | null;
+  // Real PDF page number this line's sourceQuote was found on (resolved
+  // via text-extraction.ts's locateQuotePage in vendor-quote-service.ts,
+  // same lazy PDF-only pattern as scope-coverage-service.ts's
+  // resolveCoverageGaps) -- null for non-PDF documents or a quote that
+  // couldn't be located. Feeds citation.ts's citationHref so a bare
+  // description like "Test and adjust" is one click away from the real
+  // page and its surrounding context.
+  pageNumber: number | null;
 }
 
 export type MatchConfidence = "high" | "medium" | "low";
@@ -51,6 +59,16 @@ export interface VendorLineMatch {
   // in the review UI so a reviewer can sanity-check the AI's reasoning
   // instead of just trusting a bare assignment.
   reasoning: string | null;
+  // True when the vendor's OWN description doesn't give enough
+  // information to know what physical item/scope this line is even
+  // pricing -- independent of whether it matches an estimate line item.
+  // A distinct judgment from confidence: a line can be clearly described
+  // but genuinely unmatched (low confidence, needsClarification false),
+  // or matched with high confidence to the wrong thing precisely because
+  // its description was too vague to catch (needsClarification true).
+  // Surfaced as a flag a reviewer can act on by asking the bidder, not
+  // guessed past.
+  needsClarification: boolean;
 }
 
 export interface MatchCandidate {
@@ -95,8 +113,13 @@ export const MATCH_SCHEMA = {
               description: "How confident you are in this match. \"low\" (or a null candidateIndex) means a human should review it.",
             },
             reasoning: { type: "string", description: REASONING_DESCRIPTION },
+            needsClarification: {
+              type: "boolean",
+              description:
+                "True if the vendor line's OWN description doesn't state enough about what it actually is to place it confidently, regardless of whether a candidate matched (e.g. a bare label like \"Test and adjust\" or \"Miscellaneous\" with no object stated). False for a clearly-described line even if it has no matching candidate.",
+            },
           },
-          required: ["vendorLineIndex", "candidateIndex", "confidence", "reasoning"],
+          required: ["vendorLineIndex", "candidateIndex", "confidence", "reasoning", "needsClarification"],
         },
       },
     },
@@ -116,6 +139,8 @@ For EACH vendor line, decide which candidate (if any) it's actually pricing, usi
 - The vendor's own unit/section code and the candidate's own section label, WHEN THEY GIVE YOU A REAL HINT -- these are two independent naming schemes with no guaranteed correspondence, so don't force a match on code/label alone if the description doesn't support it.
 
 Each candidate should be matched to at most one vendor line. When several vendor lines and several candidates share the exact same description with nothing else to distinguish them, do your best using price/quantity/order, but if you genuinely cannot tell them apart, leave the extras unmatched (confidence "low", candidateIndex null) rather than guessing -- a wrong auto-suggested price is worse than a visible "no match" that prompts a human to pick manually.
+
+Separately from matching, set needsClarification true for a vendor line whose OWN description doesn't state enough to know what it actually is -- a bare service/action label with no object ("Test and adjust", "Miscellaneous", "Adjustment") that could mean almost anything without more context from the vendor. This is about the description's own clarity, not whether it matched: a well-described line with no matching candidate is needsClarification false (it's just genuinely not on this estimate); a vague line is needsClarification true even if you found a plausible candidate for it, because the match itself is only a guess at what the vendor meant.
 
 Return one entry per vendor line, using its exact vendorLineIndex.`;
 
@@ -150,6 +175,7 @@ export interface RawVendorLineMatch {
   candidateIndex: number | null;
   confidence: MatchConfidence;
   reasoning: string;
+  needsClarification: boolean;
 }
 
 // documentId/opportunityId are for AI-usage tracking only (recordAiUsage);
@@ -164,7 +190,16 @@ export async function matchVendorQuoteLinesWithAi(
 ): Promise<VendorLineMatch[]> {
   if (vendorLines.length === 0) return [];
   if (candidates.length === 0) {
-    return vendorLines.map((vendorLine) => ({ vendorLine, lineItemId: null, confidence: null, reasoning: null }));
+    // Never called the AI, so clarity of the description was never
+    // judged -- false, not a guess, same "we don't know" posture as
+    // confidence: null here.
+    return vendorLines.map((vendorLine) => ({
+      vendorLine,
+      lineItemId: null,
+      confidence: null,
+      reasoning: null,
+      needsClarification: false,
+    }));
   }
 
   // Throws AiNotConfiguredError before any work -- same posture as every
@@ -234,7 +269,13 @@ export function resolveVendorLineMatches(
     // filename in scope-coverage-service.ts.
     const candidate = raw?.candidateIndex != null ? candidates[raw.candidateIndex] : undefined;
     const lineItemId = raw?.candidateIndex != null && candidate ? candidate.id : null;
-    return { vendorLine, lineItemId, confidence: raw?.confidence ?? null, reasoning: raw?.reasoning ?? null };
+    return {
+      vendorLine,
+      lineItemId,
+      confidence: raw?.confidence ?? null,
+      reasoning: raw?.reasoning ?? null,
+      needsClarification: raw?.needsClarification ?? false,
+    };
   });
 
   // Defense in depth: the prompt asks for at-most-one-vendor-line per

@@ -10,7 +10,22 @@ import {
 } from "@/lib/ai/vendor-match-ai-service";
 
 function vendorLine(description: string, unitPrice: number, unitCode: string | null = null): VendorQuoteLine {
-  return { description, unit: null, qty: null, unitPrice, totalPrice: null, sourceQuote: description, unitCode };
+  return {
+    description,
+    unit: null,
+    qty: null,
+    unitPrice,
+    totalPrice: null,
+    sourceQuote: description,
+    unitCode,
+    pageNumber: null,
+  };
+}
+
+function rawMatch(
+  overrides: Partial<RawVendorLineMatch> & Pick<RawVendorLineMatch, "vendorLineIndex" | "candidateIndex" | "confidence" | "reasoning">,
+): RawVendorLineMatch {
+  return { needsClarification: false, ...overrides };
 }
 
 function candidate(id: string, description: string, sectionLabel: string | null = null): MatchCandidate {
@@ -26,7 +41,9 @@ describe("matchVendorQuoteLinesWithAi", () => {
   it("returns every vendor line unmatched, with no OpenAI call, when there are no candidates", async () => {
     const lines = [vendorLine("Sleeper Floor", 840)];
     const matches = await matchVendorQuoteLinesWithAi(lines, [], "opp-1");
-    expect(matches).toEqual([{ vendorLine: lines[0], lineItemId: null, confidence: null, reasoning: null }]);
+    expect(matches).toEqual([
+      { vendorLine: lines[0], lineItemId: null, confidence: null, reasoning: null, needsClarification: false },
+    ]);
   });
 
   it("throws AiNotConfiguredError once there's real work to do -- .env.test deliberately has no OPENAI_API_KEY", async () => {
@@ -46,13 +63,19 @@ describe("resolveVendorLineMatches", () => {
     const lines = [vendorLine("Sleeper Floor", 840, "CAM-06")];
     const candidates = [candidate("li-1", "Sleeper Floor Required", "Section 203")];
     const raw: RawVendorLineMatch[] = [
-      { vendorLineIndex: 0, candidateIndex: 0, confidence: "high", reasoning: "Same item, matching price." },
+      rawMatch({ vendorLineIndex: 0, candidateIndex: 0, confidence: "high", reasoning: "Same item, matching price." }),
     ];
 
     const matches = resolveVendorLineMatches(raw, lines, candidates);
 
     expect(matches).toEqual([
-      { vendorLine: lines[0], lineItemId: "li-1", confidence: "high", reasoning: "Same item, matching price." },
+      {
+        vendorLine: lines[0],
+        lineItemId: "li-1",
+        confidence: "high",
+        reasoning: "Same item, matching price.",
+        needsClarification: false,
+      },
     ]);
   });
 
@@ -60,7 +83,7 @@ describe("resolveVendorLineMatches", () => {
     const lines = [vendorLine("Guardrail (Adjustable Height)", 425)];
     const candidates = [candidate("li-1", "Sleeper Floor Required")];
     const raw: RawVendorLineMatch[] = [
-      { vendorLineIndex: 0, candidateIndex: null, confidence: "low", reasoning: "No corresponding scope item." },
+      rawMatch({ vendorLineIndex: 0, candidateIndex: null, confidence: "low", reasoning: "No corresponding scope item." }),
     ];
 
     const matches = resolveVendorLineMatches(raw, lines, candidates);
@@ -71,7 +94,9 @@ describe("resolveVendorLineMatches", () => {
   it("drops a hallucinated/out-of-range candidateIndex instead of crashing or trusting it", () => {
     const lines = [vendorLine("Sleeper Floor", 840)];
     const candidates = [candidate("li-1", "Sleeper Floor Required")];
-    const raw: RawVendorLineMatch[] = [{ vendorLineIndex: 0, candidateIndex: 7, confidence: "high", reasoning: "x" }];
+    const raw: RawVendorLineMatch[] = [
+      rawMatch({ vendorLineIndex: 0, candidateIndex: 7, confidence: "high", reasoning: "x" }),
+    ];
 
     const matches = resolveVendorLineMatches(raw, lines, candidates);
 
@@ -83,19 +108,27 @@ describe("resolveVendorLineMatches", () => {
     const candidates = [candidate("li-1", "Sleeper Floor Required")];
     // Model only addressed vendor line 0, skipping line 1 -- a truncated
     // or incomplete response shouldn't crash the mapping.
-    const raw: RawVendorLineMatch[] = [{ vendorLineIndex: 0, candidateIndex: 0, confidence: "high", reasoning: "x" }];
+    const raw: RawVendorLineMatch[] = [
+      rawMatch({ vendorLineIndex: 0, candidateIndex: 0, confidence: "high", reasoning: "x" }),
+    ];
 
     const matches = resolveVendorLineMatches(raw, lines, candidates);
 
-    expect(matches[1]).toEqual({ vendorLine: lines[1], lineItemId: null, confidence: null, reasoning: null });
+    expect(matches[1]).toEqual({
+      vendorLine: lines[1],
+      lineItemId: null,
+      confidence: null,
+      reasoning: null,
+      needsClarification: false,
+    });
   });
 
   it("keeps only the highest-confidence claim when the model assigns the same candidate twice", () => {
     const lines = [vendorLine("Sleeper Floor", 840), vendorLine("Sleeper Floor Required for platform", 900)];
     const candidates = [candidate("li-1", "Sleeper Floor Required")];
     const raw: RawVendorLineMatch[] = [
-      { vendorLineIndex: 0, candidateIndex: 0, confidence: "medium", reasoning: "Plausible match." },
-      { vendorLineIndex: 1, candidateIndex: 0, confidence: "high", reasoning: "Stronger description overlap." },
+      rawMatch({ vendorLineIndex: 0, candidateIndex: 0, confidence: "medium", reasoning: "Plausible match." }),
+      rawMatch({ vendorLineIndex: 1, candidateIndex: 0, confidence: "high", reasoning: "Stronger description overlap." }),
     ];
 
     const matches = resolveVendorLineMatches(raw, lines, candidates);
@@ -108,13 +141,32 @@ describe("resolveVendorLineMatches", () => {
   it("returns one entry per vendor line, in vendor-line order, regardless of raw entry order", () => {
     const lines = [vendorLine("A", 1), vendorLine("B", 2), vendorLine("C", 3)];
     const raw: RawVendorLineMatch[] = [
-      { vendorLineIndex: 2, candidateIndex: null, confidence: "low", reasoning: "x" },
-      { vendorLineIndex: 0, candidateIndex: null, confidence: "low", reasoning: "x" },
+      rawMatch({ vendorLineIndex: 2, candidateIndex: null, confidence: "low", reasoning: "x" }),
+      rawMatch({ vendorLineIndex: 0, candidateIndex: null, confidence: "low", reasoning: "x" }),
     ];
 
     const matches = resolveVendorLineMatches(raw, lines, []);
 
     expect(matches.map((m) => m.vendorLine.description)).toEqual(["A", "B", "C"]);
+  });
+
+  it("carries needsClarification through from the raw match for a vague vendor line", () => {
+    const lines = [vendorLine("Test and adjust", 189000)];
+    const candidates = [candidate("li-1", "Sleeper Floor Required")];
+    const raw: RawVendorLineMatch[] = [
+      rawMatch({
+        vendorLineIndex: 0,
+        candidateIndex: null,
+        confidence: "low",
+        reasoning: "No object stated -- unclear what is being tested or adjusted.",
+        needsClarification: true,
+      }),
+    ];
+
+    const matches = resolveVendorLineMatches(raw, lines, candidates);
+
+    expect(matches[0].needsClarification).toBe(true);
+    expect(matches[0].lineItemId).toBeNull();
   });
 });
 
@@ -126,6 +178,7 @@ describe("MATCH_SCHEMA", () => {
       "candidateIndex",
       "confidence",
       "reasoning",
+      "needsClarification",
     ]);
     expect(MATCH_SCHEMA.schema.properties.matches.items.additionalProperties).toBe(false);
   });

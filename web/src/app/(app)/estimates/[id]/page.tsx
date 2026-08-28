@@ -419,6 +419,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                 "bid-packages": (
                   <BidPackagesTab
                     estimateId={estimate.id}
+                    opportunityId={estimate.opportunity.id}
                     version={currentVersion}
                     vendorQuoteDocuments={vendorQuoteDocuments}
                   />
@@ -1069,10 +1070,12 @@ function OptionsTab({
 // log).
 function BidPackagesTab({
   estimateId,
+  opportunityId,
   version,
   vendorQuoteDocuments,
 }: {
   estimateId: string;
+  opportunityId: string;
   version: VersionWithSections;
   vendorQuoteDocuments: { id: string; filename: string }[];
 }) {
@@ -1105,6 +1108,7 @@ function BidPackagesTab({
           <BidPackageCard
             key={bidPackage.id}
             estimateId={estimateId}
+            opportunityId={opportunityId}
             versionId={version.id}
             bidPackage={bidPackage}
             vendorQuoteDocuments={vendorQuoteDocuments}
@@ -1144,12 +1148,14 @@ function vendorLineQtyUnit(vendorLine: { qty: number | null; unit: string | null
 
 function BidPackageCard({
   estimateId,
+  opportunityId,
   versionId,
   bidPackage,
   vendorQuoteDocuments,
   allLineItems,
 }: {
   estimateId: string;
+  opportunityId: string;
   versionId: string;
   bidPackage: VersionWithSections["bidPackages"][number];
   vendorQuoteDocuments: { id: string; filename: string }[];
@@ -1323,6 +1329,16 @@ function BidPackageCard({
                 const alreadyApplied = matchedItem?.documentId === quoteDocument.id;
                 const applyWithIds = applyVendorMatchAction.bind(null, estimateId, versionId, bidPackage.id);
                 const qtyUnit = vendorLineQtyUnit(match.vendorLine);
+                // Jumps to the real page in the source document (same
+                // citation.ts pattern used on the Opportunity page) --
+                // gives a reviewer the surrounding table/context a bare
+                // description like "Test and adjust" can't carry on its
+                // own. Null (no link, plain text) for a non-PDF document
+                // or a quote/page that couldn't be resolved.
+                const sourceHref = citationHref(opportunityId, quoteDocument, {
+                  sourceQuote: match.vendorLine.sourceQuote,
+                  pageNumber: match.vendorLine.pageNumber,
+                });
                 return (
                   <tr key={i} className="border-t border-neutral-100">
                     <td className="px-3 py-2 align-top">
@@ -1333,12 +1349,26 @@ function BidPackageCard({
                           {match.confidence}
                         </span>
                       )}
+                      {match.needsClarification && (
+                        <span
+                          className="mr-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700"
+                          title="This vendor line's own description doesn't say enough to place it confidently -- worth asking the bidder to clarify."
+                        >
+                          needs clarification
+                        </span>
+                      )}
                       {match.vendorLine.unitCode && (
                         <span className="mr-1.5 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">
                           {match.vendorLine.unitCode}
                         </span>
                       )}
-                      {match.vendorLine.description}
+                      {sourceHref ? (
+                        <Link href={sourceHref} className="text-brand-navy hover:underline">
+                          {match.vendorLine.description}
+                        </Link>
+                      ) : (
+                        match.vendorLine.description
+                      )}
                       {qtyUnit && <span className="ml-1.5 text-xs text-neutral-400">({qtyUnit})</span>}
                     </td>
                     <td className="px-3 py-2 text-right align-top">{money(match.vendorLine.unitPrice)}</td>
