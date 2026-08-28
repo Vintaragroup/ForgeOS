@@ -35,6 +35,7 @@
 
 import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
+import { significantTokens } from "@/lib/catalog-match-service";
 
 export interface VendorQuoteLine {
   description: string;
@@ -463,4 +464,52 @@ export function resolveProposedVendorSections(
       (proposal) =>
         proposal.vendorLineIndices.length > 0 && !existingNamesLower.has(proposal.name.trim().toLowerCase()),
     );
+}
+
+// Deterministic, non-AI fallback for the "Matched to" dropdown when the
+// holistic AI pass found genuinely no candidate at all for a vendor line
+// (both lineItemId and suggestedLineItemId are null) -- confirmed live
+// that reviewers were having to hand-search a 30-40+ item dropdown for
+// these with zero starting point. Reuses catalog-match-service.ts's own
+// tokenizer (its header comment already anticipated this exact reuse)
+// and ports the symmetric Jaccard scorer the old vendor-match-service.ts
+// used before the AI matcher replaced it -- right tool for this specific
+// job, since a vendor line ("Sleeper Floor") and a candidate line item
+// ("Sleeper Floor Required") are both short, similarly-shaped phrases
+// needing "how much of EITHER side's vocabulary is shared," not
+// catalog-match-service's own asymmetric containment (built for a short
+// canonical catalog name against a long narrative description).
+//
+// This is ONLY a UI default to save a manual search -- it never sets
+// confidence/needsClarification, never feeds proposedSections or
+// bulkGroups, and a human still has to click Apply. A wrong pre-filled
+// dropdown selection a reviewer catches and corrects is harmless; the
+// AI's own real judgment (confidence, reasoning) is left completely
+// alone for every line this fallback isn't even reached for.
+const FALLBACK_MIN_SCORE = 0.34;
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection++;
+  return intersection / (a.size + b.size - intersection);
+}
+
+export function findClosestCandidateId(
+  description: string,
+  candidates: { id: string; description: string }[],
+): string | null {
+  const vendorTokens = new Set(significantTokens(description));
+  if (vendorTokens.size === 0) return null;
+
+  let bestId: string | null = null;
+  let bestScore = 0;
+  for (const candidate of candidates) {
+    const score = jaccard(vendorTokens, new Set(significantTokens(candidate.description)));
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = candidate.id;
+    }
+  }
+  return bestScore >= FALLBACK_MIN_SCORE ? bestId : null;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import {
+  findClosestCandidateId,
   MATCH_SCHEMA,
   matchVendorQuoteLinesWithAi,
   resolveProposedVendorSections,
@@ -302,5 +303,37 @@ describe("MATCH_SCHEMA", () => {
     ]);
     expect(MATCH_SCHEMA.schema.properties.proposedSections.items.additionalProperties).toBe(false);
     expect(MATCH_SCHEMA.schema.required).toEqual(["matches", "proposedSections"]);
+  });
+});
+
+describe("findClosestCandidateId", () => {
+  // Same real fixture pair the deleted pre-AI vendor-match-service.ts
+  // was tuned against: CAM-06's "Sleeper Floor" line vs. the existing
+  // "Sleeper Floor Required" scope line item -- ported here as the
+  // fallback default for when the AI found no candidate at all.
+  it("finds a real vendor line's corresponding candidate by shared vocabulary", () => {
+    const id = findClosestCandidateId("Sleeper Floor", [
+      { id: "li-1", description: "Sleeper Floor Required" },
+    ]);
+    expect(id).toBe("li-1");
+  });
+
+  it("returns null for a genuinely unrelated vendor line -- sharing zero real vocabulary must stay unmatched, not guessed at", () => {
+    const id = findClosestCandidateId("Guardrail (Adjustable Height)", [
+      { id: "li-1", description: "Sleeper Floor Required" },
+    ]);
+    expect(id).toBeNull();
+  });
+
+  it("picks the candidate with the highest overlap when more than one is plausible", () => {
+    const id = findClosestCandidateId("Sleeper Floor Required for platform", [
+      { id: "li-1", description: "Sleeper Floor Required" },
+      { id: "li-2", description: "Guardrail (Adjustable Height)" },
+    ]);
+    expect(id).toBe("li-1");
+  });
+
+  it("returns null when there are no candidates", () => {
+    expect(findClosestCandidateId("Sleeper Floor", [])).toBeNull();
   });
 });

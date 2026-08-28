@@ -55,7 +55,7 @@ import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/componen
 import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
 import { SectionScopedForm } from "@/components/section-scoped-form";
-import type { ProposedVendorSection, VendorLineMatch } from "@/lib/ai/vendor-match-ai-service";
+import { findClosestCandidateId, type ProposedVendorSection, type VendorLineMatch } from "@/lib/ai/vendor-match-ai-service";
 import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
@@ -1492,6 +1492,17 @@ function BidPackageCard({
                   { sourceQuote: match.vendorLine.sourceQuote, pageNumber: match.vendorLine.pageNumber },
                   `/estimates/${estimateId}?tab=bid-packages#bid-package-${bidPackage.id}`,
                 );
+                // Deterministic, non-AI last resort so the dropdown is
+                // never a cold "— choose one —" against 30-40+ items with
+                // no starting point -- only reached when the AI itself
+                // found NOTHING (see findClosestCandidateId's own header
+                // comment on why this is safe: a UI default a reviewer
+                // can override, never a confidence claim or an
+                // auto-applied price).
+                const fallbackCandidateId =
+                  !match.lineItemId && !match.suggestedLineItemId
+                    ? findClosestCandidateId(match.vendorLine.description, allLineItems)
+                    : null;
                 return (
                   <tr key={i} className="border-t border-neutral-100">
                     <td className="px-3 py-2 align-top">
@@ -1532,10 +1543,10 @@ function BidPackageCard({
                       <select
                         name="lineItemId"
                         form={`apply-match-${i}`}
-                        defaultValue={match.lineItemId ?? match.suggestedLineItemId ?? ""}
+                        defaultValue={match.lineItemId ?? match.suggestedLineItemId ?? fallbackCandidateId ?? ""}
                         className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
                       >
-                        <option value="" disabled={!!(match.lineItemId ?? match.suggestedLineItemId)}>
+                        <option value="" disabled={!!(match.lineItemId ?? match.suggestedLineItemId ?? fallbackCandidateId)}>
                           — choose one —
                         </option>
                         {allLineItems.map((li) => (
@@ -1550,7 +1561,10 @@ function BidPackageCard({
                       {!match.lineItemId && match.suggestedLineItemId && (
                         <p className="mt-1.5 text-xs text-amber-700">Suggested match pre-filled — review before applying</p>
                       )}
-                      {!match.lineItemId && !match.suggestedLineItemId && (
+                      {!match.lineItemId && !match.suggestedLineItemId && fallbackCandidateId && (
+                        <p className="mt-1.5 text-xs text-amber-700">Best guess by description similarity — review before applying</p>
+                      )}
+                      {!match.lineItemId && !match.suggestedLineItemId && !fallbackCandidateId && (
                         <p className="mt-1.5 text-xs text-amber-700">No match — review and pick one manually</p>
                       )}
                     </td>
