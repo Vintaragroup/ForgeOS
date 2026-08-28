@@ -45,7 +45,14 @@ describe("matchVendorQuoteLinesWithAi", () => {
     const result = await matchVendorQuoteLinesWithAi(lines, [], "opp-1");
     expect(result).toEqual({
       matches: [
-        { vendorLine: lines[0], lineItemId: null, confidence: null, reasoning: null, needsClarification: false },
+        {
+          vendorLine: lines[0],
+          lineItemId: null,
+          confidence: null,
+          reasoning: null,
+          needsClarification: false,
+          suggestedLineItemId: null,
+        },
       ],
       proposedSections: [],
     });
@@ -80,6 +87,7 @@ describe("resolveVendorLineMatches", () => {
         confidence: "high",
         reasoning: "Same item, matching price.",
         needsClarification: false,
+        suggestedLineItemId: "li-1",
       },
     ]);
   });
@@ -125,6 +133,7 @@ describe("resolveVendorLineMatches", () => {
       confidence: null,
       reasoning: null,
       needsClarification: false,
+      suggestedLineItemId: null,
     });
   });
 
@@ -141,6 +150,25 @@ describe("resolveVendorLineMatches", () => {
     expect(matches[1].lineItemId).toBe("li-1");
     expect(matches[0].lineItemId).toBeNull();
     expect(matches[0].confidence).toBe("low");
+  });
+
+  it("retains suggestedLineItemId on a dedup loser even though lineItemId is nulled out", () => {
+    const lines = [vendorLine("Sleeper Floor", 840), vendorLine("Sleeper Floor Required for platform", 900)];
+    const candidates = [candidate("li-1", "Sleeper Floor Required")];
+    const raw: RawVendorLineMatch[] = [
+      rawMatch({ vendorLineIndex: 0, candidateIndex: 0, confidence: "medium", reasoning: "Plausible match." }),
+      rawMatch({ vendorLineIndex: 1, candidateIndex: 0, confidence: "high", reasoning: "Stronger description overlap." }),
+    ];
+
+    const matches = resolveVendorLineMatches(raw, lines, candidates);
+
+    // Loser (index 0): lineItemId nulled by dedup, but the pre-dedup
+    // suggestion survives so the UI can still pre-fill/group with it.
+    expect(matches[0].lineItemId).toBeNull();
+    expect(matches[0].suggestedLineItemId).toBe("li-1");
+    // Winner (index 1): both fields point at the same real match.
+    expect(matches[1].lineItemId).toBe("li-1");
+    expect(matches[1].suggestedLineItemId).toBe("li-1");
   });
 
   it("returns one entry per vendor line, in vendor-line order, regardless of raw entry order", () => {

@@ -6,6 +6,7 @@ import { resetMockCookies } from "@/test/setup";
 import type { ProposedVendorSection, VendorLineMatch, VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
 import {
   applyVendorMatchAction,
+  applyVendorMatchGroupAction,
   attachVendorQuoteDocumentAction,
   commitProposedVendorSectionAction,
   createBidPackageAction,
@@ -16,12 +17,20 @@ import {
   removeLineItemFromBidPackageAction,
 } from "./bid-package-actions";
 
-function vendorLine(description: string, unitPrice: number): VendorQuoteLine {
-  return { description, unit: "EA", qty: 1, unitPrice, totalPrice: unitPrice, sourceQuote: description, unitCode: "One Time Service Costs", pageNumber: 1 };
+function vendorLine(description: string, unitPrice: number, qty: number | null = 1): VendorQuoteLine {
+  return { description, unit: "EA", qty, unitPrice, totalPrice: unitPrice, sourceQuote: description, unitCode: "One Time Service Costs", pageNumber: 1 };
 }
 
-function match(vendorLine: VendorQuoteLine): VendorLineMatch {
-  return { vendorLine, lineItemId: null, confidence: "low", reasoning: "No candidate matches.", needsClarification: true };
+function match(vendorLine: VendorQuoteLine, overrides: Partial<VendorLineMatch> = {}): VendorLineMatch {
+  return {
+    vendorLine,
+    lineItemId: null,
+    confidence: "low",
+    reasoning: "No candidate matches.",
+    needsClarification: true,
+    suggestedLineItemId: null,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -219,6 +228,114 @@ describe("applyVendorMatchAction", () => {
   });
 });
 
+describe("applyVendorMatchGroupAction", () => {
+  async function makePackageWithGroupedMatches() {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    // Two vendor lines the AI's dedup logic already tied to the same
+    // candidate (item.id) -- index 0 "won" (lineItemId set), index 1
+    // "lost" (lineItemId nulled, suggestedLineItemId retained). A third,
+    // unrelated vendor line with no shared target at all.
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Non Slip Paint [CAM-01]", 450, 1), {
+        lineItemId: item.id,
+        suggestedLineItemId: item.id,
+        confidence: "medium",
+        reasoning: "Non Slip Paint matches 'Slip-resistant flooring'.",
+        needsClarification: false,
+      }),
+      match(vendorLine("Non Slip Paint [CAM-02]", 450, 1), {
+        lineItemId: null,
+        suggestedLineItemId: item.id,
+        confidence: "low",
+        reasoning: "Non Slip Paint matches 'Slip-resistant flooring'.",
+        needsClarification: false,
+      }),
+      match(vendorLine("Soft Goods [CAM-03]", 800, 1), {
+        lineItemId: null,
+        suggestedLineItemId: null,
+        confidence: "low",
+        reasoning: "Soft Goods has no clear match.",
+        needsClarification: false,
+      }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+    return { admin, estimate, version, item, bidPackage, document };
+  }
+
+  it("sums qty/price across the group onto the target line item and patches matchResult", async () => {
+    const { estimate, version, item, bidPackage, document } = await makePackageWithGroupedMatches();
+
+    const formData = new FormData();
+    formData.set("lineItemId", item.id);
+    formData.set("matchIndices", "0,1");
+    formData.set("documentId", document.id);
+    await applyVendorMatchGroupAction(estimate.id, version.id, bidPackage.id, formData);
+
+    const updatedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(updatedItem.qty.toNumber()).toBe(2);
+    expect(updatedItem.unitCost.toNumber()).toBe(450);
+    expect(updatedItem.totalCost.toNumber()).toBe(900);
+    expect(updatedItem.documentId).toBe(document.id);
+    expect(updatedItem.isDraft).toBe(false);
+    expect(updatedItem.bidPackageId).toBe(bidPackage.id);
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    const updatedMatches = updated.matchResult as unknown as VendorLineMatch[];
+    expect(updatedMatches[0].lineItemId).toBe(item.id);
+    expect(updatedMatches[0].confidence).toBe("high");
+    expect(updatedMatches[1].lineItemId).toBe(item.id);
+    expect(updatedMatches[1].confidence).toBe("high");
+    // Unrelated third match untouched.
+    expect(updatedMatches[2].lineItemId).toBeNull();
+
+    const updatedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(updatedVersion.totalCost.toNumber()).toBe(900);
+  });
+
+  it("rejects a matchIndices entry that doesn't actually share the claimed target", async () => {
+    const { estimate, version, item, bidPackage, document } = await makePackageWithGroupedMatches();
+
+    const formData = new FormData();
+    formData.set("lineItemId", item.id);
+    // Index 2 targets nothing (suggestedLineItemId null) -- once dropped,
+    // only index 0 is left, below the 2-line minimum.
+    formData.set("matchIndices", "0,2");
+    formData.set("documentId", document.id);
+    await expect(applyVendorMatchGroupAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
+      "no longer available",
+    );
+
+    const unchanged = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(unchanged.unitCost.toNumber()).toBe(0);
+  });
+
+  it("rejects fewer than two matchIndices", async () => {
+    const { estimate, version, item, bidPackage, document } = await makePackageWithGroupedMatches();
+
+    const formData = new FormData();
+    formData.set("lineItemId", item.id);
+    formData.set("matchIndices", "0");
+    formData.set("documentId", document.id);
+    await expect(applyVendorMatchGroupAction(estimate.id, version.id, bidPackage.id, formData)).rejects.toThrow(
+      "Select at least two",
+    );
+  });
+});
+
 describe("commitProposedVendorSectionAction", () => {
   async function makePackageWithProposal() {
     const admin = await makeAdmin();
@@ -237,7 +354,7 @@ describe("commitProposedVendorSectionAction", () => {
       },
     });
     const lines = [vendorLine("Test and adjust", 189000), vendorLine("Trucking", 25000)];
-    const matches: VendorLineMatch[] = lines.map(match);
+    const matches: VendorLineMatch[] = lines.map((vl) => match(vl));
     const proposedSections: ProposedVendorSection[] = [
       { name: "One Time Service Costs", lineType: "FEE", reasoning: "Real cost category, no matching section.", vendorLineIndices: [0, 1] },
     ];

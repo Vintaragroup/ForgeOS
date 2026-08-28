@@ -234,6 +234,86 @@ export async function applyVendorMatchAction(
   revalidatePath(`/estimates/${estimateId}`);
 }
 
+// Applies several vendor lines to ONE line item at once, summing their
+// qty/price -- for the real-world case (confirmed live on the ShowRig
+// quote) where a vendor bills the same material separately per position
+// (CAM-01..CAM-20 "Non Slip Paint") while the estimate has only one line
+// for it. matchVendorQuoteLinesWithAi's own dedup logic already refuses
+// to guess which single vendor line should win that match, leaving every
+// non-winner's lineItemId null (see resolveVendorLineMatches's own
+// comment) but preserving suggestedLineItemId -- the UI groups by that
+// shared suggestion and offers this action instead of N individual
+// Apply clicks.
+//
+// matchIndices arrives as a plain hidden form field, so -- same
+// cross-resource-ID discipline as every other action in this file --
+// each index's own match is re-checked against the persisted matchResult
+// to confirm it actually shares the claimed target before any of it is
+// trusted, rather than assuming a submitted grouping is honest.
+export async function applyVendorMatchGroupAction(
+  estimateId: string,
+  versionId: string,
+  bidPackageId: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await assertBidPackageBelongsToEstimate(estimateId, bidPackageId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+
+  const lineItemId = String(formData.get("lineItemId") ?? "").trim();
+  const documentId = String(formData.get("documentId") ?? "").trim();
+  const matchIndices = String(formData.get("matchIndices") ?? "")
+    .split(",")
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n >= 0);
+  if (!lineItemId) throw new Error("Missing target line item.");
+  if (!documentId) throw new Error("Missing vendor quote document reference.");
+  if (matchIndices.length < 2) throw new Error("Select at least two vendor lines to bulk apply.");
+  await db.lineItem.findFirstOrThrow({ where: { id: lineItemId, section: { estimateVersionId: versionId } } });
+
+  const bidPackage = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackageId } });
+  const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? [];
+
+  // Every claimed index must be a real match row that actually shares
+  // this target -- dropped, not trusted, the same posture the rest of
+  // this file uses for hallucinated/tampered ids.
+  const validIndices = matchIndices.filter((i) => {
+    const m = matches[i];
+    return !!m && (m.lineItemId ?? m.suggestedLineItemId) === lineItemId;
+  });
+  if (validIndices.length < 2) {
+    throw new Error("These vendor lines are no longer available to bulk apply -- try Re-extract.");
+  }
+
+  const vendorLines: VendorQuoteLine[] = validIndices.map((i) => matches[i].vendorLine);
+  const qty = vendorLines.reduce((sum, vl) => sum + (vl.qty ?? 1), 0);
+  const total = vendorLines.reduce((sum, vl) => sum + vl.unitPrice, 0);
+  const unitCost = total / qty;
+  const sourceQuote = vendorLines.map((vl) => vl.sourceQuote).join(" | ");
+
+  await updateLineItem(opportunityId, lineItemId, { qty, unitCost, documentId, sourceQuote, isDraft: false, bidPackageId });
+
+  const updatedMatches = matches.map((m, i) =>
+    validIndices.includes(i)
+      ? {
+          ...m,
+          lineItemId,
+          confidence: "high" as const,
+          reasoning: `Bulk-applied with ${validIndices.length - 1} other matching vendor line(s), summing to $${total.toFixed(2)}.`,
+          needsClarification: false,
+        }
+      : m,
+  );
+  await db.bidPackage.update({
+    where: { id: bidPackageId },
+    data: { matchResult: updatedMatches as unknown as Prisma.InputJsonValue },
+  });
+
+  await recomputeVersionTotals(versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
 // Turns one AI-proposed section (vendor-match-ai-service.ts's own header
 // comment explains why this is judged in the same matching call, not a
 // second pass) into a real EstimateSection + priced, non-draft

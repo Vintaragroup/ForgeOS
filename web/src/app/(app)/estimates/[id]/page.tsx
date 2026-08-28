@@ -61,6 +61,7 @@ import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
   applyVendorMatchAction,
+  applyVendorMatchGroupAction,
   attachVendorQuoteDocumentAction,
   commitProposedVendorSectionAction,
   createBidPackageAction,
@@ -1187,6 +1188,26 @@ function BidPackageCard({
     (li) => !matchedLineItemIds.has(li.id) && li.documentId !== quoteDocument?.id,
   );
 
+  // Groups vendor lines that all point at the SAME target -- either
+  // already matched (lineItemId) or the AI's pre-dedup suggestion
+  // (suggestedLineItemId, see resolveVendorLineMatches's own header
+  // comment) -- so a reviewer can apply all of them at once instead of
+  // clicking through each one individually. Only worth surfacing when 2+
+  // vendor lines actually share a target; a lone match is just the
+  // normal per-row Apply flow.
+  const bulkGroups: { targetId: string; matchIndices: number[] }[] = (() => {
+    if (!matches) return [];
+    const byTarget = new Map<string, number[]>();
+    matches.forEach((m, i) => {
+      const targetId = m.lineItemId ?? m.suggestedLineItemId;
+      if (!targetId) return;
+      byTarget.set(targetId, [...(byTarget.get(targetId) ?? []), i]);
+    });
+    return Array.from(byTarget.entries())
+      .filter(([, indices]) => indices.length > 1)
+      .map(([targetId, matchIndices]) => ({ targetId, matchIndices }));
+  })();
+
   return (
     <Card id={`bid-package-${bidPackage.id}`} className="p-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -1332,6 +1353,44 @@ function BidPackageCard({
         </div>
       )}
 
+      {quoteDocument && !isExtracting && bulkGroups.length > 0 && (
+        <div className="border-t border-neutral-200 pt-4">
+          <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Bulk match suggestions</h4>
+          <div className="flex flex-col gap-3">
+            {bulkGroups.map((group) => {
+              const targetItem = allLineItems.find((li) => li.id === group.targetId);
+              const vendorLines = group.matchIndices
+                .map((i) => matches?.[i]?.vendorLine)
+                .filter((vl): vl is NonNullable<typeof vl> => !!vl);
+              const total = vendorLines.reduce((sum, vl) => sum + vl.unitPrice, 0);
+              const alreadyApplied = targetItem?.documentId === quoteDocument.id;
+              const applyGroupWithIds = applyVendorMatchGroupAction.bind(null, estimateId, versionId, bidPackage.id);
+              return (
+                <div key={group.targetId} className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                  <p className="text-sm font-medium">
+                    {vendorLines.length} vendor lines match &quot;{targetItem?.description ?? "this line item"}&quot;{" "}
+                    <span className="font-normal text-neutral-500">({money(total)} total)</span>
+                  </p>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    {vendorLines
+                      .map((vl) => (vl.unitCode ? `${vl.description} [${vl.unitCode}]` : vl.description))
+                      .join(", ")}
+                  </p>
+                  <form action={applyGroupWithIds} className="mt-3">
+                    <input type="hidden" name="lineItemId" value={group.targetId} />
+                    <input type="hidden" name="matchIndices" value={group.matchIndices.join(",")} />
+                    <input type="hidden" name="documentId" value={quoteDocument.id} />
+                    <Button variant="secondary" type="submit">
+                      {alreadyApplied ? "Re-apply" : "Apply"} all {vendorLines.length} (sum {money(total)})
+                    </Button>
+                  </form>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {quoteDocument && !isExtracting && matches && (
         <div className="border-t border-neutral-200 pt-4">
           <div className="mb-3 flex items-center justify-between gap-4">
@@ -1427,10 +1486,10 @@ function BidPackageCard({
                       <select
                         name="lineItemId"
                         form={`apply-match-${i}`}
-                        defaultValue={match.lineItemId ?? ""}
+                        defaultValue={match.lineItemId ?? match.suggestedLineItemId ?? ""}
                         className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
                       >
-                        <option value="" disabled={!!match.lineItemId}>
+                        <option value="" disabled={!!(match.lineItemId ?? match.suggestedLineItemId)}>
                           — choose one —
                         </option>
                         {allLineItems.map((li) => (
@@ -1442,7 +1501,10 @@ function BidPackageCard({
                         ))}
                       </select>
                       {match.reasoning && <p className="mt-1.5 text-xs text-neutral-400">{match.reasoning}</p>}
-                      {!match.lineItemId && (
+                      {!match.lineItemId && match.suggestedLineItemId && (
+                        <p className="mt-1.5 text-xs text-amber-700">Suggested match pre-filled — review before applying</p>
+                      )}
+                      {!match.lineItemId && !match.suggestedLineItemId && (
                         <p className="mt-1.5 text-xs text-amber-700">No match — review and pick one manually</p>
                       )}
                     </td>

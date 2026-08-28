@@ -79,6 +79,16 @@ export interface VendorLineMatch {
   // Surfaced as a flag a reviewer can act on by asking the bidder, not
   // guessed past.
   needsClarification: boolean;
+  // The candidate id this vendor line was matched to BEFORE dedup, kept
+  // even when lineItemId above was nulled out for losing a
+  // duplicate-match tiebreak against another vendor line pointing at the
+  // same candidate (see resolveVendorLineMatches below). Powers two
+  // things: pre-selecting this candidate as a starting suggestion in the
+  // "Matched to" dropdown even when there's no confident winner, and
+  // grouping vendor lines by shared target for a bulk-apply action --
+  // both need the pre-dedup id, which otherwise has nowhere to live once
+  // dedup discards it.
+  suggestedLineItemId: string | null;
 }
 
 export interface MatchCandidate {
@@ -285,6 +295,7 @@ export async function matchVendorQuoteLinesWithAi(
         confidence: null,
         reasoning: null,
         needsClarification: false,
+        suggestedLineItemId: null,
       })),
       proposedSections: [],
     };
@@ -366,6 +377,7 @@ export function resolveVendorLineMatches(
       confidence: raw?.confidence ?? null,
       reasoning: raw?.reasoning ?? null,
       needsClarification: raw?.needsClarification ?? false,
+      suggestedLineItemId: lineItemId,
     };
   });
 
