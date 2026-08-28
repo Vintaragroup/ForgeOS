@@ -30,6 +30,11 @@ export interface ParsedPricingRow {
   unit: string;
   qty: number;
   catalogMatch: CatalogMatch | null;
+  // A vendor/RFP-assigned position code for this exact row (e.g.
+  // "CAM-01"), when the sheet has a Ref./Reference column -- see
+  // LineItem.positionCode's own schema comment. Null when the sheet has
+  // no such column, or the cell is blank for this row.
+  positionCode: string | null;
 }
 
 export interface PricingImportPreview {
@@ -55,6 +60,11 @@ interface ColumnMap {
   description: number;
   unit: number;
   qty: number;
+  // A "Ref."/"Reference" column holding the vendor's own position code
+  // for each row (e.g. "CAM-01") -- optional, unlike the required
+  // columns above, since most pricing schedules don't have one. See
+  // LineItem.positionCode's own schema comment for what this unlocks.
+  refCode: number | null;
 }
 
 // A row counts as THE header row only when category/description/unit/qty
@@ -67,6 +77,7 @@ function findColumnMap(row: ExcelJS.Row): ColumnMap | null {
   let description: number | null = null;
   let unit: number | null = null;
   let qty: number | null = null;
+  let refCode: number | null = null;
 
   row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
     const text = normalizeHeader(cell.value);
@@ -81,10 +92,11 @@ function findColumnMap(row: ExcelJS.Row): ColumnMap | null {
     else if (text === "unit") unit = colNumber;
     else if (text === "qty" || text === "planning qty") qty = colNumber;
     else if (item === null && (text.startsWith("item") || text === "location / item")) item = colNumber;
+    else if (refCode === null && (text === "ref." || text === "ref" || text === "reference")) refCode = colNumber;
   });
 
   if (category === null || description === null || unit === null || qty === null) return null;
-  return { category, item, description, unit, qty };
+  return { category, item, description, unit, qty, refCode };
 }
 
 function findPricingSheet(
@@ -160,6 +172,7 @@ export async function previewPricingImport(documentId: string, opportunityId: st
 
     const category = cellText(row.getCell(columns.category).value) || lastCategory;
     lastCategory = category;
+    const positionCode = columns.refCode ? cellText(row.getCell(columns.refCode).value) || null : null;
 
     rows.push({
       rowNumber,
@@ -172,6 +185,7 @@ export async function previewPricingImport(documentId: string, opportunityId: st
       // used item verbatim) -- otherwise this would duplicate it, e.g.
       // "Right Endzone Camera Platform Right Endzone Camera Platform".
       catalogMatch: matchDescription(item && item !== description ? `${item} ${description}` : description, catalog),
+      positionCode,
     });
   }
 
@@ -311,6 +325,7 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
         // highlight (document-view-service.ts's highlightSpreadsheetCell)
         // always finds a real, exact match.
         sourceQuote: row.description,
+        positionCode: row.positionCode,
       })),
     );
     created.push({ section, count: lineItems.length });

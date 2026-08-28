@@ -146,6 +146,7 @@ async function runVendorExtractionAndMatch(params: {
       sectionLabel: li.section.groupLabel ?? li.section.name,
       qty: li.qty.toNumber(),
       unit: li.unit,
+      positionCode: li.positionCode,
     }));
     const { matches, proposedSections } = await matchVendorQuoteLinesWithAi(
       vendorLines,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import {
   findClosestCandidateId,
+  findPositionCodeMatches,
   MATCH_SCHEMA,
   matchVendorQuoteLinesWithAi,
   resolveProposedVendorSections,
@@ -32,8 +33,13 @@ function rawMatch(
   return { needsClarification: false, ...overrides };
 }
 
-function candidate(id: string, description: string, sectionLabel: string | null = null): MatchCandidate {
-  return { id, description, sectionLabel, qty: null, unit: null };
+function candidate(
+  id: string,
+  description: string,
+  sectionLabel: string | null = null,
+  positionCode: string | null = null,
+): MatchCandidate {
+  return { id, description, sectionLabel, qty: null, unit: null, positionCode };
 }
 
 describe("matchVendorQuoteLinesWithAi", () => {
@@ -68,6 +74,108 @@ describe("matchVendorQuoteLinesWithAi", () => {
         "opp-1",
       ),
     ).rejects.toBeInstanceOf(AiNotConfiguredError);
+  });
+
+  // Real fixture pair: ShowRig's own quote uses "CAM-01" the same way
+  // Arena's revised RFP response's own "Ref." column does (see
+  // pricing-import-service.ts's Ref.-column capture) -- once both sides
+  // carry that code, matching it needs no AI judgment call at all.
+  it("resolves every vendor line by shared position code, with no OpenAI call needed, when every line has one", async () => {
+    const lines = [
+      vendorLine("Non Slip Paint", 450, "CAM-01"),
+      vendorLine("Guardrail (Adjustable Height)", 425, "CAM-01"),
+    ];
+    const candidates = [candidate("li-1", "Right Endzone Camera Platform — Near", "Section 1", "CAM-01")];
+
+    // Would throw AiNotConfiguredError if this reached the AI (same
+    // env.test guarantee the test above relies on) -- resolving cleanly
+    // proves the position-code path is what actually handled this.
+    const result = await matchVendorQuoteLinesWithAi(lines, candidates, "opp-1");
+
+    expect(result.matches).toEqual([
+      {
+        vendorLine: lines[0],
+        lineItemId: "li-1",
+        confidence: "high",
+        reasoning: 'Matched by shared position code "CAM-01".',
+        needsClarification: false,
+        suggestedLineItemId: "li-1",
+      },
+      {
+        vendorLine: lines[1],
+        lineItemId: "li-1",
+        confidence: "high",
+        reasoning: 'Matched by shared position code "CAM-01".',
+        needsClarification: false,
+        suggestedLineItemId: "li-1",
+      },
+    ]);
+    expect(result.proposedSections).toEqual([]);
+  });
+
+  it("still reaches the AI (throws AiNotConfiguredError) for a vendor line whose code doesn't match any candidate, even when another line resolves by code", async () => {
+    const lines = [vendorLine("Non Slip Paint", 450, "CAM-01"), vendorLine("Miscellaneous", 200, "CAM-99")];
+    const candidates = [
+      candidate("li-1", "Right Endzone Camera Platform — Near", "Section 1", "CAM-01"),
+      // Left unclaimed by any position code -- still a real candidate the
+      // second vendor line COULD plausibly match, so the AI genuinely has
+      // work to do here (unlike the "0 candidates left" case above).
+      candidate("li-2", "Soft Goods", "Section 1"),
+    ];
+
+    // CAM-01 resolves deterministically; CAM-99 has no matching candidate
+    // position code, so this must still fall through to the AI for that
+    // one line -- proven by the AiNotConfiguredError this environment
+    // guarantees for any real AI call.
+    await expect(matchVendorQuoteLinesWithAi(lines, candidates, "opp-1")).rejects.toBeInstanceOf(AiNotConfiguredError);
+  });
+});
+
+describe("findPositionCodeMatches", () => {
+  it("matches a vendor line's unitCode to a candidate's positionCode, case/whitespace-insensitively", () => {
+    const lines = [vendorLine("Non Slip Paint", 450, " cam-01 ")];
+    const candidates = [candidate("li-1", "Right Endzone Camera Platform", null, "CAM-01")];
+
+    const result = findPositionCodeMatches(lines, candidates);
+
+    expect(result.get(0)).toEqual(candidates[0]);
+  });
+
+  it("does not match when the vendor line has no unitCode", () => {
+    const lines = [vendorLine("Non Slip Paint", 450, null)];
+    const candidates = [candidate("li-1", "Right Endzone Camera Platform", null, "CAM-01")];
+
+    expect(findPositionCodeMatches(lines, candidates).size).toBe(0);
+  });
+
+  it("does not match when no candidate carries a positionCode at all", () => {
+    const lines = [vendorLine("Non Slip Paint", 450, "CAM-01")];
+    const candidates = [candidate("li-1", "Right Endzone Camera Platform")];
+
+    expect(findPositionCodeMatches(lines, candidates).size).toBe(0);
+  });
+
+  it("refuses to guess when the same position code is (incorrectly) reused across multiple candidates", () => {
+    const lines = [vendorLine("Non Slip Paint", 450, "CAM-01")];
+    const candidates = [
+      candidate("li-1", "Right Endzone Camera Platform — Near", null, "CAM-01"),
+      candidate("li-2", "Right Endzone Camera Platform — Far", null, "CAM-01"),
+    ];
+
+    // An ambiguous deterministic signal is not a safe auto-match --
+    // falls through to the AI/manual-review path instead of guessing
+    // which of the two duplicate-coded candidates is correct.
+    expect(findPositionCodeMatches(lines, candidates).size).toBe(0);
+  });
+
+  it("lets multiple vendor lines under the same code all resolve to the one candidate that code identifies", () => {
+    const lines = [vendorLine("Non Slip Paint", 450, "CAM-01"), vendorLine("Guardrail", 425, "CAM-01")];
+    const candidates = [candidate("li-1", "Right Endzone Camera Platform", null, "CAM-01")];
+
+    const result = findPositionCodeMatches(lines, candidates);
+
+    expect(result.get(0)).toEqual(candidates[0]);
+    expect(result.get(1)).toEqual(candidates[0]);
   });
 });
 

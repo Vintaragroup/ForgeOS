@@ -947,6 +947,18 @@ model LineItem {
   sourceQuote      String?
   sourcePageNumber Int?
 
+  // A vendor/RFP-assigned position or reference code for this exact row
+  // (e.g. "CAM-01") when the source pricing schedule carries one -- see
+  // pricing-import-service.ts's Ref.-column capture. This is the shared
+  // key across two independently-authored documents: a client RFP names
+  // this row "Right Endzone Camera Platform" while the client's own
+  // filled-in submission (or a sub-vendor's quote) may reference it only
+  // as "CAM-01" -- text-similarity matching alone can never bridge that,
+  // but an exact code match can. vendor-match-ai-service.ts matches this
+  // deterministically against VendorQuoteLine.unitCode before ever
+  // asking the AI to guess. Null for imports/rows with no such code.
+  positionCode String?
+
   // Null (the default, unchanged behavior for every row that predates
   // this column) means "in-house / not yet decided" -- estimated
   // internally rather than sent out for a vendor to price. Set once a

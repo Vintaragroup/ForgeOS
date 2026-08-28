@@ -324,5 +324,28 @@ describe("previewPricingImport -- Arena RFP header shape variants", () => {
     const priced = preview.rows.find((r) => r.item === "Right Endzone Camera Platform — Near");
     expect(priced?.unit).toBe("SF");
     expect(priced?.qty).toBe(1);
+
+    // This file's own "Ref." column ("CAM-01") is the real, human-built
+    // crosswalk between Arena's location name and ShowRig's own vendor
+    // quote codes -- captured here so vendor-match-ai-service.ts can
+    // match a vendor line's unitCode against it deterministically instead
+    // of re-guessing the correspondence from text alone every time.
+    expect(priced?.positionCode).toBe("CAM-01");
+  });
+
+  it("commits positionCode onto the real LineItem row so it survives past the preview", async () => {
+    const { opportunity, document } = await makeDocumentFrom(
+      ARENA_REVISED_WITH_PRICING_PATH,
+      "expocci-revised-rfp-withsgpspricing.xlsx",
+    );
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitPricingImport(version.id, document.id);
+
+    const lineItem = await db.lineItem.findFirstOrThrow({
+      where: { section: { estimateVersionId: version.id }, positionCode: "CAM-01" },
+    });
+    expect(lineItem.description).toBe("Field-level, turf edge; 3 camera positions");
   });
 });

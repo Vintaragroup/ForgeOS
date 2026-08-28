@@ -335,6 +335,10 @@ export async function addLineItemsBulk(
     // document to check it against.
     sourceQuote?: string | null;
     sourcePageNumber?: number | null;
+    // A vendor/RFP-assigned code for this exact row (e.g. "CAM-01") when
+    // the source pricing schedule carries one -- see LineItem.positionCode's
+    // own schema comment for what this unlocks in bid-package matching.
+    positionCode?: string | null;
   }[],
   options?: { isDraft?: boolean; bidPackageId?: string | null },
 ) {
@@ -365,6 +369,7 @@ export async function addLineItemsBulk(
           documentId: item.documentId,
           sourceQuote: item.sourceQuote ?? null,
           sourcePageNumber: item.sourcePageNumber ?? null,
+          positionCode: item.positionCode ?? null,
           bidPackageId: options?.bidPackageId ?? null,
         },
       }),

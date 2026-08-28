@@ -101,6 +101,13 @@ export interface MatchCandidate {
   sectionLabel: string | null;
   qty: number | null;
   unit: string | null;
+  // LineItem.positionCode -- when this exactly matches a vendor line's
+  // own unitCode (case/whitespace-insensitive), that pair is matched
+  // deterministically below, before the AI ever sees either side. See
+  // findPositionCodeMatches and LineItem.positionCode's own schema
+  // comment for why this is the one signal strong enough to skip the
+  // "two independent naming schemes" judgment call entirely.
+  positionCode: string | null;
 }
 
 // Reuses ProposedLineItem's fixed lineType vocabulary from
@@ -235,12 +242,19 @@ function buildVendorLinesBlock(vendorLines: VendorQuoteLine[]): string {
     .join("\n");
 }
 
+// A candidate reaching this function already had no exact position-code
+// match (see findPositionCodeMatches below -- exact matches are resolved
+// deterministically and never reach the AI), so a code shown here is
+// necessarily a NEAR miss (different formatting, typo, etc.) -- still
+// worth surfacing as a weak hint alongside sectionLabel, never a
+// guaranteed key.
 function buildCandidatesBlock(candidates: MatchCandidate[]): string {
   return candidates
     .map((c, i) => {
+      const code = c.positionCode ? ` [${c.positionCode}]` : "";
       const section = c.sectionLabel ? ` [${c.sectionLabel}]` : "";
       const qty = c.qty != null ? `${c.qty}${c.unit ? ` ${c.unit}` : ""}` : c.unit || "";
-      return `${i}. ${c.description}${section}${qty ? ` (${qty})` : ""}`;
+      return `${i}. ${c.description}${code}${section}${qty ? ` (${qty})` : ""}`;
     })
     .join("\n");
 }
@@ -281,6 +295,52 @@ export interface VendorMatchResult {
   proposedSections: ProposedVendorSection[];
 }
 
+// A vendor line and a candidate sharing the exact same position code
+// (case/whitespace-insensitive -- "cam-01" and "CAM-01" are the same
+// code) is matched with certainty, no AI judgment call needed. This is
+// the one signal strong enough to bridge two documents with genuinely no
+// shared vocabulary otherwise (a vendor's own "CAM-06" vs. a client
+// RFP's "Section 203 - Main Far Left Slash Camera") -- see
+// LineItem.positionCode's own schema comment for where this code comes
+// from. Deliberately only auto-matches when a code maps to EXACTLY one
+// candidate: if the same code is (incorrectly) reused across multiple
+// candidates, that's not a safe deterministic call, so those lines fall
+// through to the AI/manual-review path instead, same "don't force it"
+// posture as everything else in this file.
+export function findPositionCodeMatches(
+  vendorLines: VendorQuoteLine[],
+  candidates: MatchCandidate[],
+): Map<number, MatchCandidate> {
+  const byCode = new Map<string, MatchCandidate[]>();
+  for (const candidate of candidates) {
+    if (!candidate.positionCode) continue;
+    const key = candidate.positionCode.trim().toUpperCase();
+    if (!key) continue;
+    byCode.set(key, [...(byCode.get(key) ?? []), candidate]);
+  }
+
+  const result = new Map<number, MatchCandidate>();
+  vendorLines.forEach((line, i) => {
+    if (!line.unitCode) return;
+    const key = line.unitCode.trim().toUpperCase();
+    if (!key) return;
+    const matches = byCode.get(key);
+    if (matches && matches.length === 1) result.set(i, matches[0]);
+  });
+  return result;
+}
+
+function codeMatchToVendorLineMatch(vendorLine: VendorQuoteLine, candidate: MatchCandidate): VendorLineMatch {
+  return {
+    vendorLine,
+    lineItemId: candidate.id,
+    confidence: "high",
+    reasoning: `Matched by shared position code "${vendorLine.unitCode}".`,
+    needsClarification: false,
+    suggestedLineItemId: candidate.id,
+  };
+}
+
 // documentId/opportunityId are for AI-usage tracking only (recordAiUsage);
 // this function does no DB reads/writes of its own -- caller persists the
 // result, same split as resolveCoverageGaps/runScopeCoverageAnalysis.
@@ -292,70 +352,110 @@ export async function matchVendorQuoteLinesWithAi(
   userId: string | null = null,
 ): Promise<VendorMatchResult> {
   if (vendorLines.length === 0) return { matches: [], proposedSections: [] };
-  if (candidates.length === 0) {
+
+  const codeMatches = findPositionCodeMatches(vendorLines, candidates);
+  const claimedCandidateIds = new Set(Array.from(codeMatches.values(), (c) => c.id));
+
+  // Code-matched vendor lines and the candidates they claimed are pulled
+  // out of what the AI sees entirely -- both because they're already
+  // solved with certainty, and because leaving a claimed candidate in
+  // the pool risks the AI separately (and wrongly) guessing some OTHER,
+  // textually-ambiguous vendor line onto it.
+  const aiIndexToOriginal: number[] = [];
+  const aiVendorLines: VendorQuoteLine[] = [];
+  vendorLines.forEach((line, i) => {
+    if (codeMatches.has(i)) return;
+    aiIndexToOriginal.push(i);
+    aiVendorLines.push(line);
+  });
+  const aiCandidates = candidates.filter((c) => !claimedCandidateIds.has(c.id));
+  // From the FULL candidate list, not aiCandidates -- a section whose
+  // every OTHER line item happened to get position-code-matched away
+  // must still count as "already exists" to the model, or it would
+  // wrongly re-propose a section that's already on the estimate.
+  const sectionLabels = existingSectionLabels(candidates);
+
+  let aiMatches: VendorLineMatch[] = [];
+  let proposedSections: ProposedVendorSection[] = [];
+
+  if (aiVendorLines.length === 0) {
+    // Every vendor line resolved by position code -- nothing left for
+    // the AI to do.
+  } else if (aiCandidates.length === 0) {
     // Never called the AI, so clarity of the description was never
     // judged -- false, not a guess, same "we don't know" posture as
     // confidence: null here. No existing sections to compare against
     // either, so no section proposals.
-    return {
-      matches: vendorLines.map((vendorLine) => ({
-        vendorLine,
-        lineItemId: null,
-        confidence: null,
-        reasoning: null,
-        needsClarification: false,
-        suggestedLineItemId: null,
-      })),
-      proposedSections: [],
-    };
-  }
+    aiMatches = aiVendorLines.map((vendorLine) => ({
+      vendorLine,
+      lineItemId: null,
+      confidence: null,
+      reasoning: null,
+      needsClarification: false,
+      suggestedLineItemId: null,
+    }));
+  } else {
+    // Throws AiNotConfiguredError before any work -- same posture as
+    // every other AI-proposal function in this app.
+    const client = getOpenAiClient();
 
-  // Throws AiNotConfiguredError before any work -- same posture as every
-  // other AI-proposal function in this app.
-  const client = getOpenAiClient();
+    const completion = await client.chat.completions.create({
+      model: ADVANCED_MODEL,
+      // Low, not zero -- a structured judgment call over a fixed shape, not
+      // creative writing, same reasoning as this app's other ADVANCED_MODEL
+      // calls.
+      temperature: 0.2,
+      max_completion_tokens: MAX_COMPLETION_TOKENS,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `VENDOR LINES:\n${buildVendorLinesBlock(aiVendorLines)}\n\nCANDIDATE LINE ITEMS:\n${buildCandidatesBlock(aiCandidates)}\n\nEXISTING SECTIONS:\n${buildExistingSectionsBlock(sectionLabels)}`,
+        },
+      ],
+      response_format: { type: "json_schema", json_schema: MATCH_SCHEMA },
+    });
 
-  const sectionLabels = existingSectionLabels(candidates);
+    await recordAiUsage({
+      userId,
+      feature: "VENDOR_LINE_MATCH",
+      model: ADVANCED_MODEL,
+      usage: completion.usage,
+      documentId: documentId ?? undefined,
+      opportunityId,
+    });
 
-  const completion = await client.chat.completions.create({
-    model: ADVANCED_MODEL,
-    // Low, not zero -- a structured judgment call over a fixed shape, not
-    // creative writing, same reasoning as this app's other ADVANCED_MODEL
-    // calls.
-    temperature: 0.2,
-    max_completion_tokens: MAX_COMPLETION_TOKENS,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `VENDOR LINES:\n${buildVendorLinesBlock(vendorLines)}\n\nCANDIDATE LINE ITEMS:\n${buildCandidatesBlock(candidates)}\n\nEXISTING SECTIONS:\n${buildExistingSectionsBlock(sectionLabels)}`,
-      },
-    ],
-    response_format: { type: "json_schema", json_schema: MATCH_SCHEMA },
-  });
-
-  await recordAiUsage({
-    userId,
-    feature: "VENDOR_LINE_MATCH",
-    model: ADVANCED_MODEL,
-    usage: completion.usage,
-    documentId: documentId ?? undefined,
-    opportunityId,
-  });
-
-  const choice = completion.choices[0];
-  const content = choice?.message?.content;
-  if (!content) throw new Error("OpenAI returned an empty response.");
-  if (choice.finish_reason === "length") {
-    throw new Error(
-      "Matching this many vendor lines against the estimate exceeded a single AI pass -- the response was cut off before finishing.",
+    const choice = completion.choices[0];
+    const content = choice?.message?.content;
+    if (!content) throw new Error("OpenAI returned an empty response.");
+    if (choice.finish_reason === "length") {
+      throw new Error(
+        "Matching this many vendor lines against the estimate exceeded a single AI pass -- the response was cut off before finishing.",
+      );
+    }
+    const parsed = JSON.parse(content) as { matches: RawVendorLineMatch[]; proposedSections: RawProposedVendorSection[] };
+    aiMatches = resolveVendorLineMatches(parsed.matches, aiVendorLines, aiCandidates);
+    // vendorLineIndices in the model's response are indexed against
+    // aiVendorLines (the reduced list it was actually shown) -- translated
+    // back to real, original vendorLines indices before this leaves the
+    // function, so every downstream caller (bid-package-actions.ts) only
+    // ever deals in original indices.
+    proposedSections = resolveProposedVendorSections(parsed.proposedSections, aiMatches, sectionLabels).map(
+      (proposal) => ({
+        ...proposal,
+        vendorLineIndices: proposal.vendorLineIndices.map((i) => aiIndexToOriginal[i]),
+      }),
     );
   }
-  const parsed = JSON.parse(content) as { matches: RawVendorLineMatch[]; proposedSections: RawProposedVendorSection[] };
-  const resolvedMatches = resolveVendorLineMatches(parsed.matches, vendorLines, candidates);
-  return {
-    matches: resolvedMatches,
-    proposedSections: resolveProposedVendorSections(parsed.proposedSections, resolvedMatches, sectionLabels),
-  };
+
+  const matches = vendorLines.map((vendorLine, i) => {
+    const codeMatch = codeMatches.get(i);
+    if (codeMatch) return codeMatchToVendorLineMatch(vendorLine, codeMatch);
+    const aiIndex = aiIndexToOriginal.indexOf(i);
+    return aiMatches[aiIndex];
+  });
+
+  return { matches, proposedSections };
 }
 
 // Separated from matchVendorQuoteLinesWithAi above so it's directly
