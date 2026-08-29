@@ -13,6 +13,7 @@ import {
   bucketSubtotal,
   buildTopLevelCategoryViews,
   computeRentalAndServicesTotals,
+  groupBoothLineItems,
   type AggregatedLineItem,
 } from "@/lib/proposal-view-model";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
@@ -130,7 +131,12 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   const { brandColor, logoUrl } = extractBranding(proposal.templateConfigSnapshot);
   const paymentMethodNote = extractPaymentMethodNote(proposal.templateConfigSnapshot);
 
-  const buckets = aggregateByCategory(version.sections.filter((section) => section.lineItems.length > 0), categories);
+  const visibleSections = version.sections.filter((section) => section.lineItems.length > 0);
+  // buckets/topLevelCategories/rentalTotal/servicesTotal all still run
+  // against every visible section -- see proposal-pdf.tsx's identical
+  // comment on why booth-linked items being shown separately below
+  // doesn't change any of this math, only which block renders them.
+  const buckets = aggregateByCategory(visibleSections, categories);
   const topLevelCategories = buildTopLevelCategoryViews(buckets, categories);
   const showServiceCategoryNames = new Set(categories.filter((c) => c.isShowService).map((c) => c.name));
   const lumpSumCategoryNames = new Set(categories.filter((c) => c.isLumpSum).map((c) => c.name));
@@ -138,6 +144,9 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
     buckets,
     showServiceCategoryNames,
   );
+  const boothGroups = groupBoothLineItems(visibleSections);
+  const customRentalTotal = boothGroups.reduce((sum, b) => sum + b.subtotal, 0);
+  const visibleCategoryItems = (items: AggregatedLineItem[]) => items.filter((li) => !li.boothLabel);
 
   return (
     <div className="flex flex-col gap-8">
@@ -198,9 +207,57 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
             </div>
           </div>
 
-          {topLevelCategories.map(({ name: categoryName, ownItems, children, totalWithChildren }, categoryIndex) => {
+          {boothGroups.length > 0 && (
+            <div className="mb-4">
+              <div className="mb-1.5 flex items-center justify-between bg-brand-black px-2 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="h-1.5 w-1.5" style={{ backgroundColor: SECTION_ACCENTS[0] }} />
+                  <span className="text-xs font-semibold uppercase tracking-wide text-white">Custom Rental</span>
+                </div>
+                <span className="text-xs font-semibold text-white">{moneyFromNumber(customRentalTotal)}</span>
+              </div>
+              <div className="ml-1.5 flex flex-col gap-3">
+                {boothGroups.map((booth) => (
+                  <div key={booth.boothLabel}>
+                    <div className="mb-1 flex items-center justify-between bg-brand-navy px-2 py-1.5">
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-white">
+                        {booth.boothLabel}
+                      </span>
+                      <span className="text-[10px] font-semibold text-white">{moneyFromNumber(booth.subtotal)}</span>
+                    </div>
+                    <div className="ml-3 flex flex-col gap-2">
+                      {booth.elementGroups.map((group) => (
+                        <div key={group.elementType}>
+                          <div className="mb-1 flex items-center justify-between bg-neutral-100 px-2 py-1">
+                            <span className="text-[9px] font-semibold uppercase tracking-wide text-neutral-700">
+                              {group.elementType}
+                            </span>
+                            <span className="text-[9px] font-semibold text-neutral-700">
+                              {moneyFromNumber(group.subtotal)}
+                            </span>
+                          </div>
+                          <CategoryTable items={group.items} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {topLevelCategories.map(({ name: categoryName, ownItems, children }, categoryIndex) => {
             const accent = SECTION_ACCENTS[categoryIndex % SECTION_ACCENTS.length];
             const isServiceStyle = lumpSumCategoryNames.has(categoryName);
+            // Booth-linked items already rendered above, under Custom
+            // Rental -- see proposal-pdf.tsx's identical comment.
+            const visibleOwnItems = visibleCategoryItems(ownItems);
+            const visibleChildren = children
+              .map((child) => ({ name: child.name, items: visibleCategoryItems(child.items) }))
+              .filter((child) => child.items.length > 0);
+            const visibleTotal =
+              bucketSubtotal(visibleOwnItems) + visibleChildren.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
+            if (visibleOwnItems.length === 0 && visibleChildren.length === 0) return null;
             return (
               <div key={categoryName} className="mb-4">
                 <div className="mb-1.5 flex items-center justify-between bg-brand-black px-2 py-2">
@@ -208,12 +265,12 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                     <span className="h-1.5 w-1.5" style={{ backgroundColor: accent }} />
                     <span className="text-xs font-semibold uppercase tracking-wide text-white">{categoryName}</span>
                   </div>
-                  <span className="text-xs font-semibold text-white">{moneyFromNumber(totalWithChildren)}</span>
+                  <span className="text-xs font-semibold text-white">{moneyFromNumber(visibleTotal)}</span>
                 </div>
-                {isServiceStyle ? <ServiceTable items={ownItems} /> : <CategoryTable items={ownItems} />}
-                {children.length > 0 && (
+                {isServiceStyle ? <ServiceTable items={visibleOwnItems} /> : <CategoryTable items={visibleOwnItems} />}
+                {visibleChildren.length > 0 && (
                   <div className="ml-3 flex flex-col gap-3">
-                    {children.map((child) => (
+                    {visibleChildren.map((child) => (
                       <div key={child.name}>
                         <div className="mb-1 flex items-center justify-between bg-neutral-100 px-2 py-1">
                           <span className="text-[9px] font-semibold uppercase tracking-wide text-neutral-700">

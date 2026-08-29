@@ -14,6 +14,7 @@ import {
   bucketSubtotal,
   buildTopLevelCategoryViews,
   computeRentalAndServicesTotals,
+  groupBoothLineItems,
   type AggregatedLineItem,
   type ProposalViewLineItem,
   type ProposalViewSection,
@@ -134,6 +135,49 @@ const styles = StyleSheet.create({
     color: BRAND.black,
   },
   subsectionHeaderTotal: { fontSize: 7.5, fontWeight: 700, color: BRAND.black },
+  // "Custom Rental" umbrella -> booth (H2) -> element type (H3) -- a
+  // third grouping axis alongside the category/subcategory one above,
+  // used only for line items with a known booth (groupBoothLineItems).
+  // Booth is the PRIMARY axis here (unlike subsection, a category's minor
+  // child), so it gets its own bolder treatment one step down from the
+  // umbrella's black bar rather than reusing subsectionHeaderRow's
+  // lighter gray, which would read as equally minor.
+  boothSection: { marginLeft: 6, marginBottom: 10 },
+  boothHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: BRAND.navy,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    marginBottom: 2,
+  },
+  boothHeaderText: {
+    fontSize: 8,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    color: BRAND.white,
+  },
+  boothHeaderTotal: { fontSize: 8, fontWeight: 700, color: BRAND.white },
+  elementTypeSection: { marginLeft: 10, marginBottom: 8 },
+  elementTypeHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#efefef",
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    marginBottom: 2,
+  },
+  elementTypeHeaderText: {
+    fontSize: 7.5,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    color: BRAND.black,
+  },
+  elementTypeHeaderTotal: { fontSize: 7.5, fontWeight: 700, color: BRAND.black },
   tableHeaderRow: {
     flexDirection: "row",
     borderBottomWidth: 1,
@@ -326,10 +370,24 @@ export interface ProposalPdfData {
 }
 
 export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
+  // buckets/topLevelCategories still run against the FULL, unfiltered
+  // data.sections -- rentalTotal/servicesTotal/grandTotal all stay
+  // correct as-is (see computeRentalAndServicesTotals below); only the
+  // BODY rendering below splits booth-linked items out into their own
+  // "Custom Rental" block instead of also showing them under their
+  // category, which would otherwise render every one of them twice.
   const buckets = aggregateByCategory(data.sections, data.categories);
   const topLevelCategories = buildTopLevelCategoryViews(buckets, data.categories);
   const showServiceCategoryNames = new Set(data.categories.filter((c) => c.isShowService).map((c) => c.name));
   const lumpSumCategoryNames = new Set(data.categories.filter((c) => c.isLumpSum).map((c) => c.name));
+  const boothGroups = groupBoothLineItems(data.sections);
+  const customRentalTotal = boothGroups.reduce((sum, b) => sum + b.subtotal, 0);
+
+  // Renders a category's own items with every booth-linked one removed
+  // (already shown under the Custom Rental block above) -- recomputes the
+  // header total from what's actually left, not the original
+  // totalWithChildren, which still includes the booth-linked contribution.
+  const visibleCategoryItems = (items: AggregatedLineItem[]) => items.filter((li) => !li.boothLabel);
 
   // Every distinct aggregated item renders as its own row, always -- no
   // detail-mode toggle, no "Includes: A, B, C" collapse. Cross-booth
@@ -460,9 +518,50 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           <Text style={[styles.colTotal, styles.headerCell]}>Total</Text>
         </View>
 
-        {topLevelCategories.map(({ name: categoryName, ownItems, children, totalWithChildren }, categoryIndex) => {
+        {boothGroups.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderRow} minPresenceAhead={24}>
+              <View style={styles.sectionHeaderLeft}>
+                <View style={[styles.sectionAccentSwatch, { backgroundColor: SECTION_ACCENTS[0] }]} />
+                <Text style={styles.sectionHeaderText}>Custom Rental</Text>
+              </View>
+              <Text style={styles.sectionHeaderTotal}>{moneyFromNumber(customRentalTotal)}</Text>
+            </View>
+            {boothGroups.map((booth) => (
+              <View key={booth.boothLabel} style={styles.boothSection}>
+                <View style={styles.boothHeaderRow} minPresenceAhead={24}>
+                  <Text style={styles.boothHeaderText}>{booth.boothLabel}</Text>
+                  <Text style={styles.boothHeaderTotal}>{moneyFromNumber(booth.subtotal)}</Text>
+                </View>
+                {booth.elementGroups.map((group) => (
+                  <View key={group.elementType} style={styles.elementTypeSection}>
+                    <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
+                      <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
+                      <Text style={styles.elementTypeHeaderTotal}>{moneyFromNumber(group.subtotal)}</Text>
+                    </View>
+                    {renderBody(group.items)}
+                  </View>
+                ))}
+              </View>
+            ))}
+          </View>
+        )}
+
+        {topLevelCategories.map(({ name: categoryName, ownItems, children }, categoryIndex) => {
           const accent = SECTION_ACCENTS[categoryIndex % SECTION_ACCENTS.length];
           const isServiceStyle = lumpSumCategoryNames.has(categoryName);
+
+          // Booth-linked items in this category already rendered above,
+          // under Custom Rental -- shown here too would double them, once
+          // with a real total and once identically. A category left with
+          // nothing visible (every one of its items turned out to be
+          // booth-linked) doesn't render its header at all.
+          const visibleOwnItems = visibleCategoryItems(ownItems);
+          const visibleChildren = children
+            .map((child) => ({ name: child.name, items: visibleCategoryItems(child.items) }))
+            .filter((child) => child.items.length > 0);
+          const visibleTotal = bucketSubtotal(visibleOwnItems) + visibleChildren.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
+          if (visibleOwnItems.length === 0 && visibleChildren.length === 0) return null;
 
           return (
             <View key={categoryName} style={styles.section}>
@@ -471,7 +570,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
                   <Text style={styles.sectionHeaderText}>{categoryName}</Text>
                 </View>
-                <Text style={styles.sectionHeaderTotal}>{moneyFromNumber(totalWithChildren)}</Text>
+                <Text style={styles.sectionHeaderTotal}>{moneyFromNumber(visibleTotal)}</Text>
               </View>
               {categoryName === "Professional Services" &&
                 data.professionalServices &&
@@ -486,8 +585,8 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     </View>
                   </View>
                 )}
-              {isServiceStyle ? renderServiceBody(ownItems) : renderBody(ownItems)}
-              {children.map((child) => (
+              {isServiceStyle ? renderServiceBody(visibleOwnItems) : renderBody(visibleOwnItems)}
+              {visibleChildren.map((child) => (
                 <View key={child.name} style={styles.subsection}>
                   <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
                     <Text style={styles.subsectionHeaderText}>{child.name}</Text>
