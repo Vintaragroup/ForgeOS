@@ -347,7 +347,7 @@ export async function summarizeDocument(documentId: string, userId: string | nul
     // Type-based UNSUPPORTED cases (PRICING_SCHEDULE, DRAWING) never call
     // OpenAI at all -- resolved before the config check below so they work
     // regardless of whether a key is configured.
-    const extraction = await extractDocumentText(document.documentType, document.mimeType, bytes);
+    const extraction = await extractDocumentText(document.documentType, document.mimeType, bytes, document.filename);
     loaded = { document, bytes, extraction };
   } catch {
     // Same retry posture as the OpenAI-call catch below -- a storage

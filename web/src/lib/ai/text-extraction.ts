@@ -14,11 +14,24 @@ export const PDF_MIME = "application/pdf";
 export const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 export const TEXT_MIME = "text/plain";
+// Real-world browser-reported values for a .md file -- unlike .txt (which
+// reliably reports text/plain), Markdown's mimeType is inconsistent
+// across OS/browser (Chrome on macOS: "text/markdown"; others: empty
+// string, or "application/octet-stream"). Both are checked explicitly;
+// the empty/octet-stream cases fall back to the filename extension below.
+export const MARKDOWN_MIMES = new Set(["text/markdown", "text/x-markdown"]);
 
 export async function extractDocumentText(
   documentType: DocumentType,
   mimeType: string,
   bytes: Buffer,
+  // Fallback signal only, for when mimeType comes back empty or generic
+  // (see MARKDOWN_MIMES above) -- both real call sites (document-summary-
+  // service.ts, meeting-notes-summary-service.ts) already have
+  // document.filename in scope. Optional/defaulted so every existing
+  // caller (including this file's own tests, none of which exercise the
+  // text path) is unaffected.
+  filename = "",
 ): Promise<ExtractionResult> {
   // The Pricing Schedule's own rows (qty/description) are a strictly
   // better structured signal than re-deriving the same facts from raw
@@ -56,8 +69,14 @@ export async function extractDocumentText(
 
   // Meeting transcripts/recaps routinely arrive as plain .txt exports
   // (e.g. an auto-generated call-transcription download) -- no parsing
-  // needed, just a raw decode.
-  if (mimeType === TEXT_MIME) {
+  // needed, just a raw decode. Markdown (design notes, a README-style
+  // scope doc, an exported spec) is exactly as trivial -- valid Markdown
+  // is valid UTF-8 text, no separate parsing library needed; the AI
+  // summarizer already handles the odd stray "#"/"-" formatting character
+  // fine as part of the raw text.
+  const isUnreliableMimeType = !mimeType || mimeType === "application/octet-stream";
+  const looksLikeMarkdownFilename = isUnreliableMimeType && /\.(md|markdown)$/i.test(filename);
+  if (mimeType === TEXT_MIME || MARKDOWN_MIMES.has(mimeType) || looksLikeMarkdownFilename) {
     const text = bytes.toString("utf-8");
     if (!text.trim()) {
       return { status: "UNSUPPORTED", reason: "This text file is empty." };

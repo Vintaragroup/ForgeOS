@@ -51,6 +51,33 @@ describe("extractDocumentText", () => {
     const result = await extractDocumentText("DRAWING", "application/pdf", bytes);
     expect(result.status).toBe("UNSUPPORTED");
   });
+
+  it("extracts a .md file's raw text when the browser reports a real markdown mimeType", async () => {
+    const bytes = Buffer.from("# Kickoff Notes\n\n- Booth build due 2026-09-01\n- Client wants FR carpet quoted separately");
+    const result = await extractDocumentText("MEETING_NOTES", "text/markdown", bytes, "kickoff-notes.md");
+    expect(result.status).toBe("COMPLETE");
+    if (result.status === "COMPLETE") {
+      expect(result.text).toContain("Booth build due 2026-09-01");
+    }
+  });
+
+  it("falls back to the .md filename extension when the mimeType is empty or generic -- confirmed real browser behavior for Markdown uploads", async () => {
+    const bytes = Buffer.from("# Scope notes\n\nSee Section 211 for camera booth requirements.");
+    const emptyMime = await extractDocumentText("SCOPE_OF_WORK", "", bytes, "scope-notes.md");
+    const octetStream = await extractDocumentText("SCOPE_OF_WORK", "application/octet-stream", bytes, "scope-notes.md");
+    expect(emptyMime.status).toBe("COMPLETE");
+    expect(octetStream.status).toBe("COMPLETE");
+  });
+
+  it("does not misdetect an unrelated octet-stream file as markdown just because it's some other unresolved type", async () => {
+    const result = await extractDocumentText("OTHER", "application/octet-stream", Buffer.from("binary-ish content"), "drawing.dwg");
+    expect(result.status).toBe("UNSUPPORTED");
+  });
+
+  it("reports an empty .md file as unsupported, same as an empty .txt file", async () => {
+    const result = await extractDocumentText("OTHER", "text/markdown", Buffer.from("   \n  "), "empty.md");
+    expect(result).toEqual({ status: "UNSUPPORTED", reason: "This text file is empty." });
+  });
 });
 
 describe("extractPdfPageTexts / locateQuotePage", () => {

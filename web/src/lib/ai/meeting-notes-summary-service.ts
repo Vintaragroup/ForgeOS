@@ -193,7 +193,7 @@ export async function summarizeMeetingNotes(documentId: string, userId: string |
   let loaded: { document: Awaited<ReturnType<typeof getDocumentBytes>>["document"]; bytes: Buffer; extraction: ExtractionResult };
   try {
     const { document, bytes } = await getDocumentBytes(documentId);
-    const extraction = await extractDocumentText(document.documentType, document.mimeType, bytes);
+    const extraction = await extractDocumentText(document.documentType, document.mimeType, bytes, document.filename);
     loaded = { document, bytes, extraction };
   } catch {
     // Same retry posture as the OpenAI-call catch below -- see
