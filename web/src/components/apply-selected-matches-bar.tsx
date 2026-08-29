@@ -53,7 +53,14 @@ export function ApplySelectedMatchesBar({
   }
 
   return (
-    <div className="sticky bottom-4 z-10 mb-3 flex flex-wrap items-center gap-3 rounded-md border border-neutral-300 bg-white p-3 shadow-lg">
+    // fixed, not sticky -- confirmed live: with 44 bulk groups + hundreds
+    // of match rows on a real package, this bar's containing block runs
+    // 30,000+px tall, and `sticky` doesn't reliably hold across a range
+    // that large (it rendered off-screen near the top of the page instead
+    // of pinning to the viewport, invisible unless you scrolled to the
+    // exact spot it happened to occupy). `fixed` pins to the viewport
+    // unconditionally regardless of how tall the page around it gets.
+    <div className="fixed inset-x-4 bottom-4 z-20 mx-auto flex max-w-2xl flex-wrap items-center gap-3 rounded-md border border-neutral-300 bg-white p-3 shadow-lg">
       <span className="text-sm font-medium text-neutral-700">
         {selection.selected.size} match{selection.selected.size === 1 ? "" : "es"} selected
       </span>
