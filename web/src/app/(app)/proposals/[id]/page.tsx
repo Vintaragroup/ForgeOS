@@ -108,7 +108,11 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
             estimate: { include: { opportunity: { include: { company: true } }, taxRate: true } },
             // Base estimate sections only -- Option (alternates) pricing is
             // rendered separately once that UI exists (task #44).
-            sections: { where: { optionId: null }, include: { lineItems: true } },
+            // isDraft: false -- see preview-pdf/route.ts's identical filter
+            // for why: keeps this page's itemized totals consistent with
+            // version.grandTotal instead of silently including unreviewed
+            // drafts in the body while excluding them from the total.
+            sections: { where: { optionId: null }, include: { lineItems: { where: { isDraft: false } } } },
           },
         },
       },

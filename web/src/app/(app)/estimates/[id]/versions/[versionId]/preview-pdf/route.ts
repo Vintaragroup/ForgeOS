@@ -38,7 +38,17 @@ export async function GET(
       where: { id: versionId, estimateId: id },
       include: {
         estimate: { include: { opportunity: { include: { company: true, primaryContact: true } }, taxRate: true } },
-        sections: { where: { optionId: null }, include: { lineItems: true } },
+        // isDraft: false -- a draft line item is deliberately excluded from
+        // version.grandTotal (estimate-service.ts's computeSectionTotal)
+        // until a human confirms it. Without this filter here, the PDF's
+        // own itemized rows/category subtotals included every draft too
+        // (often still $0, never reviewed), while its bottom-line Grand
+        // Total -- pulled straight from version.grandTotal below --
+        // excluded them: a real job's preview showed thousands of dollars
+        // of itemized subtotals against a $0.00 Grand Total. Matching the
+        // same isDraft rule here keeps the whole document internally
+        // consistent.
+        sections: { where: { optionId: null }, include: { lineItems: { where: { isDraft: false } } } },
       },
     }),
     db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } }),
