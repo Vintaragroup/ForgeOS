@@ -249,6 +249,31 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     currentVersion ? getVendorMatchApplyLog(currentVersion.id) : Promise.resolve([]),
   ]);
 
+  // A Pricing Schedule document stays selectable in "Import from
+  // document" forever, even once it's already been committed into THIS
+  // version -- confirmed live: a real user re-selected an already-done
+  // file with nothing in the UI hinting it was done, and only found out
+  // via commitPricingImport's own "already been imported" error after
+  // clicking all the way through to Commit. Left selectable (not
+  // filtered out entirely) since deleting the old rows and re-importing
+  // is a real, if rare, recovery path -- just labeled so a reviewer
+  // isn't surprised.
+  const importedPricingScheduleDocumentIds =
+    currentVersion && pricingScheduleDocuments.length > 0
+      ? new Set(
+          (
+            await db.lineItem.findMany({
+              where: {
+                documentId: { in: pricingScheduleDocuments.map((d) => d.id) },
+                section: { estimateVersionId: currentVersion.id, optionId: null },
+              },
+              select: { documentId: true },
+              distinct: ["documentId"],
+            })
+          ).map((li) => li.documentId!),
+        )
+      : new Set<string>();
+
   // Only non-empty once this Opportunity has 2+ named Estimates (see
   // getProjectContext) -- lets the Propose preview table show which
   // project each item was classified into, so a bad classification can be
@@ -500,7 +525,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     canImport={canImport}
                     buildEstimateAction={buildEstimateWithIds}
                     buildResult={buildResult}
-                    pricingScheduleDocuments={pricingScheduleDocuments}
+                    pricingScheduleDocuments={pricingScheduleDocuments.map((d) => ({
+                      id: d.id,
+                      filename: d.filename,
+                      alreadyImported: importedPricingScheduleDocumentIds.has(d.id),
+                    }))}
                     previewImportAction={previewImportWithId}
                     importDocumentId={importDocumentId}
                     importPreview={importPreview}
@@ -2293,7 +2322,7 @@ function DocumentsTab({
   canImport: boolean;
   buildEstimateAction: ((formData: FormData) => void | Promise<void>) | null;
   buildResult: BuildEstimateResult | null;
-  pricingScheduleDocuments: { id: string; filename: string }[];
+  pricingScheduleDocuments: { id: string; filename: string; alreadyImported: boolean }[];
   previewImportAction: (formData: FormData) => void | Promise<void>;
   importDocumentId: string | undefined;
   importPreview: Awaited<ReturnType<typeof previewPricingImport>> | Error | null;
@@ -2412,7 +2441,10 @@ function DocumentsTab({
                   label="Document"
                   name="documentId"
                   defaultValue={importDocumentId ?? ""}
-                  options={pricingScheduleDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+                  options={pricingScheduleDocuments.map((d) => ({
+                    value: d.id,
+                    label: d.alreadyImported ? `${d.filename} (already imported)` : d.filename,
+                  }))}
                 />
               </div>
               <Button variant="secondary">Preview import</Button>
