@@ -1260,7 +1260,18 @@ function BidPackageCard({
   // already-applied row in the package (confirmed live) -- it was
   // comparing the target's real applied price against a fresh sum that
   // included sibling vendor lines nobody had ever applied yet.
-  const priceDrift = new Map<string, { previousUnitCost: number; newUnitCost: number }>();
+  //
+  // Compares TOTAL dollars, not a blended $/unit rate -- confirmed live
+  // on the real ShowRig package that several targets genuinely do have
+  // multiple DIFFERENT vendor lines resolved onto them (e.g. a camera
+  // platform's Paint + Guardrail + Handrail, each its own real cost
+  // component, not duplicates of each other), each carrying its own
+  // natural unit (EA, LF, SF...). Summing their raw qtys into one
+  // denominator to get a "$/unit" produces a number with no real meaning
+  // once the units being summed don't match each other. Total dollars is
+  // always well-defined regardless of unit mix, and it's the number that
+  // actually lands on the line item's totalCost.
+  const priceDrift = new Map<string, { previousTotal: number; newTotal: number }>();
   if (matches && quoteDocument) {
     const byTargetForDrift = new Map<string, VendorLineMatch[]>();
     for (const m of matches) {
@@ -1270,11 +1281,10 @@ function BidPackageCard({
     for (const [targetId, group] of byTargetForDrift) {
       const target = allLineItems.find((li) => li.id === targetId);
       if (!target || target.documentId !== quoteDocument.id) continue;
-      const newQty = group.reduce((sum, m) => sum + (m.vendorLine.qty ?? 1), 0);
+      const currentTotal = target.unitCost * target.qty;
       const newTotal = group.reduce((sum, m) => sum + m.vendorLine.unitPrice, 0);
-      const newUnitCost = newQty > 0 ? newTotal / newQty : newTotal;
-      if (Math.abs(target.unitCost - newUnitCost) > 0.005 || Math.abs(target.qty - newQty) > 0.005) {
-        priceDrift.set(targetId, { previousUnitCost: target.unitCost, newUnitCost });
+      if (Math.abs(currentTotal - newTotal) > 0.5) {
+        priceDrift.set(targetId, { previousTotal: currentTotal, newTotal });
       }
     }
   }
@@ -1558,8 +1568,8 @@ function BidPackageCard({
                   </p>
                   {groupDrift && (
                     <p className="mt-1 text-xs font-medium text-amber-700">
-                      Quote revised since last applied: was {money(groupDrift.previousUnitCost)}/unit, vendor now says{" "}
-                      {money(groupDrift.newUnitCost)}/unit — review before updating
+                      Quote revised since last applied: was {money(groupDrift.previousTotal)} total, vendor lines now sum to{" "}
+                      {money(groupDrift.newTotal)} — review before updating
                     </p>
                   )}
                   <form action={applyGroupWithIds} className="mt-3 flex items-center gap-2">
@@ -1773,8 +1783,8 @@ function BidPackageCard({
                       )}
                       {!lineItemIdStale && drift && (
                         <p className="mt-1.5 text-xs font-medium text-amber-700">
-                          Quote revised since last applied: was {money(drift.previousUnitCost)}/unit, vendor now says{" "}
-                          {money(drift.newUnitCost)}/unit — review before updating
+                          Quote revised since last applied: was {money(drift.previousTotal)} total, vendor lines now sum to{" "}
+                          {money(drift.newTotal)} — review before updating
                         </p>
                       )}
                       {!lineItemIdStale && !drift && match.reasoning && (
