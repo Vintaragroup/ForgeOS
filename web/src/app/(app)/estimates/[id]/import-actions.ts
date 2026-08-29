@@ -40,6 +40,13 @@ export async function buildFullEstimateFromDocumentsAction(
   redirect(`/estimates/${estimateId}?tab=documents&buildResult=${encodeURIComponent(JSON.stringify(result))}`);
 }
 
+export async function runClientTemplateReconciliationAction(estimateId: string, formData: FormData) {
+  await requireEstimateAccess(estimateId);
+  const documentId = String(formData.get("documentId") ?? "").trim();
+  if (!documentId) throw new Error("Choose the client's pricing template document");
+  redirect(`/estimates/${estimateId}?tab=review&reconcileDocumentId=${documentId}`);
+}
+
 export async function previewImportAction(estimateId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
   const documentId = String(formData.get("documentId") ?? "").trim();

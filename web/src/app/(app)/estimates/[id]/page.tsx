@@ -33,8 +33,10 @@ import {
   previewImportAction,
   proposeScopeItemsAction,
   recategorizeLineItemsAction,
+  runClientTemplateReconciliationAction,
   runScopeCoverageAnalysisAction,
 } from "./import-actions";
+import { reconcileAgainstClientTemplate, type ClientTemplateReconciliation } from "@/lib/client-pricing-template-service";
 import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import type { CoverageGap } from "@/lib/ai/scope-coverage-service";
 import { computeOptionTotal } from "@/lib/estimate-service";
@@ -107,8 +109,10 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     confirmedCount: confirmedCountParam,
     recategorized: recategorizedParam,
     recategorizeChecked: recategorizeCheckedParam,
+    reconcileDocumentId: reconcileDocumentIdParam,
   } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
+  const reconcileDocumentId = Array.isArray(reconcileDocumentIdParam) ? reconcileDocumentIdParam[0] : reconcileDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
   const buildResultRaw = Array.isArray(buildResultParam) ? buildResultParam[0] : buildResultParam;
   // Flash confirmation for every vendor match applied so far this
@@ -330,6 +334,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const importPreview =
     canImport && importDocumentId
       ? await previewPricingImport(importDocumentId, estimate.opportunityId).catch((err: Error) => err)
+      : null;
+
+  const reconciliation =
+    currentVersion && reconcileDocumentId
+      ? await reconcileAgainstClientTemplate(currentVersion.id, reconcileDocumentId).catch((err: Error) => err)
       : null;
 
   // Flag-only mirror check (see design-cost-estimate-import-service.ts's
@@ -571,6 +580,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     coverageGapsWithDocs={coverageGapsWithDocs}
                     recategorized={recategorized}
                     recategorizeChecked={recategorizeChecked}
+                    reconciliationDocuments={pricingScheduleDocuments.map((d) => ({ id: d.id, filename: d.filename }))}
+                    runReconciliationAction={currentVersion ? runClientTemplateReconciliationAction.bind(null, estimate.id) : null}
+                    reconciliation={reconciliation}
                   />
                 ),
                 proposal: (
@@ -2731,6 +2743,9 @@ function ReviewTab({
   coverageGapsWithDocs,
   recategorized,
   recategorizeChecked,
+  reconciliationDocuments,
+  runReconciliationAction,
+  reconciliation,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -2743,13 +2758,17 @@ function ReviewTab({
   coverageGapsWithDocs: (CoverageGap & { doc: { id: string; filename: string; mimeType: string } })[];
   recategorized: number | null;
   recategorizeChecked: number;
+  reconciliationDocuments: { id: string; filename: string }[];
+  runReconciliationAction: ((formData: FormData) => void | Promise<void>) | null;
+  reconciliation: ClientTemplateReconciliation | Error | null;
 }) {
   const bidPackagesAwaitingReview = currentVersion.bidPackages.filter((p) => p.status === "QUOTE_RECEIVED");
   const hasAnyReview =
     riskFlags.length > 0 ||
     categoryAudit.issues.length > 0 ||
     bidPackagesAwaitingReview.length > 0 ||
-    (scopeDocuments.length > 0 && runCoverageAnalysisAction);
+    (scopeDocuments.length > 0 && runCoverageAnalysisAction) ||
+    (reconciliationDocuments.length > 0 && runReconciliationAction);
 
   if (!hasAnyReview) {
     return (
@@ -2926,6 +2945,83 @@ function ReviewTab({
                     );
                   })}
                 </ul>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {reconciliationDocuments.length > 0 && runReconciliationAction && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Client template reconciliation
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Compares this version&apos;s line items against the client&apos;s own RFP pricing template, booth
+            by booth -- flags a booth with nothing priced at all, or missing an item category the client
+            explicitly asks for. This never suggests a Unit Rate to fill into the client&apos;s template: our
+            part-level engineering doesn&apos;t map cleanly onto the client&apos;s coarser line items (e.g.
+            &quot;Complete Booth Build&quot;), so use these totals as a reference and price the template by
+            hand.
+          </p>
+          <form action={runReconciliationAction} className="flex items-end gap-3">
+            <div className="w-96">
+              <SelectField
+                label="Client pricing template document"
+                name="documentId"
+                options={reconciliationDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+              />
+            </div>
+            <SubmitButton pendingText="Reconciling…" variant="secondary">
+              Run reconciliation
+            </SubmitButton>
+          </form>
+
+          {reconciliation instanceof Error && (
+            <p className="mt-4 border-t border-neutral-200 pt-4 text-sm text-red-700">{reconciliation.message}</p>
+          )}
+
+          {reconciliation && !(reconciliation instanceof Error) && (
+            <div className="mt-4 flex flex-col gap-4 border-t border-neutral-200 pt-4">
+              {reconciliation.sections.map((s) => (
+                <div key={s.section} className="rounded-md border border-neutral-200 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-neutral-900">{s.section}</span>
+                    <span className="text-sm text-neutral-600">
+                      {s.ourItemCount} line item{s.ourItemCount === 1 ? "" : "s"} priced -- {money(s.ourTotal)}
+                    </span>
+                  </div>
+                  {s.missingSection && (
+                    <p className="mb-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      <span aria-hidden>⚠</span> Client expects this booth priced, but nothing has been imported
+                      for it yet.
+                    </p>
+                  )}
+                  {s.categoryGaps.map((gap, i) => (
+                    <p key={i} className="mb-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      <span aria-hidden>⚠</span> {gap}
+                    </p>
+                  ))}
+                  <details className="text-sm text-neutral-500">
+                    <summary className="cursor-pointer select-none">
+                      Client&apos;s {s.clientItems.length} expected item{s.clientItems.length === 1 ? "" : "s"}
+                    </summary>
+                    <ul className="mt-2 flex flex-col gap-1 pl-4">
+                      {s.clientItems.map((item, i) => (
+                        <li key={i}>
+                          {item.description.split("\n")[0]} — {item.qty} {item.unit}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                </div>
+              ))}
+              {reconciliation.addOnRows.length > 0 && (
+                <p className="text-xs text-neutral-400">
+                  The client&apos;s template also lists {reconciliation.addOnRows.length} standing rate-card item
+                  {reconciliation.addOnRows.length === 1 ? "" : "s"} (alternate wall systems, add-on
+                  components) not tied to a specific booth -- not checked against your booth pricing above.
+                </p>
               )}
             </div>
           )}
