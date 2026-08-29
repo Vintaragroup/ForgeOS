@@ -1139,6 +1139,8 @@ function BidPackagesTab({
       sectionLabel: s.groupLabel ?? s.name,
       documentId: li.documentId,
       bidPackageId: li.bidPackageId,
+      unitCost: li.unitCost.toNumber(),
+      qty: li.qty.toNumber(),
     })),
   );
   return (
@@ -1216,6 +1218,8 @@ function BidPackageCard({
     sectionLabel: string | null;
     documentId: string | null;
     bidPackageId: string | null;
+    unitCost: number;
+    qty: number;
   }[];
   appliedLineItemIds: Set<string>;
   staleMatchCount: number;
@@ -1238,6 +1242,39 @@ function BidPackageCard({
   const unmatchedPackageItems = bidPackage.lineItems.filter(
     (li) => !matchedLineItemIds.has(li.id) && li.documentId !== quoteDocument?.id,
   );
+
+  // Re-extract fully recomputes matchResult from the current state of the
+  // document -- a revised vendor quote (different prices, corrected
+  // qtys) produces a fresh set of vendor lines every time. Without this,
+  // a target already applied from THIS SAME document would just look
+  // "applied" forever (documentId still matches) and silently keep its
+  // stale price: the row disappears from Match Review, "Apply all N
+  // high-confidence" skips it as already-done, and the revised number
+  // from the vendor is never surfaced anywhere. Grouped by resolved
+  // target, not per vendor-line row, since duplicate vendor lines summing
+  // onto one item (see bulkGroups below) only have a meaningful "did the
+  // total change" answer as a group -- comparing one of several rows in
+  // isolation against the summed target would false-positive on every
+  // group member even when the group's total is unchanged.
+  const priceDrift = new Map<string, { previousUnitCost: number; newUnitCost: number }>();
+  if (matches && quoteDocument) {
+    const byTargetForDrift = new Map<string, VendorLineMatch[]>();
+    for (const m of matches) {
+      const targetId = m.lineItemId ?? m.suggestedLineItemId;
+      if (!targetId) continue;
+      byTargetForDrift.set(targetId, [...(byTargetForDrift.get(targetId) ?? []), m]);
+    }
+    for (const [targetId, group] of byTargetForDrift) {
+      const target = allLineItems.find((li) => li.id === targetId);
+      if (!target || target.documentId !== quoteDocument.id) continue;
+      const newQty = group.reduce((sum, m) => sum + (m.vendorLine.qty ?? 1), 0);
+      const newTotal = group.reduce((sum, m) => sum + m.vendorLine.unitPrice, 0);
+      const newUnitCost = newQty > 0 ? newTotal / newQty : newTotal;
+      if (Math.abs(target.unitCost - newUnitCost) > 0.005 || Math.abs(target.qty - newQty) > 0.005) {
+        priceDrift.set(targetId, { previousUnitCost: target.unitCost, newUnitCost });
+      }
+    }
+  }
 
   // Groups vendor lines that all point at the SAME target -- either
   // already matched (lineItemId) or the AI's pre-dedup suggestion
@@ -1262,8 +1299,14 @@ function BidPackageCard({
         // suggestions list entirely rather than sitting here permanently
         // with just a "✓ Applied" badge. The real, permanent record of
         // what was applied now lives on the History tab
-        // (vendor-match-apply-log-service.ts), not here.
-        .filter(([targetId]) => allLineItems.find((li) => li.id === targetId)?.documentId !== quoteDocument?.id)
+        // (vendor-match-apply-log-service.ts), not here. A drifted target
+        // is the one exception -- see priceDrift's own comment above --
+        // it stays visible even though its documentId already matches.
+        .filter(
+          ([targetId]) =>
+            allLineItems.find((li) => li.id === targetId)?.documentId !== quoteDocument?.id ||
+            priceDrift.has(targetId),
+        )
         .map(([targetId, matchIndices]) => ({ targetId, matchIndices }))
     );
   })();
@@ -1275,7 +1318,16 @@ function BidPackageCard({
   // from alreadyApplied per group above: this counts how many are still
   // PENDING a real price write, so the button can say "N still need
   // applying" rather than re-offering matches already resolved.
-  const highConfidenceMatches = (matches ?? []).filter((m) => m.confidence === "high" && m.lineItemId);
+  // Deliberately excludes a drifted target (see priceDrift's own comment
+  // above) even though it's technically "not yet applied at this new
+  // price" -- a changed vendor number needs the reviewer to actually SEE
+  // the old-vs-new comparison and click that row's own Apply, not get
+  // silently swept into one "Apply all N" click alongside genuinely new
+  // matches. It still shows up in the Match Review table below (see
+  // isMatchApplied), just outside this bulk button's reach.
+  const highConfidenceMatches = (matches ?? []).filter(
+    (m) => m.confidence === "high" && m.lineItemId && !priceDrift.has(m.lineItemId),
+  );
   const highConfidencePendingMatches = highConfidenceMatches.filter((m) => {
     const target = allLineItems.find((li) => li.id === m.lineItemId);
     return target?.documentId !== quoteDocument?.id;
@@ -1304,7 +1356,9 @@ function BidPackageCard({
   // shrinks as a reviewer works through it instead of accumulating
   // "Re-apply" rows indefinitely. The permanent record lives on the
   // History tab (vendor-match-apply-log-service.ts), not here.
-  const isMatchApplied = (m: VendorLineMatch) => allLineItems.find((li) => li.id === m.lineItemId)?.documentId === quoteDocument?.id;
+  const isMatchApplied = (m: VendorLineMatch) =>
+    allLineItems.find((li) => li.id === m.lineItemId)?.documentId === quoteDocument?.id &&
+    !(m.lineItemId && priceDrift.has(m.lineItemId));
   const pendingMatchCount = matches ? matches.filter((m) => !isMatchApplied(m)).length : 0;
 
   return (
@@ -1484,7 +1538,8 @@ function BidPackageCard({
                 .map((i) => matches?.[i]?.vendorLine)
                 .filter((vl): vl is NonNullable<typeof vl> => !!vl);
               const total = vendorLines.reduce((sum, vl) => sum + vl.unitPrice, 0);
-              const alreadyApplied = targetItem?.documentId === quoteDocument.id;
+              const groupDrift = priceDrift.get(group.targetId);
+              const alreadyApplied = targetItem?.documentId === quoteDocument.id && !groupDrift;
               const applyGroupWithIds = applyVendorMatchGroupAction.bind(null, estimateId, versionId, bidPackage.id);
               return (
                 <div key={group.targetId} className="rounded-md border border-blue-200 bg-blue-50 p-3">
@@ -1498,13 +1553,19 @@ function BidPackageCard({
                       .map((vl) => (vl.unitCode ? `${vl.description} [${vl.unitCode}]` : vl.description))
                       .join(", ")}
                   </p>
+                  {groupDrift && (
+                    <p className="mt-1 text-xs font-medium text-amber-700">
+                      Quote revised since last applied: was {money(groupDrift.previousUnitCost)}/unit, vendor now says{" "}
+                      {money(groupDrift.newUnitCost)}/unit — review before updating
+                    </p>
+                  )}
                   <form action={applyGroupWithIds} className="mt-3 flex items-center gap-2">
                     <input type="hidden" name="lineItemId" value={group.targetId} />
                     <input type="hidden" name="matchIndices" value={group.matchIndices.join(",")} />
                     <input type="hidden" name="documentId" value={quoteDocument.id} />
                     <input type="hidden" name="priorApplied" value={priorAppliedValue} />
                     <Button variant="secondary" type="submit">
-                      {alreadyApplied ? "Re-apply" : "Apply"} all {vendorLines.length} (sum {money(total)})
+                      {groupDrift ? "Update" : alreadyApplied ? "Re-apply" : "Apply"} all {vendorLines.length} (sum {money(total)})
                     </Button>
                     {appliedLineItemIds.has(group.targetId) && (
                       <span className="text-xs font-medium text-green-700">✓ Applied</span>
@@ -1601,11 +1662,17 @@ function BidPackageCard({
                 // target only -- there's no client JS here to re-derive
                 // this live as the select below changes, same plain-forms
                 // posture as the rest of this file.
-                const alreadyApplied = matchedItem?.documentId === quoteDocument.id;
+                const rowTargetId = match.lineItemId ?? match.suggestedLineItemId;
+                const drift = rowTargetId ? priceDrift.get(rowTargetId) : undefined;
+                const alreadyApplied = matchedItem?.documentId === quoteDocument.id && !drift;
                 // See pendingMatchCount's own comment above -- an applied
                 // row is removed from this list entirely, not left with a
                 // "Re-apply" button forever, so the table actually shrinks
-                // as a reviewer works through it.
+                // as a reviewer works through it. A drifted row (see
+                // priceDrift's own comment) is the one case that looks
+                // "applied" by documentId alone but must stay visible --
+                // the vendor's revised number still needs a reviewer's
+                // explicit decision, not a silent overwrite.
                 if (alreadyApplied) return null;
                 const applyWithIds = applyVendorMatchAction.bind(null, estimateId, versionId, bidPackage.id);
                 const qtyUnit = vendorLineQtyUnit(match.vendorLine);
@@ -1698,7 +1765,13 @@ function BidPackageCard({
                           This match&apos;s target line item no longer exists (deleted) — pick one manually
                         </p>
                       )}
-                      {!lineItemIdStale && match.reasoning && (
+                      {!lineItemIdStale && drift && (
+                        <p className="mt-1.5 text-xs font-medium text-amber-700">
+                          Quote revised since last applied: was {money(drift.previousUnitCost)}/unit, vendor now says{" "}
+                          {money(drift.newUnitCost)}/unit — review before updating
+                        </p>
+                      )}
+                      {!lineItemIdStale && !drift && match.reasoning && (
                         <p className="mt-1.5 text-xs text-neutral-400">{match.reasoning}</p>
                       )}
                       {!lineItemIdStale && !resolvedLineItemId && resolvedSuggestedId && (
@@ -1719,7 +1792,7 @@ function BidPackageCard({
                         <input type="hidden" name="priorApplied" value={priorAppliedValue} />
                         <input type="hidden" name="index" value={i} />
                         <Button variant="secondary" type="submit">
-                          {alreadyApplied ? "Re-apply" : "Apply"}
+                          {drift ? "Update price" : alreadyApplied ? "Re-apply" : "Apply"}
                         </Button>
                       </form>
                     </td>
