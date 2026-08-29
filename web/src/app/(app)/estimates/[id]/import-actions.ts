@@ -32,14 +32,21 @@ export async function buildFullEstimateFromDocumentsAction(
   const opportunityId = await estimateOpportunityId(estimateId);
   const result = await buildEstimateFromAllDocuments(versionId, opportunityId, user.id);
   revalidatePath(`/estimates/${estimateId}`);
-  redirect(`/estimates/${estimateId}?buildResult=${encodeURIComponent(JSON.stringify(result))}`);
+  redirect(`/estimates/${estimateId}?tab=documents&buildResult=${encodeURIComponent(JSON.stringify(result))}`);
 }
 
 export async function previewImportAction(estimateId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
   const documentId = String(formData.get("documentId") ?? "").trim();
   if (!documentId) throw new Error("Choose a document to import from");
-  redirect(`/estimates/${estimateId}?importDocumentId=${documentId}`);
+  // tab=documents preserved explicitly -- the Tabs component (tabs.tsx)
+  // falls back to its first tab ("Line Items") whenever the URL's own
+  // `tab` param is missing, and this redirect replaces the whole query
+  // string. Without it, a successful preview (with real rows and a
+  // Commit button) renders invisibly on the Documents tab while the user
+  // lands back on Line Items seeing no change at all -- confirmed live,
+  // this was reported as "I clicked import and nothing was added."
+  redirect(`/estimates/${estimateId}?tab=documents&importDocumentId=${documentId}`);
 }
 
 export async function commitImportAction(
@@ -51,7 +58,7 @@ export async function commitImportAction(
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await commitPricingImport(versionId, documentId);
   revalidatePath(`/estimates/${estimateId}`);
-  redirect(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}?tab=documents`);
 }
 
 export async function proposeScopeItemsAction(estimateId: string, formData: FormData) {
@@ -82,7 +89,7 @@ export async function proposeScopeItemsAction(estimateId: string, formData: Form
     throw err;
   }
   revalidatePath(`/estimates/${estimateId}`);
-  redirect(`/estimates/${estimateId}?proposeDocumentId=${documentId}`);
+  redirect(`/estimates/${estimateId}?tab=documents&proposeDocumentId=${documentId}`);
 }
 
 export async function commitScopeItemsAction(
@@ -94,7 +101,7 @@ export async function commitScopeItemsAction(
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await commitScopeLineItems(versionId, documentId);
   revalidatePath(`/estimates/${estimateId}`);
-  redirect(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}?tab=documents`);
 }
 
 // Read-only advisory check, unlike every other action in this file --
