@@ -1543,7 +1543,19 @@ function BidPackageCard({
 
       {bulkGroups.length > 0 && (
         <div className="border-t border-neutral-200 pt-4">
-          <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Bulk match suggestions</h4>
+          <div className="mb-3 flex items-center justify-between">
+            <h4 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">Bulk match suggestions</h4>
+            {/* Reuses MatchGroupCheckbox's own "select all these indices"
+                behavior (see its own comment) against the union of every
+                group's indices, instead of a reviewer having to click each
+                card's checkbox one at a time -- for reviewing N cards and
+                approving them all in one shot via the sticky
+                ApplySelectedMatchesBar below. */}
+            <label className="flex items-center gap-1.5 text-xs text-neutral-500">
+              <MatchGroupCheckbox indices={bulkGroups.flatMap((g) => g.matchIndices)} />
+              Select all {bulkGroups.length} group{bulkGroups.length === 1 ? "" : "s"}
+            </label>
+          </div>
           <div className="flex flex-col gap-3">
             {bulkGroups.map((group) => {
               const targetItem = allLineItems.find((li) => li.id === group.targetId);
