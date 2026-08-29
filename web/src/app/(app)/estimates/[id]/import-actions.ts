@@ -9,7 +9,12 @@ import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service"
 import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
 import { buildEstimateFromAllDocuments } from "@/lib/ai/estimate-synthesis-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
-import { recomputeVersionTotals, updateLineItem } from "@/lib/estimate-service";
+import {
+  confirmAllDraftLineItems,
+  recategorizeLineItems,
+  recomputeVersionTotals,
+  updateLineItem,
+} from "@/lib/estimate-service";
 import { assertVersionBelongsToEstimate, estimateOpportunityId, requireEstimateAccess } from "@/lib/opportunity-access";
 import { db } from "@/lib/db";
 
@@ -148,4 +153,22 @@ export async function updateLineItemUnitCostAction(
   await updateLineItem(opportunityId, lineItemId, { unitCost });
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function confirmAllDraftLineItemsAction(estimateId: string, versionId: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  const count = await confirmAllDraftLineItems(opportunityId, versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}?tab=line-items&confirmedCount=${count}`);
+}
+
+export async function recategorizeLineItemsAction(estimateId: string, versionId: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  const { checked, updated } = await recategorizeLineItems(opportunityId, versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}?tab=review&recategorized=${updated}&recategorizeChecked=${checked}`);
 }

@@ -29,8 +29,10 @@ import {
   buildFullEstimateFromDocumentsAction,
   commitImportAction,
   commitScopeItemsAction,
+  confirmAllDraftLineItemsAction,
   previewImportAction,
   proposeScopeItemsAction,
+  recategorizeLineItemsAction,
   runScopeCoverageAnalysisAction,
 } from "./import-actions";
 import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
@@ -102,6 +104,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     buildResult: buildResultParam,
     applied: appliedParam,
     stale: staleParam,
+    confirmedCount: confirmedCountParam,
+    recategorized: recategorizedParam,
+    recategorizeChecked: recategorizeCheckedParam,
   } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
@@ -124,6 +129,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   // skipping was indistinguishable from the button doing nothing at all
   // (confirmed live).
   const staleMatchCount = Number(Array.isArray(staleParam) ? staleParam[0] : staleParam) || 0;
+  const confirmedCount = confirmedCountParam
+    ? Number(Array.isArray(confirmedCountParam) ? confirmedCountParam[0] : confirmedCountParam) || 0
+    : null;
+  const recategorized = recategorizedParam
+    ? Number(Array.isArray(recategorizedParam) ? recategorizedParam[0] : recategorizedParam) || 0
+    : null;
+  const recategorizeChecked =
+    Number(Array.isArray(recategorizeCheckedParam) ? recategorizeCheckedParam[0] : recategorizeCheckedParam) || 0;
   let buildResult: BuildEstimateResult | null = null;
   if (buildResultRaw) {
     try {
@@ -495,6 +508,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     laborRates={laborRateOptions}
                     attachments={attachments}
                     users={users}
+                    confirmedCount={confirmedCount}
                   />
                 ),
                 options: (
@@ -555,6 +569,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     runCoverageAnalysisAction={runCoverageAnalysisWithIds}
                     coverageAnalysis={coverageAnalysis}
                     coverageGapsWithDocs={coverageGapsWithDocs}
+                    recategorized={recategorized}
+                    recategorizeChecked={recategorizeChecked}
                   />
                 ),
                 proposal: (
@@ -1032,6 +1048,7 @@ function LineItemsTab({
   laborRates,
   attachments,
   users,
+  confirmedCount,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -1041,28 +1058,47 @@ function LineItemsTab({
   laborRates: LaborRateOption[];
   attachments: { id: string; fileRef: string }[];
   users: { id: string; name: string }[];
+  confirmedCount: number | null;
 }) {
   const buckets = bucketLineItemsByCategory(version.sections, categories);
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
+  const draftCount = version.sections.flatMap((s) => s.lineItems).filter((li) => li.isDraft).length;
 
   return (
     <div className="flex flex-col gap-6">
       <Card className="p-6">
+        {confirmedCount !== null && (
+          <p className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+            Confirmed {confirmedCount} draft line item{confirmedCount === 1 ? "" : "s"} -- now counted in the version total.
+          </p>
+        )}
         {version.isLocked ? (
           <VarianceByDepartment sections={version.sections} />
         ) : (
-          <form action={updateMarginTargetAction.bind(null, estimateId, version.id)} className="mb-6 flex items-end gap-3">
-            <div className="w-40">
-              <Field
-                label="Margin target (%)"
-                name="marginTargetPct"
-                type="number"
-                defaultValue={version.marginTargetPct.toString()}
-                required
-              />
-            </div>
-            <Button variant="secondary">Update margin</Button>
-          </form>
+          <div className="mb-6 flex flex-wrap items-end gap-3">
+            <form action={updateMarginTargetAction.bind(null, estimateId, version.id)} className="flex items-end gap-3">
+              <div className="w-40">
+                <Field
+                  label="Margin target (%)"
+                  name="marginTargetPct"
+                  type="number"
+                  defaultValue={version.marginTargetPct.toString()}
+                  required
+                />
+              </div>
+              <Button variant="secondary">Update margin</Button>
+            </form>
+            {draftCount > 0 && (
+              <form
+                action={confirmAllDraftLineItemsAction.bind(null, estimateId, version.id)}
+                title="Marks every draft line item in this version as human-reviewed and priced -- review pricing first, this can't be undone in bulk."
+              >
+                <Button variant="secondary">
+                  Confirm all {draftCount} draft line item{draftCount === 1 ? "" : "s"}
+                </Button>
+              </form>
+            )}
+          </div>
         )}
 
         <BidPackageSelectionProvider>
@@ -2693,6 +2729,8 @@ function ReviewTab({
   runCoverageAnalysisAction,
   coverageAnalysis,
   coverageGapsWithDocs,
+  recategorized,
+  recategorizeChecked,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -2703,6 +2741,8 @@ function ReviewTab({
   runCoverageAnalysisAction: ((formData: FormData) => void | Promise<void>) | null;
   coverageAnalysis: { generatedAt: string; lineItemCount: number; gaps: CoverageGap[] } | null;
   coverageGapsWithDocs: (CoverageGap & { doc: { id: string; filename: string; mimeType: string } })[];
+  recategorized: number | null;
+  recategorizeChecked: number;
 }) {
   const bidPackagesAwaitingReview = currentVersion.bidPackages.filter((p) => p.status === "QUOTE_RECEIVED");
   const hasAnyReview =
@@ -2767,6 +2807,21 @@ function ReviewTab({
             These line items won&apos;t bucket correctly on the client-facing proposal — they&apos;ll fall
             into &quot;Other&quot; instead of their real category. Fix them here before sending.
           </p>
+          {recategorized !== null && (
+            <p className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+              Checked {recategorizeChecked} uncategorized line item{recategorizeChecked === 1 ? "" : "s"} and fixed{" "}
+              {recategorized} using its source document&apos;s own category label.
+              {recategorized < recategorizeChecked &&
+                ` The remaining ${recategorizeChecked - recategorized} still need a manual category -- their source doesn't carry one this can resolve automatically.`}
+            </p>
+          )}
+          <form
+            action={recategorizeLineItemsAction.bind(null, estimateId, currentVersion.id)}
+            className="mb-4"
+            title="Re-checks every uncategorized line item against its source document's own category label (e.g. a Design Cost Estimate workbook's 'Wall Panels'/'BeMatrix' banners) -- catches rows imported before that mapping existed."
+          >
+            <Button variant="secondary">Recategorize using source labels</Button>
+          </form>
           <ul className="flex flex-col gap-2 text-sm">
             {categoryAudit.issues.map((issue) => (
               <li

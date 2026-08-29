@@ -61,6 +61,7 @@ afterEach(async () => {
   await db.document.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
+  await db.category.deleteMany();
 });
 
 afterAll(async () => {
@@ -185,5 +186,45 @@ describe("commitDesignCostEstimateImport", () => {
     expect(updatedDoc.buildName).toBe("A.6.3.0");
 
     await expect(commitDesignCostEstimateImport(version.id, document.id)).rejects.toThrow(/already been imported/);
+  });
+
+  // Confirmed live on a real production estimate: every one of these
+  // part descriptions ("310mm x 2418mm Frame", "SEG w/ Blackout White -
+  // 168 15/16\" x 95 1/16\"") never contains a category-identifying word,
+  // so before mapDesignCostCategoryToCanonical existed, the generic
+  // description-only heuristic resolved essentially every row to null --
+  // "Other" -- flooding the Review tab with ~527 false "won't bucket
+  // correctly" flags on a single estimate. Confirms every row actually
+  // committed carries a real (non-"Other") category, using the same
+  // catalog+description fallback chain as every other import path, now
+  // with the workbook's own banner label given first priority.
+  it("commits every row with a resolved category, not just the ones with a catalog match", async () => {
+    const { opportunity, document } = await makeDocumentFrom(SECTION_211_PATH, "Section 211.xlsx");
+    await db.category.createMany({
+      data: [
+        { name: "Structure", key: "structure" },
+        { name: "Accessories", key: "accessories" },
+        { name: "Graphics", key: "graphics" },
+        { name: "Labor", key: "labor" },
+        { name: "Shipping", key: "shipping" },
+        { name: "Flooring", key: "flooring" },
+        { name: "Custom Build", key: "custom_build" },
+        { name: "Other", key: "other" },
+      ],
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitDesignCostEstimateImport(version.id, document.id);
+
+    const lineItems = await db.lineItem.findMany({ where: { documentId: document.id } });
+    const byDescription = (text: string) => lineItems.find((li) => li.description.includes(text));
+
+    expect(byDescription("2418mm Frame")?.category).toBe("Structure");
+    expect(byDescription("Toolless Connector")?.category).toBe("Accessories");
+    expect(byDescription("SEG w/ Blackout White")?.category).toBe("Structure");
+    expect(byDescription("EMERGANCY EXIT")?.category).toBe("Graphics");
+    expect(byDescription("Warehouse")?.category).toBe("Labor");
+    expect(lineItems.filter((li) => li.category === "Other").length).toBeLessThan(lineItems.length * 0.05);
   });
 });

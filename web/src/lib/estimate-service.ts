@@ -9,6 +9,7 @@
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { BidPackageStatus, LineItemType, SectionType } from "@/generated/prisma/enums";
+import { inferCategoryFromDescription, mapDesignCostCategoryToCanonical } from "@/lib/line-item-category";
 
 type Decimal = Prisma.Decimal;
 type DecimalInput = Decimal | number | string;
@@ -558,6 +559,63 @@ export async function confirmDraftLineItem(opportunityId: string, lineItemId: st
   await db.lineItem.update({ where: { id: lineItemId }, data: { isDraft: false } });
   await recomputeVersionTotals(existing.section.estimateVersionId);
   return db.lineItem.findUniqueOrThrow({ where: { id: lineItemId } });
+}
+
+// Bulk sibling of confirmDraftLineItem above -- a real pricing schedule
+// import can land hundreds of draft rows in one commit (a 13-file booth
+// workbook batch landed 786 on one real estimate), and clicking the
+// per-row confirm button that many times isn't realistic. Same
+// opportunityId ownership check and locked-version guard as the
+// single-item version; returns how many rows it actually flipped so the
+// caller can show a real count instead of a silent no-op.
+export async function confirmAllDraftLineItems(opportunityId: string, estimateVersionId: string) {
+  await assertUnlocked(estimateVersionId);
+  const result = await db.lineItem.updateMany({
+    where: {
+      isDraft: true,
+      section: { estimateVersionId, estimateVersion: { estimate: { opportunityId } } },
+    },
+    data: { isDraft: false },
+  });
+  if (result.count > 0) await recomputeVersionTotals(estimateVersionId);
+  return result.count;
+}
+
+// One-time-per-import-bug repair: re-resolves the category of any
+// LineItem stuck at "Other" (or unset) using the same priority chain
+// design-cost-estimate-import-service.ts's commit now uses -- the
+// workbook's own banner-row category (recovered via
+// EstimateSection.name, which findOrCreateSection sets to that same raw
+// label, e.g. "Wall Panels", "BeMatrix") first, then a catalog match,
+// then the description heuristic. Exists because the bug this backfills
+// affected already-committed LineItems that the parser fix alone can't
+// reach -- new imports get it right automatically, but ~527 rows already
+// written to a real estimate before the fix needed this to catch up.
+// Safe to run broadly: mapDesignCostCategoryToCanonical only ever matches
+// this workbook format's own exact banner strings, so a section named
+// anything else (a flat pricing-schedule's or AI-proposed section) just
+// falls through unchanged.
+export async function recategorizeLineItems(opportunityId: string, estimateVersionId: string) {
+  const categories = await db.category.findMany({ where: { deletedAt: null } });
+  const lineItems = await db.lineItem.findMany({
+    where: {
+      OR: [{ category: null }, { category: "Other" }],
+      section: { estimateVersionId, estimateVersion: { estimate: { opportunityId } } },
+    },
+    include: { section: true },
+  });
+
+  let updated = 0;
+  for (const li of lineItems) {
+    const resolved =
+      mapDesignCostCategoryToCanonical(li.section.name, categories) ??
+      inferCategoryFromDescription(li.description, categories);
+    if (resolved && resolved !== li.category) {
+      await db.lineItem.update({ where: { id: li.id }, data: { category: resolved } });
+      updated++;
+    }
+  }
+  return { checked: lineItems.length, updated };
 }
 
 // Attachment is a reference (filename, or an external FTP/WeTransfer

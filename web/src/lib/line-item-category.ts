@@ -117,6 +117,43 @@ export function mapScopeCategoryToCanonical(
   return key ? resolveCategoryNameFromKey(categories, key) : null;
 }
 
+// design-cost-estimate-import-service.ts's own banner-row category labels
+// ("   BeMatrix", "   Wall Panels", "Labor:", ...) -- confirmed against
+// every one of the 13 real booth workbooks in
+// data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/,
+// this is the complete set that ever precedes a real item row. This is a
+// MORE reliable signal than mapCatalogCategoryToCanonical or
+// inferCategoryFromDescription for this format specifically -- it's the
+// vendor's own explicit grouping, not a guess against free-text part
+// descriptions ("310mm x 2418mm Frame", "SEG w/ Blackout White - 168
+// 15/16\" x 95 1/16\"") that never contain a category-identifying word at
+// all, which is exactly why every row from this importer was landing in
+// "Other" before this existed (confirmed live: ~527 of 540 Review-tab
+// flags on a real estimate were this, not $0 pricing or anything else).
+// Deliberately NOT exhaustive -- "Cleaning", "AE % Commission", and the
+// section-header banners ("Exhibit Components:", "OPTIONAL ELEMENTS")
+// have no confident canonical home and are left to fall through to the
+// description heuristic (and, from there, "Other") rather than guessed.
+const DESIGN_COST_CATEGORY_KEY_MAP: Record<string, string> = {
+  "flooring": "flooring",
+  "bematrix": "structure",
+  "bematrix accessories": "accessories",
+  "wall panels": "structure",
+  "graphic panels": "graphics",
+  "electrical": CUSTOM_BUILD_CATEGORY_KEY,
+  "labor:": "labor",
+  "local transportation / material handling:": "shipping",
+};
+
+export function mapDesignCostCategoryToCanonical(
+  rawCategory: string | null | undefined,
+  categories: Pick<Category, "key" | "name">[],
+): string | null {
+  if (!rawCategory) return null;
+  const key = DESIGN_COST_CATEGORY_KEY_MAP[rawCategory.trim().toLowerCase()];
+  return key ? resolveCategoryNameFromKey(categories, key) : null;
+}
+
 // Fallback for descriptions that never match the catalog at all -- real
 // RFP pricing-schedule line descriptions ("Complete Booth Build 12' x 7'
 // booth...") routinely don't, by catalog-match-service.ts's own design

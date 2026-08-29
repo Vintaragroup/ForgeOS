@@ -16,7 +16,12 @@ import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import { db } from "@/lib/db";
 import { cellText } from "@/lib/xlsx-utils";
 import { loadCatalogForMatching, matchDescription, type CatalogMatch } from "@/lib/catalog-match-service";
-import { inferIsClientOwned, resolveLineItemCategory } from "@/lib/line-item-category";
+import {
+  inferCategoryFromDescription,
+  inferIsClientOwned,
+  mapCatalogCategoryToCanonical,
+  mapDesignCostCategoryToCanonical,
+} from "@/lib/line-item-category";
 
 const TITLE_SCAN_ROWS = 10; // "DESIGN COST ESTIMATE" + "Build Name:" always appear in the first few rows
 const HEADER_SCAN_ROWS = 35; // the item-table header (row 30 in every real file seen) comes after a longer disclaimer block than pricing-import-service.ts's own sheets
@@ -327,10 +332,17 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
         // match (catalogMatch is still surfaced in the preview purely as
         // a review hint).
         unitCost: row.unitCost,
-        category: resolveLineItemCategory(
-          { catalogCategory: row.catalogMatch?.category, description: row.description },
-          categories,
-        ),
+        // The workbook's own banner-row category ("Wall Panels",
+        // "BeMatrix", "Labor:", ...) is a more reliable signal here than
+        // a catalog match or a description guess -- these part
+        // descriptions ("310mm x 2418mm Frame") never contain a
+        // category-identifying word themselves. See
+        // mapDesignCostCategoryToCanonical's own comment for why this
+        // isn't routed through resolveLineItemCategory's generic chain.
+        category:
+          mapDesignCostCategoryToCanonical(row.category, categories) ??
+          mapCatalogCategoryToCanonical(row.catalogMatch?.category, categories) ??
+          inferCategoryFromDescription(row.description, categories),
         isClientOwned: inferIsClientOwned(row.description),
         documentId,
         sourceQuote: row.sourceQuote,
