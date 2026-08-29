@@ -1250,19 +1250,22 @@ function BidPackageCard({
   // "applied" forever (documentId still matches) and silently keep its
   // stale price: the row disappears from Match Review, "Apply all N
   // high-confidence" skips it as already-done, and the revised number
-  // from the vendor is never surfaced anywhere. Grouped by resolved
-  // target, not per vendor-line row, since duplicate vendor lines summing
-  // onto one item (see bulkGroups below) only have a meaningful "did the
-  // total change" answer as a group -- comparing one of several rows in
-  // isolation against the summed target would false-positive on every
-  // group member even when the group's total is unchanged.
+  // from the vendor is never surfaced anywhere. Grouped by CONFIRMED
+  // target only (m.lineItemId, never suggestedLineItemId) -- a bulk
+  // group can have several vendor lines sharing one suggested target
+  // where only ONE ever actually won an apply (see resolveVendorLineMatches's
+  // dedup comment); the rest are still just proposals, never summed into
+  // what's actually on the line item. Grouping by suggestedLineItemId too
+  // was tried first and produced a false-positive "drift" on nearly every
+  // already-applied row in the package (confirmed live) -- it was
+  // comparing the target's real applied price against a fresh sum that
+  // included sibling vendor lines nobody had ever applied yet.
   const priceDrift = new Map<string, { previousUnitCost: number; newUnitCost: number }>();
   if (matches && quoteDocument) {
     const byTargetForDrift = new Map<string, VendorLineMatch[]>();
     for (const m of matches) {
-      const targetId = m.lineItemId ?? m.suggestedLineItemId;
-      if (!targetId) continue;
-      byTargetForDrift.set(targetId, [...(byTargetForDrift.get(targetId) ?? []), m]);
+      if (!m.lineItemId) continue;
+      byTargetForDrift.set(m.lineItemId, [...(byTargetForDrift.get(m.lineItemId) ?? []), m]);
     }
     for (const [targetId, group] of byTargetForDrift) {
       const target = allLineItems.find((li) => li.id === targetId);
@@ -1662,8 +1665,11 @@ function BidPackageCard({
                 // target only -- there's no client JS here to re-derive
                 // this live as the select below changes, same plain-forms
                 // posture as the rest of this file.
-                const rowTargetId = match.lineItemId ?? match.suggestedLineItemId;
-                const drift = rowTargetId ? priceDrift.get(rowTargetId) : undefined;
+                // lineItemId only, not suggestedLineItemId -- see
+                // priceDrift's own comment above on why: "Quote revised
+                // since last applied" only makes sense for a row that was
+                // actually applied before, not a still-pending suggestion.
+                const drift = match.lineItemId ? priceDrift.get(match.lineItemId) : undefined;
                 const alreadyApplied = matchedItem?.documentId === quoteDocument.id && !drift;
                 // See pendingMatchCount's own comment above -- an applied
                 // row is removed from this list entirely, not left with a
