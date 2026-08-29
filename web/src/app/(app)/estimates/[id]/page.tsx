@@ -1717,6 +1717,7 @@ function BidPackageCard({
                         <input type="hidden" name="documentId" value={quoteDocument.id} />
                         <input type="hidden" name="sourceQuote" value={match.vendorLine.sourceQuote} />
                         <input type="hidden" name="priorApplied" value={priorAppliedValue} />
+                        <input type="hidden" name="index" value={i} />
                         <Button variant="secondary" type="submit">
                           {alreadyApplied ? "Re-apply" : "Apply"}
                         </Button>

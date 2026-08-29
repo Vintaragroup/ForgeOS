@@ -252,6 +252,8 @@ export async function applyVendorMatchAction(
   const unitCost = Number(formData.get("unitCost"));
   const documentId = String(formData.get("documentId") ?? "").trim();
   const sourceQuote = String(formData.get("sourceQuote") ?? "");
+  const rawIndex = formData.get("index");
+  const index = rawIndex === null ? NaN : Number(rawIndex);
   if (!lineItemId) throw new Error("Choose which line item this vendor price applies to.");
   if (!Number.isFinite(unitCost)) throw new Error("Unit cost must be a number.");
   if (!documentId) throw new Error("Missing vendor quote document reference.");
@@ -264,9 +266,33 @@ export async function applyVendorMatchAction(
   await recomputeVersionTotals(versionId);
 
   const [bidPackage, document] = await Promise.all([
-    db.bidPackage.findUniqueOrThrow({ where: { id: bidPackageId }, select: { name: true } }),
+    db.bidPackage.findUniqueOrThrow({ where: { id: bidPackageId }, select: { name: true, matchResult: true } }),
     db.document.findUniqueOrThrow({ where: { id: documentId }, select: { filename: true } }),
   ]);
+
+  // A row the AI itself never matched (lineItemId null -- "no matching
+  // candidate", the dropdown fell back to a suggestion or manual pick)
+  // needs its choice written back here, or this same row would show
+  // "— choose one —" forever: the shrinking-list check on the page
+  // (alreadyApplied) reads match.lineItemId from this persisted array,
+  // not from what got submitted just now. Confirmed live: a manually
+  // resolved Contingency/Labor row (no AI candidate existed at
+  // match-time) stayed in the pending list indefinitely without this,
+  // even though the line item's own price/documentId were already
+  // correct -- the write above updates the LineItem, this is the other
+  // half that keeps the review table itself in sync.
+  if (Number.isInteger(index) && index >= 0) {
+    const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? [];
+    if (matches[index] && matches[index].lineItemId !== lineItemId) {
+      const updatedMatches = matches.map((m, i) =>
+        i === index ? { ...m, lineItemId, confidence: "high" as const, needsClarification: false } : m,
+      );
+      await db.bidPackage.update({
+        where: { id: bidPackageId },
+        data: { matchResult: updatedMatches as unknown as Prisma.InputJsonValue },
+      });
+    }
+  }
   // This action never passes qty (see updateLineItem's own `data.qty ??
   // existing.qty`) -- the existing qty, fetched before the write above,
   // is the real number that landed, not an assumption.

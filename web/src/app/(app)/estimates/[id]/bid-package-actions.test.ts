@@ -344,6 +344,69 @@ describe("applyVendorMatchAction", () => {
     expect(logs[0].unitCost.toNumber()).toBe(840);
     expect(logs[0].vendorLineDescriptions).toContain("Sleeper Floor");
   });
+
+  it("patches matchResult[index].lineItemId when applying a row the AI never matched -- otherwise the row would show \"no match\" forever even after a correct manual apply", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+      },
+    });
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("10% Contingency", 53000, 1)),
+      match(vendorLine("Unrelated line", 100, 1)),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const formData = new FormData();
+    formData.set("lineItemId", item.id);
+    formData.set("unitCost", "53000");
+    formData.set("documentId", document.id);
+    formData.set("index", "0");
+    await expectAppliedRedirect(applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData), item.id);
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    const updatedMatches = updated.matchResult as unknown as VendorLineMatch[];
+    expect(updatedMatches[0].lineItemId).toBe(item.id);
+    expect(updatedMatches[0].confidence).toBe("high");
+    expect(updatedMatches[0].needsClarification).toBe(false);
+    // Unrelated second match untouched.
+    expect(updatedMatches[1].lineItemId).toBeNull();
+  });
+
+  it("does not touch matchResult when no index is submitted -- existing callers/tests with no matchResult at all must stay unaffected", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+      },
+    });
+
+    const formData = new FormData();
+    formData.set("lineItemId", item.id);
+    formData.set("unitCost", "840");
+    formData.set("documentId", document.id);
+    await expectAppliedRedirect(applyVendorMatchAction(estimate.id, version.id, bidPackage.id, formData), item.id);
+
+    const updated = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackage.id } });
+    expect(updated.matchResult).toBeNull();
+  });
 });
 
 describe("applyVendorMatchGroupAction", () => {
