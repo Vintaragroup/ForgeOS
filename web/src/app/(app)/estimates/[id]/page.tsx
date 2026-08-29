@@ -1598,19 +1598,44 @@ function BidPackageCard({
               Match review — {quoteDocument.filename}
             </h4>
             <div className="flex items-center gap-2">
-              {highConfidenceMatches.length > 0 && (
-                <form
-                  action={applyAllHighConfidenceMatchesAction.bind(null, estimateId, versionId, bidPackage.id)}
-                >
-                  <input type="hidden" name="documentId" value={quoteDocument.id} />
-                  <input type="hidden" name="priorApplied" value={priorAppliedValue} />
-                  <Button variant="secondary" type="submit">
-                    {highConfidencePendingCount > 0 ? "Apply" : "Re-apply"} all {highConfidenceDisplayCount}{" "}
-                    high-confidence match{highConfidenceDisplayCount === 1 ? "" : "es"} (sum{" "}
-                    {money(highConfidenceDisplayTotal)})
-                  </Button>
-                </form>
-              )}
+              {highConfidenceMatches.length > 0 &&
+                (highConfidencePendingCount > 0 ? (
+                  <form
+                    action={applyAllHighConfidenceMatchesAction.bind(null, estimateId, versionId, bidPackage.id)}
+                  >
+                    <input type="hidden" name="documentId" value={quoteDocument.id} />
+                    <input type="hidden" name="priorApplied" value={priorAppliedValue} />
+                    <Button variant="secondary" type="submit">
+                      Apply all {highConfidenceDisplayCount} high-confidence match
+                      {highConfidenceDisplayCount === 1 ? "" : "es"} (sum {money(highConfidenceDisplayTotal)})
+                    </Button>
+                  </form>
+                ) : (
+                  // Nothing pending -- this used to say "Re-apply all N
+                  // high-confidence matches," which read as an open action
+                  // item even though every one of these N is already
+                  // correctly applied and unchanged. Confirmed live: a real
+                  // user read that as "these need fixing" rather than "these
+                  // are fine, here's an optional reconfirm." The button
+                  // still exists (re-affirming everything is occasionally
+                  // useful, e.g. after editing a target's qty by hand
+                  // outside this flow) but no longer looks like a to-do.
+                  <div className="flex items-center gap-2 text-sm text-neutral-500">
+                    <span className="text-green-700">
+                      ✓ All {highConfidenceDisplayCount} high-confidence match
+                      {highConfidenceDisplayCount === 1 ? "" : "es"} already applied ({money(highConfidenceDisplayTotal)})
+                    </span>
+                    <form
+                      action={applyAllHighConfidenceMatchesAction.bind(null, estimateId, versionId, bidPackage.id)}
+                    >
+                      <input type="hidden" name="documentId" value={quoteDocument.id} />
+                      <input type="hidden" name="priorApplied" value={priorAppliedValue} />
+                      <button type="submit" className="text-xs text-neutral-400 underline hover:text-neutral-600">
+                        re-affirm anyway
+                      </button>
+                    </form>
+                  </div>
+                ))}
               {/* Once a document has any stored vendorQuoteLineItems,
                   SubmitVendorQuoteExtractForm above never renders again --
                   this is the only way to re-run extraction against updated
