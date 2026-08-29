@@ -4,7 +4,21 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { uploadDocument } from "@/lib/document-service";
 import { createEstimateVersion } from "@/lib/estimate-service";
-import { commitPricingImport, previewPricingImport } from "@/lib/pricing-import-service";
+import { commitPricingImport, previewPricingImport, type PricingImportPreview } from "@/lib/pricing-import-service";
+
+// previewPricingImport now also dispatches to the Design Cost Estimate
+// booth-workbook shape (design-cost-estimate-import-service.ts) and
+// returns a union of the two preview types -- every fixture in this file
+// is the flat-schedule shape, so this just narrows for TypeScript with a
+// real runtime check, rather than every call site repeating an inline
+// `if (preview.kind !== "pricing-schedule") throw ...`.
+async function previewFlatSchedule(documentId: string, opportunityId: string): Promise<PricingImportPreview> {
+  const preview = await previewPricingImport(documentId, opportunityId);
+  if (preview.kind !== "pricing-schedule") {
+    throw new Error(`Expected a flat pricing-schedule preview, got "${preview.kind}".`);
+  }
+  return preview;
+}
 
 // Real fixture from Phase 7's roadmap RFP package -- see data/RFP/superbowl.
 // Ground truth (162 rows / 5 categories) independently verified against
@@ -86,7 +100,7 @@ describe("previewPricingImport", () => {
   it("parses the real Exhibit 1 pricing schedule into 162 rows across 5 categories", async () => {
     const { opportunity, document } = await makeDocument();
 
-    const preview = await previewPricingImport(document.id, opportunity.id);
+    const preview = await previewFlatSchedule(document.id, opportunity.id);
 
     expect(preview.rows).toHaveLength(162);
     expect(preview.categories.sort()).toEqual(
@@ -115,7 +129,7 @@ describe("previewPricingImport", () => {
     await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
     const { opportunity, document } = await makeDocument();
 
-    const preview = await previewPricingImport(document.id, opportunity.id);
+    const preview = await previewFlatSchedule(document.id, opportunity.id);
     const doorRow = preview.rows.find((r) => r.description.toLowerCase().includes("compliant door"));
 
     expect(doorRow).toBeDefined();
@@ -126,7 +140,7 @@ describe("previewPricingImport", () => {
     await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
     const { opportunity, document } = await makeDocument();
 
-    const preview = await previewPricingImport(document.id, opportunity.id);
+    const preview = await previewFlatSchedule(document.id, opportunity.id);
     const boothBuildRow = preview.rows.find((r) => r.description.includes("Complete Booth Build"));
 
     expect(boothBuildRow?.catalogMatch).toBeNull();
@@ -274,7 +288,7 @@ describe("previewPricingImport -- Arena RFP header shape variants", () => {
   it("recovers all 44 named positions from Arena-template.xlsx by falling back to the Item column when Description is blank", async () => {
     const { opportunity, document } = await makeDocumentFrom(ARENA_TEMPLATE_PATH, "Arena-template.xlsx");
 
-    const preview = await previewPricingImport(document.id, opportunity.id);
+    const preview = await previewFlatSchedule(document.id, opportunity.id);
 
     // Before the Item-column fallback, 78 of these 96 candidate rows were
     // silently dropped as spacer rows (verified live against this exact
@@ -315,7 +329,7 @@ describe("previewPricingImport -- Arena RFP header shape variants", () => {
     // Before the header-synonym matching, this threw "doesn't contain a
     // recognizable Pricing Schedule sheet" -- verified live against this
     // exact file, which was otherwise byte-for-byte the same RFP shape.
-    const preview = await previewPricingImport(document.id, opportunity.id);
+    const preview = await previewFlatSchedule(document.id, opportunity.id);
 
     expect(preview.rows).toHaveLength(76);
     const byCategory = Object.fromEntries(

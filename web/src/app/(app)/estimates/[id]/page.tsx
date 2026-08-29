@@ -294,6 +294,34 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       ? await previewPricingImport(importDocumentId, estimate.opportunityId).catch((err: Error) => err)
       : null;
 
+  // Flag-only mirror check (see design-cost-estimate-import-service.ts's
+  // own header comment on why this never auto-copies pricing): a Design
+  // Cost Estimate booth workbook's "Build Name" is the one signal in that
+  // template that another uploaded document is the SAME design -- one
+  // section copied wholesale from another, or re-quantified from it,
+  // rather than independently engineered. Confirmed live against 13 real
+  // booth workbooks for one RFP: several share a Build Name, one pair
+  // byte-identical. Normalized (strip everything but letters/digits) so
+  // "A6.6.1 SECTION 330" and "A 6.6.1 SECTION 330" -- the same design,
+  // just inconsistently typed across two files -- still match.
+  const normalizeBuildName = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const mirrorDocuments =
+    importPreview && !(importPreview instanceof Error) && importPreview.kind === "design-cost-estimate" && importPreview.buildName
+      ? await db.document
+          .findMany({
+            where: { opportunityId: estimate.opportunityId, deletedAt: null, buildName: { not: null } },
+            select: { id: true, filename: true, buildName: true },
+          })
+          .then((docs) =>
+            docs.filter(
+              (d) =>
+                d.id !== importDocumentId &&
+                d.buildName &&
+                normalizeBuildName(d.buildName) === normalizeBuildName(importPreview.buildName!),
+            ),
+          )
+      : [];
+
   // proposedLineItems is computed once (see the "Propose items" button,
   // scope-line-item-service.ts) and cached on the Document -- reading it
   // here is free, no repeat OpenAI call on every page load/reload.
@@ -476,6 +504,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     previewImportAction={previewImportWithId}
                     importDocumentId={importDocumentId}
                     importPreview={importPreview}
+                    mirrorDocuments={mirrorDocuments}
                     currentVersion={currentVersion}
                     scopeDocuments={scopeDocuments}
                     proposeScopeItemsAction={proposeScopeItemsWithId}
@@ -2246,6 +2275,7 @@ function DocumentsTab({
   previewImportAction,
   importDocumentId,
   importPreview,
+  mirrorDocuments,
   currentVersion,
   scopeDocuments,
   proposeScopeItemsAction,
@@ -2267,6 +2297,7 @@ function DocumentsTab({
   previewImportAction: (formData: FormData) => void | Promise<void>;
   importDocumentId: string | undefined;
   importPreview: Awaited<ReturnType<typeof previewPricingImport>> | Error | null;
+  mirrorDocuments: { id: string; filename: string; buildName: string | null }[];
   currentVersion: VersionWithSections;
   scopeDocuments: { id: string; filename: string }[];
   proposeScopeItemsAction: (formData: FormData) => void | Promise<void>;
@@ -2401,42 +2432,90 @@ function DocumentsTab({
                 <span className="font-medium">{importPreview.categories.length}</span> categories in{" "}
                 <span className="font-medium">{importPreview.filename}</span> ({importPreview.sheetName}).
               </p>
+
+              {/* Flag-only -- see mirrorDocuments' own comment above on why
+                  this never auto-copies pricing. A reviewer decides whether
+                  a shared Build Name means "intentionally mirrored, import
+                  as-is" or "accidentally duplicated, go verify the real
+                  drawing before trusting this." */}
+              {importPreview.kind === "design-cost-estimate" && mirrorDocuments.length > 0 && (
+                <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  This booth&apos;s Build Name (<span className="font-medium">{importPreview.buildName}</span>) matches{" "}
+                  {mirrorDocuments.length} other uploaded document{mirrorDocuments.length === 1 ? "" : "s"}:{" "}
+                  {mirrorDocuments.map((d) => d.filename).join(", ")} — verify quantities before importing, this may
+                  be an intentionally mirrored design or an accidental duplicate.
+                </p>
+              )}
+
               <div className="mb-4 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-neutral-50">
-                    <tr className="text-left text-neutral-500">
-                      <th className="px-2 py-1.5 font-normal">Category</th>
-                      <th className="px-2 py-1.5 font-normal">Description</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Unit</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Qty</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {importPreview.rows.map((row) => (
-                      <tr key={row.rowNumber} className="border-t border-neutral-100">
-                        <td className="px-2 py-1 text-neutral-500">{row.category}</td>
-                        <td className="max-w-[24rem] truncate px-2 py-1" title={row.description}>
-                          {row.description.split("\n")[0]}
-                        </td>
-                        <td className="px-2 py-1 text-right">{row.unit}</td>
-                        <td className="px-2 py-1 text-right">{row.qty}</td>
-                        <td className="px-2 py-1 text-right">
-                          {row.catalogMatch ? (
-                            <span
-                              className="text-brand-navy"
-                              title={`Matched to ${row.catalogMatch.source} catalog: "${row.catalogMatch.name}" -- verify before relying on it.`}
-                            >
-                              ${row.catalogMatch.unitCost.toFixed(2)}
-                            </span>
-                          ) : (
-                            <span className="text-neutral-400">—</span>
-                          )}
-                        </td>
+                {importPreview.kind === "design-cost-estimate" ? (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-neutral-50">
+                      <tr className="text-left text-neutral-500">
+                        <th className="px-2 py-1.5 font-normal">Category</th>
+                        <th className="px-2 py-1.5 font-normal">Description</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Unit cost</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {importPreview.rows.map((row) => (
+                        <tr key={row.rowNumber} className="border-t border-neutral-100">
+                          <td className="px-2 py-1 text-neutral-500">{row.category}</td>
+                          <td className="max-w-[24rem] truncate px-2 py-1" title={row.description}>
+                            {row.description.split("\n")[0]}
+                          </td>
+                          <td className="px-2 py-1 text-right">{row.qty}</td>
+                          <td className="px-2 py-1 text-right">
+                            {row.unitCost > 0 ? (
+                              `$${row.unitCost.toFixed(2)}`
+                            ) : (
+                              <span className="text-neutral-400" title="Not yet priced in the source workbook">
+                                $0.00
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-neutral-50">
+                      <tr className="text-left text-neutral-500">
+                        <th className="px-2 py-1.5 font-normal">Category</th>
+                        <th className="px-2 py-1.5 font-normal">Description</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Unit</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.rows.map((row) => (
+                        <tr key={row.rowNumber} className="border-t border-neutral-100">
+                          <td className="px-2 py-1 text-neutral-500">{row.category}</td>
+                          <td className="max-w-[24rem] truncate px-2 py-1" title={row.description}>
+                            {row.description.split("\n")[0]}
+                          </td>
+                          <td className="px-2 py-1 text-right">{row.unit}</td>
+                          <td className="px-2 py-1 text-right">{row.qty}</td>
+                          <td className="px-2 py-1 text-right">
+                            {row.catalogMatch ? (
+                              <span
+                                className="text-brand-navy"
+                                title={`Matched to ${row.catalogMatch.source} catalog: "${row.catalogMatch.name}" -- verify before relying on it.`}
+                              >
+                                ${row.catalogMatch.unitCost.toFixed(2)}
+                              </span>
+                            ) : (
+                              <span className="text-neutral-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
               <form action={commitImportAction.bind(null, estimateId, currentVersion.id, importPreview.documentId)}>
                 <Button>

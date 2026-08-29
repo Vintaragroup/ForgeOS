@@ -460,6 +460,17 @@ model Document {
   // price field at all, by design, for ExpoCCI's own scope documents.
   vendorQuoteLineItems Json?
 
+  // Verbatim "Build Name:" field read from a Design Cost Estimate booth
+  // workbook (design-cost-estimate-import-service.ts) -- the only signal
+  // in that template that two independently-uploaded documents are the
+  // SAME booth design (a genuine "mirror build": one section copied
+  // wholesale, or re-quantified, from another's engineering rather than
+  // independently priced). Compared across sibling documents on the same
+  // opportunity at import-preview time to surface a flag-only banner --
+  // never used to auto-copy pricing, a human always decides. Null for
+  // every other document type/shape.
+  buildName String?
+
   // Set once this document is attached to a BidPackage as its vendor's
   // quote -- null until then, same as estimateId above. A VENDOR_QUOTE
   // document is uploaded generically (Opportunity Documents card, same

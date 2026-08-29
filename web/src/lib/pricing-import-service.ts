@@ -19,6 +19,12 @@ import { db } from "@/lib/db";
 import { cellText } from "@/lib/xlsx-utils";
 import { loadCatalogForMatching, matchDescription, type CatalogMatch } from "@/lib/catalog-match-service";
 import { inferIsClientOwned, resolveLineItemCategory } from "@/lib/line-item-category";
+import {
+  commitDesignCostEstimateImport,
+  findDesignCostEstimateSheet,
+  previewDesignCostEstimateImport,
+  type DesignCostEstimatePreview,
+} from "@/lib/design-cost-estimate-import-service";
 
 const HEADER_SCAN_ROWS = 20; // header always appears near the top, after a title/merge block
 
@@ -51,6 +57,10 @@ export interface ParsedPricingRow {
 }
 
 export interface PricingImportPreview {
+  // See DesignCostEstimatePreview's own comment on this field -- lets
+  // previewPricingImport's dispatcher return a union of the two shapes
+  // and page.tsx pick the right table.
+  kind: "pricing-schedule";
   documentId: string;
   filename: string;
   sheetName: string;
@@ -134,7 +144,10 @@ function findPricingSheet(
 // could preview -- and, via commitPricingImport below, commit -- a
 // DIFFERENT opportunity's pricing schedule into an estimate the caller
 // was never authorized to see that document under.
-export async function previewPricingImport(documentId: string, opportunityId: string): Promise<PricingImportPreview> {
+export async function previewPricingImport(
+  documentId: string,
+  opportunityId: string,
+): Promise<PricingImportPreview | DesignCostEstimatePreview> {
   const { document, bytes } = await getDocumentBytes(documentId);
   if (document.opportunityId !== opportunityId) {
     throw new Error("This document doesn't belong to this opportunity.");
@@ -145,6 +158,16 @@ export async function previewPricingImport(documentId: string, opportunityId: st
   // generation than this project's -- structurally identical at runtime,
   // so this is a type-level mismatch only, not a real conversion.
   await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+
+  // Tried first, before this importer's own flat-schedule detection --
+  // the two shapes are distinct enough (see detectDesignCostEstimateSheet's
+  // own comment) that this never misfires on a real flat pricing schedule.
+  // Keeps this one function/one "Preview import" button the uploader ever
+  // sees, regardless of which of the two shapes their file turns out to
+  // be -- they still just tag it "Pricing schedule" as usual.
+  if (findDesignCostEstimateSheet(workbook)) {
+    return previewDesignCostEstimateImport(documentId, opportunityId);
+  }
 
   const found = findPricingSheet(workbook);
   if (!found) {
@@ -216,6 +239,7 @@ export async function previewPricingImport(documentId: string, opportunityId: st
   }
 
   return {
+    kind: "pricing-schedule",
     documentId,
     filename: document.filename,
     sheetName: sheet.name,
@@ -278,6 +302,13 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
     select: { estimate: { select: { opportunityId: true } } },
   });
   const preview = await previewPricingImport(documentId, version.estimate.opportunityId);
+  // Same dispatch as previewPricingImport's own -- re-derives its preview
+  // internally rather than taking this one as a param, same "derive
+  // fresh, don't trust a caller-passed preview" posture this function
+  // already applies to opportunityId above.
+  if (preview.kind === "design-cost-estimate") {
+    return commitDesignCostEstimateImport(estimateVersionId, documentId);
+  }
   if (preview.rows.length === 0) {
     throw new Error(`No line items found in "${preview.filename}".`);
   }
