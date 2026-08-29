@@ -1295,6 +1295,18 @@ function BidPackageCard({
       ? highConfidencePendingMatches.reduce((sum, m) => sum + m.vendorLine.unitPrice, 0)
       : highConfidenceTotal;
 
+  // A row whose target line item's own documentId already equals this
+  // quote's is done -- same "applied" definition every other apply
+  // button on this card already uses (alreadyApplied below, bulkGroups'
+  // own filter above). Used to keep the Match Review table itself from
+  // growing forever: once a row is applied it's removed from view here,
+  // same as an applied bulk-suggestion group, so the list actually
+  // shrinks as a reviewer works through it instead of accumulating
+  // "Re-apply" rows indefinitely. The permanent record lives on the
+  // History tab (vendor-match-apply-log-service.ts), not here.
+  const isMatchApplied = (m: VendorLineMatch) => allLineItems.find((li) => li.id === m.lineItemId)?.documentId === quoteDocument?.id;
+  const pendingMatchCount = matches ? matches.filter((m) => !isMatchApplied(m)).length : 0;
+
   return (
     <Card id={`bid-package-${bidPackage.id}`} className="p-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -1547,6 +1559,11 @@ function BidPackageCard({
               was made). Cleared below; try Re-extract or pick a new target manually.
             </p>
           )}
+          {pendingMatchCount === 0 ? (
+            <p className="mb-4 text-sm text-neutral-500">
+              Every match from this quote has been applied — see the History tab for the full record.
+            </p>
+          ) : (
           <table className="mb-4 w-full text-sm">
             <thead>
               <tr className="text-left text-neutral-500">
@@ -1585,6 +1602,11 @@ function BidPackageCard({
                 // this live as the select below changes, same plain-forms
                 // posture as the rest of this file.
                 const alreadyApplied = matchedItem?.documentId === quoteDocument.id;
+                // See pendingMatchCount's own comment above -- an applied
+                // row is removed from this list entirely, not left with a
+                // "Re-apply" button forever, so the table actually shrinks
+                // as a reviewer works through it.
+                if (alreadyApplied) return null;
                 const applyWithIds = applyVendorMatchAction.bind(null, estimateId, versionId, bidPackage.id);
                 const qtyUnit = vendorLineQtyUnit(match.vendorLine);
                 // Jumps to the real page in the source document (same
@@ -1642,9 +1664,6 @@ function BidPackageCard({
                         <span className="mr-1.5 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">
                           {match.vendorLine.unitCode}
                         </span>
-                      )}
-                      {match.lineItemId && appliedLineItemIds.has(match.lineItemId) && (
-                        <span className="mr-1.5 text-xs font-medium text-green-700">✓ Applied</span>
                       )}
                       {sourceHref ? (
                         <Link href={sourceHref} className="text-brand-navy hover:underline">
@@ -1708,6 +1727,7 @@ function BidPackageCard({
               })}
             </tbody>
           </table>
+          )}
           {unmatchedPackageItems.length > 0 && (
             <p className="mb-4 text-sm text-amber-700">
               {unmatchedPackageItems.length} package item{unmatchedPackageItems.length === 1 ? "" : "s"} weren&apos;t
