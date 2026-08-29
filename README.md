@@ -68,6 +68,7 @@ flowchart LR
 | **One-click estimate synthesis** | Builds a full estimate from every analyzed document on an opportunity in a single pass, instead of importing one document at a time |
 | **In-app chat** | Ask questions about an opportunity's documents, answered with inline citations |
 | **Cost governance** | Per-user, per-feature OpenAI token/cost tracking with case-based model tiering (cheap model for extraction, stronger model for vision) |
+| **Vendor bid packages & AI matching** | Group line items for outsourced vendor pricing, AI-match a vendor's quote against the whole estimate (deterministic position-code matching before AI, holistic matching after), bulk-apply duplicate matches with a durable per-apply audit trail, and a category audit that catches anything that would silently fall into "Other" on the client-facing PDF |
 
 ## Architecture
 
@@ -105,7 +106,7 @@ flowchart TB
 | AI | OpenAI GPT-4o-mini / GPT-4o, Structured Outputs (`json_schema`, `strict: true`) |
 | PDF generation | `@react-pdf/renderer` — no headless-browser dependency |
 | Testing | Vitest, against a real (not mocked) Postgres test database |
-| Deployment | Docker multi-stage build (`web/Dockerfile`, `web/docker-compose.yml`) |
+| Deployment | Production: Vercel (app) + Render (Postgres) + Vercel Blob (files) — auto-deploys on push to `main`. Docker multi-stage build (`web/Dockerfile`, `web/docker-compose.yml`) is a self-host alternative, not the production path. |
 
 ## Getting started
 

@@ -424,6 +424,59 @@ sequencing" section for the full backlog and reasoning.
   app + Render Postgres — has since been made; see the Deployment
   section above.)
 
+## Scope (Vendor bid packages & AI matching)
+
+Post-Phase-6 work, not part of `docs/migration-plan.md`'s original phase
+list — the Phase 6 header explicitly deferred AI assistance until real
+`EstimateVersion` usage existed to build against; this is that follow-on
+work, grown organically rather than pre-planned.
+
+- **Document intake** (`/estimates/[id]`, Documents tab) — RFP/scope/
+  vendor-quote files uploaded straight to Vercel Blob (see Deployment
+  above), then AI-analyzed for risk flags, key dates, and a scope summary
+  (`src/lib/ai/`). `scope-coverage-service.ts` cross-checks a version's
+  line items against its scope documents for requirements that don't
+  appear to be priced anywhere — advisory only, never auto-adds line
+  items. `clarification-questions-service.ts` generates client-facing
+  questions for genuine RFP ambiguities.
+- **Bid packages** (`BidPackage`, `/estimates/[id]` Bid Packages tab,
+  `bid-package-actions.ts`) — group a subset of an estimate's line items
+  for outsourced vendor pricing. A vendor's quote document gets AI
+  extraction + holistic matching against every line item on the *whole*
+  estimate version, not just the bid package's own subset
+  (`vendor-match-ai-service.ts`, `matchVendorQuoteLinesWithAi`) — a real
+  bid package can have only a handful of member line items while the
+  estimate itself has 30-40+.
+- **`LineItem.positionCode`** — captured from a Pricing Schedule's own
+  Ref./Reference column on import (`pricing-import-service.ts`). Lets the
+  matcher resolve a vendor line whose `unitCode` exactly matches a
+  candidate's `positionCode` deterministically, before AI ever sees
+  either one, and is surfaced as a small badge next to the description in
+  the Line Items tab (`line-item-row.tsx`) — the only way to tell apart
+  two rows that share an identical generic description and price (a real
+  case: two symmetric camera/booth positions legitimately priced the
+  same by the vendor).
+- **Match review + bulk apply** — a checkbox per match row or per
+  bulk-suggestion group (`match-selection.tsx`, `MatchRowCheckbox`,
+  `MatchGroupCheckbox`) feeds one shared `ApplySelectedMatchesBar`, so a
+  reviewer can hand-pick an arbitrary subset — including
+  medium/low-confidence rows they've personally verified — instead of
+  being limited to one-row-at-a-time or "apply every high-confidence
+  match." A dedup loser's pre-tiebreak AI guess is retained as
+  `suggestedLineItemId` and pre-fills the "Matched to" dropdown instead of
+  defaulting to empty.
+- **`VendorMatchApplyLog`** (`vendor-match-apply-log-service.ts`, History
+  tab) — one durable, snapshotted row per apply click (single row, bulk
+  group, "all high-confidence," or a hand-picked selection), so a
+  bulk-applied group has a real audit trail instead of just an "✓
+  Applied" badge that vanishes with no record once the group leaves the
+  active suggestions list.
+- **Category audit** (`category-audit.ts`, Review tab) — flags every
+  `LineItem` whose `category` is `null` or references a category no
+  longer in the live catalog, since those items would otherwise silently
+  fall into "Other" on the client-facing PDF/proposal with no visible
+  warning anywhere in the editing UI.
+
 ## Commands
 
 ```bash
