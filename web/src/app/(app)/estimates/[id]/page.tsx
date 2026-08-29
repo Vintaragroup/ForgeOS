@@ -1275,11 +1275,24 @@ function BidPackageCard({
   // PENDING a real price write, so the button can say "N still need
   // applying" rather than re-offering matches already resolved.
   const highConfidenceMatches = (matches ?? []).filter((m) => m.confidence === "high" && m.lineItemId);
-  const highConfidencePendingCount = highConfidenceMatches.filter((m) => {
+  const highConfidencePendingMatches = highConfidenceMatches.filter((m) => {
     const target = allLineItems.find((li) => li.id === m.lineItemId);
     return target?.documentId !== quoteDocument?.id;
-  }).length;
+  });
+  const highConfidencePendingCount = highConfidencePendingMatches.length;
   const highConfidenceTotal = highConfidenceMatches.reduce((sum, m) => sum + m.vendorLine.unitPrice, 0);
+  // Shown on the button itself -- previously always the LIFETIME count
+  // (confirmed live: a real package showed "Apply all 140" even once 130+
+  // had already been applied, with only the Apply/Re-apply verb hinting
+  // anything had changed). Once nothing is pending, "Re-apply all" still
+  // means the full set (that's what re-affirming everything means), but
+  // while some are pending, the number shown is what's actually left to
+  // do, not what was ever high-confidence in total.
+  const highConfidenceDisplayCount = highConfidencePendingCount > 0 ? highConfidencePendingCount : highConfidenceMatches.length;
+  const highConfidenceDisplayTotal =
+    highConfidencePendingCount > 0
+      ? highConfidencePendingMatches.reduce((sum, m) => sum + m.vendorLine.unitPrice, 0)
+      : highConfidenceTotal;
 
   return (
     <Card id={`bid-package-${bidPackage.id}`} className="p-6">
@@ -1505,8 +1518,9 @@ function BidPackageCard({
                   <input type="hidden" name="documentId" value={quoteDocument.id} />
                   <input type="hidden" name="priorApplied" value={priorAppliedValue} />
                   <Button variant="secondary" type="submit">
-                    {highConfidencePendingCount > 0 ? "Apply" : "Re-apply"} all {highConfidenceMatches.length}{" "}
-                    high-confidence matches (sum {money(highConfidenceTotal)})
+                    {highConfidencePendingCount > 0 ? "Apply" : "Re-apply"} all {highConfidenceDisplayCount}{" "}
+                    high-confidence match{highConfidenceDisplayCount === 1 ? "" : "es"} (sum{" "}
+                    {money(highConfidenceDisplayTotal)})
                   </Button>
                 </form>
               )}

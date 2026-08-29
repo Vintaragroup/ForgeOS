@@ -294,11 +294,16 @@ describe("previewPricingImport -- Arena RFP header shape variants", () => {
     expect(namedPosition).toBeDefined();
     expect(namedPosition?.description).toBe("Right Endzone Camera Platform");
 
-    // A row where Description DOES hold real (non-blank) text keeps using
-    // it verbatim, unaffected by the fallback -- sourceQuote's own
-    // one-real-cell citation guarantee depends on this staying untouched.
+    // A row where BOTH Item and Description hold real, DIFFERENT text
+    // combines them -- confirmed live in production: 11 different booth
+    // positions all shared the literal same generic Description text
+    // ("Sleeper floor required") with no way to tell them apart in the
+    // match-review dropdown once Item's own distinguishing name was
+    // discarded. sourceQuote (the citation-highlight anchor) stays the
+    // single verbatim Description cell regardless.
     const sleeperNote = preview.rows.find((r) => r.item === "Section 203 - Main Far Left Slash Camera");
-    expect(sleeperNote?.description).toBe('Sleeper Floor Required 1"');
+    expect(sleeperNote?.description).toBe('Section 203 - Main Far Left Slash Camera — Sleeper Floor Required 1"');
+    expect(sleeperNote?.sourceQuote).toBe('Sleeper Floor Required 1"');
   });
 
   it("recognizes expocci-revised-rfp-withsgpspricing.xlsx despite its renamed headers (Location / Item, Notes, Planning Qty)", async () => {
@@ -346,6 +351,10 @@ describe("previewPricingImport -- Arena RFP header shape variants", () => {
     const lineItem = await db.lineItem.findFirstOrThrow({
       where: { section: { estimateVersionId: version.id }, positionCode: "CAM-01" },
     });
-    expect(lineItem.description).toBe("Field-level, turf edge; 3 camera positions");
+    // Combined -- Item ("Right Endzone Camera Platform — Near") is the
+    // real distinguishing name, Description ("Field-level, turf edge...")
+    // is a supplementary note; both survive onto the real LineItem row.
+    expect(lineItem.description).toBe("Right Endzone Camera Platform — Near — Field-level, turf edge; 3 camera positions");
+    expect(lineItem.sourceQuote).toBe("Field-level, turf edge; 3 camera positions");
   });
 });

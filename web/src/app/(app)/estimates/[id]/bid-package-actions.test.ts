@@ -575,6 +575,86 @@ describe("applyAllHighConfidenceMatchesAction", () => {
     expect(logs.map((l) => l.lineItemId).sort()).toEqual([item.id, secondItem.id].sort());
   });
 
+  it("only re-touches the still-pending target when one high-confidence match is already applied for this document -- doesn't re-write or re-log the one that's already done", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const section = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY" });
+    const secondItem = await addLineItem(version.id, section.id, {
+      lineType: "LABOR",
+      description: "Second item",
+      qty: 1,
+      unitCost: 0,
+    });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    // item is already applied for THIS document (documentId matches);
+    // secondItem is still pending.
+    await db.lineItem.update({ where: { id: item.id }, data: { documentId: document.id, unitCost: 840, isDraft: false } });
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Sleeper Floor Required", 840), { lineItemId: item.id, confidence: "high" }),
+      match(vendorLine("Second Item Charge", 500), { lineItemId: secondItem.id, confidence: "high" }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const formData = new FormData();
+    formData.set("documentId", document.id);
+    await expect(
+      applyAllHighConfidenceMatchesAction(estimate.id, version.id, bidPackage.id, formData),
+    ).rejects.toMatchObject({
+      digest: expect.stringContaining(`applied=${encodeURIComponent(secondItem.id)}`),
+    });
+
+    // Only ONE audit log row -- the already-applied target was never
+    // re-touched, so it was never re-logged either.
+    const logs = await db.vendorMatchApplyLog.findMany({ where: { estimateVersionId: version.id } });
+    expect(logs).toHaveLength(1);
+    expect(logs[0].lineItemId).toBe(secondItem.id);
+  });
+
+  it("falls back to re-applying the full set when nothing is pending -- 'Re-apply all' means re-affirm everything, on purpose", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const { estimate, version, item } = await makeEstimateWithLineItem();
+    const bidPackage = await createBidPackage(version.id, { name: "Package", lineItemIds: [item.id] });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "ShowRig quote.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "VENDOR_QUOTE",
+        bidPackageId: bidPackage.id,
+      },
+    });
+    await db.lineItem.update({ where: { id: item.id }, data: { documentId: document.id, unitCost: 840, isDraft: false } });
+    const matches: VendorLineMatch[] = [
+      match(vendorLine("Sleeper Floor Required", 840), { lineItemId: item.id, confidence: "high" }),
+    ];
+    await db.bidPackage.update({ where: { id: bidPackage.id }, data: { matchResult: matches as object[] } });
+
+    const formData = new FormData();
+    formData.set("documentId", document.id);
+    await expectAppliedRedirect(
+      applyAllHighConfidenceMatchesAction(estimate.id, version.id, bidPackage.id, formData),
+      item.id,
+    );
+
+    const logs = await db.vendorMatchApplyLog.findMany({ where: { estimateVersionId: version.id } });
+    expect(logs).toHaveLength(1);
+  });
+
   it("rejects when there are no high-confidence matches", async () => {
     const admin = await makeAdmin();
     await createSession(admin.id);

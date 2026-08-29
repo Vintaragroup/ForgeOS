@@ -26,7 +26,20 @@ export interface ParsedPricingRow {
   rowNumber: number;
   category: string;
   item: string | null;
+  // Human-facing text -- combines item + the Description/Notes cell when
+  // both are present and actually differ (see the row-parsing loop's own
+  // comment on why: a real production import had 11 different booth
+  // positions all landing on the literal same "Sleeper floor required"
+  // note text with no way to tell them apart in the match-review
+  // dropdown, because their real distinguishing name -- the Item column
+  // -- was being discarded once Description had ANY content at all).
   description: string;
+  // The exact source text this row cites for LineItem.sourceQuote's own
+  // citation-highlight guarantee -- kept separate from `description`
+  // specifically because it must stay a single, verbatim, one-real-cell
+  // value, whereas `description` above may now be a synthesized
+  // combination of two cells.
+  sourceQuote: string;
   unit: string;
   qty: number;
   catalogMatch: CatalogMatch | null;
@@ -155,13 +168,25 @@ export async function previewPricingImport(documentId: string, opportunityId: st
     // Some RFP shapes (e.g. Arena's own template) put the row's real
     // identifying text in the Item column -- "Right Endzone Camera
     // Platform" -- and leave Description blank except for a supplementary
-    // note on a handful of rows. Verified live: without this fallback, 78
-    // of that template's 96 candidate rows (including nearly all 44 named
-    // camera/booth/auxiliary positions) were silently dropped as "spacer
-    // rows" below. Falls back to Item's own text so this stays a single,
-    // verbatim, one-cell value -- sourceQuote below (and its citation
-    // highlight in the spreadsheet viewer) depends on that.
-    const description = rawDescription || item || "";
+    // note on a handful of rows; others put a generic, repeated note in
+    // Description ("Sleeper floor required") while Item holds the real,
+    // DISTINGUISHING location name. Confirmed live on a real production
+    // import: 11 different booth positions all landed on the literal same
+    // "Sleeper floor required" text with no way to tell them apart in the
+    // match-review dropdown, because Item's own text was discarded
+    // outright whenever Description had ANY content. Combines both when
+    // they're both present and actually differ, falls back to whichever
+    // one exists when only one does (verified live: without a fallback at
+    // all, 78 of Arena-template.xlsx's 96 candidate rows were silently
+    // dropped as spacer rows below).
+    const description =
+      item && rawDescription && item !== rawDescription ? `${item} — ${rawDescription}` : rawDescription || item || "";
+    // The citation-highlight anchor (LineItem.sourceQuote) must stay a
+    // single, verbatim, one-real-cell value even when `description` above
+    // is a synthesized combination of two cells -- whichever field
+    // actually has content, same resolution order as before this file
+    // started combining the two for display.
+    const sourceQuote = rawDescription || item || "";
     const qtyRaw = row.getCell(columns.qty).value;
     const qty = typeof qtyRaw === "number" ? qtyRaw : Number(cellText(qtyRaw));
 
@@ -179,12 +204,13 @@ export async function previewPricingImport(documentId: string, opportunityId: st
       category,
       item,
       description,
+      sourceQuote,
       unit: cellText(row.getCell(columns.unit).value),
       qty,
-      // Guarded against item === description (the fallback above already
-      // used item verbatim) -- otherwise this would duplicate it, e.g.
-      // "Right Endzone Camera Platform Right Endzone Camera Platform".
-      catalogMatch: matchDescription(item && item !== description ? `${item} ${description}` : description, catalog),
+      // description already combines item + notes when both are real and
+      // distinct (see above), so it alone is the right catalog-matching
+      // input now -- no separate item/description concatenation needed.
+      catalogMatch: matchDescription(description, catalog),
       positionCode,
     });
   }
@@ -320,11 +346,13 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
         ),
         isClientOwned: inferIsClientOwned(row.description),
         documentId,
-        // The Description cell's own text, verbatim -- exactly what the
+        // A single real cell's own text, verbatim -- exactly what the
         // spreadsheet viewer renders in that cell, so the "Source" link's
         // highlight (document-view-service.ts's highlightSpreadsheetCell)
-        // always finds a real, exact match.
-        sourceQuote: row.description,
+        // always finds a real, exact match. Deliberately NOT row.description,
+        // which may now be a synthesized combination of two cells -- see
+        // ParsedPricingRow's own comment on why the two are kept separate.
+        sourceQuote: row.sourceQuote,
         positionCode: row.positionCode,
       })),
     );

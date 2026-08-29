@@ -591,10 +591,27 @@ export async function applyAllHighConfidenceMatchesAction(
   const bidPackage = await db.bidPackage.findUniqueOrThrow({ where: { id: bidPackageId } });
   const matches = (bidPackage.matchResult as unknown as VendorLineMatch[] | null) ?? [];
 
-  const indices = matches
+  const allHighConfidenceIndices = matches
     .map((m, i) => (m.confidence === "high" && m.lineItemId ? i : -1))
     .filter((i) => i !== -1);
-  if (indices.length === 0) throw new Error("No high-confidence matches to apply.");
+  if (allHighConfidenceIndices.length === 0) throw new Error("No high-confidence matches to apply.");
+
+  // Scoped to only the NOT-YET-applied-for-this-document targets when any
+  // exist, rather than unconditionally re-touching every high-confidence
+  // match on every click -- confirmed live: a real 140-match package kept
+  // re-writing (same values) and re-logging all 140 on every "Apply all"
+  // click, even the 130 already done, which both wasted writes and would
+  // flood the History tab (vendor-match-apply-log-service.ts) with
+  // redundant rows. Only falls back to the full set when literally
+  // nothing is pending -- that's what "Re-apply all" (the button's own
+  // label swap) actually promises: re-affirm everything, on purpose.
+  const targetIds = [...new Set(allHighConfidenceIndices.map((i) => matches[i].lineItemId!))];
+  const targets = await db.lineItem.findMany({ where: { id: { in: targetIds } }, select: { id: true, documentId: true } });
+  const alreadyAppliedTargetIds = new Set(
+    targets.filter((t) => t.documentId === documentId).map((t) => t.id),
+  );
+  const pendingIndices = allHighConfidenceIndices.filter((i) => !alreadyAppliedTargetIds.has(matches[i].lineItemId!));
+  const indices = pendingIndices.length > 0 ? pendingIndices : allHighConfidenceIndices;
 
   const document = await db.document.findUniqueOrThrow({ where: { id: documentId }, select: { filename: true } });
   const { appliedLineItemIds, staleCount } = await applyMatchesByIndices(
