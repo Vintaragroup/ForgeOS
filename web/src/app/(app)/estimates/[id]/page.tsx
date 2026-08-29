@@ -786,6 +786,7 @@ function LineItemsTable({
               key={li.id}
               id={li.id}
               description={li.description}
+              positionCode={li.positionCode}
               isDraft={li.isDraft}
               sourceHref={sourceHref}
               department={li.department ?? ""}

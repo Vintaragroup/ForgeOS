@@ -38,6 +38,7 @@ export function LineItemRow({
   categoryOptions,
   laborRates,
   bidPackageName,
+  positionCode,
   deleteAction,
   confirmAction,
   updateAction,
@@ -72,6 +73,13 @@ export function LineItemRow({
   // everywhere else, including every existing caller that predates this
   // prop).
   bidPackageName?: string | null;
+  // The vendor/RFP position code (e.g. "CAM-17") this row was imported
+  // with, if any -- see LineItem.positionCode's own schema comment.
+  // Otherwise invisible anywhere in this tab, even though it's the one
+  // thing that can distinguish two rows sharing an identical generic
+  // description/qty/price (a real case: two symmetric booth platforms of
+  // the same size legitimately cost the same).
+  positionCode?: string | null;
   deleteAction: (formData: FormData) => void | Promise<void>;
   confirmAction: (formData: FormData) => void | Promise<void>;
   updateAction: (formData: FormData) => void | Promise<void>;
@@ -142,6 +150,9 @@ export function LineItemRow({
             onChange={() => selection.toggle(id)}
             aria-label="Select for a bid package"
           />
+        )}
+        {positionCode && (
+          <span className="mr-1.5 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">{positionCode}</span>
         )}
         {description}
         {isDraft && (
