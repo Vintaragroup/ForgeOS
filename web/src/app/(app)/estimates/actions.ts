@@ -17,6 +17,7 @@ import {
   updateLineItem,
   updateMarginTarget,
   updateSectionBuildType,
+  updateSectionItemsCategory,
 } from "@/lib/estimate-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
@@ -73,6 +74,20 @@ export async function updateSectionBuildTypeAction(
   await assertVersionBelongsToEstimate(estimateId, versionId);
   const buildType = String(formData.get("buildType")) as SectionBuildType;
   await updateSectionBuildType(versionId, groupLabel, buildType);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateSectionItemsCategoryAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const category = String(formData.get("category") ?? "").trim();
+  if (!category) throw new Error("Category is required");
+  await updateSectionItemsCategory(versionId, sectionId, category);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

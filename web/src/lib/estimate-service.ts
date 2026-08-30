@@ -147,6 +147,22 @@ export async function updateSectionBuildType(
   });
 }
 
+// Bulk-moves every LineItem in one section to a different category in one
+// step -- a section with no groupLabel (so ineligible for the Rental/Custom
+// Build tagging above) can still land its whole raw category wrong, e.g. a
+// generic "Platform" section whose items all matched the "platform"/
+// "sleeper floor" description heuristic into Flooring when they're really
+// rental structure. Scoped to sectionId (already estimateVersionId-scoped
+// by the caller's own access check), not by section name -- two sections
+// can share a name, and only the one the estimator is looking at should move.
+export async function updateSectionItemsCategory(estimateVersionId: string, sectionId: string, category: string) {
+  await assertUnlocked(estimateVersionId);
+  await db.lineItem.updateMany({
+    where: { sectionId, section: { estimateVersionId } },
+    data: { category },
+  });
+}
+
 // Swaps a section with its immediate neighbor (by current display order)
 // in the given direction -- siblings are every other section sharing the
 // same estimateVersionId AND optionId (an Option's own sections reorder

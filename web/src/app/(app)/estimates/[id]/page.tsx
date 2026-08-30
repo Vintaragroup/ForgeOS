@@ -33,6 +33,7 @@ import {
   updateLineItemAction,
   updateMarginTargetAction,
   updateSectionBuildTypeAction,
+  updateSectionItemsCategoryAction,
 } from "../actions";
 import {
   buildFullEstimateFromDocumentsAction,
@@ -2228,6 +2229,10 @@ function CategoryTabContent({
 }) {
   const hasBoothGroups = !!boothGroups && boothGroups.length > 0;
   const flatSectionGroups = hasBoothGroups ? bucket.sectionGroups.filter((g) => !g.groupLabel) : bucket.sectionGroups;
+  // No "— auto-detect —" entry here (unlike AddLineItemForm's own
+  // categoryOptions) -- moving a whole section only makes sense to a real,
+  // explicit category, never back to a guess.
+  const moveCategoryOptions = categoryOptions.filter((o) => o.value !== "");
 
   // Same ratio-based cost -> price scaling as proposal-pdf.tsx's sell()
   // (commit ed6bc2d) -- simpler here since version.totalCost/grandTotal
@@ -2332,6 +2337,17 @@ function CategoryTabContent({
           <h4 className="mb-3 flex flex-wrap items-center gap-2 text-sm font-medium text-neutral-700">
             {group.sectionName}
             {group.groupLabel && <span className="font-normal text-neutral-500">— {group.groupLabel}</span>}
+            {!version.isLocked && (
+              <form
+                action={updateSectionItemsCategoryAction.bind(null, estimateId, version.id, group.sectionId)}
+                className="ml-auto flex items-center gap-1.5"
+              >
+                <SelectField label="" name="category" defaultValue={bucket.category.name} options={moveCategoryOptions} />
+                <Button variant="secondary" type="submit">
+                  Move section
+                </Button>
+              </form>
+            )}
           </h4>
           <SectionLineItemsBlock
             lineItems={group.lineItems}
