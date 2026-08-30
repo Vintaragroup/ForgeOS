@@ -4,7 +4,9 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
-import type { Prisma } from "@/generated/prisma/client";
+import type { Category, Prisma } from "@/generated/prisma/client";
+import { aggregateByCategory, buildTopLevelCategoryViews } from "@/lib/proposal-view-model";
+import { ProposalPreviewModal } from "@/components/proposal-preview-modal";
 import {
   addAttachmentAction,
   addLineItemAction,
@@ -503,7 +505,12 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         </Card>
       ) : (
         <>
-          <VersionSummaryBar estimateId={estimate.id} version={currentVersion} proposalTemplates={proposalTemplates} />
+          <VersionSummaryBar
+            estimateId={estimate.id}
+            version={currentVersion}
+            proposalTemplates={proposalTemplates}
+            categories={categories}
+          />
 
           <Suspense fallback={null}>
             <Tabs
@@ -663,13 +670,36 @@ function VersionSummaryBar({
   estimateId,
   version,
   proposalTemplates,
+  categories,
 }: {
   estimateId: string;
   version: VersionWithSections;
   proposalTemplates: { id: string; name: string }[];
+  categories: Category[];
 }) {
   const lockVersionWithIds = lockVersionAction.bind(null, estimateId, version.id);
   const createNewVersionWithIds = createNewVersionAction.bind(null, estimateId, version.id);
+
+  // Which top-level categories the Preview PDF modal's reorder/hide-
+  // pricing/summary controls should list -- matching preview-pdf/
+  // route.ts's own isDraft:false / optionId:null discipline exactly (in-
+  // memory here against the same version.sections the rest of this page
+  // already loaded, rather than a second DB round trip), so the modal
+  // never offers a category the PDF wouldn't actually render. Only
+  // top-level categories are independently reorderable/toggleable in the
+  // PDF itself (a child category always renders nested under its parent
+  // -- see proposal-pdf.tsx's own render loop), so that's all this lists.
+  const previewSections = version.sections
+    .filter((s) => s.optionId === null)
+    .map((s) => ({ name: s.name, groupLabel: s.groupLabel, lineItems: s.lineItems.filter((li) => !li.isDraft) }));
+  const previewTopLevel = buildTopLevelCategoryViews(aggregateByCategory(previewSections, categories), categories);
+  const categoryNameToId = new Map(categories.map((c) => [c.name, c.id]));
+  const categoriesWithItems = previewTopLevel
+    .map((c) => {
+      const id = categoryNameToId.get(c.name);
+      return id ? { id, name: c.name } : null;
+    })
+    .filter((c): c is { id: string; name: string } => c !== null);
 
   return (
     <Card className="p-6">
@@ -723,22 +753,12 @@ function VersionSummaryBar({
             actionLabel="Add a template"
           />
         ) : (
-          <form
-            action={`/estimates/${estimateId}/versions/${version.id}/preview-pdf`}
-            method="get"
-            target="_blank"
-            className="flex items-end gap-3"
-          >
-            <div className="w-56">
-              <SelectField
-                label="Proposal template"
-                name="templateId"
-                required
-                options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
-              />
-            </div>
-            <Button variant="secondary">Preview PDF</Button>
-          </form>
+          <ProposalPreviewModal
+            estimateId={estimateId}
+            versionId={version.id}
+            proposalTemplates={proposalTemplates}
+            categories={categoriesWithItems}
+          />
         )}
       </div>
     </Card>

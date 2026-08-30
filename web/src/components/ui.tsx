@@ -280,10 +280,17 @@ export function Button({
   children,
   variant = "primary",
   type = "submit",
+  onClick,
+  disabled,
 }: {
   children: ReactNode;
   variant?: "primary" | "secondary" | "danger";
   type?: "submit" | "button";
+  // Optional -- every existing caller submits a <form action>, so this
+  // was never needed until a client component (proposal-preview-modal.tsx)
+  // wanted this same look for a plain client-side click, not a form post.
+  onClick?: () => void;
+  disabled?: boolean;
 }) {
   const styles = {
     primary: "bg-brand-black text-white hover:bg-brand-navy",
@@ -293,7 +300,9 @@ export function Button({
   return (
     <button
       type={type}
-      className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${styles}`}
+      onClick={onClick}
+      disabled={disabled}
+      className={`rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${styles}`}
     >
       {children}
     </button>

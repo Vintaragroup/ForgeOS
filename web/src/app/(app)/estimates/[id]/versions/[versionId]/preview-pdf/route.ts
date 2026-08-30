@@ -30,6 +30,19 @@ export async function GET(
   const templateId = url.searchParams.get("templateId");
   if (!templateId) return new Response("Missing templateId", { status: 400 });
 
+  // Ephemeral, per-export view options from the Preview PDF modal
+  // (proposal-preview-modal.tsx) -- comma-separated Category ids, never
+  // persisted anywhere. categoryOrder reorders the `categories` array
+  // below before it's handed to ProposalPdfDocument (aggregateByCategory/
+  // buildTopLevelCategoryViews in proposal-view-model.ts already take
+  // their own ordering straight from whatever array they're given, so no
+  // changes needed there); hidePricing/summary get resolved to Category
+  // NAMES once below, since ProposalPdfDocument's own bucketing keys on
+  // name, not id.
+  const categoryOrderIds = (url.searchParams.get("categoryOrder") ?? "").split(",").filter(Boolean);
+  const hidePricingIds = new Set((url.searchParams.get("hidePricing") ?? "").split(",").filter(Boolean));
+  const summaryIds = new Set((url.searchParams.get("summary") ?? "").split(",").filter(Boolean));
+
   const user = await getCurrentUser();
   if (!user) notFound();
 
@@ -59,6 +72,25 @@ export async function GET(
   const template = await db.proposalTemplate.findUnique({ where: { id: templateId } });
   if (!template) notFound();
 
+  // categoryOrder reorders by id (what the modal's own reorder buttons
+  // track); anything not named keeps its original relative sortOrder,
+  // appended after the named ones -- so an unmodified request (no
+  // categoryOrder param at all) is a no-op, identical to today's order.
+  const orderedCategories = categoryOrderIds.length
+    ? [...categories].sort((a, b) => {
+        const ai = categoryOrderIds.indexOf(a.id);
+        const bi = categoryOrderIds.indexOf(b.id);
+        if (ai === -1 && bi === -1) return 0;
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      })
+    : categories;
+  const hidePricingCategoryNames = new Set(
+    orderedCategories.filter((c) => hidePricingIds.has(c.id)).map((c) => c.name),
+  );
+  const summaryCategoryNames = new Set(orderedCategories.filter((c) => summaryIds.has(c.id)).map((c) => c.name));
+
   const opportunity = version.estimate.opportunity;
   const { brandColor, logoUrl } = extractBranding({ brandingConfig: template.brandingConfig });
   const professionalServices = extractProfessionalServices({ layoutConfig: template.layoutConfig });
@@ -85,7 +117,9 @@ export async function GET(
         venue,
         scopeSummary,
         sections: version.sections,
-        categories,
+        categories: orderedCategories,
+        hidePricingCategoryNames,
+        summaryCategoryNames,
         professionalServices,
         termsAndConditions,
         paymentMethodNote,

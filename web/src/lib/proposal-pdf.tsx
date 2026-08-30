@@ -352,7 +352,23 @@ export interface ProposalPdfData {
   // Live catalog (db.category.findMany, ordered by sortOrder) -- drives
   // section order/hierarchy (aggregateByCategory/buildTopLevelCategoryViews)
   // and which categories render lump-sum / roll into Show Services below.
+  // Caller (preview-pdf/route.ts) may have already reordered this array
+  // per the modal's own category-reorder controls -- this component just
+  // renders whatever order it's given, same as it always has.
   categories: Category[];
+  // Ephemeral, per-export view options from the Preview PDF modal
+  // (proposal-preview-modal.tsx) -- never persisted, both keyed by
+  // Category NAME (not id) since that's what aggregateByCategory's own
+  // buckets are keyed on. A category in summaryCategoryNames renders its
+  // header + subtotal only, no item rows; a category in
+  // hidePricingCategoryNames blanks its own subtotal and every one of its
+  // line items' Total cell (same visual treatment as the existing
+  // isClientOwned redaction, just triggered per-category instead of
+  // per-line) -- Grand Total / Rental-Services totals below are computed
+  // from the full, real buckets regardless, so hiding a category's
+  // breakdown never changes the bottom-line number.
+  hidePricingCategoryNames?: ReadonlySet<string>;
+  summaryCategoryNames?: ReadonlySet<string>;
   professionalServices: ProposalPdfProfessionalServices | null;
   termsAndConditions: string[];
   paymentMethodNote: string | null;
@@ -382,6 +398,8 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   const lumpSumCategoryNames = new Set(data.categories.filter((c) => c.isLumpSum).map((c) => c.name));
   const boothGroups = groupBoothLineItems(data.sections);
   const customRentalTotal = boothGroups.reduce((sum, b) => sum + b.subtotal, 0);
+  const hidePricingCategoryNames = data.hidePricingCategoryNames ?? new Set<string>();
+  const summaryCategoryNames = data.summaryCategoryNames ?? new Set<string>();
 
   // Renders a category's own items with every booth-linked one removed
   // (already shown under the Custom Rental block above) -- recomputes the
@@ -397,7 +415,13 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // to share a description's first line. Matches every historical Expo
   // CCI proposal, which itemizes every component with a real qty/total,
   // never a rolled-up description.
-  const renderBody = (items: AggregatedLineItem[]) => (
+  // hidePrice is a per-category view option (see ProposalPdfData's own
+  // comment), not a per-line one like isClientOwned -- every row in a
+  // hide-pricing category blanks the same way, regardless of that row's
+  // own isClientOwned value (a client-owned row already reads "Client
+  // Owned" either way, so hidePrice only changes anything for a normally-
+  // priced row).
+  const renderBody = (items: AggregatedLineItem[], hidePrice = false) => (
     <>
       {items.map((li) => (
         <View key={li.key} style={styles.tableRow} wrap={false}>
@@ -407,21 +431,21 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           </View>
           <Text style={styles.colQty}>{formatQtyNumber(li.qty)}</Text>
           <Text style={styles.colUnit}>{li.unit ?? ""}</Text>
-          <Text style={{ ...styles.colTotal, ...(li.isClientOwned ? styles.clientOwnedLabel : {}) }}>
-            {li.isClientOwned ? "Client Owned" : moneyFromNumber(li.totalCost)}
+          <Text style={{ ...styles.colTotal, ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}) }}>
+            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(li.totalCost)}
           </Text>
         </View>
       ))}
     </>
   );
 
-  const renderServiceBody = (items: AggregatedLineItem[]) => (
+  const renderServiceBody = (items: AggregatedLineItem[], hidePrice = false) => (
     <>
       {items.map((li) => (
         <View key={li.key} style={styles.serviceRow} wrap={false}>
           <Text style={styles.serviceDescription}>{li.description}</Text>
-          <Text style={{ ...styles.serviceTotal, ...(li.isClientOwned ? styles.clientOwnedLabel : {}) }}>
-            {li.isClientOwned ? "Client Owned" : moneyFromNumber(li.totalCost)}
+          <Text style={{ ...styles.serviceTotal, ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}) }}>
+            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(li.totalCost)}
           </Text>
         </View>
       ))}
@@ -563,6 +587,16 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           const visibleTotal = bucketSubtotal(visibleOwnItems) + visibleChildren.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
           if (visibleOwnItems.length === 0 && visibleChildren.length === 0) return null;
 
+          // Both are per-category view options from the Preview PDF modal
+          // -- see ProposalPdfData's own comment. isSummary skips every
+          // item row (this category's/its children's own header rows with
+          // subtotal still render); hidePrice blanks the subtotal text
+          // itself (showing a total while hiding what it's made of would
+          // just leak the number back) and is threaded into whichever body
+          // renderer actually runs.
+          const isSummary = summaryCategoryNames.has(categoryName);
+          const hidePrice = hidePricingCategoryNames.has(categoryName);
+
           return (
             <View key={categoryName} style={styles.section}>
               <View style={styles.sectionHeaderRow} minPresenceAhead={24}>
@@ -570,7 +604,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
                   <Text style={styles.sectionHeaderText}>{categoryName}</Text>
                 </View>
-                <Text style={styles.sectionHeaderTotal}>{moneyFromNumber(visibleTotal)}</Text>
+                <Text style={styles.sectionHeaderTotal}>{hidePrice ? "" : moneyFromNumber(visibleTotal)}</Text>
               </View>
               {categoryName === "Professional Services" &&
                 data.professionalServices &&
@@ -585,14 +619,17 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     </View>
                   </View>
                 )}
-              {isServiceStyle ? renderServiceBody(visibleOwnItems) : renderBody(visibleOwnItems)}
+              {!isSummary &&
+                (isServiceStyle ? renderServiceBody(visibleOwnItems, hidePrice) : renderBody(visibleOwnItems, hidePrice))}
               {visibleChildren.map((child) => (
                 <View key={child.name} style={styles.subsection}>
                   <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
                     <Text style={styles.subsectionHeaderText}>{child.name}</Text>
-                    <Text style={styles.subsectionHeaderTotal}>{moneyFromNumber(bucketSubtotal(child.items))}</Text>
+                    <Text style={styles.subsectionHeaderTotal}>
+                      {hidePrice ? "" : moneyFromNumber(bucketSubtotal(child.items))}
+                    </Text>
                   </View>
-                  {renderBody(child.items)}
+                  {!isSummary && renderBody(child.items, hidePrice)}
                 </View>
               ))}
             </View>
