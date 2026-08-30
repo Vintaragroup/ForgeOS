@@ -68,7 +68,7 @@ describe("runScopeCoverageAnalysis", () => {
     await expect(runScopeCoverageAnalysis(version.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
   });
 
-  it("ignores a PRICING_SCHEDULE document -- pricing rows already become line items mechanically, not scope text", async () => {
+  it("counts a PRICING_SCHEDULE document as a scope document -- a real spreadsheet format neither deterministic importer recognizes can carry real, unimported pricing that coverage analysis needs to see", async () => {
     const { version, opportunity } = await makeVersion();
     await db.document.create({
       data: {
@@ -79,10 +79,14 @@ describe("runScopeCoverageAnalysis", () => {
         storageKey: "test-key",
         documentType: "PRICING_SCHEDULE",
         extractionStatus: "COMPLETE",
+        extractedText: "Rigging package -- truss, motors, cabling: $54,993.",
       },
     });
 
-    await expect(runScopeCoverageAnalysis(version.id)).rejects.toThrow(/No analyzed scope documents/);
+    // Reaches the AiNotConfiguredError guard, not "No analyzed scope
+    // documents" -- proves the PRICING_SCHEDULE document was actually
+    // picked up, not silently excluded the way it used to be.
+    await expect(runScopeCoverageAnalysis(version.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
   });
 
   it("counts a DRAWING document as a scope document -- its vision-derived scopeSummary bullets are just as usable as text-extracted ones", async () => {

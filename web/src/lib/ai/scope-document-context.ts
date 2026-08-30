@@ -10,27 +10,33 @@
 
 import { db } from "@/lib/db";
 
-// Pricing-schedule rows already become line items mechanically
-// (pricing-import-service.ts) -- the only type that never belongs in a
-// scope analysis. DRAWING and MEETING_NOTES used to be excluded too
-// (drawings have no extractedText; meeting notes didn't exist as a
-// type), but both now produce the same compact scopeSummary/candidateGaps
-// bullets every other document type does (drawing-summary-service.ts's
-// vision pipeline, meeting-notes-summary-service.ts's transcript
-// pipeline) -- neither Scope Coverage nor Clarification Questions needs
-// raw extractedText anymore (see buildBulletsBlock below), so there's no
-// more reason to exclude them. resolveClarificationQuestions/
-// resolveCoverageGaps already tolerate a null extractedText gracefully
-// for drawing-sourced facts; the same tolerance now also covers meeting-
-// notes facts.
+// DRAWING and MEETING_NOTES used to be excluded too (drawings have no
+// extractedText; meeting notes didn't exist as a type), but both now
+// produce the same compact scopeSummary/candidateGaps bullets every other
+// document type does (drawing-summary-service.ts's vision pipeline,
+// meeting-notes-summary-service.ts's transcript pipeline) -- neither
+// Scope Coverage nor Clarification Questions needs raw extractedText
+// anymore (see buildBulletsBlock below), so there's no more reason to
+// exclude them. resolveClarificationQuestions/resolveCoverageGaps already
+// tolerate a null extractedText gracefully for drawing-sourced facts; the
+// same tolerance now also covers meeting-notes facts.
+//
+// PRICING_SCHEDULE used to be excluded outright, on the reasoning that
+// its rows already become line items mechanically (pricing-import-
+// service.ts) so there was nothing left for a scope analysis to check.
+// That held for a schedule the deterministic importers could actually
+// read -- it stops holding the moment a real spreadsheet format neither
+// recognizes (spreadsheet-line-item-service.ts's AI fallback exists for
+// exactly this): a whole package's worth of real pricing can sit in a
+// PRICING_SCHEDULE-tagged file that never became a single line item, and
+// the old exclusion made that invisible to Scope Coverage too, not just
+// to import. A schedule that WAS cleanly imported doesn't false-positive
+// here either -- its content is already reflected in real line items, so
+// the coverage prompt (which compares against what's already priced) has
+// nothing left to flag.
 export async function getScopeDocuments(opportunityId: string) {
   return db.document.findMany({
-    where: {
-      opportunityId,
-      deletedAt: null,
-      extractionStatus: "COMPLETE",
-      documentType: { notIn: ["PRICING_SCHEDULE"] },
-    },
+    where: { opportunityId, deletedAt: null, extractionStatus: "COMPLETE" },
     orderBy: { createdAt: "desc" },
   });
 }

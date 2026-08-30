@@ -333,6 +333,7 @@ enum AiFeature {
   SCOPE_COVERAGE_ANALYSIS
   RFP_CLARIFICATION_QUESTIONS
   VENDOR_LINE_MATCH
+  SPREADSHEET_LINE_ITEMS
 }
 
 // One row per OpenAI call, for case-based model routing's cost/token

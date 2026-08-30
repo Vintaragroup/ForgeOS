@@ -3,8 +3,10 @@
 // reasons (see each case below), not because extraction failed on them.
 
 import mammoth from "mammoth";
+import ExcelJS from "exceljs";
 import { extractText, getDocumentProxy } from "unpdf";
 import type { DocumentType } from "@/generated/prisma/enums";
+import { serializeWorkbookForPrompt } from "@/lib/xlsx-utils";
 
 export type ExtractionResult =
   | { status: "COMPLETE"; text: string }
@@ -65,6 +67,27 @@ export async function extractDocumentText(
       return { status: "UNSUPPORTED", reason: "No extractable text found in this document." };
     }
     return { status: "COMPLETE", text: result.value };
+  }
+
+  // Any XLSX document NOT tagged PRICING_SCHEDULE (that early-return
+  // above) -- a vendor bid, a fabrication estimate, anything spreadsheet-
+  // shaped uploaded as a Vendor Quote/Contract/Other/etc. Reuses the same
+  // serializer spreadsheet-line-item-service.ts's AI-fallback importer
+  // uses, so this document becomes visible to the generic summarizer,
+  // risk-flag extraction, and scope coverage analysis (all of which only
+  // ever look at extractionStatus: COMPLETE) the same way a PDF or DOCX
+  // already is -- confirmed live: without this, an XLSX document could
+  // never reach COMPLETE at all, making a real $54,993 Rigging package in
+  // an unrecognized bid workbook invisible to every AI feature, not just
+  // the deterministic importers.
+  if (mimeType === XLSX_MIME) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+    const text = serializeWorkbookForPrompt(workbook);
+    if (!text.trim()) {
+      return { status: "UNSUPPORTED", reason: "No extractable content found in this spreadsheet." };
+    }
+    return { status: "COMPLETE", text };
   }
 
   // Meeting transcripts/recaps routinely arrive as plain .txt exports

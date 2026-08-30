@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { uploadDocument } from "@/lib/document-service";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import { commitPricingImport, previewPricingImport, type PricingImportPreview } from "@/lib/pricing-import-service";
+import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 
 // previewPricingImport now also dispatches to the Design Cost Estimate
 // booth-workbook shape (design-cost-estimate-import-service.ts) and
@@ -370,5 +371,34 @@ describe("previewPricingImport -- Arena RFP header shape variants", () => {
     // is a supplementary note; both survive onto the real LineItem row.
     expect(lineItem.description).toBe("Right Endzone Camera Platform — Near — Field-level, turf edge; 3 camera positions");
     expect(lineItem.sourceQuote).toBe("Field-level, turf edge; 3 camera positions");
+  });
+});
+
+// Real fixtures from the "Full Swing PGA Orlando" job -- confirmed live
+// to match neither findDesignCostEstimateSheet nor findPricingSheet, the
+// exact condition that should route previewPricingImport to
+// spreadsheet-line-item-service.ts's AI fallback instead of throwing the
+// old "doesn't contain a recognizable Pricing Schedule sheet" error.
+const FUSE_BID_PATH = path.resolve(
+  import.meta.dirname,
+  "../../../data/RFP/Full_Swing/EXPO_CCI_Full_Swing_PGA_Orlando_Bid_Breakdown.xlsx",
+);
+const FABRICATION_ESTIMATE_PATH = path.resolve(
+  import.meta.dirname,
+  "../../../data/RFP/Full_Swing/Full Swing @ PGA 2027 Orlando Estimate 082526TA.xlsx",
+);
+
+describe("previewPricingImport -- AI fallback dispatch", () => {
+  it.each([
+    ["the real Fuse AV/lighting/rigging bid", FUSE_BID_PATH],
+    ["the real 33-sheet internal fabrication estimate", FABRICATION_ESTIMATE_PATH],
+  ])("reaches the AI fallback (not the old unrecognized-format error) for %s", async (_label, filePath) => {
+    const { opportunity, document } = await makeDocumentFrom(filePath, "unrecognized-format.xlsx");
+
+    // .env.test deliberately has no OpenAI key -- AiNotConfiguredError
+    // proves the AI fallback was actually reached, not the deterministic
+    // "doesn't contain a recognizable Pricing Schedule sheet" error this
+    // used to throw for exactly these two real files.
+    await expect(previewPricingImport(document.id, opportunity.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
   });
 });

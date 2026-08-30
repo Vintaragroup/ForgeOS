@@ -333,7 +333,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const canImport = !!currentVersion && !currentVersion.isLocked;
   const importPreview =
     canImport && importDocumentId
-      ? await previewPricingImport(importDocumentId, estimate.opportunityId).catch((err: Error) => err)
+      ? await previewPricingImport(importDocumentId, estimate.opportunityId, user.id).catch((err: Error) => err)
       : null;
 
   const reconciliation =
@@ -2510,8 +2510,19 @@ function DocumentsTab({
               <p className="mb-3 text-sm text-neutral-700">
                 <span className="font-medium">{importPreview.rows.length}</span> line items across{" "}
                 <span className="font-medium">{importPreview.categories.length}</span> categories in{" "}
-                <span className="font-medium">{importPreview.filename}</span> ({importPreview.sheetName}).
+                <span className="font-medium">{importPreview.filename}</span>
+                {"sheetName" in importPreview && ` (${importPreview.sheetName})`}.
               </p>
+
+              {importPreview.kind === "ai-proposed" && (
+                <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  This spreadsheet&apos;s layout wasn&apos;t recognized by either deterministic importer, so these
+                  rows are AI-proposed from its raw content instead of read directly from fixed columns — verify
+                  every row against the source before committing. A qty marked{" "}
+                  <span className="text-amber-600">*</span> wasn&apos;t explicitly stated in the sheet; committing
+                  appends &quot;(qty estimated — verify)&quot; to that row&apos;s description as a permanent flag.
+                </p>
+              )}
 
               {/* Flag-only -- see mirrorDocuments' own comment above on why
                   this never auto-copies pricing. A reviewer decides whether
@@ -2551,6 +2562,46 @@ function DocumentsTab({
                               `$${row.unitCost.toFixed(2)}`
                             ) : (
                               <span className="text-neutral-400" title="Not yet priced in the source workbook">
+                                $0.00
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : importPreview.kind === "ai-proposed" ? (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-neutral-50">
+                      <tr className="text-left text-neutral-500">
+                        <th className="px-2 py-1.5 font-normal">Category</th>
+                        <th className="px-2 py-1.5 font-normal">Description</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Unit</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Unit cost</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.rows.map((row, i) => (
+                        <tr key={i} className="border-t border-neutral-100">
+                          <td className="px-2 py-1 text-neutral-500">{row.category}</td>
+                          <td className="max-w-[24rem] truncate px-2 py-1" title={row.sourceQuote}>
+                            {row.description}
+                          </td>
+                          <td className="px-2 py-1 text-right">{row.unit}</td>
+                          <td className="px-2 py-1 text-right">
+                            {row.qty}
+                            {!row.qtyIsExplicit && (
+                              <span className="ml-1 text-amber-600" title="Not stated in the source -- a placeholder, not a real quantity.">
+                                *
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1 text-right">
+                            {row.unitCost > 0 ? (
+                              `$${row.unitCost.toFixed(2)}`
+                            ) : (
+                              <span className="text-neutral-400" title="Not yet priced in the source spreadsheet">
                                 $0.00
                               </span>
                             )}

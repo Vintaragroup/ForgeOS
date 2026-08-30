@@ -25,6 +25,11 @@ import {
   previewDesignCostEstimateImport,
   type DesignCostEstimatePreview,
 } from "@/lib/design-cost-estimate-import-service";
+import {
+  commitAiProposedImport,
+  previewAiProposedImport,
+  type AiProposedImportPreview,
+} from "@/lib/ai/spreadsheet-line-item-service";
 
 const HEADER_SCAN_ROWS = 20; // header always appears near the top, after a title/merge block
 
@@ -147,7 +152,8 @@ function findPricingSheet(
 export async function previewPricingImport(
   documentId: string,
   opportunityId: string,
-): Promise<PricingImportPreview | DesignCostEstimatePreview> {
+  userId: string | null = null,
+): Promise<PricingImportPreview | DesignCostEstimatePreview | AiProposedImportPreview> {
   const { document, bytes } = await getDocumentBytes(documentId);
   if (document.opportunityId !== opportunityId) {
     throw new Error("This document doesn't belong to this opportunity.");
@@ -171,9 +177,13 @@ export async function previewPricingImport(
 
   const found = findPricingSheet(workbook);
   if (!found) {
-    throw new Error(
-      `"${document.filename}" doesn't contain a recognizable Pricing Schedule sheet (expected Category/Description/Unit/Qty columns).`,
-    );
+    // Neither deterministic shape recognized this file -- confirmed
+    // necessary against two more real vendor formats (see
+    // spreadsheet-line-item-service.ts's own header comment) rather than
+    // dead-ending the estimate on a format nobody's hand-written a parser
+    // for yet. Always tried last: deterministic parsing stays preferred
+    // wherever a shape is actually known.
+    return previewAiProposedImport(documentId, opportunityId, userId);
   }
   const { sheet, headerRowNumber, columns } = found;
 
@@ -308,6 +318,9 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
   // already applies to opportunityId above.
   if (preview.kind === "design-cost-estimate") {
     return commitDesignCostEstimateImport(estimateVersionId, documentId);
+  }
+  if (preview.kind === "ai-proposed") {
+    return commitAiProposedImport(estimateVersionId, documentId);
   }
   if (preview.rows.length === 0) {
     throw new Error(`No line items found in "${preview.filename}".`);
