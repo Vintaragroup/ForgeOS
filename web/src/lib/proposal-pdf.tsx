@@ -204,6 +204,11 @@ const styles = StyleSheet.create({
   // A $0.00 the client already owns/supplies, not "not yet priced" -- see
   // ProposalViewLineItem.isClientOwned's comment.
   clientOwnedLabel: { fontStyle: "italic", color: "#737373" },
+  // Summary-only categories (see isSummary below) skip the priced table
+  // entirely but still list what's actually in the category -- same
+  // bullet treatment as professionalServicesItem/projectScopeItem, just a
+  // different section.
+  summaryListItem: { fontSize: 8.5, lineHeight: 1.6, color: "#404040", paddingHorizontal: 8, marginBottom: 2 },
   headerCell: { color: BRAND.black, fontSize: 8, textTransform: "uppercase", fontWeight: 700 },
   totalRow: {
     flexDirection: "row",
@@ -439,6 +444,22 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     </>
   );
 
+  // Summary-only categories (isSummary below) skip renderBody/
+  // renderServiceBody entirely -- but rendering nothing at all besides the
+  // header/subtotal left a client with no idea what the category even
+  // contains. This lists each item's own description as a plain bullet,
+  // no qty/unit/price columns, so "summary" still says what's included
+  // without turning back into the full priced table.
+  const renderSummaryBody = (items: AggregatedLineItem[]) => (
+    <>
+      {items.map((li) => (
+        <Text key={li.key} style={styles.summaryListItem}>
+          • {li.boothLabel ? `${li.boothLabel} — ${li.description}` : li.description}
+        </Text>
+      ))}
+    </>
+  );
+
   const renderServiceBody = (items: AggregatedLineItem[], hidePrice = false) => (
     <>
       {items.map((li) => (
@@ -619,8 +640,11 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     </View>
                   </View>
                 )}
-              {!isSummary &&
-                (isServiceStyle ? renderServiceBody(visibleOwnItems, hidePrice) : renderBody(visibleOwnItems, hidePrice))}
+              {isSummary
+                ? renderSummaryBody(visibleOwnItems)
+                : isServiceStyle
+                  ? renderServiceBody(visibleOwnItems, hidePrice)
+                  : renderBody(visibleOwnItems, hidePrice)}
               {visibleChildren.map((child) => (
                 <View key={child.name} style={styles.subsection}>
                   <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
@@ -629,7 +653,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                       {hidePrice ? "" : moneyFromNumber(bucketSubtotal(child.items))}
                     </Text>
                   </View>
-                  {!isSummary && renderBody(child.items, hidePrice)}
+                  {isSummary ? renderSummaryBody(child.items) : renderBody(child.items, hidePrice)}
                 </View>
               ))}
             </View>
