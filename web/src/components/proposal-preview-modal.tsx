@@ -165,9 +165,36 @@ export function ProposalPreviewModal({
                 Update preview
               </Button>
             </div>
-            <div className="flex-1">
+            <div className="flex flex-1 flex-col">
               {appliedSrc ? (
-                <iframe key={appliedSrc} src={appliedSrc} className="h-full w-full" title="Proposal PDF preview" />
+                <>
+                  {/* The iframe's own embedded PDF viewer has zoom/pan of its
+                      own, but it's cramped and easy to miss inside a modal --
+                      "Open in new tab" gives the browser's full, un-cramped
+                      native PDF viewer (proper zoom controls, click-drag pan,
+                      its own toolbar) with zero new rendering code, and
+                      `download` on a same-origin link saves the file
+                      directly regardless of the route's own inline
+                      Content-Disposition header. */}
+                  <div className="flex items-center justify-end gap-3 border-b border-neutral-200 px-3 py-1.5">
+                    <a
+                      href={appliedSrc}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-medium text-brand-navy hover:underline"
+                    >
+                      Open in new tab ↗
+                    </a>
+                    <a
+                      href={appliedSrc}
+                      download
+                      className="text-xs font-medium text-brand-navy hover:underline"
+                    >
+                      Download PDF
+                    </a>
+                  </div>
+                  <iframe key={appliedSrc} src={appliedSrc} className="h-full w-full flex-1" title="Proposal PDF preview" />
+                </>
               ) : (
                 <div className="flex h-full items-center justify-center text-sm text-neutral-400">
                   Adjust categories, then click Update preview to generate the PDF.
