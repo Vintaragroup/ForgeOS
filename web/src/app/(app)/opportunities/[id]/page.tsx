@@ -38,7 +38,8 @@ import {
   STAGE_AGE_CRITICAL_DAYS,
   STAGE_AGE_WARNING_DAYS,
 } from "@/lib/deal-checklist";
-import { Button, CollapsibleSection, Field, PageHeader, ReadOnlyField, SelectField, StatusChip } from "@/components/ui";
+import { Button, CollapsibleSection, Field, PageHeader, ReadOnlyField, SelectField, StatusBanner, StatusChip } from "@/components/ui";
+import { readStatus } from "@/lib/action-status";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
 import { DocumentUploadForm } from "@/components/document-upload-form";
@@ -612,7 +613,9 @@ function fmtDate(d: Date | null): string {
 
 export default async function OpportunityDetailPage(props: PageProps<"/opportunities/[id]">) {
   const { id } = await props.params;
-  const { editDetails: editDetailsParam, collaboratorsUpdated: collaboratorsUpdatedParam } = await props.searchParams;
+  const searchParams = await props.searchParams;
+  const { editDetails: editDetailsParam, collaboratorsUpdated: collaboratorsUpdatedParam } = searchParams;
+  const { success: statusSuccess, error: statusError } = readStatus(searchParams);
   // Same query-param toggle convention as estimates/[id]/page.tsx's
   // importDocumentId/proposeDocumentId -- a plain server-rendered view
   // vs. edit split needs no client state, just which panel a link
@@ -853,6 +856,9 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           </>
         }
       />
+
+      {statusSuccess && <StatusBanner kind="success">{statusSuccess}</StatusBanner>}
+      {statusError && <StatusBanner kind="error">{statusError}</StatusBanner>}
 
       {dealChecklist.length > 0 && (
         <CollapsibleSection title="Next steps to close this deal">
@@ -1310,11 +1316,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           Registered teammates checked below can see and work on this opportunity, in addition to its
           owner. Admins can already see every opportunity regardless of this list.
         </p>
-        {collaboratorsUpdated && (
-          <p className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
-            Collaborators updated.
-          </p>
-        )}
+        {collaboratorsUpdated && <StatusBanner kind="success">Collaborators updated.</StatusBanner>}
         <form action={updateCollaboratorsWithId} className="flex flex-col gap-3">
           {users.length === 0 ? (
             <p className="text-sm text-neutral-400">No other registered users yet.</p>

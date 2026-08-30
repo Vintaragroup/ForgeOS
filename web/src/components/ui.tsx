@@ -429,3 +429,21 @@ export function StatusChip({
     </span>
   );
 }
+
+// A page-level confirmation/error banner after a server-action mutation --
+// the shared replacement for this app's previously ad-hoc, hand-copied
+// banners (estimates/[id]/page.tsx's confirmedCount/recategorized,
+// cut-list's optimizeError/importResult, account's success/error), whose
+// border/bg agreed everywhere but whose text shade and padding quietly
+// drifted between files. Standardizes on -900 text and rounded/px-3/py-2/
+// text-sm sizing, the majority convention across those. Callers still
+// control WHICH query param drives visibility and where on the page this
+// renders -- some actions need a dedicated param beyond a plain message
+// (see opportunities/actions.ts's updateCollaborators, which also has to
+// force its own CollapsibleSection back open), so this stays a pure
+// presentational component, not tied to any one param-reading convention.
+export function StatusBanner({ kind, children }: { kind: "success" | "error"; children: ReactNode }) {
+  const styles =
+    kind === "success" ? "border-green-200 bg-green-50 text-green-900" : "border-red-200 bg-red-50 text-red-900";
+  return <p className={`mb-4 rounded border px-3 py-2 text-sm ${styles}`}>{children}</p>;
+}

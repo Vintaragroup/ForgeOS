@@ -6,6 +6,7 @@ import { changeOpportunityStage } from "@/lib/opportunity-service";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
 import { EXTRACTABLE_OPPORTUNITY_FIELDS, type ExtractableOpportunityField } from "@/lib/ai/document-summary-service";
 import { parseFreeTextDate } from "@/lib/citation";
+import { statusRedirectPath } from "@/lib/action-status";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -91,7 +92,7 @@ export async function updateOpportunity(id: string, formData: FormData) {
 
   revalidatePath("/opportunities");
   revalidatePath(`/opportunities/${id}`);
-  redirect(`/opportunities/${id}`);
+  redirect(statusRedirectPath(`/opportunities/${id}`, { success: "Details saved." }));
 }
 
 // Accepting an AI-suggested onboarding field (opportunities/[id]/page.tsx's
@@ -123,6 +124,7 @@ export async function applyOpportunityFieldSuggestionAction(
   await db.opportunity.update({ where: { id: opportunityId }, data: { [field]: value } });
 
   revalidatePath(`/opportunities/${opportunityId}`);
+  redirect(statusRedirectPath(`/opportunities/${opportunityId}`, { success: "Suggested value applied." }));
 }
 
 // Diffs the submitted checkbox list against the current collaborator
@@ -153,9 +155,13 @@ export async function updateCollaborators(id: string, formData: FormData) {
   // action previously gave zero visible feedback on save (confirmed live:
   // the checkboxes already reflected the submitted state via
   // defaultChecked, so a revalidated page looked byte-for-byte identical,
-  // reading as "nothing happened" even though the save succeeded). Same
-  // redirect-with-status convention as updateOpportunity/import-actions.ts's
-  // confirmedCount, read back below to show a real confirmation banner.
+  // reading as "nothing happened" even though the save succeeded). Kept as
+  // its own dedicated param rather than statusRedirectPath's generic
+  // success/error (action-status.ts) -- this one also has to force the
+  // Collaborators CollapsibleSection back open after the redirect, since
+  // a fresh server render otherwise re-collapses it (defaultOpen is only
+  // an initial value, not persisted client state), which a page-top
+  // generic banner alone wouldn't fix.
   redirect(`/opportunities/${id}?collaboratorsUpdated=1#collaborators`);
 }
 
@@ -174,6 +180,7 @@ export async function changeStage(id: string, formData: FormData) {
 
   revalidatePath("/opportunities");
   revalidatePath(`/opportunities/${id}`);
+  redirect(statusRedirectPath(`/opportunities/${id}`, { success: "Stage updated." }));
 }
 
 export async function deleteOpportunity(id: string) {
