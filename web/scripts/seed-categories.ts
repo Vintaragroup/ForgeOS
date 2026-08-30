@@ -25,7 +25,11 @@ interface SeedCategory {
 // Order matches the old CANONICAL_CATEGORIES array exactly.
 const SEED_CATEGORIES: SeedCategory[] = [
   { name: "Custom Build", key: "custom_build" },
-  { name: "Structure", key: "structure", parent: "Custom Build" },
+  // "structure" key kept unchanged (stable identifier, see SeedCategory's
+  // own comment) even though the display name changed -- this category
+  // now means rental/catalog structures, not "part of Custom Build," so
+  // it's no longer seeded with a parent.
+  { name: "Rental", key: "structure" },
   { name: "Flooring", key: "flooring" },
   { name: "Furniture", key: "furniture" },
   { name: "Accessories", key: "accessories" },
