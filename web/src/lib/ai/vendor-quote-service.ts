@@ -21,6 +21,7 @@ import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MI
 import { getDocumentBytes } from "@/lib/document-service";
 import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
+import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import type { VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
 
 const SOURCE_QUOTE_DESCRIPTION =
@@ -189,4 +190,120 @@ export async function proposeVendorQuoteLineItems(
     where: { id: documentId },
     data: { vendorQuoteLineItems: items as unknown as Prisma.InputJsonValue },
   });
+}
+
+// The "Import from document" path for a standalone vendor-quote PDF with
+// no pre-existing matching line items -- e.g. a booth graphics vendor's
+// own itemized quote, uploaded before any estimate line exists to match
+// it against. createBidPackage (estimate-service.ts) refuses to create a
+// package with zero seed line items, which is the wrong fit here; this
+// reuses proposeVendorQuoteLineItems's own extraction wholesale (same
+// schema/prompt/model, same Document.vendorQuoteLineItems cache field --
+// safe to share, a given document only ever goes through one of these
+// two paths) and skips straight to a pricing-import-service.ts-shaped
+// preview/commit, the same "Import from document" flow every other
+// pricing document already gets.
+export interface StandaloneVendorQuoteImportPreview {
+  kind: "vendor-quote";
+  documentId: string;
+  filename: string;
+  rows: VendorQuoteLine[];
+}
+
+// Same cache-first posture as spreadsheet-line-item-service.ts's own
+// previewAiProposedImport -- a repeated "Preview import" click against
+// the same document must not re-spend tokens. Unlike bid-package-
+// actions.ts's runVendorExtractionAndMatch (which always re-extracts,
+// since it only runs from an explicit "Extract & match" click), this is
+// read-heavy the way a page render is.
+export async function previewStandaloneVendorQuoteImport(
+  documentId: string,
+  opportunityId: string,
+  userId: string | null = null,
+): Promise<StandaloneVendorQuoteImportPreview> {
+  const document = await db.document.findFirstOrThrow({ where: { id: documentId, opportunityId } });
+
+  const cached = document.vendorQuoteLineItems as unknown as VendorQuoteLine[] | null;
+  if (cached && cached.length > 0) {
+    return { kind: "vendor-quote", documentId, filename: document.filename, rows: cached };
+  }
+
+  // proposeVendorQuoteLineItems itself throws AiNotConfiguredError before
+  // any write, same posture as every other AI proposer in this app.
+  const updated = await proposeVendorQuoteLineItems(documentId, opportunityId, userId);
+  const rows = (updated.vendorQuoteLineItems as unknown as VendorQuoteLine[] | null) ?? [];
+  return { kind: "vendor-quote", documentId, filename: document.filename, rows };
+}
+
+// Same idempotency-guard/findOrCreateSection/addLineItemsBulk shape every
+// other importer in this app uses, grouped by unitCode (the vendor's own
+// section/unit header, e.g. "CAM-06") the same way the other importers
+// group by booth/sheet -- rows with no such header (the common case for
+// a single flat pricing table, e.g. the real Booth Graphics quote) all
+// land in one section named after the document. isDraft is still implied
+// true via addLineItemsBulk's own default: unlike
+// commitProposedVendorSectionAction's `isDraft: false` (where accepting
+// an AI-proposed MATCH against an existing line item *is* the review
+// step), this is a brand-new, never-reviewed extraction with nothing to
+// match against, so it gets the same "needs human confirmation" gate
+// every other document-sourced import in this app already gets.
+export async function commitStandaloneVendorQuoteImport(estimateVersionId: string, documentId: string) {
+  const version = await db.estimateVersion.findUniqueOrThrow({
+    where: { id: estimateVersionId },
+    select: { estimate: { select: { opportunityId: true } } },
+  });
+  const preview = await previewStandaloneVendorQuoteImport(documentId, version.estimate.opportunityId);
+  if (preview.rows.length === 0) {
+    throw new Error(`No priced line items could be extracted from "${preview.filename}".`);
+  }
+
+  const alreadyImported = await db.lineItem.findFirst({
+    where: { documentId, section: { estimateVersionId, optionId: null } },
+  });
+  if (alreadyImported) {
+    throw new Error(
+      `"${preview.filename}" has already been imported into this estimate. Delete its existing line items first if you want to re-import.`,
+    );
+  }
+
+  const existingSectionCount = await db.estimateSection.count({ where: { estimateVersionId, optionId: null } });
+
+  const unitCodes: (string | null)[] = [];
+  const seen = new Set<string>();
+  for (const row of preview.rows) {
+    const key = row.unitCode ?? "";
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unitCodes.push(row.unitCode ?? null);
+  }
+
+  let nextSortOrder = existingSectionCount;
+  const created = [];
+  for (const unitCode of unitCodes) {
+    const section = await findOrCreateSection(estimateVersionId, {
+      name: preview.filename,
+      sectionType: "CATEGORY",
+      sortOrder: nextSortOrder++,
+      groupLabel: unitCode,
+    });
+
+    const rowsForGroup = preview.rows.filter((r) => (r.unitCode ?? null) === unitCode);
+    const lineItems = await addLineItemsBulk(
+      estimateVersionId,
+      section.id,
+      rowsForGroup.map((row) => ({
+        lineType: "MATERIAL" as const,
+        description: row.description,
+        qty: row.qty ?? 1,
+        unit: row.unit,
+        unitCost: row.unitPrice,
+        documentId,
+        sourceQuote: row.sourceQuote,
+        sourcePageNumber: row.pageNumber,
+      })),
+    );
+    created.push({ section, count: lineItems.length });
+  }
+
+  return { filename: preview.filename, sectionsCreated: created.length, rowsImported: preview.rows.length };
 }

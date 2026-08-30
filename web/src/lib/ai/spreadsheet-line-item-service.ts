@@ -16,7 +16,7 @@ import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
-import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
+import { addLineItemsBulk, addOption, findOrCreateSection } from "@/lib/estimate-service";
 import { getDocumentBytes } from "@/lib/document-service";
 import { serializeWorkbookForPrompt } from "@/lib/xlsx-utils";
 import { resolveLineItemCategory } from "@/lib/line-item-category";
@@ -38,6 +38,21 @@ export interface ProposedSpreadsheetLineItem {
   category: string;
   sourceQuote: string;
   sheetName: string;
+  // Set ONLY when the sheet itself has real textual evidence this row's
+  // sheet is one of several mutually-exclusive alternatives for the same
+  // scope -- an explicit comparison sheet, "Option A/B" language, "the
+  // only difference is..." framing. Never inferred from ambiguity alone.
+  // Confirmed necessary live: a real Fuse Technical Group bid had "Video
+  // V1" (LED ceiling) and "Video V2" (projection ceiling) -- the client
+  // picks ONE -- both committed as regular line items would silently
+  // double the real cost. Rows that are genuinely alternatives to each
+  // other share the same label (e.g. "Video Package: LED Ceiling vs
+  // Projection Ceiling"); every other row (the overwhelming majority)
+  // gets null. This never auto-splits anything by itself -- see
+  // findAlternateGroups and commitAiProposedImport's sheetDestinations
+  // param, which require a human's own choice before anything commits to
+  // a different destination than the base version.
+  alternateGroupLabel?: string | null;
 }
 
 const SOURCE_QUOTE_DESCRIPTION =
@@ -82,8 +97,13 @@ export function buildSpreadsheetProposalSchema(categoryNames: string[]) {
               },
               sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
               sheetName: { type: "string", description: "The exact sheet name this item came from." },
+              alternateGroupLabel: {
+                type: ["string", "null"],
+                description:
+                  "Null for almost every item. Set ONLY when this row's own sheet is one of several mutually-exclusive alternatives for the same scope, with real textual evidence in the spreadsheet itself (an explicit comparison sheet, \"Option A/B\" language, \"the only difference is...\" framing) -- never because two sheets merely seem similar. Every row from every alternative sheet in the same choice must share the exact same label text (e.g. \"Video Package: LED Ceiling vs Projection Ceiling\").",
+              },
             },
-            required: ["description", "qty", "qtyIsExplicit", "unit", "unitCost", "unitCostIsExplicit", "category", "sourceQuote", "sheetName"],
+            required: ["description", "qty", "qtyIsExplicit", "unit", "unitCost", "unitCostIsExplicit", "category", "sourceQuote", "sheetName", "alternateGroupLabel"],
           },
         },
       },
@@ -101,6 +121,7 @@ Real spreadsheets in this business take many shapes: a flat schedule, one sheet 
 - Skip section headers, running totals, tax lines, and narrative notes -- propose only items that represent something to be supplied, built, or rented.
 - sourceQuote must be a real, exact substring of the row's own text as given -- this is how a reviewer verifies and jumps back to the source; never paraphrase it.
 - If a quantity truly isn't stated anywhere for a real priced item, use 1 and set qtyIsExplicit to false rather than guessing a number.
+- alternateGroupLabel: null for almost every item. Only set it when the spreadsheet itself gives you real evidence that this row's sheet is one of several mutually-exclusive alternatives for the same scope -- an explicit comparison sheet, "Option A/B" wording, or a note like "the only difference between these is...". Every row from every alternative sheet in that same choice must share the exact same label text. Do not set this just because two sheets look similar or cover related equipment -- only when the document itself frames them as a choice between alternatives.
 
 category must be exactly one of: ${categoryNames.join(", ")} when the item clearly fits one of those; otherwise use your own short, specific label rather than forcing a bad fit.
 
@@ -116,6 +137,46 @@ export interface AiProposedImportPreview {
   rows: ProposedSpreadsheetLineItem[];
   categories: string[];
 }
+
+export interface AlternateGroup {
+  alternateGroupLabel: string;
+  sheetNames: string[];
+  totalBySheet: Record<string, number>;
+}
+
+// Pure, separately testable from the OpenAI-calling glue on purpose --
+// this only reads what the model already flagged, it never decides
+// anything on its own. A "group" of exactly one sheet is dropped (can't
+// be an alternative to nothing) -- a defensive floor in case the model
+// mislabels a single sheet, so the UI never shows a confusing one-sheet
+// "choose between these" banner.
+export function findAlternateGroups(rows: ProposedSpreadsheetLineItem[]): AlternateGroup[] {
+  const sheetsByLabel = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!row.alternateGroupLabel) continue;
+    if (!sheetsByLabel.has(row.alternateGroupLabel)) sheetsByLabel.set(row.alternateGroupLabel, new Set());
+    sheetsByLabel.get(row.alternateGroupLabel)!.add(row.sheetName);
+  }
+
+  return [...sheetsByLabel.entries()]
+    .filter(([, sheets]) => sheets.size > 1)
+    .map(([alternateGroupLabel, sheets]) => {
+      const sheetNames = [...sheets];
+      const totalBySheet: Record<string, number> = {};
+      for (const sheetName of sheetNames) {
+        totalBySheet[sheetName] = rows
+          .filter((r) => r.sheetName === sheetName && r.alternateGroupLabel === alternateGroupLabel)
+          .reduce((sum, r) => sum + r.qty * r.unitCost, 0);
+      }
+      return { alternateGroupLabel, sheetNames, totalBySheet };
+    });
+}
+
+// One entry per sheetName the reviewer has an opinion on -- any sheet not
+// present here defaults to the base version, which is exactly today's
+// (pre-alternate-flagging) behavior, so a document with no
+// alternateGroupLabel rows at all needs no change from a caller.
+export type SheetDestination = { target: "base" } | { target: "option"; optionName: string };
 
 // opportunityId ownership check -- see design-cost-estimate-import-
 // service.ts's previewDesignCostEstimateImport for the identical
@@ -195,11 +256,28 @@ export async function previewAiProposedImport(
 }
 
 // Same idempotency-guard/findOrCreateSection/addLineItemsBulk shape every
-// other importer in this app already uses. isDraft is implied true for
-// every row here with no exception -- addLineItemsBulk's own default --
-// AI-derived pricing needs human confirmation MORE than a deterministic
-// import does, never less.
-export async function commitAiProposedImport(estimateVersionId: string, documentId: string) {
+// other importer in this app already uses, extended two ways:
+//
+// - Sections are now grouped by (sheetName, category), not category
+//   alone -- mirrors design-cost-estimate-import-service.ts's own
+//   (boothLabel, category) grouping exactly. Confirmed necessary live: a
+//   real job's 67 committed items all landed in flat, generic category
+//   buckets with zero sub-structure, because this importer never passed
+//   groupLabel the way every other one in this app does.
+// - sheetDestinations lets a reviewer route a specific sheet's rows into
+//   a real Option instead of the base version -- see
+//   findAlternateGroups's own header comment for why this exists. A
+//   sheet with no entry here (the overwhelming common case) goes to the
+//   base version, unchanged from this function's original behavior.
+//
+// isDraft is still implied true for every row with no exception --
+// addLineItemsBulk's own default -- AI-derived pricing needs human
+// confirmation MORE than a deterministic import does, never less.
+export async function commitAiProposedImport(
+  estimateVersionId: string,
+  documentId: string,
+  sheetDestinations: Record<string, SheetDestination> = {},
+) {
   const version = await db.estimateVersion.findUniqueOrThrow({
     where: { id: estimateVersionId },
     select: { estimate: { select: { opportunityId: true } } },
@@ -220,20 +298,46 @@ export async function commitAiProposedImport(estimateVersionId: string, document
 
   const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
   const existingSectionCount = await db.estimateSection.count({ where: { estimateVersionId, optionId: null } });
+
+  // Resolve/create every distinct named Option up front, once per name --
+  // several sheets could legitimately route to the same new Option.
+  const optionIdByName = new Map<string, string>();
+  for (const destination of Object.values(sheetDestinations)) {
+    if (destination.target === "option" && !optionIdByName.has(destination.optionName)) {
+      const option = await addOption(estimateVersionId, { name: destination.optionName });
+      optionIdByName.set(destination.optionName, option.id);
+    }
+  }
+
+  const groupKey = (row: ProposedSpreadsheetLineItem) => `${row.sheetName} ${row.category}`;
+  const seenKeys = new Set<string>();
+  const groups: { sheetName: string; category: string }[] = [];
+  for (const row of preview.rows) {
+    const key = groupKey(row);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    groups.push({ sheetName: row.sheetName, category: row.category });
+  }
+
   let nextSortOrder = existingSectionCount;
   const created = [];
-  for (const category of preview.categories) {
+  for (const group of groups) {
+    const destination = sheetDestinations[group.sheetName] ?? { target: "base" as const };
+    const optionId = destination.target === "option" ? (optionIdByName.get(destination.optionName) ?? null) : null;
+
     const section = await findOrCreateSection(estimateVersionId, {
-      name: category,
+      name: group.category,
       sectionType: "CATEGORY",
       sortOrder: nextSortOrder++,
+      groupLabel: group.sheetName,
+      optionId,
     });
 
-    const rowsForCategory = preview.rows.filter((r) => r.category === category);
+    const rowsForGroup = preview.rows.filter((r) => groupKey(r) === `${group.sheetName} ${group.category}`);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,
-      rowsForCategory.map((row) => ({
+      rowsForGroup.map((row) => ({
         lineType: "MATERIAL" as const,
         description: row.qtyIsExplicit ? row.description : `${row.description} (qty estimated -- verify)`,
         qty: row.qty,

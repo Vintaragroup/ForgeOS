@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { RateLimitError } from "openai";
 import { commitPricingImport } from "@/lib/pricing-import-service";
+import type { SheetDestination } from "@/lib/ai/spreadsheet-line-item-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
 import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service";
 import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
@@ -65,10 +66,25 @@ export async function commitImportAction(
   estimateId: string,
   versionId: string,
   documentId: string,
+  formData: FormData,
 ) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
-  await commitPricingImport(versionId, documentId);
+  // Only present when the preview flagged one or more alternate-option
+  // groups (spreadsheet-line-item-service.ts's findAlternateGroups) --
+  // every other "Commit" form on this page still submits with no matching
+  // fields at all, which is exactly "everything goes to the base version,"
+  // this function's unchanged default.
+  const sheetDestinations: Record<string, SheetDestination> = {};
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("destination__")) continue;
+    const sheetName = key.slice("destination__".length);
+    if (value === "option") {
+      const optionName = String(formData.get(`optionName__${sheetName}`) ?? "").trim();
+      if (optionName) sheetDestinations[sheetName] = { target: "option", optionName };
+    }
+  }
+  await commitPricingImport(versionId, documentId, sheetDestinations);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}?tab=documents`);
 }

@@ -41,6 +41,7 @@ import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import type { CoverageGap } from "@/lib/ai/scope-coverage-service";
 import { computeOptionTotal } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
+import { findAlternateGroups } from "@/lib/ai/spreadsheet-line-item-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { laborRateOptionLabel } from "@/lib/labor-rate";
@@ -236,8 +237,18 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       orderBy: { createdAt: "desc" },
       include: { uploadedBy: true },
     }),
+    // VENDOR_QUOTE included alongside PRICING_SCHEDULE so a standalone
+    // itemized vendor-quote PDF (e.g. a booth graphics vendor's own
+    // pricing table, with no pre-existing line items to match against --
+    // see vendor-quote-service.ts's previewStandaloneVendorQuoteImport)
+    // shows up in this same "Import from document" picker instead of
+    // only under Bid Packages. pricing-import-service.ts's
+    // previewPricingImport dispatches on the real document's own
+    // documentType/mimeType, not this query, so a VENDOR_QUOTE that
+    // happens to be a spreadsheet still goes through the normal XLSX
+    // paths unaffected.
     db.document.findMany({
-      where: { opportunityId: estimate.opportunityId, documentType: "PRICING_SCHEDULE", deletedAt: null },
+      where: { opportunityId: estimate.opportunityId, documentType: { in: ["PRICING_SCHEDULE", "VENDOR_QUOTE"] }, deletedAt: null },
       orderBy: { createdAt: "desc" },
     }),
     // Any analyzed document EXCEPT a pricing schedule (which already has
@@ -2508,11 +2519,23 @@ function DocumentsTab({
           {importPreview && !(importPreview instanceof Error) && (
             <div className="mt-4 border-t border-neutral-200 pt-4">
               <p className="mb-3 text-sm text-neutral-700">
-                <span className="font-medium">{importPreview.rows.length}</span> line items across{" "}
-                <span className="font-medium">{importPreview.categories.length}</span> categories in{" "}
-                <span className="font-medium">{importPreview.filename}</span>
+                <span className="font-medium">{importPreview.rows.length}</span> line items
+                {"categories" in importPreview && (
+                  <>
+                    {" "}
+                    across <span className="font-medium">{importPreview.categories.length}</span> categories
+                  </>
+                )}{" "}
+                in <span className="font-medium">{importPreview.filename}</span>
                 {"sheetName" in importPreview && ` (${importPreview.sheetName})`}.
               </p>
+
+              {importPreview.kind === "vendor-quote" && (
+                <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  These line items are AI-extracted directly from this vendor quote&apos;s own pricing table — verify
+                  every row against the source before committing.
+                </p>
+              )}
 
               {importPreview.kind === "ai-proposed" && (
                 <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -2610,6 +2633,33 @@ function DocumentsTab({
                       ))}
                     </tbody>
                   </table>
+                ) : importPreview.kind === "vendor-quote" ? (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-neutral-50">
+                      <tr className="text-left text-neutral-500">
+                        <th className="px-2 py-1.5 font-normal">Description</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Unit</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Unit price</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.rows.map((row, i) => (
+                        <tr key={i} className="border-t border-neutral-100">
+                          <td className="max-w-[24rem] truncate px-2 py-1" title={row.sourceQuote}>
+                            {row.description}
+                          </td>
+                          <td className="px-2 py-1 text-right">{row.unit ?? ""}</td>
+                          <td className="px-2 py-1 text-right">{row.qty ?? "—"}</td>
+                          <td className="px-2 py-1 text-right">${row.unitPrice.toFixed(2)}</td>
+                          <td className="px-2 py-1 text-right">
+                            ${(row.totalPrice ?? row.unitPrice * (row.qty ?? 1)).toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 ) : (
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-neutral-50">
@@ -2649,6 +2699,45 @@ function DocumentsTab({
                 )}
               </div>
               <form action={commitImportAction.bind(null, estimateId, currentVersion.id, importPreview.documentId)}>
+                {importPreview.kind === "ai-proposed" &&
+                  findAlternateGroups(importPreview.rows).map((group) => (
+                    <div
+                      key={group.alternateGroupLabel}
+                      className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+                    >
+                      <p className="mb-2">
+                        <span className="font-medium">{group.alternateGroupLabel}</span> — these{" "}
+                        {group.sheetNames.length} sheets look like mutually exclusive alternatives for the same
+                        scope, not separate real costs. Choose where each one goes before committing, or the total
+                        will double-count whichever one you don&apos;t actually pick.
+                      </p>
+                      <div className="flex flex-col gap-2">
+                        {group.sheetNames.map((sheetName, i) => (
+                          <div key={sheetName} className="flex flex-wrap items-center gap-2">
+                            <span className="w-40 shrink-0 font-medium text-amber-900">{sheetName}</span>
+                            <span className="w-24 shrink-0 text-right text-amber-900">
+                              ${group.totalBySheet[sheetName].toFixed(2)}
+                            </span>
+                            <select
+                              name={`destination__${sheetName}`}
+                              defaultValue={i === 0 ? "base" : "option"}
+                              className="rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-900"
+                            >
+                              <option value="base">Commit to base version</option>
+                              <option value="option">Commit as a new option</option>
+                            </select>
+                            <input
+                              type="text"
+                              name={`optionName__${sheetName}`}
+                              defaultValue={`${group.alternateGroupLabel} — ${sheetName}`}
+                              placeholder="Option name"
+                              className="min-w-[12rem] flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-900"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 <Button>
                   Commit {importPreview.rows.length} draft line items
                 </Button>

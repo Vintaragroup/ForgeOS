@@ -114,7 +114,7 @@ export async function createEstimateVersion(estimateId: string, marginTargetPct:
 
 export async function addSection(
   estimateVersionId: string,
-  data: { name: string; sectionType: SectionType; sortOrder?: number; optionId?: string; groupLabel?: string | null },
+  data: { name: string; sectionType: SectionType; sortOrder?: number; optionId?: string | null; groupLabel?: string | null },
 ) {
   await assertUnlocked(estimateVersionId);
   return db.estimateSection.create({
@@ -177,13 +177,25 @@ export async function moveSectionOrder(opportunityId: string, sectionId: string,
 // collapse into a single shared one across all booths.
 export async function findOrCreateSection(
   estimateVersionId: string,
-  data: { name: string; sectionType: SectionType; sortOrder?: number; groupLabel?: string | null },
+  data: {
+    name: string;
+    sectionType: SectionType;
+    sortOrder?: number;
+    groupLabel?: string | null;
+    // Defaults to base-version (null), exactly this function's prior
+    // hardcoded behavior -- every existing caller is unaffected. Set by
+    // an importer that lets a reviewer route specific rows into a real
+    // Option instead (see spreadsheet-line-item-service.ts's
+    // sheetDestinations) rather than the base version.
+    optionId?: string | null;
+  },
 ) {
+  const optionId = data.optionId ?? null;
   const existing = await db.estimateSection.findFirst({
-    where: { estimateVersionId, optionId: null, name: data.name, groupLabel: data.groupLabel ?? null },
+    where: { estimateVersionId, optionId, name: data.name, groupLabel: data.groupLabel ?? null },
   });
   if (existing) return existing;
-  return addSection(estimateVersionId, data);
+  return addSection(estimateVersionId, { ...data, optionId });
 }
 
 // An alternate/upgrade pricing path within one estimate (business-

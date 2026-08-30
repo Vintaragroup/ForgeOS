@@ -9,6 +9,7 @@ import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import {
   buildSpreadsheetProposalSchema,
   commitAiProposedImport,
+  findAlternateGroups,
   previewAiProposedImport,
   type ProposedSpreadsheetLineItem,
 } from "@/lib/ai/spreadsheet-line-item-service";
@@ -61,6 +62,7 @@ const FAKE_PROPOSAL: ProposedSpreadsheetLineItem[] = [
 afterEach(async () => {
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
+  await db.option.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.document.deleteMany();
@@ -156,6 +158,82 @@ describe("commitAiProposedImport", () => {
 
     await expect(commitAiProposedImport(version.id, document.id)).rejects.toThrow(/already been imported/);
   });
+
+  it("keeps two sheets' rows in separate sections even when they share a category -- groupLabel, not category alone, drives sectioning", async () => {
+    const { opportunity, document } = await makeDocument();
+    await db.category.createMany({ data: [{ name: "Audio/Visual", key: "audio_visual" }] });
+    const sameCategoryDifferentSheets: ProposedSpreadsheetLineItem[] = [
+      { ...FAKE_PROPOSAL[0], category: "Audio/Visual", sheetName: "Video V1" },
+      { ...FAKE_PROPOSAL[0], category: "Audio/Visual", sheetName: "Video V2", description: "LED Circular Header (V2 copy)" },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: sameCategoryDifferentSheets as unknown as Prisma.InputJsonValue },
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const result = await commitAiProposedImport(version.id, document.id);
+
+    expect(result.sectionsCreated).toBe(2);
+    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
+    expect(sections.map((s) => s.groupLabel).sort()).toEqual(["Video V1", "Video V2"]);
+    expect(new Set(sections.map((s) => s.name))).toEqual(new Set(["Audio/Visual"]));
+  });
+
+  it("routes a sheet into a real new Option when sheetDestinations says so, leaving an unlisted sheet in the base version", async () => {
+    const { opportunity, document } = await makeDocument();
+    await db.category.createMany({ data: [{ name: "Audio/Visual", key: "audio_visual" }] });
+    const twoSheets: ProposedSpreadsheetLineItem[] = [
+      { ...FAKE_PROPOSAL[0], category: "Audio/Visual", sheetName: "Video V1", alternateGroupLabel: "Video: LED vs Projection" },
+      { ...FAKE_PROPOSAL[0], category: "Audio/Visual", sheetName: "Video V2", alternateGroupLabel: "Video: LED vs Projection", description: "Projection ceiling" },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: twoSheets as unknown as Prisma.InputJsonValue },
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitAiProposedImport(version.id, document.id, {
+      "Video V2": { target: "option", optionName: "Projection ceiling alternate" },
+    });
+
+    const baseSections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id, optionId: null } });
+    expect(baseSections).toHaveLength(1);
+    expect(baseSections[0].groupLabel).toBe("Video V1");
+
+    const options = await db.option.findMany({ where: { estimateVersionId: version.id } });
+    expect(options).toHaveLength(1);
+    expect(options[0].name).toBe("Projection ceiling alternate");
+
+    const optionSections = await db.estimateSection.findMany({ where: { optionId: options[0].id } });
+    expect(optionSections).toHaveLength(1);
+    expect(optionSections[0].groupLabel).toBe("Video V2");
+  });
+});
+
+describe("findAlternateGroups", () => {
+  it("groups rows by alternateGroupLabel and reports each sheet's own total, dropping a group with only one sheet", () => {
+    const rows: ProposedSpreadsheetLineItem[] = [
+      { ...FAKE_PROPOSAL[0], sheetName: "Video V1", alternateGroupLabel: "Video choice", qty: 1, unitCost: 100 },
+      { ...FAKE_PROPOSAL[0], sheetName: "Video V2", alternateGroupLabel: "Video choice", qty: 1, unitCost: 200 },
+      { ...FAKE_PROPOSAL[1], sheetName: "Rigging", alternateGroupLabel: null },
+      { ...FAKE_PROPOSAL[1], sheetName: "Lighting", alternateGroupLabel: "Solo group -- should be dropped" },
+    ];
+
+    const groups = findAlternateGroups(rows);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].alternateGroupLabel).toBe("Video choice");
+    expect(groups[0].sheetNames.sort()).toEqual(["Video V1", "Video V2"]);
+    expect(groups[0].totalBySheet["Video V1"]).toBe(100);
+    expect(groups[0].totalBySheet["Video V2"]).toBe(200);
+  });
+
+  it("returns an empty array when nothing was flagged -- the common case", () => {
+    expect(findAlternateGroups(FAKE_PROPOSAL)).toEqual([]);
+  });
 });
 
 describe("buildSpreadsheetProposalSchema", () => {
@@ -175,6 +253,7 @@ describe("buildSpreadsheetProposalSchema", () => {
       "category",
       "sourceQuote",
       "sheetName",
+      "alternateGroupLabel",
     ]);
   });
 });

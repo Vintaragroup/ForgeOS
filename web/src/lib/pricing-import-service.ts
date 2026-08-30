@@ -17,6 +17,7 @@ import { getDocumentBytes } from "@/lib/document-service";
 import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
 import { db } from "@/lib/db";
 import { cellText } from "@/lib/xlsx-utils";
+import { PDF_MIME } from "@/lib/ai/text-extraction";
 import { loadCatalogForMatching, matchDescription, type CatalogMatch } from "@/lib/catalog-match-service";
 import { inferIsClientOwned, resolveLineItemCategory } from "@/lib/line-item-category";
 import {
@@ -29,7 +30,13 @@ import {
   commitAiProposedImport,
   previewAiProposedImport,
   type AiProposedImportPreview,
+  type SheetDestination,
 } from "@/lib/ai/spreadsheet-line-item-service";
+import {
+  commitStandaloneVendorQuoteImport,
+  previewStandaloneVendorQuoteImport,
+  type StandaloneVendorQuoteImportPreview,
+} from "@/lib/ai/vendor-quote-service";
 
 const HEADER_SCAN_ROWS = 20; // header always appears near the top, after a title/merge block
 
@@ -153,10 +160,20 @@ export async function previewPricingImport(
   documentId: string,
   opportunityId: string,
   userId: string | null = null,
-): Promise<PricingImportPreview | DesignCostEstimatePreview | AiProposedImportPreview> {
+): Promise<PricingImportPreview | DesignCostEstimatePreview | AiProposedImportPreview | StandaloneVendorQuoteImportPreview> {
   const { document, bytes } = await getDocumentBytes(documentId);
   if (document.opportunityId !== opportunityId) {
     throw new Error("This document doesn't belong to this opportunity.");
+  }
+
+  // A vendor-quote PDF (e.g. a booth graphics vendor's own itemized
+  // quote) has no workbook to load at all -- ExcelJS.Workbook().xlsx.load
+  // below would throw immediately on a PDF's bytes. Checked first, before
+  // that call, not as a catch-and-retry: this is a real, known shape
+  // (documentType VENDOR_QUOTE + a PDF mimeType), not a fallback for an
+  // unrecognized one the way the AI-proposed spreadsheet path is.
+  if (document.documentType === "VENDOR_QUOTE" && document.mimeType === PDF_MIME) {
+    return previewStandaloneVendorQuoteImport(documentId, opportunityId, userId);
   }
 
   const workbook = new ExcelJS.Workbook();
@@ -303,7 +320,11 @@ function humanizeCategory(category: string): string {
 // before they ever click Commit), that rate seeds unitCost instead of
 // leaving every single row at $0. Still isDraft, still requires the
 // existing confirm-before-it-counts step either way.
-export async function commitPricingImport(estimateVersionId: string, documentId: string) {
+export async function commitPricingImport(
+  estimateVersionId: string,
+  documentId: string,
+  sheetDestinations?: Record<string, SheetDestination>,
+) {
   // Derived fresh from estimateVersionId, not a redundant caller-supplied
   // parameter -- see previewPricingImport's own header comment for why
   // this check exists at all.
@@ -320,7 +341,10 @@ export async function commitPricingImport(estimateVersionId: string, documentId:
     return commitDesignCostEstimateImport(estimateVersionId, documentId);
   }
   if (preview.kind === "ai-proposed") {
-    return commitAiProposedImport(estimateVersionId, documentId);
+    return commitAiProposedImport(estimateVersionId, documentId, sheetDestinations);
+  }
+  if (preview.kind === "vendor-quote") {
+    return commitStandaloneVendorQuoteImport(estimateVersionId, documentId);
   }
   if (preview.rows.length === 0) {
     throw new Error(`No line items found in "${preview.filename}".`);
