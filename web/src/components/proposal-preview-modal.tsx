@@ -57,9 +57,14 @@ export function ProposalPreviewModal({
     return `/estimates/${estimateId}/versions/${versionId}/preview-pdf?${params.toString()}`;
   }
 
+  // Deliberately does NOT set appliedSrc here -- opening the modal is
+  // exactly the moment someone wants to adjust category order/pricing/
+  // detail BEFORE spending a real server-side PDF render, not after.
+  // Requiring the first render to also go through "Update preview" (same
+  // as every later change) means opening the modal never pays for a
+  // render the user might immediately discard.
   function openModal() {
     setOpen(true);
-    setAppliedSrc(buildSrc());
   }
 
   function move(index: number, direction: -1 | 1) {
@@ -161,7 +166,13 @@ export function ProposalPreviewModal({
               </Button>
             </div>
             <div className="flex-1">
-              {appliedSrc && <iframe key={appliedSrc} src={appliedSrc} className="h-full w-full" title="Proposal PDF preview" />}
+              {appliedSrc ? (
+                <iframe key={appliedSrc} src={appliedSrc} className="h-full w-full" title="Proposal PDF preview" />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-neutral-400">
+                  Adjust categories, then click Update preview to generate the PDF.
+                </div>
+              )}
             </div>
           </div>
         </Modal>
