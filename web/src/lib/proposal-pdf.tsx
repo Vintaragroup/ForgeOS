@@ -598,15 +598,27 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
 
           // Booth-linked items in this category already rendered above,
           // under Custom Rental -- shown here too would double them, once
-          // with a real total and once identically. A category left with
-          // nothing visible (every one of its items turned out to be
-          // booth-linked) doesn't render its header at all.
+          // with a real total and once identically. A category that never
+          // had any items at all still doesn't render its header (same as
+          // always); one whose real content all turned out to be
+          // booth-linked -- e.g. Custom Build/Structure on a build-out job
+          // where the only priced item lives on a booth -- would otherwise
+          // vanish with no explanation of where its dollars went, so that
+          // case gets a cross-reference note instead of disappearing (see
+          // allDivertedToCustomRental below).
           const visibleOwnItems = visibleCategoryItems(ownItems);
           const visibleChildren = children
             .map((child) => ({ name: child.name, items: visibleCategoryItems(child.items) }))
             .filter((child) => child.items.length > 0);
           const visibleTotal = bucketSubtotal(visibleOwnItems) + visibleChildren.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
-          if (visibleOwnItems.length === 0 && visibleChildren.length === 0) return null;
+          const hadAnyItemsBeforeBoothFilter =
+            ownItems.length > 0 || children.some((child) => child.items.length > 0);
+          const allDivertedToCustomRental =
+            hadAnyItemsBeforeBoothFilter &&
+            visibleOwnItems.length === 0 &&
+            visibleChildren.length === 0 &&
+            boothGroups.length > 0;
+          if (visibleOwnItems.length === 0 && visibleChildren.length === 0 && !allDivertedToCustomRental) return null;
 
           // Both are per-category view options from the Preview PDF modal
           // -- see ProposalPdfData's own comment. isSummary skips every
@@ -625,8 +637,13 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
                   <Text style={styles.sectionHeaderText}>{categoryName}</Text>
                 </View>
-                <Text style={styles.sectionHeaderTotal}>{hidePrice ? "" : moneyFromNumber(visibleTotal)}</Text>
+                <Text style={styles.sectionHeaderTotal}>
+                  {hidePrice || allDivertedToCustomRental ? "" : moneyFromNumber(visibleTotal)}
+                </Text>
               </View>
+              {allDivertedToCustomRental && (
+                <Text style={styles.summaryListItem}>See Custom Rental above for {categoryName} pricing and detail.</Text>
+              )}
               {categoryName === "Professional Services" &&
                 data.professionalServices &&
                 data.professionalServices.items.length > 0 && (
