@@ -731,6 +731,14 @@ function VersionSummaryBar({
         <div>
           <div className="text-neutral-500">Gross margin</div>
           <div className="text-lg font-semibold">{version.grossMarginPct.toFixed(1)}%</div>
+          {/* grossMarginPct is derived entirely from marginTargetPct (see
+              estimate-service.ts's computeMarginGrossUp) -- 0.0% at its
+              default doesn't mean cost and price have diverged badly, it
+              means no target has been entered yet, so grandTotal still
+              equals totalCost exactly. */}
+          {version.marginTargetPct.toNumber() === 0 && (
+            <div className="mt-0.5 text-xs text-neutral-400">No margin target set -- see Line Items tab</div>
+          )}
         </div>
       </div>
 
@@ -1203,9 +1211,17 @@ function OptionsTab({
 
   return (
     <Card className="p-6">
-      <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+      <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
         Options (alternates)
       </h3>
+      {/* Confirmed by reading both PDF-rendering paths (preview-pdf/route.ts
+          and proposals/[id]/pdf/route.ts) -- both scope their sections query
+          to optionId: null unconditionally, and there's no "promote to base
+          version" action anywhere in the codebase. So this is a hard,
+          permanent fact about today's behavior, not a caveat. */}
+      <p className="mb-4 text-xs text-neutral-400">
+        Internal comparison only -- an option&apos;s line items never appear on the client-facing proposal PDF.
+      </p>
       {version.options.length === 0 ? (
         <p className="text-sm text-neutral-500">
           {version.isLocked ? "No alternate options on this version." : "No alternate options yet."}
@@ -1324,6 +1340,15 @@ const CONFIDENCE_BADGE_CLASS: Record<string, string> = {
   low: "bg-red-50 text-red-700",
 };
 
+// Both lists below sort largest-dollar-drift-first (see priceDrift's own
+// comment), so what's hidden behind the "Show N more" disclosure is
+// always the least-changed, lowest-priority tail -- never the thing a
+// reviewer actually needs to see first. Confirmed live against a real
+// 44-group/242-line package: without a cap, this tab was an unbroken
+// scroll of near-identical "quote revised" text.
+const BULK_GROUP_VISIBLE_COUNT = 15;
+const MATCH_ROW_VISIBLE_COUNT = 25;
+
 // proposeVendorQuoteLineItems extracts qty/unit for every vendor line but
 // the match review table previously showed only the bare description --
 // a reviewer had no way to see "3 EA" vs "1 EA" without opening the
@@ -1408,7 +1433,7 @@ function BidPackageCard({
   // once the units being summed don't match each other. Total dollars is
   // always well-defined regardless of unit mix, and it's the number that
   // actually lands on the line item's totalCost.
-  const priceDrift = new Map<string, { previousTotal: number; newTotal: number }>();
+  const priceDrift = new Map<string, { previousTotal: number; newTotal: number; driftAmount: number }>();
   if (matches && quoteDocument) {
     const byTargetForDrift = new Map<string, VendorLineMatch[]>();
     for (const m of matches) {
@@ -1420,8 +1445,9 @@ function BidPackageCard({
       if (!target || target.documentId !== quoteDocument.id) continue;
       const currentTotal = target.unitCost * target.qty;
       const newTotal = group.reduce((sum, m) => sum + m.vendorLine.unitPrice, 0);
-      if (Math.abs(currentTotal - newTotal) > 0.5) {
-        priceDrift.set(targetId, { previousTotal: currentTotal, newTotal });
+      const driftAmount = Math.abs(currentTotal - newTotal);
+      if (driftAmount > 0.5) {
+        priceDrift.set(targetId, { previousTotal: currentTotal, newTotal, driftAmount });
       }
     }
   }
@@ -1458,8 +1484,41 @@ function BidPackageCard({
             priceDrift.has(targetId),
         )
         .map(([targetId, matchIndices]) => ({ targetId, matchIndices }))
+        // Largest dollar change first -- a $2,000 revision and a $5 one
+        // used to render in whatever order the AI's own matches array
+        // happened to return them, with identical visual weight. Groups
+        // with no drift (a brand-new suggestion, never applied before)
+        // keep their original relative order, after every drifted one.
+        .sort(
+          (a, b) => (priceDrift.get(b.targetId)?.driftAmount ?? -1) - (priceDrift.get(a.targetId)?.driftAmount ?? -1),
+        )
     );
   })();
+
+  // Once a vendor line is covered by its own bulk-group card above, it
+  // shouldn't ALSO render as a standalone row in the flat Match review
+  // table below -- confirmed live, on a real 44-group/242-line package
+  // this was rendering every one of those 242 lines twice, once grouped
+  // and once individually, which is most of why the tab read as an
+  // unreadable wall of repeated "quote revised" text.
+  const groupedMatchIndices = new Set(bulkGroups.flatMap((g) => g.matchIndices));
+  // Same largest-dollar-change-first ordering as bulkGroups above,
+  // applied to the flat table's own rows. Drift is only ever keyed by a
+  // CONFIRMED lineItemId (see priceDrift's own comment on why
+  // suggestedLineItemId never carries drift), so an ungrouped row with
+  // only a suggestedLineItemId sorts as zero drift, same as a brand-new
+  // suggestion with no history to compare against.
+  const matchIndicesSorted = matches
+    ? matches
+        .map((_, i) => i)
+        .sort((a, b) => {
+          const aId = matches[a].lineItemId;
+          const bId = matches[b].lineItemId;
+          const aDrift = aId ? (priceDrift.get(aId)?.driftAmount ?? 0) : 0;
+          const bDrift = bId ? (priceDrift.get(bId)?.driftAmount ?? 0) : 0;
+          return bDrift - aDrift;
+        })
+    : [];
 
   // Every "high" confidence match, for the single "Apply all
   // high-confidence matches" button -- deliberately excludes
@@ -1510,6 +1569,205 @@ function BidPackageCard({
     allLineItems.find((li) => li.id === m.lineItemId)?.documentId === quoteDocument?.id &&
     !(m.lineItemId && priceDrift.has(m.lineItemId));
   const pendingMatchCount = matches ? matches.filter((m) => !isMatchApplied(m)).length : 0;
+
+  // `doc` (not `quoteDocument`) deliberately -- both render helpers below
+  // are declared here, outside the JSX where `quoteDocument` is narrowed
+  // non-null by its own `{quoteDocument && ...}` guard, so each takes the
+  // already-narrowed document as an explicit parameter from its call site
+  // instead of re-deriving it from the (still nullable, from here) outer
+  // variable.
+  function renderBulkGroupCard(group: { targetId: string; matchIndices: number[] }, doc: NonNullable<typeof quoteDocument>) {
+    const targetItem = allLineItems.find((li) => li.id === group.targetId);
+    const vendorLines = group.matchIndices
+      .map((i) => matches?.[i]?.vendorLine)
+      .filter((vl): vl is NonNullable<typeof vl> => !!vl);
+    const total = vendorLines.reduce((sum, vl) => sum + vl.unitPrice, 0);
+    const groupDrift = priceDrift.get(group.targetId);
+    const alreadyApplied = targetItem?.documentId === doc.id && !groupDrift;
+    const applyGroupWithIds = applyVendorMatchGroupAction.bind(null, estimateId, versionId, bidPackage.id);
+    return (
+      <div key={group.targetId} className="rounded-md border border-blue-200 bg-blue-50 p-3">
+        <p className="text-sm font-medium">
+          <MatchGroupCheckbox indices={group.matchIndices} />{" "}
+          {vendorLines.length} vendor lines match &quot;{targetItem?.description ?? "this line item"}&quot;{" "}
+          <span className="font-normal text-neutral-500">({money(total)} total)</span>
+        </p>
+        <p className="mt-1 text-xs text-neutral-500">
+          {vendorLines
+            .map((vl) => (vl.unitCode ? `${vl.description} [${vl.unitCode}]` : vl.description))
+            .join(", ")}
+        </p>
+        {groupDrift && (
+          <p className="mt-1 text-xs font-medium text-amber-700">
+            Quote revised since last applied: was {money(groupDrift.previousTotal)} total, vendor lines now sum to{" "}
+            {money(groupDrift.newTotal)} — review before updating
+          </p>
+        )}
+        <form action={applyGroupWithIds} className="mt-3 flex items-center gap-2">
+          <input type="hidden" name="lineItemId" value={group.targetId} />
+          <input type="hidden" name="matchIndices" value={group.matchIndices.join(",")} />
+          <input type="hidden" name="documentId" value={doc.id} />
+          <input type="hidden" name="priorApplied" value={priorAppliedValue} />
+          <Button variant="secondary" type="submit">
+            {groupDrift ? "Update" : alreadyApplied ? "Re-apply" : "Apply"} all {vendorLines.length} (sum {money(total)})
+          </Button>
+          {appliedLineItemIds.has(group.targetId) && (
+            <span className="text-xs font-medium text-green-700">✓ Applied</span>
+          )}
+        </form>
+      </div>
+    );
+  }
+
+  function renderMatchRow(match: VendorLineMatch, i: number, doc: NonNullable<typeof quoteDocument>) {
+    // Looked up against allLineItems (every item on the version), not
+    // just bidPackage.lineItems -- the AI match pool is version-wide now,
+    // so a suggested lineItemId may not be a package member yet (applying
+    // it is what adds it, see applyVendorMatchAction's own header comment).
+    const matchedItem = allLineItems.find((li) => li.id === match.lineItemId);
+    // A stale lineItemId (target row deleted since the match was made --
+    // see applyAllHighConfidenceMatchesAction's own self-healing) must
+    // never be treated as a real match: it still reads truthy but has no
+    // corresponding <option>, so an uncontrolled <select
+    // defaultValue={staleId}> would silently render the FIRST option in
+    // the whole list instead of erroring, which looks like a real (wrong)
+    // selection rather than a missing one.
+    const lineItemIdStale = !!match.lineItemId && !matchedItem;
+    const resolvedLineItemId = lineItemIdStale ? null : match.lineItemId;
+    const suggestedItemExists =
+      !!match.suggestedLineItemId && allLineItems.some((li) => li.id === match.suggestedLineItemId);
+    const resolvedSuggestedId = suggestedItemExists ? match.suggestedLineItemId : null;
+    // "Applied" is derived from provenance (this line item's own
+    // documentId equals this quote's), not from a persisted decision.
+    // lineItemId only, not suggestedLineItemId -- see priceDrift's own
+    // comment above on why: "Quote revised since last applied" only
+    // makes sense for a row that was actually applied before, not a
+    // still-pending suggestion.
+    const drift = match.lineItemId ? priceDrift.get(match.lineItemId) : undefined;
+    const alreadyApplied = matchedItem?.documentId === doc.id && !drift;
+    // See pendingMatchCount's own comment above -- an applied row is
+    // removed from this list entirely, not left with a "Re-apply" button
+    // forever, so the table actually shrinks as a reviewer works through
+    // it. A drifted row is the one case that looks "applied" by
+    // documentId alone but must stay visible.
+    if (alreadyApplied) return null;
+    // Already actionable from its own bulk-group card above -- see
+    // groupedMatchIndices' own comment.
+    if (groupedMatchIndices.has(i)) return null;
+    const applyWithIds = applyVendorMatchAction.bind(null, estimateId, versionId, bidPackage.id);
+    const qtyUnit = vendorLineQtyUnit(match.vendorLine);
+    // Jumps to the real page in the source document (same citation.ts
+    // pattern used on the Opportunity page). returnTo carries the
+    // current ?applied= confirmation list forward -- without this,
+    // clicking a citation link and then Back landed on a URL with no
+    // applied= param at all, so every "✓ Applied" badge vanished even
+    // though the underlying prices were never touched.
+    const sourceHref = citationHref(
+      opportunityId,
+      doc,
+      { sourceQuote: match.vendorLine.sourceQuote, pageNumber: match.vendorLine.pageNumber },
+      `/estimates/${estimateId}?tab=bid-packages${priorAppliedValue ? `&applied=${encodeURIComponent(priorAppliedValue)}` : ""}#bid-package-${bidPackage.id}`,
+    );
+    // Deterministic, non-AI last resort so the dropdown is never a cold
+    // "— choose one —" against 30-40+ items with no starting point --
+    // only reached when the AI itself found NOTHING.
+    const fallbackCandidateId =
+      !resolvedLineItemId && !resolvedSuggestedId
+        ? findClosestCandidateId(match.vendorLine.description, allLineItems)
+        : null;
+    return (
+      <tr key={i} className="border-t border-neutral-100">
+        <td className="py-2 pr-1 align-top">
+          <MatchRowCheckbox index={i} />
+        </td>
+        <td className="px-3 py-2 align-top">
+          {match.confidence && (
+            <span
+              className={`mr-1.5 rounded px-1.5 py-0.5 text-xs ${CONFIDENCE_BADGE_CLASS[match.confidence] ?? ""}`}
+            >
+              {match.confidence}
+            </span>
+          )}
+          {match.needsClarification && (
+            <span
+              className="mr-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700"
+              title="This vendor line's own description doesn't say enough to place it confidently -- worth asking the bidder to clarify."
+            >
+              needs clarification
+            </span>
+          )}
+          {match.vendorLine.unitCode && (
+            <span className="mr-1.5 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">
+              {match.vendorLine.unitCode}
+            </span>
+          )}
+          {sourceHref ? (
+            <Link href={sourceHref} className="text-brand-navy hover:underline">
+              {match.vendorLine.description}
+            </Link>
+          ) : (
+            match.vendorLine.description
+          )}
+          {qtyUnit && <span className="ml-1.5 text-xs text-neutral-400">({qtyUnit})</span>}
+        </td>
+        <td className="px-3 py-2 text-right align-top">{money(match.vendorLine.unitPrice)}</td>
+        <td className="px-3 py-2 align-top">
+          <select
+            name="lineItemId"
+            form={`apply-match-${i}`}
+            defaultValue={resolvedLineItemId ?? resolvedSuggestedId ?? fallbackCandidateId ?? ""}
+            className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+          >
+            <option value="" disabled={!!(resolvedLineItemId ?? resolvedSuggestedId ?? fallbackCandidateId)}>
+              — choose one —
+            </option>
+            {allLineItems.map((li) => (
+              <option key={li.id} value={li.id}>
+                {li.description}
+                {li.sectionLabel ? ` — ${li.sectionLabel}` : ""}
+                {li.bidPackageId && li.bidPackageId !== bidPackage.id ? " (assigned elsewhere)" : ""}
+              </option>
+            ))}
+          </select>
+          {lineItemIdStale && (
+            <p className="mt-1.5 text-xs text-amber-700">
+              This match&apos;s target line item no longer exists (deleted) — pick one manually
+            </p>
+          )}
+          {!lineItemIdStale && drift && (
+            <p className="mt-1.5 text-xs font-medium text-amber-700">
+              Quote revised since last applied: was {money(drift.previousTotal)} total, vendor lines now sum to{" "}
+              {money(drift.newTotal)} — review before updating
+            </p>
+          )}
+          {!lineItemIdStale && !drift && match.reasoning && (
+            <p className="mt-1.5 text-xs text-neutral-400">{match.reasoning}</p>
+          )}
+          {!lineItemIdStale && !resolvedLineItemId && resolvedSuggestedId && (
+            <p className="mt-1.5 text-xs text-amber-700">Suggested match pre-filled — review before applying</p>
+          )}
+          {!lineItemIdStale && !resolvedLineItemId && !resolvedSuggestedId && fallbackCandidateId && (
+            <p className="mt-1.5 text-xs text-amber-700">Best guess by description similarity — review before applying</p>
+          )}
+          {!lineItemIdStale && !resolvedLineItemId && !resolvedSuggestedId && !fallbackCandidateId && (
+            <p className="mt-1.5 text-xs text-amber-700">No match — review and pick one manually</p>
+          )}
+        </td>
+        <td className="py-2 pl-3 text-right align-top">
+          <form id={`apply-match-${i}`} action={applyWithIds} className="inline">
+            <input type="hidden" name="unitCost" value={match.vendorLine.unitPrice} />
+            <input type="hidden" name="documentId" value={doc.id} />
+            <input type="hidden" name="sourceQuote" value={match.vendorLine.sourceQuote} />
+            <input type="hidden" name="priorApplied" value={priorAppliedValue} />
+            <input type="hidden" name="index" value={i} />
+            <Button variant="secondary" type="submit">
+              {drift ? "Update price" : alreadyApplied ? "Re-apply" : "Apply"}
+            </Button>
+          </form>
+        </td>
+      </tr>
+    );
+  }
 
   return (
     <Card id={`bid-package-${bidPackage.id}`} className="p-6">
@@ -1694,49 +1952,19 @@ function BidPackageCard({
             </label>
           </div>
           <div className="flex flex-col gap-3">
-            {bulkGroups.map((group) => {
-              const targetItem = allLineItems.find((li) => li.id === group.targetId);
-              const vendorLines = group.matchIndices
-                .map((i) => matches?.[i]?.vendorLine)
-                .filter((vl): vl is NonNullable<typeof vl> => !!vl);
-              const total = vendorLines.reduce((sum, vl) => sum + vl.unitPrice, 0);
-              const groupDrift = priceDrift.get(group.targetId);
-              const alreadyApplied = targetItem?.documentId === quoteDocument.id && !groupDrift;
-              const applyGroupWithIds = applyVendorMatchGroupAction.bind(null, estimateId, versionId, bidPackage.id);
-              return (
-                <div key={group.targetId} className="rounded-md border border-blue-200 bg-blue-50 p-3">
-                  <p className="text-sm font-medium">
-                    <MatchGroupCheckbox indices={group.matchIndices} />{" "}
-                    {vendorLines.length} vendor lines match &quot;{targetItem?.description ?? "this line item"}&quot;{" "}
-                    <span className="font-normal text-neutral-500">({money(total)} total)</span>
-                  </p>
-                  <p className="mt-1 text-xs text-neutral-500">
-                    {vendorLines
-                      .map((vl) => (vl.unitCode ? `${vl.description} [${vl.unitCode}]` : vl.description))
-                      .join(", ")}
-                  </p>
-                  {groupDrift && (
-                    <p className="mt-1 text-xs font-medium text-amber-700">
-                      Quote revised since last applied: was {money(groupDrift.previousTotal)} total, vendor lines now sum to{" "}
-                      {money(groupDrift.newTotal)} — review before updating
-                    </p>
-                  )}
-                  <form action={applyGroupWithIds} className="mt-3 flex items-center gap-2">
-                    <input type="hidden" name="lineItemId" value={group.targetId} />
-                    <input type="hidden" name="matchIndices" value={group.matchIndices.join(",")} />
-                    <input type="hidden" name="documentId" value={quoteDocument.id} />
-                    <input type="hidden" name="priorApplied" value={priorAppliedValue} />
-                    <Button variant="secondary" type="submit">
-                      {groupDrift ? "Update" : alreadyApplied ? "Re-apply" : "Apply"} all {vendorLines.length} (sum {money(total)})
-                    </Button>
-                    {appliedLineItemIds.has(group.targetId) && (
-                      <span className="text-xs font-medium text-green-700">✓ Applied</span>
-                    )}
-                  </form>
-                </div>
-              );
-            })}
+            {bulkGroups.slice(0, BULK_GROUP_VISIBLE_COUNT).map((group) => renderBulkGroupCard(group, quoteDocument))}
           </div>
+          {bulkGroups.length > BULK_GROUP_VISIBLE_COUNT && (
+            <details className="mt-3">
+              <summary className="cursor-pointer text-sm text-neutral-500 hover:text-neutral-700">
+                Show {bulkGroups.length - BULK_GROUP_VISIBLE_COUNT} more group
+                {bulkGroups.length - BULK_GROUP_VISIBLE_COUNT === 1 ? "" : "s"}
+              </summary>
+              <div className="mt-3 flex flex-col gap-3">
+                {bulkGroups.slice(BULK_GROUP_VISIBLE_COUNT).map((group) => renderBulkGroupCard(group, quoteDocument))}
+              </div>
+            </details>
+          )}
         </div>
       )}
 
@@ -1812,6 +2040,7 @@ function BidPackageCard({
               Every match from this quote has been applied — see the History tab for the full record.
             </p>
           ) : (
+          <>
           <table className="mb-4 w-full text-sm">
             <thead>
               <tr className="text-left text-neutral-500">
@@ -1823,174 +2052,27 @@ function BidPackageCard({
               </tr>
             </thead>
             <tbody>
-              {matches.map((match, i) => {
-                // Looked up against allLineItems (every item on the
-                // version), not just bidPackage.lineItems -- the AI match
-                // pool is version-wide now, so a suggested lineItemId may
-                // not be a package member yet (applying it is what adds
-                // it, see applyVendorMatchAction's own header comment).
-                const matchedItem = allLineItems.find((li) => li.id === match.lineItemId);
-                // A stale lineItemId (target row deleted since the match
-                // was made -- see applyAllHighConfidenceMatchesAction's own
-                // self-healing) must never be treated as a real match: it
-                // still reads truthy but has no corresponding <option>, so
-                // an uncontrolled <select defaultValue={staleId}> would
-                // silently render the FIRST option in the whole list
-                // instead of erroring, which looks like a real (wrong)
-                // selection rather than a missing one.
-                const lineItemIdStale = !!match.lineItemId && !matchedItem;
-                const resolvedLineItemId = lineItemIdStale ? null : match.lineItemId;
-                const suggestedItemExists =
-                  !!match.suggestedLineItemId && allLineItems.some((li) => li.id === match.suggestedLineItemId);
-                const resolvedSuggestedId = suggestedItemExists ? match.suggestedLineItemId : null;
-                // "Applied" is derived from provenance (this line item's
-                // own documentId equals this quote's), not from a
-                // persisted decision. Reflects the row's DEFAULT/suggested
-                // target only -- there's no client JS here to re-derive
-                // this live as the select below changes, same plain-forms
-                // posture as the rest of this file.
-                // lineItemId only, not suggestedLineItemId -- see
-                // priceDrift's own comment above on why: "Quote revised
-                // since last applied" only makes sense for a row that was
-                // actually applied before, not a still-pending suggestion.
-                const drift = match.lineItemId ? priceDrift.get(match.lineItemId) : undefined;
-                const alreadyApplied = matchedItem?.documentId === quoteDocument.id && !drift;
-                // See pendingMatchCount's own comment above -- an applied
-                // row is removed from this list entirely, not left with a
-                // "Re-apply" button forever, so the table actually shrinks
-                // as a reviewer works through it. A drifted row (see
-                // priceDrift's own comment) is the one case that looks
-                // "applied" by documentId alone but must stay visible --
-                // the vendor's revised number still needs a reviewer's
-                // explicit decision, not a silent overwrite.
-                if (alreadyApplied) return null;
-                const applyWithIds = applyVendorMatchAction.bind(null, estimateId, versionId, bidPackage.id);
-                const qtyUnit = vendorLineQtyUnit(match.vendorLine);
-                // Jumps to the real page in the source document (same
-                // citation.ts pattern used on the Opportunity page) --
-                // gives a reviewer the surrounding table/context a bare
-                // description like "Test and adjust" can't carry on its
-                // own. Null (no link, plain text) for a non-PDF document
-                // or a quote/page that couldn't be resolved.
-                // returnTo carries the current ?applied= confirmation list
-                // forward -- without this, clicking a citation link and
-                // then Back landed on a URL with no applied= param at
-                // all, so every "✓ Applied" badge vanished even though
-                // the underlying prices were never touched (confirmed
-                // live: a real user report that read as data loss but
-                // was purely this return link losing the flash).
-                const sourceHref = citationHref(
-                  opportunityId,
-                  quoteDocument,
-                  { sourceQuote: match.vendorLine.sourceQuote, pageNumber: match.vendorLine.pageNumber },
-                  `/estimates/${estimateId}?tab=bid-packages${priorAppliedValue ? `&applied=${encodeURIComponent(priorAppliedValue)}` : ""}#bid-package-${bidPackage.id}`,
-                );
-                // Deterministic, non-AI last resort so the dropdown is
-                // never a cold "— choose one —" against 30-40+ items with
-                // no starting point -- only reached when the AI itself
-                // found NOTHING (see findClosestCandidateId's own header
-                // comment on why this is safe: a UI default a reviewer
-                // can override, never a confidence claim or an
-                // auto-applied price).
-                const fallbackCandidateId =
-                  !resolvedLineItemId && !resolvedSuggestedId
-                    ? findClosestCandidateId(match.vendorLine.description, allLineItems)
-                    : null;
-                return (
-                  <tr key={i} className="border-t border-neutral-100">
-                    <td className="py-2 pr-1 align-top">
-                      <MatchRowCheckbox index={i} />
-                    </td>
-                    <td className="px-3 py-2 align-top">
-                      {match.confidence && (
-                        <span
-                          className={`mr-1.5 rounded px-1.5 py-0.5 text-xs ${CONFIDENCE_BADGE_CLASS[match.confidence] ?? ""}`}
-                        >
-                          {match.confidence}
-                        </span>
-                      )}
-                      {match.needsClarification && (
-                        <span
-                          className="mr-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700"
-                          title="This vendor line's own description doesn't say enough to place it confidently -- worth asking the bidder to clarify."
-                        >
-                          needs clarification
-                        </span>
-                      )}
-                      {match.vendorLine.unitCode && (
-                        <span className="mr-1.5 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">
-                          {match.vendorLine.unitCode}
-                        </span>
-                      )}
-                      {sourceHref ? (
-                        <Link href={sourceHref} className="text-brand-navy hover:underline">
-                          {match.vendorLine.description}
-                        </Link>
-                      ) : (
-                        match.vendorLine.description
-                      )}
-                      {qtyUnit && <span className="ml-1.5 text-xs text-neutral-400">({qtyUnit})</span>}
-                    </td>
-                    <td className="px-3 py-2 text-right align-top">{money(match.vendorLine.unitPrice)}</td>
-                    <td className="px-3 py-2 align-top">
-                      <select
-                        name="lineItemId"
-                        form={`apply-match-${i}`}
-                        defaultValue={resolvedLineItemId ?? resolvedSuggestedId ?? fallbackCandidateId ?? ""}
-                        className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
-                      >
-                        <option value="" disabled={!!(resolvedLineItemId ?? resolvedSuggestedId ?? fallbackCandidateId)}>
-                          — choose one —
-                        </option>
-                        {allLineItems.map((li) => (
-                          <option key={li.id} value={li.id}>
-                            {li.description}
-                            {li.sectionLabel ? ` — ${li.sectionLabel}` : ""}
-                            {li.bidPackageId && li.bidPackageId !== bidPackage.id ? " (assigned elsewhere)" : ""}
-                          </option>
-                        ))}
-                      </select>
-                      {lineItemIdStale && (
-                        <p className="mt-1.5 text-xs text-amber-700">
-                          This match&apos;s target line item no longer exists (deleted) — pick one manually
-                        </p>
-                      )}
-                      {!lineItemIdStale && drift && (
-                        <p className="mt-1.5 text-xs font-medium text-amber-700">
-                          Quote revised since last applied: was {money(drift.previousTotal)} total, vendor lines now sum to{" "}
-                          {money(drift.newTotal)} — review before updating
-                        </p>
-                      )}
-                      {!lineItemIdStale && !drift && match.reasoning && (
-                        <p className="mt-1.5 text-xs text-neutral-400">{match.reasoning}</p>
-                      )}
-                      {!lineItemIdStale && !resolvedLineItemId && resolvedSuggestedId && (
-                        <p className="mt-1.5 text-xs text-amber-700">Suggested match pre-filled — review before applying</p>
-                      )}
-                      {!lineItemIdStale && !resolvedLineItemId && !resolvedSuggestedId && fallbackCandidateId && (
-                        <p className="mt-1.5 text-xs text-amber-700">Best guess by description similarity — review before applying</p>
-                      )}
-                      {!lineItemIdStale && !resolvedLineItemId && !resolvedSuggestedId && !fallbackCandidateId && (
-                        <p className="mt-1.5 text-xs text-amber-700">No match — review and pick one manually</p>
-                      )}
-                    </td>
-                    <td className="py-2 pl-3 text-right align-top">
-                      <form id={`apply-match-${i}`} action={applyWithIds} className="inline">
-                        <input type="hidden" name="unitCost" value={match.vendorLine.unitPrice} />
-                        <input type="hidden" name="documentId" value={quoteDocument.id} />
-                        <input type="hidden" name="sourceQuote" value={match.vendorLine.sourceQuote} />
-                        <input type="hidden" name="priorApplied" value={priorAppliedValue} />
-                        <input type="hidden" name="index" value={i} />
-                        <Button variant="secondary" type="submit">
-                          {drift ? "Update price" : alreadyApplied ? "Re-apply" : "Apply"}
-                        </Button>
-                      </form>
-                    </td>
-                  </tr>
-                );
-              })}
+              {matchIndicesSorted
+                .slice(0, MATCH_ROW_VISIBLE_COUNT)
+                .map((i) => renderMatchRow(matches[i], i, quoteDocument))}
             </tbody>
           </table>
+          {matchIndicesSorted.length > MATCH_ROW_VISIBLE_COUNT && (
+            <details className="mb-4">
+              <summary className="cursor-pointer text-sm text-neutral-500 hover:text-neutral-700">
+                Show {matchIndicesSorted.length - MATCH_ROW_VISIBLE_COUNT} more match
+                {matchIndicesSorted.length - MATCH_ROW_VISIBLE_COUNT === 1 ? "" : "es"}
+              </summary>
+              <table className="mt-2 w-full text-sm">
+                <tbody>
+                  {matchIndicesSorted
+                    .slice(MATCH_ROW_VISIBLE_COUNT)
+                    .map((i) => renderMatchRow(matches[i], i, quoteDocument))}
+                </tbody>
+              </table>
+            </details>
+          )}
+          </>
           )}
           {unmatchedPackageItems.length > 0 && (
             <p className="mb-4 text-sm text-amber-700">
