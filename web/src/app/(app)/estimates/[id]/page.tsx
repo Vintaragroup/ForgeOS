@@ -2633,6 +2633,29 @@ function DocumentsTab({
                       ))}
                     </tbody>
                   </table>
+                ) : importPreview.kind === "module-cost-estimate" ? (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-neutral-50">
+                      <tr className="text-left text-neutral-500">
+                        <th className="px-2 py-1.5 font-normal">Category</th>
+                        <th className="px-2 py-1.5 font-normal">Description</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Unit cost</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.rows.map((row, i) => (
+                        <tr key={i} className="border-t border-neutral-100">
+                          <td className="px-2 py-1 text-neutral-500">{row.category ?? "—"}</td>
+                          <td className="max-w-[24rem] truncate px-2 py-1" title={row.sourceQuote}>
+                            {row.description}
+                          </td>
+                          <td className="px-2 py-1 text-right">{row.qty}</td>
+                          <td className="px-2 py-1 text-right">${row.unitCost.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 ) : importPreview.kind === "vendor-quote" ? (
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-neutral-50">

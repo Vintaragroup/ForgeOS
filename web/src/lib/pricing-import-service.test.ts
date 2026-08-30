@@ -374,31 +374,49 @@ describe("previewPricingImport -- Arena RFP header shape variants", () => {
   });
 });
 
-// Real fixtures from the "Full Swing PGA Orlando" job -- confirmed live
-// to match neither findDesignCostEstimateSheet nor findPricingSheet, the
+// Real fixture from the "Full Swing PGA Orlando" job -- confirmed live to
+// match neither findDesignCostEstimateSheet nor findPricingSheet, the
 // exact condition that should route previewPricingImport to
 // spreadsheet-line-item-service.ts's AI fallback instead of throwing the
-// old "doesn't contain a recognizable Pricing Schedule sheet" error.
+// old "doesn't contain a recognizable Pricing Schedule sheet" error. This
+// bid is genuinely package-level-only pricing (no per-component Sheet
+// Goods/Other Items/Labor detail anywhere in the file), unlike its
+// sibling fixture below -- still correctly an AI-fallback case.
 const FUSE_BID_PATH = path.resolve(
   import.meta.dirname,
   "../../../data/RFP/Full_Swing/EXPO_CCI_Full_Swing_PGA_Orlando_Bid_Breakdown.xlsx",
 );
-const FABRICATION_ESTIMATE_PATH = path.resolve(
-  import.meta.dirname,
-  "../../../data/RFP/Full_Swing/Full Swing @ PGA 2027 Orlando Estimate 082526TA.xlsx",
-);
 
 describe("previewPricingImport -- AI fallback dispatch", () => {
-  it.each([
-    ["the real Fuse AV/lighting/rigging bid", FUSE_BID_PATH],
-    ["the real 33-sheet internal fabrication estimate", FABRICATION_ESTIMATE_PATH],
-  ])("reaches the AI fallback (not the old unrecognized-format error) for %s", async (_label, filePath) => {
-    const { opportunity, document } = await makeDocumentFrom(filePath, "unrecognized-format.xlsx");
+  it.each([["the real Fuse AV/lighting/rigging bid", FUSE_BID_PATH]])(
+    "reaches the AI fallback (not the old unrecognized-format error) for %s",
+    async (_label, filePath) => {
+      const { opportunity, document } = await makeDocumentFrom(filePath, "unrecognized-format.xlsx");
 
-    // .env.test deliberately has no OpenAI key -- AiNotConfiguredError
-    // proves the AI fallback was actually reached, not the deterministic
-    // "doesn't contain a recognizable Pricing Schedule sheet" error this
-    // used to throw for exactly these two real files.
-    await expect(previewPricingImport(document.id, opportunity.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
+      // .env.test deliberately has no OpenAI key -- AiNotConfiguredError
+      // proves the AI fallback was actually reached, not the deterministic
+      // "doesn't contain a recognizable Pricing Schedule sheet" error this
+      // used to throw for this real file.
+      await expect(previewPricingImport(document.id, opportunity.id)).rejects.toBeInstanceOf(AiNotConfiguredError);
+    },
+  );
+
+  // The "33-sheet internal fabrication estimate" this describe block used
+  // to also cover here now has its own real deterministic importer
+  // (module-cost-estimate-import-service.ts) -- confirmed live its per-
+  // module sheets have real Sheet Goods/Other Items/Labor detail the
+  // AI-fallback path was silently collapsing into one lump-sum line per
+  // module. See module-cost-estimate-import-service.test.ts for its own
+  // dispatch/itemization/commit coverage against this same real file.
+  it("routes the real 33-sheet internal fabrication estimate to the new module-cost-estimate importer, not the AI fallback", async () => {
+    const fabricationEstimatePath = path.resolve(
+      import.meta.dirname,
+      "../../../data/RFP/Full_Swing/Full Swing @ PGA 2027 Orlando Estimate 082526TA.xlsx",
+    );
+    const { opportunity, document } = await makeDocumentFrom(fabricationEstimatePath, "fabrication-estimate.xlsx");
+
+    const preview = await previewPricingImport(document.id, opportunity.id);
+
+    expect(preview.kind).toBe("module-cost-estimate");
   });
 });

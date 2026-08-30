@@ -27,6 +27,12 @@ import {
   type DesignCostEstimatePreview,
 } from "@/lib/design-cost-estimate-import-service";
 import {
+  commitModuleCostEstimateImport,
+  findModuleCostEstimateSheets,
+  previewModuleCostEstimateImport,
+  type ModuleCostEstimatePreview,
+} from "@/lib/module-cost-estimate-import-service";
+import {
   commitAiProposedImport,
   previewAiProposedImport,
   type AiProposedImportPreview,
@@ -160,7 +166,13 @@ export async function previewPricingImport(
   documentId: string,
   opportunityId: string,
   userId: string | null = null,
-): Promise<PricingImportPreview | DesignCostEstimatePreview | AiProposedImportPreview | StandaloneVendorQuoteImportPreview> {
+): Promise<
+  | PricingImportPreview
+  | DesignCostEstimatePreview
+  | ModuleCostEstimatePreview
+  | AiProposedImportPreview
+  | StandaloneVendorQuoteImportPreview
+> {
   const { document, bytes } = await getDocumentBytes(documentId);
   if (document.opportunityId !== opportunityId) {
     throw new Error("This document doesn't belong to this opportunity.");
@@ -190,6 +202,14 @@ export async function previewPricingImport(
   // be -- they still just tag it "Pricing schedule" as usual.
   if (findDesignCostEstimateSheet(workbook)) {
     return previewDesignCostEstimateImport(documentId, opportunityId);
+  }
+
+  // Tried right after the Design Cost Estimate shape -- both are banner-
+  // based itemized shapes, this one distinct enough (its own "Sheet
+  // Goods"/"Other Items"/"Labor" column-1 banners) that it never
+  // conflicts with that detector or the flat-schedule one below.
+  if (findModuleCostEstimateSheets(workbook).length > 0) {
+    return previewModuleCostEstimateImport(documentId, opportunityId);
   }
 
   const found = findPricingSheet(workbook);
@@ -339,6 +359,9 @@ export async function commitPricingImport(
   // already applies to opportunityId above.
   if (preview.kind === "design-cost-estimate") {
     return commitDesignCostEstimateImport(estimateVersionId, documentId);
+  }
+  if (preview.kind === "module-cost-estimate") {
+    return commitModuleCostEstimateImport(estimateVersionId, documentId);
   }
   if (preview.kind === "ai-proposed") {
     return commitAiProposedImport(estimateVersionId, documentId, sheetDestinations);
