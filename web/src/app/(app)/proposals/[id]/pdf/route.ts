@@ -71,6 +71,9 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
         scopeSummary,
         sections: version.sections,
         categories,
+        // Real, client-facing document -- cost never reaches the client,
+        // only the marked-up price. See ProposalPdfData's own comment.
+        showCost: false,
         professionalServices,
         termsAndConditions,
         paymentMethodNote,

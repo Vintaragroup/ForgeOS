@@ -201,9 +201,27 @@ const styles = StyleSheet.create({
   colQty: { width: "14%", textAlign: "right" },
   colUnit: { width: "13%", textAlign: "right" },
   colTotal: { width: "25%", textAlign: "right" },
+  // Narrower variants used only when data.showCost is true (the internal
+  // Preview PDF), making room for a real second amount column instead of
+  // the single Total -- see colCost/colPrice below. Never used on the
+  // real client Proposal PDF, which keeps the original 4-column widths.
+  colDescriptionDual: { width: "36%" },
+  colQtyDual: { width: "11%", textAlign: "right" },
+  colUnitDual: { width: "10%", textAlign: "right" },
+  // Muted color is the only visual cue distinguishing Cost from Price --
+  // deliberately not a background tint or border, which would fight the
+  // section accent colors already carrying meaning on this page.
+  colCost: { width: "20%", textAlign: "right", color: "#8a8a8a" },
+  colPrice: { width: "23%", textAlign: "right" },
   // A $0.00 the client already owns/supplies, not "not yet priced" -- see
   // ProposalViewLineItem.isClientOwned's comment.
   clientOwnedLabel: { fontStyle: "italic", color: "#737373" },
+  // Nested inline span ahead of a header/subtotal bar's price (see
+  // amountContent below) -- these bars were never a column grid, just one
+  // right-aligned total, so "cost and price side by side" here means a
+  // smaller/lighter prefix within the same <Text> node rather than a
+  // parallel grid for every differently-colored bar on the page.
+  costPrefixSpan: { fontSize: 7, fontWeight: 400 },
   // Summary-only categories (see isSummary below) skip the priced table
   // entirely but still list what's actually in the category -- same
   // bullet treatment as professionalServicesItem/projectScopeItem, just a
@@ -221,6 +239,11 @@ const styles = StyleSheet.create({
   totalBlock: { alignItems: "flex-end" },
   totalLabel: { fontSize: 8, color: "#737373" },
   totalValue: { fontSize: 20, fontWeight: 700, marginTop: 2, color: BRAND.navy },
+  // Only rendered when data.showCost -- a second, deliberately smaller/
+  // muted block beside Grand total so the marked-up figure stays the
+  // visual headline even while cost sits right next to it for reference.
+  totalCostBlock: { marginRight: 24 },
+  totalCostValue: { fontSize: 14, fontWeight: 700, marginTop: 2, color: "#737373" },
   footer: {
     position: "absolute",
     bottom: 24,
@@ -260,6 +283,10 @@ const styles = StyleSheet.create({
   },
   serviceDescription: { width: "75%", lineHeight: 1.4 },
   serviceTotal: { width: "25%", textAlign: "right", fontWeight: 700 },
+  // Dual (showCost) variants, same reasoning as colDescriptionDual etc. above.
+  serviceDescriptionDual: { width: "50%", lineHeight: 1.4 },
+  serviceCost: { width: "22%", textAlign: "right", color: "#8a8a8a" },
+  servicePrice: { width: "28%", textAlign: "right", fontWeight: 700 },
   professionalServicesRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -324,6 +351,21 @@ function formatDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Compact "Cost $X → " prefix ahead of the price, nested inside the same
+// <Text> node rather than a second column -- see costPrefixSpan's own
+// comment on why header/subtotal bars use this instead of a grid. When
+// showCost is false (the real client Proposal), this is just the price,
+// unchanged from what a plain moneyFromNumber(price) call would render.
+function amountContent(cost: number, price: number, showCost: boolean) {
+  if (!showCost) return moneyFromNumber(price);
+  return (
+    <>
+      <Text style={styles.costPrefixSpan}>Cost {moneyFromNumber(cost)} → </Text>
+      {moneyFromNumber(price)}
+    </>
+  );
+}
+
 export interface ProposalPdfTimelineEntry {
   label: string;
   date: Date;
@@ -374,6 +416,13 @@ export interface ProposalPdfData {
   // breakdown never changes the bottom-line number.
   hidePricingCategoryNames?: ReadonlySet<string>;
   summaryCategoryNames?: ReadonlySet<string>;
+  // true on the internal Preview PDF (preview-pdf/route.ts): every dollar
+  // figure renders as Cost alongside the marked-up Price, so an estimator
+  // can sanity-check margin math before a version is locked. false on the
+  // real, client-facing Proposal PDF (proposals/[id]/pdf/route.ts): only
+  // the marked-up Price ever renders -- cost never reaches the client.
+  // Neither route can omit this; there's no default that's safe for both.
+  showCost: boolean;
   professionalServices: ProposalPdfProfessionalServices | null;
   termsAndConditions: string[];
   paymentMethodNote: string | null;
@@ -398,6 +447,19 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // "Custom Rental" block instead of also showing them under their
   // category, which would otherwise render every one of them twice.
   const buckets = aggregateByCategory(data.sections, data.categories);
+  // Every AggregatedLineItem.totalCost is raw cost (see proposal-view-
+  // model.ts -- no margin is ever applied there by design). The only
+  // place marginTargetPct is ever applied is once, to the whole version,
+  // producing data.grandTotal (estimate-service.ts's
+  // computeMarginGrossUp). Rather than re-deriving that formula here
+  // (which would need marginTargetPct threaded through as a new prop, and
+  // could drift from the already-stored, already-rounded grandTotal),
+  // sell() scales every cost figure by the ratio between the two totals
+  // already in hand -- self-consistent by construction: summing sell(x)
+  // over every bucket always reproduces data.grandTotal exactly.
+  const totalCostSum = buckets.reduce((sum, b) => sum + bucketSubtotal(b.items), 0);
+  const priceRatio = totalCostSum > 0 ? data.grandTotal.toNumber() / totalCostSum : 1;
+  const sell = (cost: number) => cost * priceRatio;
   const topLevelCategories = buildTopLevelCategoryViews(buckets, data.categories);
   const showServiceCategoryNames = new Set(data.categories.filter((c) => c.isShowService).map((c) => c.name));
   const lumpSumCategoryNames = new Set(data.categories.filter((c) => c.isLumpSum).map((c) => c.name));
@@ -430,14 +492,24 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     <>
       {items.map((li) => (
         <View key={li.key} style={styles.tableRow} wrap={false}>
-          <View style={styles.colDescription}>
+          <View style={data.showCost ? styles.colDescriptionDual : styles.colDescription}>
             {li.boothLabel && <Text style={styles.itemBoothLabel}>{li.boothLabel}</Text>}
             <Text>{li.description}</Text>
           </View>
-          <Text style={styles.colQty}>{formatQtyNumber(li.qty)}</Text>
-          <Text style={styles.colUnit}>{li.unit ?? ""}</Text>
-          <Text style={{ ...styles.colTotal, ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}) }}>
-            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(li.totalCost)}
+          <Text style={data.showCost ? styles.colQtyDual : styles.colQty}>{formatQtyNumber(li.qty)}</Text>
+          <Text style={data.showCost ? styles.colUnitDual : styles.colUnit}>{li.unit ?? ""}</Text>
+          {data.showCost && (
+            <Text style={{ ...styles.colCost, ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}) }}>
+              {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(li.totalCost)}
+            </Text>
+          )}
+          <Text
+            style={{
+              ...(data.showCost ? styles.colPrice : styles.colTotal),
+              ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}),
+            }}
+          >
+            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sell(li.totalCost))}
           </Text>
         </View>
       ))}
@@ -464,9 +536,21 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     <>
       {items.map((li) => (
         <View key={li.key} style={styles.serviceRow} wrap={false}>
-          <Text style={styles.serviceDescription}>{li.description}</Text>
-          <Text style={{ ...styles.serviceTotal, ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}) }}>
-            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(li.totalCost)}
+          <Text style={data.showCost ? styles.serviceDescriptionDual : styles.serviceDescription}>
+            {li.description}
+          </Text>
+          {data.showCost && (
+            <Text style={{ ...styles.serviceCost, ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}) }}>
+              {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(li.totalCost)}
+            </Text>
+          )}
+          <Text
+            style={{
+              ...(data.showCost ? styles.servicePrice : styles.serviceTotal),
+              ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}),
+            }}
+          >
+            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sell(li.totalCost))}
           </Text>
         </View>
       ))}
@@ -557,10 +641,15 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
             much or little cover content there is, so the pricing table never
             competes with it for room mid-page. */}
         <View style={styles.tableHeaderRow} break>
-          <Text style={[styles.colDescription, styles.headerCell]}>Description</Text>
-          <Text style={[styles.colQty, styles.headerCell]}>Qty</Text>
-          <Text style={[styles.colUnit, styles.headerCell]}>Unit</Text>
-          <Text style={[styles.colTotal, styles.headerCell]}>Total</Text>
+          <Text style={[data.showCost ? styles.colDescriptionDual : styles.colDescription, styles.headerCell]}>
+            Description
+          </Text>
+          <Text style={[data.showCost ? styles.colQtyDual : styles.colQty, styles.headerCell]}>Qty</Text>
+          <Text style={[data.showCost ? styles.colUnitDual : styles.colUnit, styles.headerCell]}>Unit</Text>
+          {data.showCost && <Text style={[styles.colCost, styles.headerCell]}>Cost</Text>}
+          <Text style={[data.showCost ? styles.colPrice : styles.colTotal, styles.headerCell]}>
+            {data.showCost ? "Price" : "Total"}
+          </Text>
         </View>
 
         {boothGroups.length > 0 && (
@@ -570,19 +659,25 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 <View style={[styles.sectionAccentSwatch, { backgroundColor: SECTION_ACCENTS[0] }]} />
                 <Text style={styles.sectionHeaderText}>Custom Rental</Text>
               </View>
-              <Text style={styles.sectionHeaderTotal}>{moneyFromNumber(customRentalTotal)}</Text>
+              <Text style={styles.sectionHeaderTotal}>
+                {amountContent(customRentalTotal, sell(customRentalTotal), data.showCost)}
+              </Text>
             </View>
             {boothGroups.map((booth) => (
               <View key={booth.boothLabel} style={styles.boothSection}>
                 <View style={styles.boothHeaderRow} minPresenceAhead={24}>
                   <Text style={styles.boothHeaderText}>{booth.boothLabel}</Text>
-                  <Text style={styles.boothHeaderTotal}>{moneyFromNumber(booth.subtotal)}</Text>
+                  <Text style={styles.boothHeaderTotal}>
+                    {amountContent(booth.subtotal, sell(booth.subtotal), data.showCost)}
+                  </Text>
                 </View>
                 {booth.elementGroups.map((group) => (
                   <View key={group.elementType} style={styles.elementTypeSection}>
                     <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
                       <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
-                      <Text style={styles.elementTypeHeaderTotal}>{moneyFromNumber(group.subtotal)}</Text>
+                      <Text style={styles.elementTypeHeaderTotal}>
+                        {amountContent(group.subtotal, sell(group.subtotal), data.showCost)}
+                      </Text>
                     </View>
                     {renderBody(group.items)}
                   </View>
@@ -638,7 +733,9 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   <Text style={styles.sectionHeaderText}>{categoryName}</Text>
                 </View>
                 <Text style={styles.sectionHeaderTotal}>
-                  {hidePrice || allDivertedToCustomRental ? "" : moneyFromNumber(visibleTotal)}
+                  {hidePrice || allDivertedToCustomRental
+                    ? ""
+                    : amountContent(visibleTotal, sell(visibleTotal), data.showCost)}
                 </Text>
               </View>
               {allDivertedToCustomRental && (
@@ -667,7 +764,13 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
                     <Text style={styles.subsectionHeaderText}>{child.name}</Text>
                     <Text style={styles.subsectionHeaderTotal}>
-                      {hidePrice ? "" : moneyFromNumber(bucketSubtotal(child.items))}
+                      {hidePrice
+                        ? ""
+                        : amountContent(
+                            bucketSubtotal(child.items),
+                            sell(bucketSubtotal(child.items)),
+                            data.showCost,
+                          )}
                     </Text>
                   </View>
                   {isSummary ? renderSummaryBody(child.items) : renderBody(child.items, hidePrice)}
@@ -683,11 +786,15 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               <>
                 <View style={styles.subtotalsRow}>
                   <Text style={styles.subtotalsRowLabel}>Rental components total</Text>
-                  <Text style={styles.subtotalsRowValue}>{moneyFromNumber(rentalTotal)}</Text>
+                  <Text style={styles.subtotalsRowValue}>
+                    {amountContent(rentalTotal, sell(rentalTotal), data.showCost)}
+                  </Text>
                 </View>
                 <View style={styles.subtotalsRow}>
                   <Text style={styles.subtotalsRowLabel}>Show services total</Text>
-                  <Text style={styles.subtotalsRowValue}>{moneyFromNumber(servicesTotal)}</Text>
+                  <Text style={styles.subtotalsRowValue}>
+                    {amountContent(servicesTotal, sell(servicesTotal), data.showCost)}
+                  </Text>
                 </View>
               </>
             )}
@@ -696,10 +803,16 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 taxable base is exactly the rental components total
                 (already computed above). No tax rate or jurisdiction
                 logic involved; this just labels which part of the total
-                is subject to tax at all. */}
+                is subject to tax at all. Uses sell(rentalTotal), not
+                rentalTotal -- tax applies to what the client is actually
+                charged, not internal cost (this was a real, separate
+                latent bug: the base was cost even on the client-facing
+                document before this fix). */}
             <View style={styles.subtotalsRow}>
               <Text style={styles.subtotalsRowLabel}>Total taxable</Text>
-              <Text style={styles.subtotalsRowValue}>{moneyFromNumber(rentalTotal)}</Text>
+              <Text style={styles.subtotalsRowValue}>
+                {amountContent(rentalTotal, sell(rentalTotal), data.showCost)}
+              </Text>
             </View>
             {data.taxRate && (
               <>
@@ -707,7 +820,9 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   <Text style={styles.subtotalsRowLabel}>
                     Estimated tax ({data.taxRate.label}, {(data.taxRate.rate * 100).toFixed(2)}%)
                   </Text>
-                  <Text style={styles.subtotalsRowValue}>{moneyFromNumber(rentalTotal * data.taxRate.rate)}</Text>
+                  <Text style={styles.subtotalsRowValue}>
+                    {moneyFromNumber(sell(rentalTotal) * data.taxRate.rate)}
+                  </Text>
                 </View>
                 <Text style={styles.taxDisclaimer}>{TAX_ESTIMATE_DISCLAIMER}</Text>
               </>
@@ -723,6 +838,12 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
         )}
 
         <View style={styles.totalRow}>
+          {data.showCost && (
+            <View style={[styles.totalBlock, styles.totalCostBlock]}>
+              <Text style={styles.totalLabel}>Total cost</Text>
+              <Text style={styles.totalCostValue}>{moneyFromNumber(totalCostSum)}</Text>
+            </View>
+          )}
           <View style={styles.totalBlock}>
             <Text style={styles.totalLabel}>Grand total</Text>
             <Text style={styles.totalValue}>{money(data.grandTotal)}</Text>

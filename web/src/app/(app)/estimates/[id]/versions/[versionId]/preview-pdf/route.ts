@@ -120,6 +120,10 @@ export async function GET(
         categories: orderedCategories,
         hidePricingCategoryNames,
         summaryCategoryNames,
+        // Internal, still-editing document -- an estimator sanity-checking
+        // margin math needs to see cost next to the marked-up price, never
+        // just the price alone. See ProposalPdfData's own comment.
+        showCost: true,
         professionalServices,
         termsAndConditions,
         paymentMethodNote,
