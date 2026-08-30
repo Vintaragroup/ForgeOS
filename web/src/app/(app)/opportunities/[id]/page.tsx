@@ -612,7 +612,7 @@ function fmtDate(d: Date | null): string {
 
 export default async function OpportunityDetailPage(props: PageProps<"/opportunities/[id]">) {
   const { id } = await props.params;
-  const { editDetails: editDetailsParam } = await props.searchParams;
+  const { editDetails: editDetailsParam, collaboratorsUpdated: collaboratorsUpdatedParam } = await props.searchParams;
   // Same query-param toggle convention as estimates/[id]/page.tsx's
   // importDocumentId/proposeDocumentId -- a plain server-rendered view
   // vs. edit split needs no client state, just which panel a link
@@ -622,6 +622,8 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   // URL after Save is what returns here to view mode, no extra code
   // needed for that half of the round trip.
   const isEditingDetails = (Array.isArray(editDetailsParam) ? editDetailsParam[0] : editDetailsParam) === "1";
+  const collaboratorsUpdated =
+    (Array.isArray(collaboratorsUpdatedParam) ? collaboratorsUpdatedParam[0] : collaboratorsUpdatedParam) === "1";
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
@@ -1303,11 +1305,16 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         </CollapsibleSection>
       )}
 
-      <CollapsibleSection title="Collaborators" defaultOpen={false}>
+      <CollapsibleSection title="Collaborators" id="collaborators" defaultOpen={collaboratorsUpdated}>
         <p className="mb-4 text-sm text-neutral-500">
           Registered teammates checked below can see and work on this opportunity, in addition to its
           owner. Admins can already see every opportunity regardless of this list.
         </p>
+        {collaboratorsUpdated && (
+          <p className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+            Collaborators updated.
+          </p>
+        )}
         <form action={updateCollaboratorsWithId} className="flex flex-col gap-3">
           {users.length === 0 ? (
             <p className="text-sm text-neutral-400">No other registered users yet.</p>

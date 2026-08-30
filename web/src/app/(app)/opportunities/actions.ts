@@ -149,6 +149,14 @@ export async function updateCollaborators(id: string, formData: FormData) {
   ]);
 
   revalidatePath(`/opportunities/${id}`);
+  // Redirect back with a query param, not just revalidatePath -- this
+  // action previously gave zero visible feedback on save (confirmed live:
+  // the checkboxes already reflected the submitted state via
+  // defaultChecked, so a revalidated page looked byte-for-byte identical,
+  // reading as "nothing happened" even though the save succeeded). Same
+  // redirect-with-status convention as updateOpportunity/import-actions.ts's
+  // confirmedCount, read back below to show a real confirmation banner.
+  redirect(`/opportunities/${id}?collaboratorsUpdated=1#collaborators`);
 }
 
 export async function changeStage(id: string, formData: FormData) {
