@@ -16,12 +16,13 @@ import {
   recomputeVersionTotals,
   updateLineItem,
   updateMarginTarget,
+  updateSectionBuildType,
 } from "@/lib/estimate-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
 import { recordCostActual } from "@/lib/cost-actual-service";
 import { assertVersionBelongsToEstimate, estimateOpportunityId, requireEstimateAccess } from "@/lib/opportunity-access";
-import type { LineItemType, SectionType } from "@/generated/prisma/enums";
+import type { LineItemType, SectionBuildType, SectionType } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -59,6 +60,19 @@ export async function addSectionAction(estimateId: string, versionId: string, fo
   const sectionType = String(formData.get("sectionType")) as SectionType;
 
   await addSection(versionId, { name, sectionType });
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateSectionBuildTypeAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const buildType = String(formData.get("buildType")) as SectionBuildType;
+  await updateSectionBuildType(versionId, groupLabel, buildType);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

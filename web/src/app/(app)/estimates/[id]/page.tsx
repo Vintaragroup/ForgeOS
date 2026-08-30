@@ -9,6 +9,7 @@ import {
   aggregateByCategory,
   buildTopLevelCategoryViews,
   groupBoothLineItemsForEditing,
+  resolveEffectiveCategory,
   type RawBoothGroup,
 } from "@/lib/proposal-view-model";
 import { ProposalPreviewModal } from "@/components/proposal-preview-modal";
@@ -31,6 +32,7 @@ import {
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
+  updateSectionBuildTypeAction,
 } from "../actions";
 import {
   buildFullEstimateFromDocumentsAction,
@@ -59,7 +61,8 @@ import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { getProjectContext } from "@/lib/ai/scope-document-context";
 import { citationHref } from "@/lib/citation";
 import { auditLineItemCategories } from "@/lib/category-audit";
-import { isKnownCategory } from "@/lib/line-item-category";
+import { CUSTOM_BUILD_CATEGORY_KEY, RENTAL_STRUCTURES_CATEGORY_KEY } from "@/lib/line-item-category";
+import type { SectionBuildType } from "@/generated/prisma/enums";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { getVendorMatchApplyLog } from "@/lib/vendor-match-apply-log-service";
 import { createChangeOrderAction } from "../../change-orders/actions";
@@ -696,7 +699,12 @@ function VersionSummaryBar({
   // -- see proposal-pdf.tsx's own render loop), so that's all this lists.
   const previewSections = version.sections
     .filter((s) => s.optionId === null)
-    .map((s) => ({ name: s.name, groupLabel: s.groupLabel, lineItems: s.lineItems.filter((li) => !li.isDraft) }));
+    .map((s) => ({
+      name: s.name,
+      groupLabel: s.groupLabel,
+      buildType: s.buildType,
+      lineItems: s.lineItems.filter((li) => !li.isDraft),
+    }));
   const previewTopLevel = buildTopLevelCategoryViews(aggregateByCategory(previewSections, categories), categories);
   const categoryNameToId = new Map(categories.map((c) => [c.name, c.id]));
   const categoriesWithItems = previewTopLevel
@@ -1031,7 +1039,7 @@ interface CategorySectionGroup {
 }
 
 interface CategoryBucket {
-  category: { id: string; name: string };
+  category: { id: string; name: string; key: string };
   totalItems: number;
   sectionGroups: CategorySectionGroup[];
 }
@@ -1053,20 +1061,22 @@ interface CategoryBucket {
 // (its own id, its own move/update/delete actions).
 function bucketLineItemsByCategory(
   sections: VersionWithSections["sections"],
-  categories: { id: string; name: string }[],
+  categories: { id: string; name: string; key: string }[],
 ): CategoryBucket[] {
   const byCategoryThenSection = new Map<string, Map<string, CategorySectionGroup>>();
 
   for (const section of sections) {
-    // A booth/component-linked section's items render in their own
-    // "Components" view instead (see LineItemsTab's own boothGroups) --
-    // showing them here too would mean a component's Lighting line
-    // appears both grouped under its component AND flat under the
-    // Lighting tab, same double-render the client-facing PDF already
-    // avoids via its own visibleCategoryItems filter (proposal-pdf.tsx).
-    if (section.groupLabel) continue;
     for (const li of section.lineItems) {
-      const categoryName = isKnownCategory(categories, li.category) ? li.category! : "Other";
+      // A tagged booth's items resolve to Rental Structures/Custom
+      // Components regardless of their own raw category (see
+      // resolveEffectiveCategory's own comment) -- an untagged booth
+      // falls through to its raw category unchanged, same as any other
+      // item. Either way this function still buckets every item; it's
+      // CategoryTabContent that skips a booth-linked section's own flat
+      // rendering once that booth is also being shown via its own
+      // component-grouped view (LineItemsTab's own boothGroups), so
+      // nothing renders twice.
+      const categoryName = resolveEffectiveCategory(li, section, categories);
       let sectionMap = byCategoryThenSection.get(categoryName);
       if (!sectionMap) {
         sectionMap = new Map();
@@ -1116,7 +1126,7 @@ function LineItemsTab({
   estimateId: string;
   opportunityId: string;
   version: VersionWithSections;
-  categories: { id: string; name: string }[];
+  categories: { id: string; name: string; key: string }[];
   categoryOptions: { value: string; label: string }[];
   laborRates: LaborRateOption[];
   attachments: { id: string; fileRef: string }[];
@@ -1126,13 +1136,28 @@ function LineItemsTab({
   const buckets = bucketLineItemsByCategory(version.sections, categories);
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
   const draftCount = version.sections.flatMap((s) => s.lineItems).filter((li) => li.isDraft).length;
+
   // Every booth/component-linked section (EstimateSection.groupLabel),
-  // grouped the same way the client-facing PDF already groups its own
-  // "Custom Rental" block (see groupBoothLineItemsForEditing's own
-  // comment on why this is a raw, non-merged variant of that PDF-only
-  // logic) -- most jobs have none of these, so the Components tab below
-  // only appears when there's actually something to show in it.
+  // grouped the same way the client-facing PDF groups its own booth
+  // content (see groupBoothLineItemsForEditing's own comment on why this
+  // is a raw, non-merged variant of that PDF-only logic). Most jobs have
+  // none of these. A booth's own resolved category (Rental Structures vs
+  // Custom Components) is EstimateSection.buildType, set once per booth
+  // via the tagging card below -- every section sharing one groupLabel
+  // always shares the same buildType (updateSectionBuildTypeAction sets
+  // them together), so reading any one of them is enough.
   const boothGroups = groupBoothLineItemsForEditing(version.sections);
+  const buildTypeByBoothLabel = new Map<string, SectionBuildType | null>();
+  for (const section of version.sections) {
+    if (section.groupLabel && !buildTypeByBoothLabel.has(section.groupLabel)) {
+      buildTypeByBoothLabel.set(section.groupLabel, section.buildType);
+    }
+  }
+  const untaggedBoothLabels = boothGroups
+    .map((g) => g.boothLabel)
+    .filter((label) => !buildTypeByBoothLabel.get(label));
+  const rentalBoothGroups = boothGroups.filter((g) => buildTypeByBoothLabel.get(g.boothLabel) === "RENTAL");
+  const customBoothGroups = boothGroups.filter((g) => buildTypeByBoothLabel.get(g.boothLabel) === "CUSTOM_BUILD");
 
   return (
     <div className="flex flex-col gap-6">
@@ -1171,49 +1196,68 @@ function LineItemsTab({
           </div>
         )}
 
+        {untaggedBoothLabels.length > 0 && (
+          <div className="mb-6 rounded-md border border-amber-200 bg-amber-50 p-4">
+            <h3 className="mb-1 text-sm font-semibold text-amber-900">
+              Components needing a Rental/Custom Build tag
+            </h3>
+            <p className="mb-3 text-xs text-amber-800">
+              A component&apos;s items bucket under its own raw category (Flooring, Labor, ...) until tagged --
+              tagging moves them under Rental Structures or Custom Components instead, grouped by component.
+            </p>
+            <ul className="flex flex-col gap-2">
+              {untaggedBoothLabels.map((boothLabel) => (
+                <li key={boothLabel} className="flex flex-wrap items-center gap-2">
+                  <form
+                    action={updateSectionBuildTypeAction.bind(null, estimateId, version.id, boothLabel)}
+                    className="flex items-center gap-2"
+                  >
+                    <span className="text-sm font-medium text-amber-900">{boothLabel}</span>
+                    <SelectField
+                      label=""
+                      name="buildType"
+                      options={[
+                        { value: "RENTAL", label: "Rental Structures" },
+                        { value: "CUSTOM_BUILD", label: "Custom Components" },
+                      ]}
+                    />
+                    <Button variant="secondary" type="submit">
+                      Tag
+                    </Button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <BidPackageSelectionProvider>
           <Tabs
             paramName="category"
-            tabs={[
-              ...buckets.map((b) => ({ id: b.category.id, label: b.category.name, count: b.totalItems })),
-              // Synthetic id, not a real Category -- never collides with
-              // buckets' real category.id values (real ids are cuids).
-              ...(boothGroups.length > 0
-                ? [{ id: "__components__", label: "Components", count: boothGroups.length }]
-                : []),
-            ]}
-            content={{
-              ...Object.fromEntries(
-                buckets.map((bucket) => [
-                  bucket.category.id,
-                  <CategoryTabContent
-                    key={bucket.category.id}
-                    bucket={bucket}
-                    version={version}
-                    estimateId={estimateId}
-                    opportunityId={opportunityId}
-                    laborRates={laborRates}
-                    categoryOptions={categoryOptions}
-                    attachments={attachments}
-                    users={users}
-                  />,
-                ]),
-              ),
-              ...(boothGroups.length > 0
-                ? {
-                    __components__: (
-                      <ComponentsTabContent
-                        boothGroups={boothGroups}
-                        version={version}
-                        estimateId={estimateId}
-                        opportunityId={opportunityId}
-                        laborRates={laborRates}
-                        categoryOptions={categoryOptions}
-                      />
-                    ),
+            tabs={buckets.map((b) => ({ id: b.category.id, label: b.category.name, count: b.totalItems }))}
+            content={Object.fromEntries(
+              buckets.map((bucket) => [
+                bucket.category.id,
+                <CategoryTabContent
+                  key={bucket.category.id}
+                  bucket={bucket}
+                  version={version}
+                  estimateId={estimateId}
+                  opportunityId={opportunityId}
+                  laborRates={laborRates}
+                  categoryOptions={categoryOptions}
+                  attachments={attachments}
+                  users={users}
+                  boothGroups={
+                    bucket.category.key === RENTAL_STRUCTURES_CATEGORY_KEY
+                      ? rentalBoothGroups
+                      : bucket.category.key === CUSTOM_BUILD_CATEGORY_KEY
+                        ? customBoothGroups
+                        : undefined
                   }
-                : {}),
-            }}
+                />,
+              ]),
+            )}
           />
           <CreateBidPackageBar createBidPackage={createBidPackageAction.bind(null, estimateId, version.id)} />
         </BidPackageSelectionProvider>
@@ -2165,6 +2209,7 @@ function CategoryTabContent({
   categoryOptions,
   attachments,
   users,
+  boothGroups,
 }: {
   bucket: CategoryBucket;
   version: VersionWithSections;
@@ -2174,8 +2219,26 @@ function CategoryTabContent({
   categoryOptions: { value: string; label: string }[];
   attachments: { id: string; fileRef: string }[];
   users: { id: string; name: string }[];
+  // Only passed for the Rental Structures/Custom Components categories,
+  // when this version has any booth-linked sections tagged into this one
+  // (see LineItemsTab's own comment). Every one of these items already
+  // renders here via this grouped view, so the flat sectionGroups list
+  // below excludes them (see flatSectionGroups) -- never both.
+  boothGroups?: RawBoothGroup<SectionLineItem>[];
 }) {
-  if (bucket.sectionGroups.length === 0) {
+  const hasBoothGroups = !!boothGroups && boothGroups.length > 0;
+  const flatSectionGroups = hasBoothGroups ? bucket.sectionGroups.filter((g) => !g.groupLabel) : bucket.sectionGroups;
+
+  // Same ratio-based cost -> price scaling as proposal-pdf.tsx's sell()
+  // (commit ed6bc2d) -- simpler here since version.totalCost/grandTotal
+  // are already top-level fields on this page, no need to re-derive from
+  // buckets. Read-only: margin is still one version-level "Margin target
+  // (%)" field (above, on this tab), not editable per component.
+  const totalCostNum = version.totalCost.toNumber();
+  const priceRatio = totalCostNum > 0 ? version.grandTotal.toNumber() / totalCostNum : 1;
+  const sell = (cost: number) => cost * priceRatio;
+
+  if (flatSectionGroups.length === 0 && !hasBoothGroups) {
     const firstSection = version.sections[0];
     return (
       <div className="pt-2">
@@ -2222,7 +2285,49 @@ function CategoryTabContent({
 
   return (
     <div className="flex flex-col gap-6 pt-2">
-      {bucket.sectionGroups.map((group) => (
+      {hasBoothGroups && (
+        <div className="flex flex-col gap-8">
+          {boothGroups!.map((booth) => (
+            <div key={booth.boothLabel} className="overflow-hidden rounded-md border border-neutral-200">
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
+                <h4 className="text-sm font-semibold uppercase tracking-wide">{booth.boothLabel}</h4>
+                <div className="text-xs">
+                  <span className="text-neutral-400">Cost {money(booth.subtotal)}</span>
+                  <span className="mx-1.5 text-neutral-500">&rarr;</span>
+                  <span className="font-semibold">{money(sell(booth.subtotal))}</span>
+                </div>
+              </div>
+              <div className="flex flex-col gap-5 p-4">
+                {booth.elementGroups.map((group) => (
+                  <div key={group.elementType}>
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded bg-neutral-100 px-3 py-1.5">
+                      <h5 className="text-xs font-semibold uppercase tracking-wide text-neutral-600">
+                        {group.elementType}
+                      </h5>
+                      <div className="text-xs text-neutral-600">
+                        <span className="text-neutral-400">Cost {money(group.subtotal)}</span>
+                        <span className="mx-1.5">&rarr;</span>
+                        <span className="font-medium">{money(sell(group.subtotal))}</span>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto rounded-md border border-neutral-200">
+                      <LineItemsTable
+                        lineItems={group.items}
+                        version={version}
+                        estimateId={estimateId}
+                        opportunityId={opportunityId}
+                        laborRates={laborRates}
+                        categoryOptions={categoryOptions}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {flatSectionGroups.map((group) => (
         <div key={group.sectionId} className="border-t border-neutral-200 pt-4 first:border-t-0 first:pt-0">
           <h4 className="mb-3 flex flex-wrap items-center gap-2 text-sm font-medium text-neutral-700">
             {group.sectionName}
@@ -2257,83 +2362,6 @@ function CategoryTabContent({
               defaultCategory={bucket.category.name}
             />
           )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Every booth/component-linked line item, grouped by its physical
-// component then by element type (Lighting, Labor, Structure, ...) --
-// the same structure the client-facing PDF's "Custom Rental" block
-// already uses (groupBoothLineItems, proposal-pdf.tsx), but with raw,
-// individually editable line items instead of that block's merged,
-// read-only rows -- see groupBoothLineItemsForEditing's own comment.
-// This is why bucketLineItemsByCategory excludes these same items from
-// the flat category tabs: a component's Lighting line lives here, once,
-// not also under the Lighting tab.
-function ComponentsTabContent({
-  boothGroups,
-  version,
-  estimateId,
-  opportunityId,
-  laborRates,
-  categoryOptions,
-}: {
-  boothGroups: RawBoothGroup<SectionLineItem>[];
-  version: VersionWithSections;
-  estimateId: string;
-  opportunityId: string;
-  laborRates: LaborRateOption[];
-  categoryOptions: { value: string; label: string }[];
-}) {
-  // Same ratio-based cost -> price scaling as proposal-pdf.tsx's sell()
-  // (commit ed6bc2d) -- simpler here since version.totalCost/grandTotal
-  // are already top-level fields on this page, no need to re-derive from
-  // buckets. Read-only: margin is still one version-level "Margin target
-  // (%)" field (above, on this same tab), not editable per component.
-  const totalCostNum = version.totalCost.toNumber();
-  const priceRatio = totalCostNum > 0 ? version.grandTotal.toNumber() / totalCostNum : 1;
-  const sell = (cost: number) => cost * priceRatio;
-
-  return (
-    <div className="flex flex-col gap-8 pt-2">
-      {boothGroups.map((booth) => (
-        <div key={booth.boothLabel} className="overflow-hidden rounded-md border border-neutral-200">
-          <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
-            <h4 className="text-sm font-semibold uppercase tracking-wide">{booth.boothLabel}</h4>
-            <div className="text-xs">
-              <span className="text-neutral-400">Cost {money(booth.subtotal)}</span>
-              <span className="mx-1.5 text-neutral-500">&rarr;</span>
-              <span className="font-semibold">{money(sell(booth.subtotal))}</span>
-            </div>
-          </div>
-          <div className="flex flex-col gap-5 p-4">
-            {booth.elementGroups.map((group) => (
-              <div key={group.elementType}>
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded bg-neutral-100 px-3 py-1.5">
-                  <h5 className="text-xs font-semibold uppercase tracking-wide text-neutral-600">
-                    {group.elementType}
-                  </h5>
-                  <div className="text-xs text-neutral-600">
-                    <span className="text-neutral-400">Cost {money(group.subtotal)}</span>
-                    <span className="mx-1.5">&rarr;</span>
-                    <span className="font-medium">{money(sell(group.subtotal))}</span>
-                  </div>
-                </div>
-                <div className="overflow-x-auto rounded-md border border-neutral-200">
-                  <LineItemsTable
-                    lineItems={group.items}
-                    version={version}
-                    estimateId={estimateId}
-                    opportunityId={opportunityId}
-                    laborRates={laborRates}
-                    categoryOptions={categoryOptions}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       ))}
     </div>

@@ -44,6 +44,13 @@ export function getCategoryChildren(categories: Category[], parentName: string):
 // the point of use, always against a freshly fetched `categories`.
 export const CUSTOM_BUILD_CATEGORY_KEY = "custom_build";
 
+// Stable key for the seeded "Rental Structures" category (renamed from
+// "Structure" -- same key, unchanged, per this file's own convention).
+// Used when a booth/component section's own EstimateSection.buildType
+// resolves it to a Rental Structures item, overriding that line item's
+// raw `category` string -- see aggregateByCategory/bucketLineItemsByCategory.
+export const RENTAL_STRUCTURES_CATEGORY_KEY = "structure";
+
 // Best-effort mapping from the raw category strings actually observed in
 // the Material/RentalItem catalogs (see the "category" column on both
 // models) to the canonical list above, by stable key. Catalog categories

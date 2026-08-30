@@ -9,6 +9,7 @@ import { Document, Page, Text, View, Image as PdfImage, StyleSheet, Font } from 
 import type { Category, Prisma } from "@/generated/prisma/client";
 import { BRAND, BRAND_ADDRESS_LINES, BRAND_COMPANY_NAME, BRAND_TAGLINE } from "@/lib/brand";
 import { TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
+import { CUSTOM_BUILD_CATEGORY_KEY, RENTAL_STRUCTURES_CATEGORY_KEY, resolveCategoryNameFromKey } from "@/lib/line-item-category";
 import {
   aggregateByCategory,
   bucketSubtotal,
@@ -16,6 +17,7 @@ import {
   computeRentalAndServicesTotals,
   groupBoothLineItems,
   type AggregatedLineItem,
+  type BoothGroup,
   type ProposalViewLineItem,
   type ProposalViewSection,
 } from "@/lib/proposal-view-model";
@@ -440,12 +442,11 @@ export interface ProposalPdfData {
 }
 
 export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
-  // buckets/topLevelCategories still run against the FULL, unfiltered
-  // data.sections -- rentalTotal/servicesTotal/grandTotal all stay
-  // correct as-is (see computeRentalAndServicesTotals below); only the
-  // BODY rendering below splits booth-linked items out into their own
-  // "Custom Rental" block instead of also showing them under their
-  // category, which would otherwise render every one of them twice.
+  // buckets/topLevelCategories run against the FULL, unfiltered
+  // data.sections -- a tagged booth's items already resolve into Rental
+  // Structures/Custom Components directly (resolveEffectiveCategory), so
+  // there's nothing left to split out into a separate block; an untagged
+  // booth's items stay under their own raw category exactly as before.
   const buckets = aggregateByCategory(data.sections, data.categories);
   // Every AggregatedLineItem.totalCost is raw cost (see proposal-view-
   // model.ts -- no margin is ever applied there by design). The only
@@ -463,16 +464,23 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   const topLevelCategories = buildTopLevelCategoryViews(buckets, data.categories);
   const showServiceCategoryNames = new Set(data.categories.filter((c) => c.isShowService).map((c) => c.name));
   const lumpSumCategoryNames = new Set(data.categories.filter((c) => c.isLumpSum).map((c) => c.name));
-  const boothGroups = groupBoothLineItems(data.sections);
-  const customRentalTotal = boothGroups.reduce((sum, b) => sum + b.subtotal, 0);
   const hidePricingCategoryNames = data.hidePricingCategoryNames ?? new Set<string>();
   const summaryCategoryNames = data.summaryCategoryNames ?? new Set<string>();
 
-  // Renders a category's own items with every booth-linked one removed
-  // (already shown under the Custom Rental block above) -- recomputes the
-  // header total from what's actually left, not the original
-  // totalWithChildren, which still includes the booth-linked contribution.
-  const visibleCategoryItems = (items: AggregatedLineItem[]) => items.filter((li) => !li.boothLabel);
+  // Component grouping (booth -> element type -> line items) lives inside
+  // whichever of these two categories a tagged booth resolved into, not a
+  // separate "Custom Rental" block -- see resolveEffectiveCategory. An
+  // untagged booth (buildType still null) contributes to neither and keeps
+  // rendering flat under its own raw category, unchanged.
+  const rentalCategoryName = resolveCategoryNameFromKey(data.categories, RENTAL_STRUCTURES_CATEGORY_KEY);
+  const customCategoryName = resolveCategoryNameFromKey(data.categories, CUSTOM_BUILD_CATEGORY_KEY);
+  const rentalBoothGroups = groupBoothLineItems(data.sections.filter((s) => s.buildType === "RENTAL"));
+  const customBoothGroups = groupBoothLineItems(data.sections.filter((s) => s.buildType === "CUSTOM_BUILD"));
+  const boothGroupsForCategory = (categoryName: string): BoothGroup[] => {
+    if (categoryName === rentalCategoryName) return rentalBoothGroups;
+    if (categoryName === customCategoryName) return customBoothGroups;
+    return [];
+  };
 
   // Every distinct aggregated item renders as its own row, always -- no
   // detail-mode toggle, no "Includes: A, B, C" collapse. Cross-booth
@@ -652,78 +660,33 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           </Text>
         </View>
 
-        {boothGroups.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeaderRow} minPresenceAhead={24}>
-              <View style={styles.sectionHeaderLeft}>
-                <View style={[styles.sectionAccentSwatch, { backgroundColor: SECTION_ACCENTS[0] }]} />
-                <Text style={styles.sectionHeaderText}>Custom Rental</Text>
-              </View>
-              <Text style={styles.sectionHeaderTotal}>
-                {amountContent(customRentalTotal, sell(customRentalTotal), data.showCost)}
-              </Text>
-            </View>
-            {boothGroups.map((booth) => (
-              <View key={booth.boothLabel} style={styles.boothSection}>
-                <View style={styles.boothHeaderRow} minPresenceAhead={24}>
-                  <Text style={styles.boothHeaderText}>{booth.boothLabel}</Text>
-                  <Text style={styles.boothHeaderTotal}>
-                    {amountContent(booth.subtotal, sell(booth.subtotal), data.showCost)}
-                  </Text>
-                </View>
-                {booth.elementGroups.map((group) => (
-                  <View key={group.elementType} style={styles.elementTypeSection}>
-                    <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
-                      <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
-                      <Text style={styles.elementTypeHeaderTotal}>
-                        {amountContent(group.subtotal, sell(group.subtotal), data.showCost)}
-                      </Text>
-                    </View>
-                    {renderBody(group.items)}
-                  </View>
-                ))}
-              </View>
-            ))}
-          </View>
-        )}
-
         {topLevelCategories.map(({ name: categoryName, ownItems, children }, categoryIndex) => {
           const accent = SECTION_ACCENTS[categoryIndex % SECTION_ACCENTS.length];
           const isServiceStyle = lumpSumCategoryNames.has(categoryName);
-
-          // Booth-linked items in this category already rendered above,
-          // under Custom Rental -- shown here too would double them, once
-          // with a real total and once identically. A category that never
-          // had any items at all still doesn't render its header (same as
-          // always); one whose real content all turned out to be
-          // booth-linked -- e.g. Custom Build/Structure on a build-out job
-          // where the only priced item lives on a booth -- would otherwise
-          // vanish with no explanation of where its dollars went, so that
-          // case gets a cross-reference note instead of disappearing (see
-          // allDivertedToCustomRental below).
-          const visibleOwnItems = visibleCategoryItems(ownItems);
-          const visibleChildren = children
-            .map((child) => ({ name: child.name, items: visibleCategoryItems(child.items) }))
-            .filter((child) => child.items.length > 0);
-          const visibleTotal = bucketSubtotal(visibleOwnItems) + visibleChildren.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
-          const hadAnyItemsBeforeBoothFilter =
-            ownItems.length > 0 || children.some((child) => child.items.length > 0);
-          const allDivertedToCustomRental =
-            hadAnyItemsBeforeBoothFilter &&
-            visibleOwnItems.length === 0 &&
-            visibleChildren.length === 0 &&
-            boothGroups.length > 0;
-          if (visibleOwnItems.length === 0 && visibleChildren.length === 0 && !allDivertedToCustomRental) return null;
-
-          // Both are per-category view options from the Preview PDF modal
-          // -- see ProposalPdfData's own comment. isSummary skips every
-          // item row (this category's/its children's own header rows with
-          // subtotal still render); hidePrice blanks the subtotal text
-          // itself (showing a total while hiding what it's made of would
-          // just leak the number back) and is threaded into whichever body
-          // renderer actually runs.
           const isSummary = summaryCategoryNames.has(categoryName);
           const hidePrice = hidePricingCategoryNames.has(categoryName);
+
+          // A tagged booth's items already resolved into this exact
+          // category's bucket (resolveEffectiveCategory) -- boothGroups
+          // renders them grouped by booth -> element type instead of flat,
+          // reusing the exact hierarchy the (now-removed) standalone
+          // Custom Rental block used to render on its own. Any of this
+          // category's items that AREN'T booth-linked (added directly to
+          // the category, or an untagged booth still on its raw category)
+          // still render flat below/alongside, unchanged.
+          const boothGroups = boothGroupsForCategory(categoryName);
+          const hasBoothGroups = boothGroups.length > 0;
+          const flatOwnItems = hasBoothGroups ? ownItems.filter((li) => !li.boothLabel) : ownItems;
+          const flatChildren = (
+            hasBoothGroups
+              ? children.map((child) => ({ name: child.name, items: child.items.filter((li) => !li.boothLabel) }))
+              : children
+          ).filter((child) => child.items.length > 0);
+          if (flatOwnItems.length === 0 && flatChildren.length === 0 && !hasBoothGroups) return null;
+
+          const boothTotal = boothGroups.reduce((sum, b) => sum + b.subtotal, 0);
+          const flatTotal = bucketSubtotal(flatOwnItems) + flatChildren.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
+          const sectionTotal = boothTotal + flatTotal;
 
           return (
             <View key={categoryName} style={styles.section}>
@@ -733,14 +696,9 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   <Text style={styles.sectionHeaderText}>{categoryName}</Text>
                 </View>
                 <Text style={styles.sectionHeaderTotal}>
-                  {hidePrice || allDivertedToCustomRental
-                    ? ""
-                    : amountContent(visibleTotal, sell(visibleTotal), data.showCost)}
+                  {hidePrice ? "" : amountContent(sectionTotal, sell(sectionTotal), data.showCost)}
                 </Text>
               </View>
-              {allDivertedToCustomRental && (
-                <Text style={styles.summaryListItem}>See Custom Rental above for {categoryName} pricing and detail.</Text>
-              )}
               {categoryName === "Professional Services" &&
                 data.professionalServices &&
                 data.professionalServices.items.length > 0 && (
@@ -754,12 +712,38 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     </View>
                   </View>
                 )}
+              {hasBoothGroups &&
+                boothGroups.map((booth) => (
+                  <View key={booth.boothLabel} style={styles.boothSection}>
+                    <View style={styles.boothHeaderRow} minPresenceAhead={24}>
+                      <Text style={styles.boothHeaderText}>{booth.boothLabel}</Text>
+                      <Text style={styles.boothHeaderTotal}>
+                        {hidePrice ? "" : amountContent(booth.subtotal, sell(booth.subtotal), data.showCost)}
+                      </Text>
+                    </View>
+                    {booth.elementGroups.map((group) => (
+                      <View key={group.elementType} style={styles.elementTypeSection}>
+                        <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
+                          <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
+                          <Text style={styles.elementTypeHeaderTotal}>
+                            {hidePrice ? "" : amountContent(group.subtotal, sell(group.subtotal), data.showCost)}
+                          </Text>
+                        </View>
+                        {isSummary
+                          ? renderSummaryBody(group.items)
+                          : isServiceStyle
+                            ? renderServiceBody(group.items, hidePrice)
+                            : renderBody(group.items, hidePrice)}
+                      </View>
+                    ))}
+                  </View>
+                ))}
               {isSummary
-                ? renderSummaryBody(visibleOwnItems)
+                ? renderSummaryBody(flatOwnItems)
                 : isServiceStyle
-                  ? renderServiceBody(visibleOwnItems, hidePrice)
-                  : renderBody(visibleOwnItems, hidePrice)}
-              {visibleChildren.map((child) => (
+                  ? renderServiceBody(flatOwnItems, hidePrice)
+                  : renderBody(flatOwnItems, hidePrice)}
+              {flatChildren.map((child) => (
                 <View key={child.name} style={styles.subsection}>
                   <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
                     <Text style={styles.subsectionHeaderText}>{child.name}</Text>

@@ -8,7 +8,7 @@
 
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
-import type { BidPackageStatus, LineItemType, SectionType } from "@/generated/prisma/enums";
+import type { BidPackageStatus, LineItemType, SectionBuildType, SectionType } from "@/generated/prisma/enums";
 import { inferCategoryFromDescription, mapDesignCostCategoryToCanonical } from "@/lib/line-item-category";
 
 type Decimal = Prisma.Decimal;
@@ -126,6 +126,24 @@ export async function addSection(
       optionId: data.optionId,
       groupLabel: data.groupLabel,
     },
+  });
+}
+
+// Tags every EstimateSection sharing this groupLabel (usually one row per
+// booth, but safe if a booth ever spans more than one section) with a
+// build type -- see SectionBuildType's own schema comment on why this is
+// always an explicit human choice, never inferred from import data.
+// Scoped to estimateVersionId so a groupLabel that happens to repeat
+// across a different version can never be cross-contaminated.
+export async function updateSectionBuildType(
+  estimateVersionId: string,
+  groupLabel: string,
+  buildType: SectionBuildType,
+) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { buildType },
   });
 }
 
