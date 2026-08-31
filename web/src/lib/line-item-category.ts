@@ -78,6 +78,16 @@ export const TYPE_KEYS_WITH_METHOD_SPLIT = [
 
 export type MethodKey = "rental" | "purchase" | "custom_fabricated";
 
+// Display label for a Method, derived from a leaf category's stable `key`
+// suffix (never its estimator-editable `name`) -- see
+// proposal-view-model.ts's groupPrimaryCategoryTabs, the one place this is
+// used to label the category board's secondary Method pill filter.
+export const METHOD_KEY_LABELS: Record<MethodKey, string> = {
+  rental: "Rental",
+  purchase: "Purchase",
+  custom_fabricated: "Custom Fabricated",
+};
+
 export function methodKeyFromBuildType(buildType: SectionBuildType): MethodKey {
   if (buildType === "RENTAL") return "rental";
   if (buildType === "PURCHASE") return "purchase";

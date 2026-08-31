@@ -6,19 +6,18 @@ import {
   addOption,
   addSection,
   archiveEstimate,
-  bulkMoveLineItemsCategory,
   confirmDraftLineItem,
   createEstimateVersion,
   createNewVersionFromLocked,
   deleteLineItem,
   lockEstimateVersion,
+  moveLineItemsToCategory,
   moveLineItemWithinSection,
   moveSectionOrder,
   recomputeVersionTotals,
   updateLineItem,
   updateMarginTarget,
   updateSectionBuildType,
-  updateSectionItemsCategory,
 } from "@/lib/estimate-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
@@ -95,7 +94,7 @@ export async function updateSectionItemsCategoryAction(
   await assertVersionBelongsToEstimate(estimateId, versionId);
   const category = String(formData.get("category") ?? "").trim();
   if (!category) throw new Error("Category is required");
-  await updateSectionItemsCategory(versionId, sectionId, category);
+  await moveLineItemsToCategory(versionId, { sectionId }, category);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
@@ -113,7 +112,7 @@ export async function bulkMoveLineItemsCategoryAction(
   const category = data.category.trim();
   if (!category) throw new Error("Choose a category to move the selected items to.");
   if (data.lineItemIds.length === 0) throw new Error("Select at least one line item to move.");
-  await bulkMoveLineItemsCategory(versionId, data.lineItemIds, category);
+  await moveLineItemsToCategory(versionId, { lineItemIds: data.lineItemIds }, category);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

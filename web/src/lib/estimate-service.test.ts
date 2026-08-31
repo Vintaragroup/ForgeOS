@@ -6,7 +6,6 @@ import {
   addLineItem,
   addOption,
   addSection,
-  bulkMoveLineItemsCategory,
   computeLineItemTotal,
   computeMarginGrossUp,
   computeOptionTotal,
@@ -18,9 +17,11 @@ import {
   createNewVersionFromLocked,
   deleteLineItem,
   lockEstimateVersion,
+  moveLineItemsToCategory,
   moveLineItemToEstimate,
   moveLineItemWithinSection,
   moveSectionOrder,
+  recategorizeLineItems,
   recomputeVersionTotals,
   removeLineItemFromBidPackage,
   setBidPackageStatus,
@@ -478,7 +479,7 @@ describe("Bid packages", () => {
   });
 });
 
-describe("bulkMoveLineItemsCategory", () => {
+describe("moveLineItemsToCategory -- lineItemIds scope", () => {
   it("moves an arbitrary, cross-section set of selected items to a new category", async () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);
@@ -508,7 +509,7 @@ describe("bulkMoveLineItemsCategory", () => {
       unitCost: 0,
     });
 
-    await bulkMoveLineItemsCategory(version.id, [itemA.id, itemB.id], "Structure");
+    await moveLineItemsToCategory(version.id, { lineItemIds: [itemA.id, itemB.id] }, "Structure");
 
     const moved = await db.lineItem.findMany({ where: { id: { in: [itemA.id, itemB.id] } } });
     expect(moved.every((li) => li.category === "Structure")).toBe(true);
@@ -539,7 +540,7 @@ describe("bulkMoveLineItemsCategory", () => {
       unitCost: 0,
     });
 
-    await bulkMoveLineItemsCategory(version.id, [item.id, otherItem.id], "Structure");
+    await moveLineItemsToCategory(version.id, { lineItemIds: [item.id, otherItem.id] }, "Structure");
 
     const movedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
     expect(movedItem.category).toBe("Structure");
@@ -560,7 +561,130 @@ describe("bulkMoveLineItemsCategory", () => {
     });
     await lockEstimateVersion(version.id);
 
-    await expect(bulkMoveLineItemsCategory(version.id, [item.id], "Structure")).rejects.toThrow(/locked/);
+    await expect(moveLineItemsToCategory(version.id, { lineItemIds: [item.id] }, "Structure")).rejects.toThrow(
+      /locked/,
+    );
+  });
+});
+
+describe("moveLineItemsToCategory -- sectionId scope", () => {
+  it("moves every item in one section to a new category", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Platform", sectionType: "CATEGORY" });
+    const itemA = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Sleeper Floor Required 1\"",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+    const itemB = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "FR Carpet",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    await moveLineItemsToCategory(version.id, { sectionId: section.id }, "Structure");
+
+    const moved = await db.lineItem.findMany({ where: { id: { in: [itemA.id, itemB.id] } } });
+    expect(moved.every((li) => li.category === "Structure")).toBe(true);
+  });
+
+  it("does not touch a different section in the same version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Platform", sectionType: "CATEGORY" });
+    const otherSection = await addSection(version.id, { name: "Other Platform", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "A",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+    const untouched = await addLineItem(version.id, otherSection.id, {
+      lineType: "MATERIAL",
+      description: "B",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    await moveLineItemsToCategory(version.id, { sectionId: section.id }, "Structure");
+
+    const movedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(movedItem.category).toBe("Structure");
+    const untouchedItem = await db.lineItem.findUniqueOrThrow({ where: { id: untouched.id } });
+    expect(untouchedItem.category).toBe("Flooring");
+  });
+
+  it("does not touch a same-named section in a different version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "A",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    const otherEstimate = await makeEstimate();
+    const otherVersion = await createEstimateVersion(otherEstimate.id, 0);
+    const otherSection = await addSection(otherVersion.id, { name: "Structure", sectionType: "CATEGORY" });
+    const otherItem = await addLineItem(otherVersion.id, otherSection.id, {
+      lineType: "MATERIAL",
+      description: "B",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    await moveLineItemsToCategory(version.id, { sectionId: section.id }, "Structure");
+
+    const movedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(movedItem.category).toBe("Structure");
+    const untouchedForeignItem = await db.lineItem.findUniqueOrThrow({ where: { id: otherItem.id } });
+    expect(untouchedForeignItem.category).toBe("Flooring");
+  });
+
+  it("rejects moving a section's items on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "A",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+    await lockEstimateVersion(version.id);
+
+    await expect(moveLineItemsToCategory(version.id, { sectionId: section.id }, "Structure")).rejects.toThrow(
+      /locked/,
+    );
+  });
+});
+
+describe("recategorizeLineItems", () => {
+  it("rejects recategorizing a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Platform", sectionType: "CATEGORY" });
+    await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Uncategorized item",
+      qty: 1,
+      unitCost: 0,
+    });
+    await lockEstimateVersion(version.id);
+
+    await expect(recategorizeLineItems(estimate.opportunityId, version.id)).rejects.toThrow(/locked/);
   });
 });
 

@@ -8,10 +8,15 @@ import type { Category, Prisma } from "@/generated/prisma/client";
 import {
   aggregateByCategory,
   boothGroupsByCategoryForEditing,
+  bucketLineItemsByCategory,
   buildTopLevelCategoryViews,
   groupBoothLineItemsForEditing,
-  resolveEffectiveCategory,
+  groupPrimaryCategoryTabs,
+  mergeBoothGroupsForAllMethods,
+  mergeCategoryBucketsForAllMethods,
+  type PrimaryCategoryTab,
   type RawBoothGroup,
+  type RawCategoryBucket,
 } from "@/lib/proposal-view-model";
 import { ProposalPreviewModal } from "@/components/proposal-preview-modal";
 import {
@@ -73,6 +78,7 @@ import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
 import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
+import { CategoryMethodFilter } from "@/components/category-method-filter";
 import { SectionScopedForm } from "@/components/section-scoped-form";
 import { findClosestCandidateId, type ProposedVendorSection, type VendorLineMatch } from "@/lib/ai/vendor-match-ai-service";
 import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
@@ -1035,77 +1041,6 @@ function SectionLineItemsBlock({
   );
 }
 
-interface CategorySectionGroup {
-  sectionId: string;
-  sectionName: string;
-  groupLabel: string | null;
-  lineItems: SectionLineItem[];
-}
-
-interface CategoryBucket {
-  category: { id: string; name: string; key: string };
-  totalItems: number;
-  sectionGroups: CategorySectionGroup[];
-}
-
-// The category board's data shape -- every live Category (Labor,
-// Structure, Furniture, ...) always gets a bucket, even an empty one, so
-// it always shows as a tab (matches Tabs' own header comment on why: a
-// blank Excel sheet still has a tab). Buckets by section too, not just
-// category, since a category's items still need their originating
-// booth/component visible for production tracking and Add Line Item's
-// own sectionId -- this only changes what's grouped together for
-// display, not the underlying per-section data model LineItem/
-// EstimateSection already are.
-//
-// Deliberately does NOT merge/sum identical line items across sections
-// the way proposal-view-model.ts's aggregateByCategory does for the
-// client-facing PDF -- that's a read-only summary view; this is for
-// editing, which needs every raw LineItem individually addressable
-// (its own id, its own move/update/delete actions).
-function bucketLineItemsByCategory(
-  sections: VersionWithSections["sections"],
-  categories: { id: string; name: string; key: string; parentId: string | null }[],
-): CategoryBucket[] {
-  const byCategoryThenSection = new Map<string, Map<string, CategorySectionGroup>>();
-
-  for (const section of sections) {
-    for (const li of section.lineItems) {
-      // A tagged booth's items resolve to Rental Structures/Custom
-      // Components regardless of their own raw category (see
-      // resolveEffectiveCategory's own comment) -- an untagged booth
-      // falls through to its raw category unchanged, same as any other
-      // item. Either way this function still buckets every item; it's
-      // CategoryTabContent that skips a booth-linked section's own flat
-      // rendering once that booth is also being shown via its own
-      // component-grouped view (LineItemsTab's own boothGroups), so
-      // nothing renders twice.
-      const categoryName = resolveEffectiveCategory(li, section, categories);
-      let sectionMap = byCategoryThenSection.get(categoryName);
-      if (!sectionMap) {
-        sectionMap = new Map();
-        byCategoryThenSection.set(categoryName, sectionMap);
-      }
-      let group = sectionMap.get(section.id);
-      if (!group) {
-        group = { sectionId: section.id, sectionName: section.name, groupLabel: section.groupLabel, lineItems: [] };
-        sectionMap.set(section.id, group);
-      }
-      group.lineItems.push(li);
-    }
-  }
-
-  return categories.map((category) => {
-    const sectionMap = byCategoryThenSection.get(category.name);
-    const sectionGroups = sectionMap ? [...sectionMap.values()] : [];
-    return {
-      category,
-      totalItems: sectionGroups.reduce((sum, g) => sum + g.lineItems.length, 0),
-      sectionGroups,
-    };
-  });
-}
-
 // The "Line Items" tab: the category board itself (Excel-sheet-tab-style
 // navigation across Labor/Structure/Furniture/...), plus Add section, the
 // one structural control that still applies across every category. Options
@@ -1138,6 +1073,7 @@ function LineItemsTab({
   confirmedCount: number | null;
 }) {
   const buckets = bucketLineItemsByCategory(version.sections, categories);
+  const primaryTabs = groupPrimaryCategoryTabs(buckets, categories);
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
   const draftCount = version.sections.flatMap((s) => s.lineItems).filter((li) => li.isDraft).length;
 
@@ -1242,13 +1178,13 @@ function LineItemsTab({
         <BidPackageSelectionProvider>
           <Tabs
             paramName="category"
-            tabs={buckets.map((b) => ({ id: b.category.id, label: b.category.name, count: b.totalItems }))}
+            tabs={primaryTabs.map((t) => ({ id: t.id, label: t.label, count: t.totalItems }))}
             content={Object.fromEntries(
-              buckets.map((bucket) => [
-                bucket.category.id,
-                <CategoryTabContent
-                  key={bucket.category.id}
-                  bucket={bucket}
+              primaryTabs.map((tab) => [
+                tab.id,
+                <PrimaryCategoryTabContent
+                  key={tab.id}
+                  tab={tab}
                   version={version}
                   estimateId={estimateId}
                   opportunityId={opportunityId}
@@ -1256,7 +1192,7 @@ function LineItemsTab({
                   categoryOptions={categoryOptions}
                   attachments={attachments}
                   users={users}
-                  boothGroups={boothGroupsByCategoryName.get(bucket.category.name)}
+                  boothGroupsByCategoryName={boothGroupsByCategoryName}
                 />,
               ]),
             )}
@@ -2213,6 +2149,65 @@ function SubmitVendorQuoteExtractForm({
   );
 }
 
+// Renders one primary category tab's content -- either CategoryTabContent
+// unchanged (a flat category, or a Type with no live Method split), or,
+// for a Type that does have one, an "All" pill plus one pill per Method
+// (Rental/Purchase/Custom Fabricated) above it, each still delegating to
+// CategoryTabContent for a single bucket. All composition (merging the
+// Type's own bucket with its Method buckets for "All") happens here so
+// CategoryTabContent itself stays unaware of the grouping above it.
+function PrimaryCategoryTabContent({
+  tab,
+  boothGroupsByCategoryName,
+  ...rest
+}: {
+  tab: PrimaryCategoryTab<SectionLineItem>;
+  boothGroupsByCategoryName: Map<string, RawBoothGroup<SectionLineItem>[]>;
+  version: VersionWithSections;
+  estimateId: string;
+  opportunityId: string;
+  laborRates: LaborRateOption[];
+  categoryOptions: { value: string; label: string }[];
+  attachments: { id: string; fileRef: string }[];
+  users: { id: string; name: string }[];
+}) {
+  if (!tab.hasMethodSplit) {
+    return (
+      <CategoryTabContent
+        bucket={tab.ownBucket}
+        boothGroups={boothGroupsByCategoryName.get(tab.ownBucket.category.name)}
+        {...rest}
+      />
+    );
+  }
+
+  const allBucket = mergeCategoryBucketsForAllMethods(tab);
+  const allBoothGroups = mergeBoothGroupsForAllMethods(tab, boothGroupsByCategoryName);
+
+  return (
+    <CategoryMethodFilter
+      options={[
+        { id: "all", label: "All", count: tab.totalItems },
+        ...tab.methodBuckets.map((m) => ({ id: m.key, label: m.label, count: m.bucket.totalItems })),
+      ]}
+      content={{
+        all: <CategoryTabContent bucket={allBucket} boothGroups={allBoothGroups} {...rest} />,
+        ...Object.fromEntries(
+          tab.methodBuckets.map((m) => [
+            m.key,
+            <CategoryTabContent
+              key={m.key}
+              bucket={m.bucket}
+              boothGroups={boothGroupsByCategoryName.get(m.bucket.category.name)}
+              {...rest}
+            />,
+          ]),
+        ),
+      }}
+    />
+  );
+}
+
 function CategoryTabContent({
   bucket,
   version,
@@ -2224,7 +2219,7 @@ function CategoryTabContent({
   users,
   boothGroups,
 }: {
-  bucket: CategoryBucket;
+  bucket: RawCategoryBucket<SectionLineItem>;
   version: VersionWithSections;
   estimateId: string;
   opportunityId: string;
@@ -2367,7 +2362,7 @@ function CategoryTabContent({
                 action={updateSectionItemsCategoryAction.bind(null, estimateId, version.id, group.sectionId)}
                 className="ml-auto flex items-center gap-1.5"
               >
-                <SelectField label="" name="category" defaultValue={bucket.category.name} options={moveCategoryOptions} />
+                <SelectField label="" name="category" defaultValue={group.categoryName} options={moveCategoryOptions} />
                 <Button variant="secondary" type="submit">
                   Move section
                 </Button>

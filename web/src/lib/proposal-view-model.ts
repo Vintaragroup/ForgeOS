@@ -15,8 +15,10 @@ import {
   getCategoryChildren,
   isCompoundAssemblyDescription,
   leafCategoryKey,
+  METHOD_KEY_LABELS,
   resolveCategoryNameFromKey,
   TYPE_KEYS_WITH_METHOD_SPLIT,
+  type MethodKey,
 } from "@/lib/line-item-category";
 
 export interface ProposalViewLineItem {
@@ -71,6 +73,20 @@ export interface ProposalViewSection {
 // Shared by aggregateByCategory (PDF/web proposal) and the Line Items
 // tab's own bucketLineItemsByCategory, so the two views can never
 // resolve a booth's category differently.
+
+// Reverse of leafCategoryKey(typeKey, buildType) -- built once from the
+// same two static inputs (TYPE_KEYS_WITH_METHOD_SPLIT, every
+// SectionBuildType) rather than derived per-call from a category's own
+// key by string-slicing, so this can never drift out of sync with
+// leafCategoryKey's own composition.
+const LEAF_KEY_TO_TYPE_KEY = new Map<string, string>(
+  (TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).flatMap((typeKey) =>
+    (["RENTAL", "PURCHASE", "CUSTOM_BUILD"] satisfies SectionBuildType[]).map(
+      (buildType) => [leafCategoryKey(typeKey, buildType), typeKey] as const,
+    ),
+  ),
+);
+
 export function resolveEffectiveCategory(
   li: { category: string | null },
   section: { groupLabel: string | null; buildType?: SectionBuildType | null },
@@ -78,16 +94,21 @@ export function resolveEffectiveCategory(
 ): string {
   const ownCategory = li.category ? categories.find((c) => c.name === li.category) : undefined;
   if (section.groupLabel && section.buildType && ownCategory) {
-    // This item's own Type category: itself if it's already a top-level
-    // Type (no parent -- e.g. Labor, Graphics, or an untagged Structure
-    // item), or its parent if it's already a Method leaf (re-tagging a
-    // booth that was tagged before, or an item whose own category was
-    // hand-set to a leaf directly).
-    const typeCategory = ownCategory.parentId
-      ? categories.find((c) => c.id === ownCategory.parentId)
-      : ownCategory;
-    if (typeCategory && (TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).includes(typeCategory.key)) {
-      const resolved = resolveCategoryNameFromKey(categories, leafCategoryKey(typeCategory.key, section.buildType));
+    // This item's own Type key: itself if it's already a Type (flat, or
+    // one of the five with a real Method split), or the Type its own key
+    // composes onto if it's already a Method leaf (re-tagging a booth
+    // that was tagged before, or an item whose own category was hand-set
+    // to a leaf directly). Identified from ownCategory's own stable `key`
+    // via LEAF_KEY_TO_TYPE_KEY, NOT its parentId -- confirmed necessary
+    // against real data, where a Type's own parentId can be non-null for
+    // a reason unrelated to this taxonomy (a category hand-edited in
+    // /catalog/categories; see groupPrimaryCategoryTabs' own comment for
+    // the same issue there). Trusting parentId here would misresolve
+    // that Type's own untagged items as if they were themselves a Method
+    // leaf of whatever category parentId happens to (wrongly) point to.
+    const typeKey = LEAF_KEY_TO_TYPE_KEY.get(ownCategory.key) ?? ownCategory.key;
+    if ((TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).includes(typeKey)) {
+      const resolved = resolveCategoryNameFromKey(categories, leafCategoryKey(typeKey, section.buildType));
       if (resolved) return resolved;
     }
   }
@@ -554,6 +575,198 @@ export function boothGroupsByCategoryForEditing<
     result.set(categoryName, groupBoothLineItemsForEditing(sectionsForCategory));
   }
   return result;
+}
+
+export interface RawCategorySectionGroup<T> {
+  sectionId: string;
+  sectionName: string;
+  groupLabel: string | null;
+  // The resolved category this group was actually bucketed under -- always
+  // matches the RawCategoryBucket that contains it in
+  // bucketLineItemsByCategory's own output, but carried on the group too so
+  // a caller merging several categories' buckets into one combined view
+  // (see mergeCategoryBucketsForAllMethods) can still tell each group's
+  // real category apart instead of assuming every group in the merged view
+  // shares its own top-level name -- e.g. the per-section "Move section"
+  // dropdown needs this to default to the section's actual leaf category
+  // ("Structure - Rental"), not the merged view's Type name ("Structure").
+  categoryName: string;
+  lineItems: T[];
+}
+
+export interface RawCategoryBucket<T> {
+  category: { id: string; name: string; key: string };
+  totalItems: number;
+  sectionGroups: RawCategorySectionGroup<T>[];
+}
+
+// Editing-surface counterpart to aggregateByCategory: every live Category
+// always gets a bucket, even an empty one, so it always shows as a tab
+// (matches Tabs' own header comment on why: a blank Excel sheet still has a
+// tab). Buckets by section too, not just category, since a category's items
+// still need their originating booth/component visible for production
+// tracking and Add Line Item's own sectionId -- this only changes what's
+// grouped together for display, not the underlying per-section data model
+// LineItem/EstimateSection already are.
+//
+// Deliberately does NOT merge/sum identical line items across sections the
+// way aggregateByCategory does for the client-facing PDF -- that's a
+// read-only summary view; this is for editing, which needs every raw
+// LineItem individually addressable (its own id, its own move/update/
+// delete actions). Generic over T for the same reason
+// groupBoothLineItemsForEditing is: the Line Items tab's own richer
+// LineItem shape (unitCost, isDraft, category, ...) passes straight through
+// unchanged.
+export function bucketLineItemsByCategory<T extends { category: string | null }>(
+  sections: {
+    id: string;
+    name: string;
+    groupLabel: string | null;
+    buildType?: SectionBuildType | null;
+    lineItems: T[];
+  }[],
+  categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
+): RawCategoryBucket<T>[] {
+  const byCategoryThenSection = new Map<string, Map<string, RawCategorySectionGroup<T>>>();
+
+  for (const section of sections) {
+    for (const li of section.lineItems) {
+      // A tagged booth's items resolve to Rental Structures/Custom
+      // Components regardless of their own raw category (see
+      // resolveEffectiveCategory's own comment) -- an untagged booth falls
+      // through to its raw category unchanged, same as any other item.
+      // Either way this function still buckets every item; it's
+      // CategoryTabContent that skips a booth-linked section's own flat
+      // rendering once that booth is also being shown via its own
+      // component-grouped view (LineItemsTab's own boothGroups), so
+      // nothing renders twice.
+      const categoryName = resolveEffectiveCategory(li, section, categories);
+      let sectionMap = byCategoryThenSection.get(categoryName);
+      if (!sectionMap) {
+        sectionMap = new Map();
+        byCategoryThenSection.set(categoryName, sectionMap);
+      }
+      let group = sectionMap.get(section.id);
+      if (!group) {
+        group = {
+          sectionId: section.id,
+          sectionName: section.name,
+          groupLabel: section.groupLabel,
+          categoryName,
+          lineItems: [],
+        };
+        sectionMap.set(section.id, group);
+      }
+      group.lineItems.push(li);
+    }
+  }
+
+  return categories.map((category) => {
+    const sectionMap = byCategoryThenSection.get(category.name);
+    const sectionGroups = sectionMap ? [...sectionMap.values()] : [];
+    return {
+      category,
+      totalItems: sectionGroups.reduce((sum, g) => sum + g.lineItems.length, 0),
+      sectionGroups,
+    };
+  });
+}
+
+export interface CategoryMethodTab<T> {
+  key: MethodKey;
+  label: string;
+  bucket: RawCategoryBucket<T>;
+}
+
+export interface PrimaryCategoryTab<T> {
+  // The Type category's (or flat category's) own id -- used as the primary
+  // tab bar's tab id.
+  id: string;
+  label: string;
+  hasMethodSplit: boolean;
+  // The Type's own bucket (items whose Method hasn't resolved yet, or a
+  // flat category's only bucket) -- always rendered, even when
+  // hasMethodSplit is true (an untagged item under a splittable Type still
+  // needs somewhere to show up).
+  ownBucket: RawCategoryBucket<T>;
+  // [] unless hasMethodSplit; otherwise one entry per live Method leaf
+  // under this Type, ordered Rental/Purchase/Custom Fabricated.
+  methodBuckets: CategoryMethodTab<T>[];
+  totalItems: number;
+}
+
+const METHOD_KEY_ORDER: MethodKey[] = ["rental", "purchase", "custom_fabricated"];
+
+// Groups the ~28 flat buckets bucketLineItemsByCategory produces (every
+// Type parent, every Method leaf, every flat non-split category) into one
+// tab per top-level Category -- cutting the category board's tab bar down
+// to ~13 without a schema change, since the Type/Method relationship is
+// already fully described by each leaf's own stable `key`
+// (`${typeKey}_${method}`, see leafCategoryKey).
+//
+// Identifies a Method leaf by that key pattern, NOT by Category.parentId --
+// confirmed necessary against real data, where a Type's own parentId can
+// itself be non-null for a reason unrelated to this taxonomy (e.g. hand-
+// edited in /catalog/categories); trusting parentId there would make that
+// Type wrongly look like someone else's Method leaf, dropping it out of
+// the primary tab bar and silently hiding every item under it. `key` is
+// the only signal this file already treats as authoritative for exactly
+// that reason (see resolveCategoryNameFromKey's own comment).
+export function groupPrimaryCategoryTabs<T>(
+  buckets: RawCategoryBucket<T>[],
+  categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
+): PrimaryCategoryTab<T>[] {
+  const bucketsById = new Map(buckets.map((b) => [b.category.id, b] as const));
+  const byKey = new Map(categories.map((c) => [c.key, c] as const));
+  const leafKeys = new Set(
+    categories
+      .filter((c) => (TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).includes(c.key))
+      .flatMap((type) => METHOD_KEY_ORDER.map((method) => `${type.key}_${method}`)),
+  );
+
+  return categories
+    .filter((c) => !leafKeys.has(c.key))
+    .map((parent) => {
+      const ownBucket = bucketsById.get(parent.id)!;
+      if (!(TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).includes(parent.key)) {
+        return { id: parent.id, label: parent.name, hasMethodSplit: false, ownBucket, methodBuckets: [], totalItems: ownBucket.totalItems };
+      }
+      const methodBuckets: CategoryMethodTab<T>[] = METHOD_KEY_ORDER.flatMap((key) => {
+        const child = byKey.get(`${parent.key}_${key}`);
+        return child ? [{ key, label: METHOD_KEY_LABELS[key], bucket: bucketsById.get(child.id)! }] : [];
+      });
+      const hasMethodSplit = methodBuckets.length > 0;
+      const totalItems = ownBucket.totalItems + methodBuckets.reduce((sum, m) => sum + m.bucket.totalItems, 0);
+      return { id: parent.id, label: parent.name, hasMethodSplit, ownBucket, methodBuckets, totalItems };
+    });
+}
+
+// Combines a Type tab's own bucket with all of its Method buckets into one
+// "All" view for the category board's secondary Method pill filter
+// (CategoryMethodFilter) -- switching to "All" shows every item under a
+// Type regardless of which Method (or none) it's tagged with. Safe to
+// concatenate sectionGroups without dedup: a single EstimateSection has
+// exactly one buildType, so its items always resolve to exactly one of the
+// 4 buckets (the Type's own + its 3 Method leaves), never split across two
+// -- see resolveEffectiveCategory.
+export function mergeCategoryBucketsForAllMethods<T>(tab: PrimaryCategoryTab<T>): RawCategoryBucket<T> {
+  return {
+    category: tab.ownBucket.category,
+    totalItems: tab.totalItems,
+    sectionGroups: [...tab.ownBucket.sectionGroups, ...tab.methodBuckets.flatMap((m) => m.bucket.sectionGroups)],
+  };
+}
+
+// Booth-group companion to mergeCategoryBucketsForAllMethods above, for the
+// same "All" pill -- unions whichever booth groups (from
+// boothGroupsByCategoryForEditing's own per-category map) belong to this
+// Type's own bucket or any of its Method leaves.
+export function mergeBoothGroupsForAllMethods<T>(
+  tab: PrimaryCategoryTab<T>,
+  boothGroupsByCategoryName: Map<string, RawBoothGroup<T>[]>,
+): RawBoothGroup<T>[] {
+  const names = [tab.ownBucket.category.name, ...tab.methodBuckets.map((m) => m.bucket.category.name)];
+  return names.flatMap((name) => boothGroupsByCategoryName.get(name) ?? []);
 }
 
 export function computeRentalAndServicesTotals(

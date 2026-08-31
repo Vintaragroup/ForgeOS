@@ -156,43 +156,35 @@ export async function updateSectionBuildType(
   });
 }
 
-// Bulk-moves every LineItem in one section to a different category in one
-// step -- a section with no groupLabel (so ineligible for the Rental/Custom
-// Build tagging above) can still land its whole raw category wrong, e.g. a
-// generic "Platform" section whose items all matched the "platform"/
-// "sleeper floor" description heuristic into Flooring when they're really
-// rental structure. Scoped to sectionId (already estimateVersionId-scoped
-// by the caller's own access check), not by section name -- two sections
-// can share a name, and only the one the estimator is looking at should move.
-export async function updateSectionItemsCategory(estimateVersionId: string, sectionId: string, category: string) {
-  await assertUnlocked(estimateVersionId);
-  await db.lineItem.updateMany({
-    where: { sectionId, section: { estimateVersionId } },
-    data: { category },
-  });
-}
+// A category move's scope -- a whole section (the per-section "Move
+// section" dropdown, for a section with no groupLabel so ineligible for the
+// Rental/Custom Build tagging above, e.g. a generic "Platform" section whose
+// items all matched the "platform"/"sleeper floor" description heuristic
+// into Flooring when they're really rental structure) or an arbitrary,
+// hand-picked cross-section set of line items (the sticky bulk-move bar,
+// via the Line Items tab's own selection checkbox, bid-package-
+// selection.tsx -- covers a handful of items on a booth-tagged section
+// that were mis-typed at import and need moving individually, not the
+// section's other items alongside them).
+export type CategoryMoveScope = { sectionId: string } | { lineItemIds: string[] };
 
-// Companion to updateSectionItemsCategory above, but for an arbitrary,
-// cross-section set of line items an estimator hand-picks via the Line
-// Items tab's own selection checkbox (bid-package-selection.tsx) --
-// covers the case a whole section's items don't share one Type
-// (e.g. a handful of items on a booth-tagged section were mis-typed at
-// import and need moving individually, not the section's other items
-// alongside them). Scoped to estimateVersionId the same defensive way
-// as every other bulk write here -- lineItemIds is caller-suppliable
-// (a client selection Set serialized into a direct server-action call,
-// not a real form field), so a fictitious/foreign id in the list is
-// simply excluded by the where clause rather than trusted.
-export async function bulkMoveLineItemsCategory(
-  estimateVersionId: string,
-  lineItemIds: string[],
-  category: string,
-) {
+// Moves every LineItem in scope to a different category in one step --
+// merges what were previously two near-identical functions
+// (updateSectionItemsCategory, bulkMoveLineItemsCategory), which only ever
+// differed in this where clause, never the write itself. Scoped to
+// estimateVersionId the same defensive way as every other bulk write here:
+// a sectionId is already version-scoped by the caller's own access check,
+// and lineItemIds is caller-suppliable (a client selection Set serialized
+// into a direct server-action call, not a real form field), so a
+// fictitious/foreign id in the list is simply excluded by the where clause
+// rather than trusted.
+export async function moveLineItemsToCategory(estimateVersionId: string, scope: CategoryMoveScope, category: string) {
   await assertUnlocked(estimateVersionId);
-  await db.lineItem.updateMany({
-    where: { id: { in: lineItemIds }, section: { estimateVersionId } },
-    data: { category },
-  });
+  const where =
+    "sectionId" in scope
+      ? { sectionId: scope.sectionId, section: { estimateVersionId } }
+      : { id: { in: scope.lineItemIds }, section: { estimateVersionId } };
+  await db.lineItem.updateMany({ where, data: { category } });
 }
 
 // Swaps a section with its immediate neighbor (by current display order)
@@ -674,6 +666,7 @@ export async function confirmAllDraftLineItems(opportunityId: string, estimateVe
 // anything else (a flat pricing-schedule's or AI-proposed section) just
 // falls through unchanged.
 export async function recategorizeLineItems(opportunityId: string, estimateVersionId: string) {
+  await assertUnlocked(estimateVersionId);
   const categories = await db.category.findMany({ where: { deletedAt: null } });
   const lineItems = await db.lineItem.findMany({
     where: {

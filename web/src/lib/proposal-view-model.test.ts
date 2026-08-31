@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { Prisma } from "@/generated/prisma/client";
-import { aggregateByCategory, groupBoothLineItems, type ProposalViewSection } from "@/lib/proposal-view-model";
+import {
+  aggregateByCategory,
+  groupBoothLineItems,
+  groupPrimaryCategoryTabs,
+  mergeBoothGroupsForAllMethods,
+  mergeCategoryBucketsForAllMethods,
+  resolveEffectiveCategory,
+  type ProposalViewSection,
+  type RawBoothGroup,
+  type RawCategoryBucket,
+} from "@/lib/proposal-view-model";
 
 function cat(name: string, key: string) {
   return { id: key, name, key, parentId: null, sortOrder: 0, isShowService: false, isLumpSum: false, deletedAt: null } as never;
@@ -144,5 +154,194 @@ describe("groupBoothLineItems", () => {
     // The booth is already the group's own heading -- redundant per-item
     // label would just repeat it under every single row.
     expect(booth.elementGroups[0].items[0].boothLabel).toBeNull();
+  });
+});
+
+describe("resolveEffectiveCategory", () => {
+  it("resolves a tagged booth's Type to its Method leaf even when the Type's own parentId is wrongly non-null", () => {
+    // Confirmed against real data: a Type category's parentId can be
+    // non-null for a reason unrelated to this taxonomy (observed live --
+    // "Structure" pointed at an unrelated flat category's id). Resolution
+    // must key off each leaf's own stable `key`, never Category.parentId,
+    // or a tagged booth's untagged-Type items resolve as if they were a
+    // Method leaf of whatever category parentId happens to (wrongly)
+    // point to instead of composing their own Type with the tag's Method.
+    const unrelatedFlat = { id: "flat", name: "Custom Build / Rental", key: "custom_build", parentId: null };
+    const structure = { id: "structure", name: "Structure", key: "structure", parentId: "flat" };
+    const structureRental = { id: "structure_rental", name: "Structure - Rental", key: "structure_rental", parentId: "structure" };
+    const categories = [unrelatedFlat, structure, structureRental];
+
+    const result = resolveEffectiveCategory(
+      { category: "Structure" },
+      { groupLabel: "SECTION 211", buildType: "RENTAL" },
+      categories,
+    );
+
+    expect(result).toBe("Structure - Rental");
+  });
+
+  it("falls through to the item's own raw category when the section isn't tagged", () => {
+    const structure = { id: "structure", name: "Structure", key: "structure", parentId: null };
+
+    const result = resolveEffectiveCategory({ category: "Structure" }, { groupLabel: null, buildType: null }, [structure]);
+
+    expect(result).toBe("Structure");
+  });
+
+  it("falls back to Other for a category no longer in the live list", () => {
+    const result = resolveEffectiveCategory({ category: "Deleted Category" }, { groupLabel: null, buildType: null }, []);
+
+    expect(result).toBe("Other");
+  });
+});
+
+describe("groupPrimaryCategoryTabs", () => {
+  const TYPES = [
+    { key: "structure", name: "Structure" },
+    { key: "flooring", name: "Flooring" },
+    { key: "furniture", name: "Furniture" },
+    { key: "audio_visual", name: "Audio/Visual" },
+    { key: "misc", name: "Misc" },
+  ];
+  const METHODS: { suffix: string; label: string }[] = [
+    { suffix: "rental", label: "Rental" },
+    { suffix: "purchase", label: "Purchase" },
+    { suffix: "custom_fabricated", label: "Custom Fabricated" },
+  ];
+  const FLATS = [
+    { key: "custom_build", name: "Custom Components" },
+    { key: "labor", name: "Labor" },
+  ];
+
+  type CatShape = { id: string; name: string; key: string; parentId: string | null };
+
+  function makeCategories(): CatShape[] {
+    const types = TYPES.map((t) => cat(t.name, t.key) as unknown as CatShape);
+    const leaves = types.flatMap((type) =>
+      METHODS.map(({ suffix, label }) => ({
+        ...(cat(`${type.name} - ${label}`, `${type.key}_${suffix}`) as unknown as CatShape),
+        parentId: type.id,
+      })),
+    );
+    const flats = FLATS.map((f) => cat(f.name, f.key) as unknown as CatShape);
+    return [...types, ...leaves, ...flats];
+  }
+
+  function makeBucket(category: { id: string; name: string; key: string }, totalItems = 0): RawCategoryBucket<unknown> {
+    return { category, totalItems, sectionGroups: [] };
+  }
+
+  it("groups ~28 flat categories into 5 Type-with-children tabs plus 2 flat tabs", () => {
+    const categories = makeCategories();
+    const buckets = categories.map((c) => makeBucket(c));
+
+    const tabs = groupPrimaryCategoryTabs(buckets, categories);
+
+    expect(tabs).toHaveLength(TYPES.length + FLATS.length);
+    const withSplit = tabs.filter((t) => t.hasMethodSplit);
+    expect(withSplit.map((t) => t.label).sort()).toEqual(TYPES.map((t) => t.name).sort());
+    const flat = tabs.filter((t) => !t.hasMethodSplit);
+    expect(flat.map((t) => t.label).sort()).toEqual(FLATS.map((t) => t.name).sort());
+  });
+
+  it("orders a Type's method buckets Rental, Purchase, Custom Fabricated and labels them from the stable key, not the name", () => {
+    const categories = makeCategories();
+    const buckets = categories.map((c) => makeBucket(c));
+
+    const [structureTab] = groupPrimaryCategoryTabs(buckets, categories).filter((t) => t.label === "Structure");
+
+    expect(structureTab.methodBuckets.map((m) => m.key)).toEqual(["rental", "purchase", "custom_fabricated"]);
+    expect(structureTab.methodBuckets.map((m) => m.label)).toEqual(["Rental", "Purchase", "Custom Fabricated"]);
+  });
+
+  it("sums a Type's own bucket and its Method buckets into totalItems", () => {
+    const categories = makeCategories();
+    const buckets = categories.map((c) => {
+      if (c.name === "Structure") return makeBucket(c, 2);
+      if (c.name === "Structure - Rental") return makeBucket(c, 3);
+      if (c.name === "Structure - Purchase") return makeBucket(c, 1);
+      return makeBucket(c);
+    });
+
+    const [structureTab] = groupPrimaryCategoryTabs(buckets, categories).filter((t) => t.label === "Structure");
+
+    expect(structureTab.totalItems).toBe(6);
+  });
+
+  it("does not split a flat category even if it happens to share a Method-split Type's key prefix", () => {
+    const categories = makeCategories();
+    const buckets = categories.map((c) => makeBucket(c));
+
+    const [customBuildTab] = groupPrimaryCategoryTabs(buckets, categories).filter((t) => t.label === "Custom Components");
+
+    expect(customBuildTab.hasMethodSplit).toBe(false);
+    expect(customBuildTab.methodBuckets).toEqual([]);
+  });
+
+  it("still shows a Type as its own primary tab even when its own parentId is wrongly non-null", () => {
+    // Confirmed against real data: a Type category's parentId can be
+    // non-null for a reason unrelated to this taxonomy (observed live --
+    // "Structure" pointed at an unrelated flat category's id, apparently
+    // from a hand-edit in /catalog/categories). Grouping must key off each
+    // leaf's own `key` (${typeKey}_${method}), never Category.parentId, or
+    // a Type in this state -- and every item under it -- silently
+    // disappears from the tab bar entirely.
+    const categories = makeCategories();
+    const flatCustomBuild = categories.find((c) => c.name === "Custom Components")!;
+    const structure = categories.find((c) => c.name === "Structure")!;
+    structure.parentId = flatCustomBuild.id;
+    const buckets = categories.map((c) => makeBucket(c, c.name === "Structure" ? 5 : 0));
+
+    const tabs = groupPrimaryCategoryTabs(buckets, categories);
+
+    const structureTab = tabs.find((t) => t.label === "Structure");
+    expect(structureTab).toBeDefined();
+    expect(structureTab!.hasMethodSplit).toBe(true);
+    expect(structureTab!.totalItems).toBe(5);
+    expect(tabs).toHaveLength(TYPES.length + FLATS.length);
+  });
+});
+
+describe("mergeCategoryBucketsForAllMethods / mergeBoothGroupsForAllMethods", () => {
+  const structure = { id: "structure", name: "Structure", key: "structure" };
+  const rental = { id: "structure_rental", name: "Structure - Rental", key: "structure_rental" };
+  const purchase = { id: "structure_purchase", name: "Structure - Purchase", key: "structure_purchase" };
+
+  function group(sectionId: string, categoryName: string) {
+    return { sectionId, sectionName: sectionId, groupLabel: null, categoryName, lineItems: [] };
+  }
+
+  const tab = {
+    id: structure.id,
+    label: structure.name,
+    hasMethodSplit: true,
+    ownBucket: { category: structure, totalItems: 1, sectionGroups: [group("own", "Structure")] },
+    methodBuckets: [
+      { key: "rental" as const, label: "Rental", bucket: { category: rental, totalItems: 2, sectionGroups: [group("r", "Structure - Rental")] } },
+      { key: "purchase" as const, label: "Purchase", bucket: { category: purchase, totalItems: 1, sectionGroups: [group("p", "Structure - Purchase")] } },
+    ],
+    totalItems: 4,
+  };
+
+  it("concatenates the Type's own sectionGroups with every Method bucket's, under the Type's own category identity", () => {
+    const merged = mergeCategoryBucketsForAllMethods(tab);
+
+    expect(merged.category).toBe(structure);
+    expect(merged.totalItems).toBe(4);
+    expect(merged.sectionGroups.map((g) => g.sectionId)).toEqual(["own", "r", "p"]);
+    expect(merged.sectionGroups.map((g) => g.categoryName)).toEqual(["Structure", "Structure - Rental", "Structure - Purchase"]);
+  });
+
+  it("unions booth groups from the Type's own bucket and every Method bucket's category name", () => {
+    const boothA: RawBoothGroup<unknown> = { boothLabel: "Booth A", elementGroups: [], subtotal: 100 };
+    const boothB: RawBoothGroup<unknown> = { boothLabel: "Booth B", elementGroups: [], subtotal: 200 };
+    const boothGroupsByCategoryName = new Map<string, RawBoothGroup<unknown>[]>([
+      ["Structure", [boothA]],
+      ["Structure - Rental", [boothB]],
+    ]);
+
+    const merged = mergeBoothGroupsForAllMethods(tab, boothGroupsByCategoryName);
+
+    expect(merged).toEqual([boothA, boothB]);
   });
 });
