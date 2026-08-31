@@ -11,6 +11,7 @@
 // sortOrder) instead of importing a constant.
 
 import type { Category } from "@/generated/prisma/client";
+import type { SectionBuildType } from "@/generated/prisma/enums";
 
 export function isKnownCategory(categories: Pick<Category, "name">[], value: string | null | undefined): boolean {
   return !!value && categories.some((c) => c.name === value);
@@ -50,6 +51,91 @@ export const CUSTOM_BUILD_CATEGORY_KEY = "custom_build";
 // resolves it to a Rental Structures item, overriding that line item's
 // raw `category` string -- see aggregateByCategory/bucketLineItemsByCategory.
 export const RENTAL_STRUCTURES_CATEGORY_KEY = "structure";
+
+// Stable key for the seeded "Misc" type category -- IT equipment,
+// special-request equipment, anything that doesn't cleanly fit
+// Structure/Flooring/Furniture/Audio-Visual. New alongside the Type x
+// Method taxonomy below; every other Type key (structure/flooring/
+// furniture/audio_visual) already existed before this.
+export const MISC_CATEGORY_KEY = "misc";
+
+// The five real commodity Types that get a Rental/Purchase/Custom
+// Fabricated split (per direct confirmation: every Type can appear under
+// every Method -- a client can rent, purchase, or get custom-built A/V
+// gear same as furniture or structure). Custom Build is deliberately
+// NOT in this list -- it stays a flat catch-all for fabrication inputs
+// that don't cleanly resolve to one of these five, not itself split by
+// Method (see MethodKey's own comment on why "Custom Build" and
+// "Custom Fabricated" are different things: one is a Type, the other a
+// Method that composes onto a Type).
+export const TYPE_KEYS_WITH_METHOD_SPLIT = [
+  RENTAL_STRUCTURES_CATEGORY_KEY,
+  "flooring",
+  "furniture",
+  "audio_visual",
+  MISC_CATEGORY_KEY,
+] as const;
+
+export type MethodKey = "rental" | "purchase" | "custom_fabricated";
+
+export function methodKeyFromBuildType(buildType: SectionBuildType): MethodKey {
+  if (buildType === "RENTAL") return "rental";
+  if (buildType === "PURCHASE") return "purchase";
+  return "custom_fabricated";
+}
+
+// Composes a Type key (structure/flooring/furniture/audio_visual/misc/
+// custom_build) and an optional Method into the stable key of the live
+// leaf category that combination resolves to, e.g. ("structure",
+// "RENTAL") -> "structure_rental". A null method (nothing resolved it
+// yet -- see resolveAcquisitionMethod) resolves to the flat Type key
+// itself, unchanged -- an item whose Method hasn't resolved renders
+// under its Type with no Method split, never a guessed leaf. Always
+// resolve the returned key through resolveCategoryNameFromKey before
+// display -- this only ever returns a key, never a name.
+export function leafCategoryKey(typeKey: string, method: SectionBuildType | null): string {
+  return method ? `${typeKey}_${methodKeyFromBuildType(method)}` : typeKey;
+}
+
+// Infers a line item's acquisition Method from real signals in its own
+// raw import data -- confirmed directly against the estimator's own
+// rules:
+// - BeMatrix is always rental hardware, regardless of catalog or import
+//   path (confirmed real recurring raw-text signal across multiple
+//   importers already -- see ELEMENT_TYPE_MAP in proposal-view-model.ts,
+//   DESIGN_COST_CATEGORY_KEY_MAP below).
+// - A RentalItem catalog match (catalog-match-service.ts's own
+//   `source: "Rental"`, as opposed to a Material catalog match) means
+//   the estimator picked it from the rental price list, not a
+//   fabrication-input list -- "if they select furniture from our
+//   catalog its rental" generalizes to any RentalItem match, not just
+//   furniture.
+// - Explicit "rental" text covers a vendor bid marked "market rental"
+//   or similar phrasing.
+// - Explicit "purchase"/"purchased" text -- confirmed real: a genuine
+//   Chicago vendor workbook row reads "PURCHASE SQ FT (basic) —
+//   ceiling" (module-cost-estimate-import-service.test.ts).
+// - A Material catalog match with no stronger signal falls back to
+//   Custom Fabricated -- it's a raw fabrication input (same reasoning
+//   CATALOG_CATEGORY_KEY_MAP already applies for Type: Acrylic/Wood &
+//   Sheet Goods/Hardware & Fasteners all fold into Custom Build).
+// Returns null (never guesses) when nothing matches -- same "don't
+// persist a guess" philosophy as resolveLineItemCategory's own null
+// fallback; an unresolved Method just means "not split yet," not "no
+// category at all."
+export function resolveAcquisitionMethod(input: {
+  catalogSource?: "Material" | "Rental";
+  category?: string | null;
+  description: string;
+}): SectionBuildType | null {
+  const text = `${input.category ?? ""} ${input.description}`;
+  if (/\bbematrix\b|\bbe[\s-]matrix\b|\bb-matrix\b/i.test(text)) return "RENTAL";
+  if (input.catalogSource === "Rental") return "RENTAL";
+  if (/\brental\b/i.test(text)) return "RENTAL";
+  if (/\bpurchase(d)?\b/i.test(text)) return "PURCHASE";
+  if (input.catalogSource === "Material") return "CUSTOM_BUILD";
+  return null;
+}
 
 // Best-effort mapping from the raw category strings actually observed in
 // the Material/RentalItem catalogs (see the "category" column on both
@@ -176,8 +262,16 @@ const DESCRIPTION_PATTERNS: { pattern: RegExp; key: string }[] = [
   { pattern: /\b(seg fabric|dtp|vinyl wrap|graphic|signage fabric)\b/i, key: "graphics" },
   { pattern: /\bhanging sign\b/i, key: "signage" },
   { pattern: /\bcomplete .* build\b/i, key: CUSTOM_BUILD_CATEGORY_KEY },
-  { pattern: /\bplatform|sleeper floor|carpet|padding|visqueen\b/i, key: "flooring" },
-  { pattern: /\b(door|frame|backer|panel|wall|b-matrix|roof|curtain)\b/i, key: "structure" },
+  // "platform"/"sleeper floor"/"scaffold"/"truss" checked as structure
+  // BEFORE the flooring pattern below -- confirmed live as a real bug:
+  // a temporary-structure job's "Platform for Booth", "Sleeper Floor
+  // incl curb ramp" line items (scaffolding/platform-build parts, not
+  // floor coverings) were matching flooring's own broader pattern first,
+  // landing an entire scaffolding job's real pricing under Flooring.
+  // Genuine floor coverings (carpet, padding, visqueen) still resolve
+  // to flooring via the pattern below, since this one doesn't claim them.
+  { pattern: /\b(door|frame|backer|panel|wall|b-matrix|bematrix|roof|curtain|platform|sleeper floor|scaffold|scaffolding|truss)\b/i, key: "structure" },
+  { pattern: /\bcarpet|padding|visqueen\b/i, key: "flooring" },
   { pattern: /\b(chair|table|stool|counter|showcase|sofa)\b/i, key: "furniture" },
   { pattern: /\b(monitor|screen|media player|touchscreen|led)\b/i, key: "audio_visual" },
 ];
@@ -243,6 +337,34 @@ export function isCompoundAssemblyDescription(description: string): boolean {
 // freshly fetched `categories` will get null back instead of a category,
 // which is deliberate: an honestly-uncategorized item gets caught by
 // category-audit.ts, a silently-stale name would not have been.
+// Key-returning sibling of resolveLineItemCategory below, same priority
+// chain (explicit > compound-assembly override > catalog match >
+// description heuristic) but stopping one step short of resolving to a
+// live display name -- needed so a caller can compose this Type key with
+// a separately-resolved Method key (leafCategoryKey) before the one
+// resolveCategoryNameFromKey lookup that actually hits the live
+// category list. resolveLineItemCategory itself is now a thin wrapper
+// around this -- no behavior change for any existing caller.
+export function resolveLineItemTypeKey(
+  input: {
+    explicit?: string | null;
+    catalogCategory?: string | null;
+    description: string;
+  },
+  categories: Pick<Category, "key" | "name">[] = [],
+): string | null {
+  if (input.explicit && isKnownCategory(categories, input.explicit)) {
+    return categories.find((c) => c.name === input.explicit)?.key ?? null;
+  }
+  if (isCompoundAssemblyDescription(input.description)) return CUSTOM_BUILD_CATEGORY_KEY;
+  const catalogKey = CATALOG_CATEGORY_KEY_MAP[(input.catalogCategory ?? "").trim().toLowerCase()];
+  if (catalogKey) return catalogKey;
+  for (const { pattern, key } of DESCRIPTION_PATTERNS) {
+    if (pattern.test(input.description)) return key;
+  }
+  return null;
+}
+
 export function resolveLineItemCategory(
   input: {
     explicit?: string | null;
@@ -252,10 +374,46 @@ export function resolveLineItemCategory(
   categories: Pick<Category, "key" | "name">[] = [],
 ): string | null {
   if (input.explicit && isKnownCategory(categories, input.explicit)) return input.explicit;
-  if (isCompoundAssemblyDescription(input.description)) {
-    return resolveCategoryNameFromKey(categories, CUSTOM_BUILD_CATEGORY_KEY);
+  const key = resolveLineItemTypeKey(input, categories);
+  return key ? resolveCategoryNameFromKey(categories, key) : null;
+}
+
+// The one place Type and Method come together into a real, resolved
+// Category.name -- used at import time (pricing-import-service.ts,
+// where a real catalogSource is available from the match that just
+// happened) and reused by the bucketing layer's own effective-category
+// resolution (proposal-view-model.ts's resolveEffectiveCategory) once a
+// section's tag supplies Method instead of the per-item inference. Type
+// always resolves via the existing resolveLineItemTypeKey priority
+// chain, completely independent of Method -- this is the fix for a
+// tagged component's non-Structure content (Audio/Visual, Graphics, ...)
+// disappearing into whichever category the tag names; only the five
+// commodity Types with a real Rental/Purchase/Custom Fabricated split
+// (TYPE_KEYS_WITH_METHOD_SPLIT) ever compose with Method at all -- a
+// Labor/Shipping/Graphics/Custom Build item's Type key passes straight
+// through unchanged even when Method resolves to something, since those
+// Types were never seeded with Method children.
+export function resolveComposedCategory(
+  input: {
+    explicit?: string | null;
+    catalogCategory?: string | null;
+    catalogSource?: "Material" | "Rental";
+    description: string;
+    // An explicit Method override (a tagged section's own buildType) --
+    // when provided, wins outright and per-item inference never runs.
+    // Omit to let resolveAcquisitionMethod infer from this item's own
+    // signals instead.
+    method?: SectionBuildType;
+  },
+  categories: Pick<Category, "key" | "name">[] = [],
+): string | null {
+  if (input.explicit && isKnownCategory(categories, input.explicit)) return input.explicit;
+  const typeKey = resolveLineItemTypeKey(input, categories);
+  if (!typeKey) return null;
+  if (!(TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).includes(typeKey)) {
+    return resolveCategoryNameFromKey(categories, typeKey);
   }
-  const fromCatalog = mapCatalogCategoryToCanonical(input.catalogCategory, categories);
-  if (fromCatalog) return fromCatalog;
-  return inferCategoryFromDescription(input.description, categories);
+  const method = input.method ?? resolveAcquisitionMethod(input);
+  const leafKey = leafCategoryKey(typeKey, method);
+  return resolveCategoryNameFromKey(categories, leafKey) ?? resolveCategoryNameFromKey(categories, typeKey);
 }

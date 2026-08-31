@@ -794,15 +794,27 @@ enum SectionType {
   FEE
 }
 
-// Whether a booth/component section (one with groupLabel set) is a
-// temporary structure the client is renting back (returned after the
-// show) or a custom-fabricated piece the client keeps -- only an
+// The acquisition Method for a booth/component section (one with
+// groupLabel set) -- how it's being obtained, never what it physically
+// is. That's the crucial distinction from earlier in this enum's life:
+// this used to also stand in for the item's whole category (Rental
+// Structures vs. Custom Components), discarding each line item's own
+// real type (Structure/Furniture/Audio-Visual/...) in the process --
+// confirmed live as a real bug (an Audio/Visual vendor bid tagged this
+// way lost ~$50k of AV content into a generic Custom-Build bucket).
+// Today this ONLY supplies Method; a tagged section's line items still
+// resolve their own Type independently (resolveAcquisitionMethod /
+// resolveEffectiveCategory in line-item-category.ts /
+// proposal-view-model.ts), composing into e.g. "Audio/Visual - Rental"
+// rather than replacing the item's category outright. Only an
 // estimator's real-world deal knowledge can set this, never inferred
-// from import data (see EstimateSection.buildType's own comment). Not
+// from import data for the section-level tag itself (per-item inference
+// exists separately, see resolveAcquisitionMethod's own comment). Not
 // meaningful for a section with no groupLabel.
 enum SectionBuildType {
   RENTAL
   CUSTOM_BUILD
+  PURCHASE
 }
 
 enum LineItemType {
@@ -880,13 +892,16 @@ model EstimateSection {
   // same as before this column existed). See pricing-import-service.ts.
   groupLabel String?
 
-  // Rental Structures vs. Custom Components -- see SectionBuildType's own
-  // comment. Null until an estimator explicitly tags this booth (the
-  // Line Items tab's "Components needing a tag" card); a line item's
-  // effective category (aggregateByCategory/bucketLineItemsByCategory)
-  // only resolves through this once it's set, so an untagged booth's
-  // items keep bucketing by their own raw category exactly as before --
-  // tagging is what moves them, nothing regresses in the meantime.
+  // This booth's acquisition Method (Rental/Custom Build/Purchase) -- see
+  // SectionBuildType's own comment on why this is Method-only, never a
+  // stand-in for the item's Type. Null until an estimator explicitly
+  // tags this booth (the Line Items tab's "Components needing a tag"
+  // card); a line item's effective category
+  // (resolveEffectiveCategory/bucketLineItemsByCategory) only resolves
+  // Method through this once it's set -- Type always resolves
+  // independently, tagged or not -- so an untagged booth's items keep
+  // resolving Method per-item exactly as before, tagging is what
+  // supplies it instead.
   buildType SectionBuildType?
 
   // Set when this section belongs to an Option (alternate) rather than

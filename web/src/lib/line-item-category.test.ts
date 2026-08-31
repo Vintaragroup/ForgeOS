@@ -3,9 +3,12 @@ import {
   CUSTOM_BUILD_CATEGORY_KEY,
   inferCategoryFromDescription,
   isKnownCategory,
+  leafCategoryKey,
   mapCatalogCategoryToCanonical,
+  resolveAcquisitionMethod,
   resolveCategoryNameFromKey,
   resolveLineItemCategory,
+  resolveLineItemTypeKey,
 } from "@/lib/line-item-category";
 
 // Minimal in-memory stand-ins -- these functions are pure and only ever
@@ -83,6 +86,85 @@ describe("resolveLineItemCategory", () => {
 
   it("returns null (not a guess) when categories is empty -- the safe, audit-catchable failure mode", () => {
     expect(resolveLineItemCategory({ description: "Complete Booth Build\n12' x 7'" })).toBeNull();
+  });
+});
+
+describe("DESCRIPTION_PATTERNS: structure vs. flooring ordering", () => {
+  it("resolves scaffolding/platform-build text to Structure, not Flooring", () => {
+    const categories = [cat("Structure", "structure"), cat("Flooring", "flooring")];
+    expect(inferCategoryFromDescription("Platform for Booth - 6' x 7' x 2' H", categories)).toBe("Structure");
+    expect(inferCategoryFromDescription("Sleeper Floor incl curb ramp - 6' x 7' x 1\" H", categories)).toBe(
+      "Structure",
+    );
+    expect(inferCategoryFromDescription("Scaffold-supported deck system", categories)).toBe("Structure");
+  });
+
+  it("still resolves genuine floor coverings to Flooring", () => {
+    const categories = [cat("Structure", "structure"), cat("Flooring", "flooring")];
+    expect(inferCategoryFromDescription("FR Carpet", categories)).toBe("Flooring");
+    expect(inferCategoryFromDescription("Water-permeable visqueen underlayment", categories)).toBe("Flooring");
+  });
+});
+
+describe("resolveLineItemTypeKey", () => {
+  it("mirrors resolveLineItemCategory's priority chain but returns the raw key", () => {
+    const categories = [cat("Structure", "structure"), cat("Labor", "labor")];
+    expect(resolveLineItemTypeKey({ description: "36 x 84\" Compliant Door" }, categories)).toBe("structure");
+    expect(resolveLineItemTypeKey({ explicit: "Labor", description: "Plywood" }, categories)).toBe("labor");
+  });
+
+  it("returns null when nothing resolves", () => {
+    expect(resolveLineItemTypeKey({ description: "xyzzy unmatched text" }, [])).toBeNull();
+  });
+});
+
+describe("leafCategoryKey", () => {
+  it("composes a Type key and Method into the leaf key", () => {
+    expect(leafCategoryKey("structure", "RENTAL")).toBe("structure_rental");
+    expect(leafCategoryKey("furniture", "PURCHASE")).toBe("furniture_purchase");
+    expect(leafCategoryKey("audio_visual", "CUSTOM_BUILD")).toBe("audio_visual_custom_fabricated");
+  });
+
+  it("returns the flat Type key unchanged when Method is null", () => {
+    expect(leafCategoryKey("structure", null)).toBe("structure");
+  });
+});
+
+describe("resolveAcquisitionMethod", () => {
+  it("resolves BeMatrix to RENTAL regardless of source", () => {
+    expect(resolveAcquisitionMethod({ description: "2418mm x 310mm Frame", category: "BeMatrix" })).toBe("RENTAL");
+    expect(resolveAcquisitionMethod({ description: "BeMatrix wall panel" })).toBe("RENTAL");
+    expect(resolveAcquisitionMethod({ description: "B-Matrix connector" })).toBe("RENTAL");
+  });
+
+  it("resolves a RentalItem catalog match to RENTAL", () => {
+    expect(resolveAcquisitionMethod({ catalogSource: "Rental", description: "Barstool" })).toBe("RENTAL");
+  });
+
+  it("resolves explicit 'rental' text to RENTAL (a vendor bid marked market rental)", () => {
+    expect(resolveAcquisitionMethod({ description: "Equipment Rental — ShowRig (7 wks)" })).toBe("RENTAL");
+    expect(resolveAcquisitionMethod({ description: "AV Package", category: "Market Rental" })).toBe("RENTAL");
+  });
+
+  it("resolves explicit 'purchase' text to PURCHASE (confirmed real vendor workbook wording)", () => {
+    expect(resolveAcquisitionMethod({ description: "PURCHASE SQ FT (basic) — ceiling" })).toBe("PURCHASE");
+    expect(resolveAcquisitionMethod({ description: "Projector, purchased outright" })).toBe("PURCHASE");
+  });
+
+  it("resolves a Material catalog match with no stronger signal to CUSTOM_BUILD", () => {
+    expect(resolveAcquisitionMethod({ catalogSource: "Material", description: "Birch Ply PF1S" })).toBe(
+      "CUSTOM_BUILD",
+    );
+  });
+
+  it("returns null when nothing resolves -- never guesses", () => {
+    expect(resolveAcquisitionMethod({ description: "Custom LED lighting fixture" })).toBeNull();
+  });
+
+  it("prioritizes BeMatrix over a Material catalog match", () => {
+    expect(resolveAcquisitionMethod({ catalogSource: "Material", description: "BeMatrix frame stock" })).toBe(
+      "RENTAL",
+    );
   });
 });
 

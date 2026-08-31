@@ -1,6 +1,6 @@
 // Surfaces exactly what aggregateByCategory (proposal-view-model.ts)
 // already silently detects and papers over with its "Other" fallback --
-// as a visible, actionable signal instead. Two genuinely distinct
+// as a visible, actionable signal instead. Two genuinely distinct hard
 // failure states, not one: a line item that was never categorized at all
 // (category is null) versus one that was categorized once but now
 // references a category that no longer exists in the live catalog
@@ -9,9 +9,19 @@
 // "Other" is a legitimate catch-all for genuinely miscellaneous items
 // (e.g. "Or other proprietary system", "Daily Rate" on a real job), not
 // itself a problem.
+//
+// A third, deliberately SOFT state: a line item sitting on a flat Type
+// category (e.g. plain "Structure") that supports a Rental/Purchase/
+// Custom Fabricated split but never got one -- resolveAcquisitionMethod
+// couldn't infer a Method from its own text/catalog source, and no
+// estimator has tagged its booth. This is an expected, legitimate
+// resting state (see resolveComposedCategory/resolveEffectiveCategory's
+// own "never guess" fallback), not a broken reference -- it renders
+// fine, just without a Method breakdown -- so it's tracked separately
+// from `issues` and never affects `isClean`/the send-proposal gate.
 
 import type { Category } from "@/generated/prisma/client";
-import { isKnownCategory } from "@/lib/line-item-category";
+import { TYPE_KEYS_WITH_METHOD_SPLIT } from "@/lib/line-item-category";
 
 export interface CategoryAuditIssue {
   lineItemId: string;
@@ -22,8 +32,17 @@ export interface CategoryAuditIssue {
   reason: "uncategorized" | "orphaned";
 }
 
+export interface MethodUnresolvedIssue {
+  lineItemId: string;
+  description: string;
+  sectionName: string;
+  groupLabel: string | null;
+  category: string;
+}
+
 export interface CategoryAuditResult {
   issues: CategoryAuditIssue[];
+  methodUnresolvedIssues: MethodUnresolvedIssue[];
   isClean: boolean;
 }
 
@@ -48,9 +67,10 @@ interface AuditableSection {
 // currently-viewed version's sections directly).
 export function auditLineItemCategories(
   sections: AuditableSection[],
-  categories: Pick<Category, "name">[],
+  categories: Pick<Category, "name" | "key">[],
 ): CategoryAuditResult {
   const issues: CategoryAuditIssue[] = [];
+  const methodUnresolvedIssues: MethodUnresolvedIssue[] = [];
   for (const section of sections) {
     for (const li of section.lineItems) {
       if (li.category === null) {
@@ -62,7 +82,10 @@ export function auditLineItemCategories(
           category: null,
           reason: "uncategorized",
         });
-      } else if (!isKnownCategory(categories, li.category)) {
+        continue;
+      }
+      const ownCategory = categories.find((c) => c.name === li.category);
+      if (!ownCategory) {
         issues.push({
           lineItemId: li.id,
           description: li.description,
@@ -71,8 +94,16 @@ export function auditLineItemCategories(
           category: li.category,
           reason: "orphaned",
         });
+      } else if ((TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).includes(ownCategory.key)) {
+        methodUnresolvedIssues.push({
+          lineItemId: li.id,
+          description: li.description,
+          sectionName: section.name,
+          groupLabel: section.groupLabel,
+          category: li.category,
+        });
       }
     }
   }
-  return { issues, isClean: issues.length === 0 };
+  return { issues, methodUnresolvedIssues, isClean: issues.length === 0 };
 }

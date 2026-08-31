@@ -9,16 +9,14 @@ import { Document, Page, Text, View, Image as PdfImage, StyleSheet, Font } from 
 import type { Category, Prisma } from "@/generated/prisma/client";
 import { BRAND, BRAND_ADDRESS_LINES, BRAND_COMPANY_NAME, BRAND_TAGLINE } from "@/lib/brand";
 import { TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
-import { CUSTOM_BUILD_CATEGORY_KEY, RENTAL_STRUCTURES_CATEGORY_KEY, resolveCategoryNameFromKey } from "@/lib/line-item-category";
 import {
   aggregateByCategory,
+  boothGroupsByCategory,
   bucketSubtotal,
   buildTopLevelCategoryViews,
   computeRentalAndServicesTotals,
-  groupBoothLineItems,
   type AggregatedLineItem,
   type BoothGroup,
-  type ProposalViewLineItem,
   type ProposalViewSection,
 } from "@/lib/proposal-view-model";
 
@@ -468,19 +466,16 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   const summaryCategoryNames = data.summaryCategoryNames ?? new Set<string>();
 
   // Component grouping (booth -> element type -> line items) lives inside
-  // whichever of these two categories a tagged booth resolved into, not a
-  // separate "Custom Rental" block -- see resolveEffectiveCategory. An
-  // untagged booth (buildType still null) contributes to neither and keeps
-  // rendering flat under its own raw category, unchanged.
-  const rentalCategoryName = resolveCategoryNameFromKey(data.categories, RENTAL_STRUCTURES_CATEGORY_KEY);
-  const customCategoryName = resolveCategoryNameFromKey(data.categories, CUSTOM_BUILD_CATEGORY_KEY);
-  const rentalBoothGroups = groupBoothLineItems(data.sections.filter((s) => s.buildType === "RENTAL"));
-  const customBoothGroups = groupBoothLineItems(data.sections.filter((s) => s.buildType === "CUSTOM_BUILD"));
-  const boothGroupsForCategory = (categoryName: string): BoothGroup[] => {
-    if (categoryName === rentalCategoryName) return rentalBoothGroups;
-    if (categoryName === customCategoryName) return customBoothGroups;
-    return [];
-  };
+  // whichever category each of a tagged booth's own items resolved into
+  // -- not one of two fixed buckets regardless of what they actually are
+  // -- so a booth's Structure content and its Audio/Visual content each
+  // surface under their own tab. See resolveEffectiveCategory and
+  // boothGroupsByCategory. An untagged booth (buildType still null)
+  // contributes no booth groups and keeps rendering flat under its own
+  // raw category, unchanged.
+  const boothGroupsByCategoryName = boothGroupsByCategory(data.sections, data.categories);
+  const boothGroupsForCategory = (categoryName: string): BoothGroup[] =>
+    boothGroupsByCategoryName.get(categoryName) ?? [];
 
   // Every distinct aggregated item renders as its own row, always -- no
   // detail-mode toggle, no "Includes: A, B, C" collapse. Cross-booth

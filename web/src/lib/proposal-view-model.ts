@@ -12,12 +12,11 @@
 import type { Category, Prisma } from "@/generated/prisma/client";
 import type { SectionBuildType } from "@/generated/prisma/enums";
 import {
-  CUSTOM_BUILD_CATEGORY_KEY,
-  RENTAL_STRUCTURES_CATEGORY_KEY,
   getCategoryChildren,
   isCompoundAssemblyDescription,
-  isKnownCategory,
+  leafCategoryKey,
   resolveCategoryNameFromKey,
+  TYPE_KEYS_WITH_METHOD_SPLIT,
 } from "@/lib/line-item-category";
 
 export interface ProposalViewLineItem {
@@ -51,28 +50,48 @@ export interface ProposalViewSection {
   lineItems: ProposalViewLineItem[];
 }
 
-// A booth/component's effective category for bucketing purposes -- once
+// A booth/component's effective category for bucketing purposes. Once
 // an estimator tags its build type (EstimateSection.buildType, via the
-// Line Items tab's own tagging card), every line item in that section
-// resolves to Rental Structures or Custom Components regardless of its
-// own raw `category` string (Flooring, Labor, ...), which is usually
-// just whatever raw vendor-workbook label it happened to import under.
+// Line Items tab's own tagging card), that tag supplies this item's
+// acquisition Method ONLY -- Rental/Purchase/Custom Fabricated -- never
+// its Type. The item's own Type (Structure/Flooring/Furniture/
+// Audio-Visual/Misc/Custom Build/...) always resolves from its own
+// already-persisted `category`, tagged or not. This is a deliberate
+// fix, confirmed live as a real bug in the tag's earlier, cruder form:
+// tagging a vendor Audio/Visual bid comparison as "Custom Build" used
+// to force ALL of its line items -- including ~$50k of real Audio/
+// Visual pricing -- into one Rental-Structures-or-Custom-Components
+// bucket, discarding what they actually were. Now that same tag
+// composes with each item's own Type instead, so those items land at
+// "Audio/Visual - Rental" (or whichever Method was tagged) rather than
+// disappearing into Structure/Custom Build.
+//
 // An untagged booth (buildType still null) falls through to the item's
-// own raw category unchanged -- tagging is what moves it, nothing
-// regresses before that. Shared by aggregateByCategory (PDF/web
-// proposal) and the Line Items tab's own bucketLineItemsByCategory, so
-// the two views can never resolve a booth's category differently.
+// own raw category unchanged, same as before this composition existed.
+// Shared by aggregateByCategory (PDF/web proposal) and the Line Items
+// tab's own bucketLineItemsByCategory, so the two views can never
+// resolve a booth's category differently.
 export function resolveEffectiveCategory(
   li: { category: string | null },
   section: { groupLabel: string | null; buildType?: SectionBuildType | null },
-  categories: Pick<Category, "name" | "key">[],
+  categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
 ): string {
-  if (section.groupLabel && section.buildType) {
-    const key = section.buildType === "RENTAL" ? RENTAL_STRUCTURES_CATEGORY_KEY : CUSTOM_BUILD_CATEGORY_KEY;
-    const resolved = resolveCategoryNameFromKey(categories, key);
-    if (resolved) return resolved;
+  const ownCategory = li.category ? categories.find((c) => c.name === li.category) : undefined;
+  if (section.groupLabel && section.buildType && ownCategory) {
+    // This item's own Type category: itself if it's already a top-level
+    // Type (no parent -- e.g. Labor, Graphics, or an untagged Structure
+    // item), or its parent if it's already a Method leaf (re-tagging a
+    // booth that was tagged before, or an item whose own category was
+    // hand-set to a leaf directly).
+    const typeCategory = ownCategory.parentId
+      ? categories.find((c) => c.id === ownCategory.parentId)
+      : ownCategory;
+    if (typeCategory && (TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).includes(typeCategory.key)) {
+      const resolved = resolveCategoryNameFromKey(categories, leafCategoryKey(typeCategory.key, section.buildType));
+      if (resolved) return resolved;
+    }
   }
-  return isKnownCategory(categories, li.category) ? li.category! : "Other";
+  return ownCategory ? ownCategory.name : "Other";
 }
 
 export interface AggregatedLineItem {
@@ -391,6 +410,46 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     .filter((g): g is BoothGroup => g !== null);
 }
 
+// Generalizes the booth-grouped build-out view from the old two hardcoded
+// buckets (Rental Structures / Custom Components) to one bucket per
+// category a tagged booth's items actually resolve to -- reusing
+// resolveEffectiveCategory itself, item by item, so the grouping can
+// never disagree with aggregateByCategory's own flat bucketing (same
+// resolved name is the map key both sides use). This is what lets one
+// physical booth's Structure content and its Audio/Visual content each
+// surface under their own category tab instead of one crowding out the
+// other -- confirmed live as the exact bug that hid ~$50k of real
+// Audio/Visual pricing under "Custom Components" on a real job, back
+// when a tag forced an entire booth into one of two buckets regardless
+// of what its line items actually were.
+export function boothGroupsByCategory(
+  sections: ProposalViewSection[],
+  categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
+): Map<string, BoothGroup[]> {
+  const sectionsByCategoryName = new Map<string, ProposalViewSection[]>();
+  for (const section of sections) {
+    if (!section.groupLabel || !section.buildType) continue;
+    const itemsByCategoryName = new Map<string, ProposalViewLineItem[]>();
+    for (const li of section.lineItems) {
+      const categoryName = resolveEffectiveCategory(li, section, categories);
+      const bucket = itemsByCategoryName.get(categoryName);
+      if (bucket) bucket.push(li);
+      else itemsByCategoryName.set(categoryName, [li]);
+    }
+    for (const [categoryName, items] of itemsByCategoryName) {
+      const clone: ProposalViewSection = { ...section, lineItems: items };
+      const arr = sectionsByCategoryName.get(categoryName);
+      if (arr) arr.push(clone);
+      else sectionsByCategoryName.set(categoryName, [clone]);
+    }
+  }
+  const result = new Map<string, BoothGroup[]>();
+  for (const [categoryName, sectionsForCategory] of sectionsByCategoryName) {
+    result.set(categoryName, groupBoothLineItems(sectionsForCategory));
+  }
+  return result;
+}
+
 export interface RawElementTypeGroup<T> {
   elementType: string;
   items: T[];
@@ -458,6 +517,43 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
       return { boothLabel, elementGroups, subtotal };
     })
     .filter((g): g is RawBoothGroup<T> => g !== null);
+}
+
+// Editing-surface counterpart to boothGroupsByCategory above -- same
+// per-item Type+Method resolution (resolveEffectiveCategory), same
+// per-category grouping, but keeps every raw line item its own row via
+// groupBoothLineItemsForEditing instead of merging by description+unit.
+// Generic over T for the same reason groupBoothLineItemsForEditing is:
+// the Line Items tab's own richer LineItem shape (unitCost, isDraft, ...)
+// passes straight through unchanged.
+export function boothGroupsByCategoryForEditing<
+  T extends { totalCost: Prisma.Decimal; sortOrder: number; category: string | null },
+>(
+  sections: { name: string; groupLabel: string | null; buildType?: SectionBuildType | null; lineItems: T[] }[],
+  categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
+): Map<string, RawBoothGroup<T>[]> {
+  const sectionsByCategoryName = new Map<string, { name: string; groupLabel: string | null; lineItems: T[] }[]>();
+  for (const section of sections) {
+    if (!section.groupLabel || !section.buildType) continue;
+    const itemsByCategoryName = new Map<string, T[]>();
+    for (const li of section.lineItems) {
+      const categoryName = resolveEffectiveCategory(li, section, categories);
+      const bucket = itemsByCategoryName.get(categoryName);
+      if (bucket) bucket.push(li);
+      else itemsByCategoryName.set(categoryName, [li]);
+    }
+    for (const [categoryName, items] of itemsByCategoryName) {
+      const clone = { name: section.name, groupLabel: section.groupLabel, lineItems: items };
+      const arr = sectionsByCategoryName.get(categoryName);
+      if (arr) arr.push(clone);
+      else sectionsByCategoryName.set(categoryName, [clone]);
+    }
+  }
+  const result = new Map<string, RawBoothGroup<T>[]>();
+  for (const [categoryName, sectionsForCategory] of sectionsByCategoryName) {
+    result.set(categoryName, groupBoothLineItemsForEditing(sectionsForCategory));
+  }
+  return result;
 }
 
 export function computeRentalAndServicesTotals(

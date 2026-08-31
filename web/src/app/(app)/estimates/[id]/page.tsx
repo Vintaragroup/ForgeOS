@@ -7,6 +7,7 @@ import { canAccessOpportunity } from "@/lib/opportunity-access";
 import type { Category, Prisma } from "@/generated/prisma/client";
 import {
   aggregateByCategory,
+  boothGroupsByCategoryForEditing,
   buildTopLevelCategoryViews,
   groupBoothLineItemsForEditing,
   resolveEffectiveCategory,
@@ -63,7 +64,6 @@ import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { getProjectContext } from "@/lib/ai/scope-document-context";
 import { citationHref } from "@/lib/citation";
 import { auditLineItemCategories } from "@/lib/category-audit";
-import { CUSTOM_BUILD_CATEGORY_KEY, RENTAL_STRUCTURES_CATEGORY_KEY } from "@/lib/line-item-category";
 import type { SectionBuildType } from "@/generated/prisma/enums";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { getVendorMatchApplyLog } from "@/lib/vendor-match-apply-log-service";
@@ -418,7 +418,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   // at send time" half of that same safety net.
   const categoryAudit = currentVersion
     ? auditLineItemCategories(currentVersion.sections, categories)
-    : { issues: [], isClean: true };
+    : { issues: [], methodUnresolvedIssues: [], isClean: true };
 
   // Read-only advisory check of this version's line items against its
   // scope documents (scope-coverage-service.ts) -- persisted on the
@@ -1063,7 +1063,7 @@ interface CategoryBucket {
 // (its own id, its own move/update/delete actions).
 function bucketLineItemsByCategory(
   sections: VersionWithSections["sections"],
-  categories: { id: string; name: string; key: string }[],
+  categories: { id: string; name: string; key: string; parentId: string | null }[],
 ): CategoryBucket[] {
   const byCategoryThenSection = new Map<string, Map<string, CategorySectionGroup>>();
 
@@ -1128,7 +1128,7 @@ function LineItemsTab({
   estimateId: string;
   opportunityId: string;
   version: VersionWithSections;
-  categories: { id: string; name: string; key: string }[];
+  categories: { id: string; name: string; key: string; parentId: string | null }[];
   categoryOptions: { value: string; label: string }[];
   laborRates: LaborRateOption[];
   attachments: { id: string; fileRef: string }[];
@@ -1139,27 +1139,29 @@ function LineItemsTab({
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
   const draftCount = version.sections.flatMap((s) => s.lineItems).filter((li) => li.isDraft).length;
 
-  // Every booth/component-linked section (EstimateSection.groupLabel),
-  // grouped the same way the client-facing PDF groups its own booth
-  // content (see groupBoothLineItemsForEditing's own comment on why this
-  // is a raw, non-merged variant of that PDF-only logic). Most jobs have
-  // none of these. A booth's own resolved category (Rental Structures vs
-  // Custom Components) is EstimateSection.buildType, set once per booth
-  // via the tagging card below -- every section sharing one groupLabel
-  // always shares the same buildType (updateSectionBuildTypeAction sets
-  // them together), so reading any one of them is enough.
-  const boothGroups = groupBoothLineItemsForEditing(version.sections);
+  // Every booth/component-linked section (EstimateSection.groupLabel).
+  // Most jobs have none of these. A booth's tag (EstimateSection.
+  // buildType, set once per booth via the tagging card below -- every
+  // section sharing one groupLabel always shares the same buildType,
+  // updateSectionBuildTypeAction sets them together) only supplies
+  // Method (Rental/Purchase/Custom Fabricated); each item still resolves
+  // its own Type independently, same as resolveEffectiveCategory. So a
+  // single booth's content can spread across several category tabs
+  // (Structure, Audio/Visual, ...) instead of one swallowing the rest --
+  // see boothGroupsByCategoryForEditing. allBoothGroups (the flat,
+  // pre-split variant) exists only to enumerate real booth labels for the
+  // untagged-booth prompt below.
+  const allBoothGroups = groupBoothLineItemsForEditing(version.sections);
   const buildTypeByBoothLabel = new Map<string, SectionBuildType | null>();
   for (const section of version.sections) {
     if (section.groupLabel && !buildTypeByBoothLabel.has(section.groupLabel)) {
       buildTypeByBoothLabel.set(section.groupLabel, section.buildType);
     }
   }
-  const untaggedBoothLabels = boothGroups
+  const untaggedBoothLabels = allBoothGroups
     .map((g) => g.boothLabel)
     .filter((label) => !buildTypeByBoothLabel.get(label));
-  const rentalBoothGroups = boothGroups.filter((g) => buildTypeByBoothLabel.get(g.boothLabel) === "RENTAL");
-  const customBoothGroups = boothGroups.filter((g) => buildTypeByBoothLabel.get(g.boothLabel) === "CUSTOM_BUILD");
+  const boothGroupsByCategoryName = boothGroupsByCategoryForEditing(version.sections, categories);
 
   return (
     <div className="flex flex-col gap-6">
@@ -1201,11 +1203,12 @@ function LineItemsTab({
         {untaggedBoothLabels.length > 0 && (
           <div className="mb-6 rounded-md border border-amber-200 bg-amber-50 p-4">
             <h3 className="mb-1 text-sm font-semibold text-amber-900">
-              Components needing a Rental/Custom Build tag
+              Components needing a Rental/Purchase/Custom Fabricated tag
             </h3>
             <p className="mb-3 text-xs text-amber-800">
-              A component&apos;s items bucket under its own raw category (Flooring, Labor, ...) until tagged --
-              tagging moves them under Rental Structures or Custom Components instead, grouped by component.
+              Tagging a component sets how it&apos;s being acquired -- each item still lands under its own real
+              category (Structure, Audio/Visual, Furniture, ...), just as e.g. &quot;Structure - Rental&quot;
+              instead of plain &quot;Structure&quot;, grouped by component within that category.
             </p>
             <ul className="flex flex-col gap-2">
               {untaggedBoothLabels.map((boothLabel) => (
@@ -1219,8 +1222,9 @@ function LineItemsTab({
                       label=""
                       name="buildType"
                       options={[
-                        { value: "RENTAL", label: "Rental Structures" },
-                        { value: "CUSTOM_BUILD", label: "Custom Components" },
+                        { value: "RENTAL", label: "Rental" },
+                        { value: "PURCHASE", label: "Purchase" },
+                        { value: "CUSTOM_BUILD", label: "Custom Fabricated" },
                       ]}
                     />
                     <Button variant="secondary" type="submit">
@@ -1250,13 +1254,7 @@ function LineItemsTab({
                   categoryOptions={categoryOptions}
                   attachments={attachments}
                   users={users}
-                  boothGroups={
-                    bucket.category.key === RENTAL_STRUCTURES_CATEGORY_KEY
-                      ? rentalBoothGroups
-                      : bucket.category.key === CUSTOM_BUILD_CATEGORY_KEY
-                        ? customBoothGroups
-                        : undefined
-                  }
+                  boothGroups={boothGroupsByCategoryName.get(bucket.category.name)}
                 />,
               ]),
             )}
@@ -3295,6 +3293,38 @@ function ReviewTab({
                   {issue.reason === "orphaned" && (
                     <span className="text-amber-700"> — category &quot;{issue.category}&quot; no longer exists</span>
                   )}
+                </span>
+                <a href={`#line-item-${issue.lineItemId}`} className="shrink-0 text-xs text-brand-navy hover:underline">
+                  {issue.sectionName}
+                  {issue.groupLabel ? ` — ${issue.groupLabel}` : ""} →
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {categoryAudit.methodUnresolvedIssues.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            No Rental/Purchase/Custom Fabricated method yet
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            These line items sit on a flat category (e.g. &quot;Structure&quot;) that supports a method split, but
+            neither their own text nor a component tag resolved one yet -- they still render fine, just without a
+            Rental/Purchase/Custom Fabricated breakdown. Not a blocker; fix via the component tagging card above or
+            a manual category change on the line item.
+          </p>
+          <ul className="flex flex-col gap-2 text-sm">
+            {categoryAudit.methodUnresolvedIssues.map((issue) => (
+              <li
+                key={issue.lineItemId}
+                className="flex items-start justify-between gap-3 rounded-md bg-neutral-50 px-3 py-2"
+              >
+                <span className="flex items-start gap-2 text-neutral-700">
+                  <span aria-hidden>·</span>
+                  {issue.description}
+                  <span className="text-neutral-400"> — {issue.category}</span>
                 </span>
                 <a href={`#line-item-${issue.lineItemId}`} className="shrink-0 text-xs text-brand-navy hover:underline">
                   {issue.sectionName}

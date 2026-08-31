@@ -19,7 +19,7 @@ import { db } from "@/lib/db";
 import { cellText } from "@/lib/xlsx-utils";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
 import { loadCatalogForMatching, matchDescription, type CatalogMatch } from "@/lib/catalog-match-service";
-import { inferIsClientOwned, resolveLineItemCategory } from "@/lib/line-item-category";
+import { inferIsClientOwned, resolveComposedCategory } from "@/lib/line-item-category";
 import {
   commitDesignCostEstimateImport,
   findDesignCostEstimateSheet,
@@ -431,8 +431,12 @@ export async function commitPricingImport(
         qty: row.qty,
         unit: row.unit || null,
         unitCost: row.catalogMatch?.unitCost ?? 0,
-        category: resolveLineItemCategory(
-          { catalogCategory: row.catalogMatch?.category, description: row.description },
+        category: resolveComposedCategory(
+          {
+            catalogCategory: row.catalogMatch?.category,
+            catalogSource: row.catalogMatch?.source,
+            description: row.description,
+          },
           categories,
         ),
         isClientOwned: inferIsClientOwned(row.description),
