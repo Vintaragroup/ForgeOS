@@ -16,6 +16,7 @@ function li(overrides: Partial<{
   totalCost: number;
   isDraft: boolean;
   isClientOwned: boolean;
+  usageTag: "RENTAL_PANEL" | "GRAPHIC" | null;
 }>) {
   return {
     id: overrides.id ?? "li1",
@@ -27,6 +28,7 @@ function li(overrides: Partial<{
     totalCost: new Prisma.Decimal(overrides.totalCost ?? 100),
     isDraft: overrides.isDraft ?? false,
     isClientOwned: overrides.isClientOwned ?? false,
+    usageTag: overrides.usageTag ?? null,
   } as never;
 }
 
@@ -138,6 +140,54 @@ describe("buildTypeTotals", () => {
       expect(customBuild.categoryName).toBe("Custom Build / Rental");
       expect(customBuild.purchase.parts).toHaveLength(1);
       expect(customBuild.rental.parts).toHaveLength(0);
+    });
+
+    it("lets an explicit usageTag win outright for an otherwise-ambiguous PVC item", () => {
+      const rentalPanel = [
+        { groupLabel: null, buildType: null, lineItems: [li({ description: "PVC sheet 1/8in", usageTag: "RENTAL_PANEL" })] },
+      ];
+      const graphic = [
+        { groupLabel: null, buildType: null, lineItems: [li({ description: "PVC sheet 1/8in", usageTag: "GRAPHIC" })] },
+      ];
+
+      expect(buildTypeTotals(rentalPanel, categories)[0].rental.parts).toHaveLength(1);
+      expect(buildTypeTotals(graphic, categories)[0].purchase.parts).toHaveLength(1);
+    });
+
+    it("lets usageTag win even over an explicit booth Rental tag (more specific wins)", () => {
+      const sections = [
+        {
+          groupLabel: "SECTION 1",
+          buildType: "RENTAL" as const,
+          lineItems: [li({ description: "PVC sheet 1/8in", category: "Structure", usageTag: "GRAPHIC" })],
+        },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.purchase.parts).toHaveLength(1);
+      expect(structure.rental.parts).toHaveLength(0);
+    });
+
+    it("falls through to the normal chain when usageTag is unset, even for a PVC description", () => {
+      const sections = [{ groupLabel: null, buildType: null, lineItems: [li({ description: "PVC sheet 1/8in" })] }];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      // No signal at all -> defaults to Purchase, same as any other
+      // unresolved item.
+      expect(structure.purchase.parts).toHaveLength(1);
+    });
+
+    it("classifies a SEG item as Purchase even when its description also happens to contain 'rental'", () => {
+      const sections = [
+        { groupLabel: null, buildType: null, lineItems: [li({ description: "SEG w/ Blackout White - rental show graphic" })] },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.purchase.parts).toHaveLength(1);
+      expect(structure.rental.parts).toHaveLength(0);
     });
 
     it("classifies an item explicitly hand-set to a Method leaf category (not just a booth tag) accordingly", () => {

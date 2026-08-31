@@ -28,6 +28,7 @@ export function LineItemRow({
   unitCost,
   totalCostDisplay,
   isClientOwned,
+  usageTag,
   isLocked,
   actualCostDisplay,
   varianceDisplay,
@@ -35,6 +36,7 @@ export function LineItemRow({
   isFirst,
   isLast,
   lineTypeOptions,
+  usageTagOptions,
   categoryOptions,
   laborRates,
   bidPackageName,
@@ -57,6 +59,9 @@ export function LineItemRow({
   unitCost: string;
   totalCostDisplay: string;
   isClientOwned: boolean;
+  // Manual disambiguation for a genuinely ambiguous material (PVC, for
+  // one) -- "" means unset, same convention as category/department above.
+  usageTag: string;
   isLocked: boolean;
   actualCostDisplay: string | null;
   varianceDisplay: string | null;
@@ -64,6 +69,7 @@ export function LineItemRow({
   isFirst: boolean;
   isLast: boolean;
   lineTypeOptions: { value: string; label: string }[];
+  usageTagOptions: { value: string; label: string }[];
   categoryOptions: { value: string; label: string }[];
   laborRates: LaborRateOption[];
   // Null = in-house/undecided (BidPackage.name once assigned) -- see
@@ -119,11 +125,14 @@ export function LineItemRow({
             <div className="sm:order-6 sm:w-24">
               <Field label="Unit" name="unit" defaultValue={unit} placeholder="EA, SQFT, LF" />
             </div>
-            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-8 sm:col-span-1">
+            <div className="sm:order-8 sm:w-36">
+              <SelectField label="Usage" name="usageTag" defaultValue={usageTag} options={usageTagOptions} />
+            </div>
+            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-9 sm:col-span-1">
               <input type="checkbox" name="isClientOwned" defaultChecked={isClientOwned} />
               Client owned (no charge)
             </label>
-            <div className="flex gap-3 sm:order-9">
+            <div className="flex gap-3 sm:order-10">
               <Button variant="secondary">Save</Button>
               <button
                 type="button"
@@ -157,6 +166,11 @@ export function LineItemRow({
         {description}
         {isDraft && (
           <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">draft</span>
+        )}
+        {usageTag && (
+          <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">
+            {usageTagOptions.find((o) => o.value === usageTag)?.label ?? usageTag}
+          </span>
         )}
         {bidPackageName && (
           <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">

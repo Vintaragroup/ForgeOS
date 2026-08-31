@@ -118,6 +118,17 @@ const LINE_TYPE_OPTIONS = [
   { value: "FEE", label: "Fee" },
 ];
 
+// Manual disambiguation for a material that's genuinely ambiguous on its
+// own (PVC, for one -- see LineItemUsageTag's own schema comment). Always
+// shown, normally left blank -- same posture as the isClientOwned checkbox
+// below, a deliberate always-available choice rather than automatic
+// show/hide magic keyed off the description text.
+const LINE_ITEM_USAGE_TAG_OPTIONS = [
+  { value: "", label: "— unspecified —" },
+  { value: "RENTAL_PANEL", label: "Rental Panel" },
+  { value: "GRAPHIC", label: "Graphic" },
+];
+
 function money(d: { toFixed(n: number): string }): string {
   return `$${Number(d.toFixed(2)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -955,6 +966,7 @@ function LineItemsTable({
               unitCost={li.unitCost.toString()}
               totalCostDisplay={money(li.totalCost)}
               isClientOwned={li.isClientOwned}
+              usageTag={li.usageTag ?? ""}
               isLocked={version.isLocked}
               actualCostDisplay={actualCost !== null ? money(actualCost) : null}
               varianceDisplay={variance !== null ? money(variance) : null}
@@ -962,6 +974,7 @@ function LineItemsTable({
               isFirst={index === 0}
               isLast={index === lineItems.length - 1}
               lineTypeOptions={LINE_TYPE_OPTIONS}
+              usageTagOptions={LINE_ITEM_USAGE_TAG_OPTIONS}
               categoryOptions={categoryOptions}
               laborRates={laborRates}
               bidPackageName={li.bidPackage?.name ?? null}
@@ -2680,25 +2693,28 @@ function AddLineItemForm({
         <div className="sm:order-6 sm:w-24">
           <Field label="Unit" name="unit" placeholder="EA, SQFT, LF" />
         </div>
-        <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-8 sm:col-span-1">
+        <div className="sm:order-8 sm:w-36">
+          <SelectField label="Usage" name="usageTag" defaultValue="" options={LINE_ITEM_USAGE_TAG_OPTIONS} />
+        </div>
+        <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-9 sm:col-span-1">
           <input type="checkbox" name="isClientOwned" />
           Client owned (no charge)
         </label>
         {attachments.length > 0 && (
           <>
-            <div className="col-span-2 sm:order-9 sm:w-40 sm:col-span-1">
+            <div className="col-span-2 sm:order-10 sm:w-40 sm:col-span-1">
               <SelectField
                 label="From attachment"
                 name="attachmentId"
                 options={[{ value: "", label: "— none —" }, ...attachments.map((a) => ({ value: a.id, label: a.fileRef }))]}
               />
             </div>
-            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-10 sm:col-span-1">
+            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-11 sm:col-span-1">
               <input type="checkbox" name="isDraft" /> Draft
             </label>
           </>
         )}
-        <div className="col-span-2 sm:order-11">
+        <div className="col-span-2 sm:order-12">
           <Button variant="secondary">Add line item</Button>
         </div>
       </form>

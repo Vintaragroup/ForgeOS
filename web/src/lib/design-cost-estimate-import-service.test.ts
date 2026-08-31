@@ -222,7 +222,11 @@ describe("commitDesignCostEstimateImport", () => {
 
     expect(byDescription("2418mm Frame")?.category).toBe("Structure");
     expect(byDescription("Toolless Connector")?.category).toBe("Accessories");
-    expect(byDescription("SEG w/ Blackout White")?.category).toBe("Structure");
+    // SEG fabric is always Graphics regardless of which banner group
+    // (here, "Wall Panels") it happens to sit under -- see
+    // isAlwaysGraphicsDescription's own comment for why this overrides
+    // the banner mapping for this one, unambiguous case.
+    expect(byDescription("SEG w/ Blackout White")?.category).toBe("Graphics");
     expect(byDescription("EMERGANCY EXIT")?.category).toBe("Graphics");
     expect(byDescription("Warehouse")?.category).toBe("Labor");
     expect(lineItems.filter((li) => li.category === "Other").length).toBeLessThan(lineItems.length * 0.05);

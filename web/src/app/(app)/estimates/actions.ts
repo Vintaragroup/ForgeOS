@@ -25,7 +25,7 @@ import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
 import { recordCostActual } from "@/lib/cost-actual-service";
 import { assertVersionBelongsToEstimate, estimateOpportunityId, requireEstimateAccess } from "@/lib/opportunity-access";
-import type { LineItemType, SectionBuildType, SectionType } from "@/generated/prisma/enums";
+import type { LineItemType, LineItemUsageTag, SectionBuildType, SectionType } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -192,6 +192,9 @@ export async function addLineItemAction(
   // The checkbox is an explicit override; unchecked, fall back to the same
   // description heuristic import paths use -- see line-item-category.ts.
   const isClientOwned = formData.get("isClientOwned") === "on" || inferIsClientOwned(description);
+  // Manual disambiguation for a genuinely ambiguous material (PVC, for
+  // one) -- never inferred, unlike category/isClientOwned above.
+  const usageTag = emptyToNull(formData.get("usageTag")) as LineItemUsageTag | null;
   const unit = emptyToNull(formData.get("unit"));
   const qty = Number(formData.get("qty"));
   const unitCost = Number(formData.get("unitCost"));
@@ -207,6 +210,7 @@ export async function addLineItemAction(
     department,
     category,
     isClientOwned,
+    usageTag,
     qty,
     unit,
     unitCost,
@@ -242,6 +246,7 @@ export async function updateLineItemAction(
   // same way it would have at creation time.
   const category = emptyToNull(formData.get("category")) ?? inferCategoryFromDescription(description, await fetchActiveCategories());
   const isClientOwned = formData.get("isClientOwned") === "on" || inferIsClientOwned(description);
+  const usageTag = emptyToNull(formData.get("usageTag")) as LineItemUsageTag | null;
   const unit = emptyToNull(formData.get("unit"));
   const qty = Number(formData.get("qty"));
   const unitCost = Number(formData.get("unitCost"));
@@ -255,6 +260,7 @@ export async function updateLineItemAction(
     department,
     category,
     isClientOwned,
+    usageTag,
     qty,
     unit,
     unitCost,

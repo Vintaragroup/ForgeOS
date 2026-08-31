@@ -269,7 +269,7 @@ const DESCRIPTION_PATTERNS: { pattern: RegExp; key: string }[] = [
   { pattern: /\b(on[\s-]?site labor|installation|dismantle|labor)\b/i, key: "labor" },
   { pattern: /\bshipping|drayage|freight\b/i, key: "shipping" },
   { pattern: /\b(cad|engineering|project (coordination|management)|art (proofing|template|set ?up)|electrical layout)\b/i, key: "professional_services" },
-  { pattern: /\b(seg fabric|dtp|vinyl wrap|graphic|signage fabric)\b/i, key: "graphics" },
+  { pattern: /\b(seg|dtp|vinyl wrap|graphic|signage fabric)\b/i, key: "graphics" },
   { pattern: /\bhanging sign\b/i, key: "signage" },
   { pattern: /\bcomplete .* build\b/i, key: CUSTOM_BUILD_CATEGORY_KEY },
   // "platform"/"sleeper floor"/"scaffold"/"truss" checked as structure
@@ -294,6 +294,27 @@ export function inferCategoryFromDescription(
     if (pattern.test(description)) return resolveCategoryNameFromKey(categories, key);
   }
   return null;
+}
+
+// SEG (Silicone Edge Graphics fabric) is unambiguous -- per direct
+// confirmation, it's always Graphics, and always a purchase/throwaway
+// (never pulled from rental stock, since Graphics isn't one of the Types
+// with a real Rental/Purchase split -- see TYPE_KEYS_WITH_METHOD_SPLIT).
+// Checked as a dedicated, higher-priority signal in
+// resolveLineItemTypeKey below rather than relying solely on
+// DESCRIPTION_PATTERNS' own (lower-priority, catalog-match-losing) graphics
+// entry -- confirmed live as a real miscategorization: a booth-workbook
+// import's section-banner mapping (design-cost-estimate-import-service.ts)
+// routes an entire "Wall Panels" banner group to Structure, including its
+// SEG fabric lines, before any per-item description check ever runs. This
+// export lets that importer (and anywhere else that needs the same
+// override ahead of its own category-resolution order) apply the same
+// rule explicitly. Bare "SEG" as a whole word -- won't false-positive on
+// "segment".
+const ALWAYS_GRAPHICS_PATTERN = /\bseg\b/i;
+
+export function isAlwaysGraphicsDescription(description: string): boolean {
+  return ALWAYS_GRAPHICS_PATTERN.test(description);
 }
 
 // A $0.00 line is ambiguous without this -- "not yet priced" and "client
@@ -335,9 +356,12 @@ export function isCompoundAssemblyDescription(description: string): boolean {
 }
 
 // Priority order: an estimator's explicit choice wins outright; then the
-// compound-assembly override above; then a confident catalog match's own
-// category; then the description heuristic as a last resort. Returns
-// null (not "Other") when nothing resolves -- "Other" is a
+// compound-assembly override above; then the always-Graphics SEG override
+// (isAlwaysGraphicsDescription -- still below explicit/assembly, since a
+// human's own choice or a genuine multi-line assembly narrative that just
+// mentions SEG in passing should both still win); then a confident catalog
+// match's own category; then the description heuristic as a last resort.
+// Returns null (not "Other") when nothing resolves -- "Other" is a
 // presentation-layer bucket for unresolved items, not a category to
 // persist as if it were a real determination.
 //
@@ -348,10 +372,10 @@ export function isCompoundAssemblyDescription(description: string): boolean {
 // which is deliberate: an honestly-uncategorized item gets caught by
 // category-audit.ts, a silently-stale name would not have been.
 // Key-returning sibling of resolveLineItemCategory below, same priority
-// chain (explicit > compound-assembly override > catalog match >
-// description heuristic) but stopping one step short of resolving to a
-// live display name -- needed so a caller can compose this Type key with
-// a separately-resolved Method key (leafCategoryKey) before the one
+// chain (explicit > compound-assembly override > SEG override > catalog
+// match > description heuristic) but stopping one step short of resolving
+// to a live display name -- needed so a caller can compose this Type key
+// with a separately-resolved Method key (leafCategoryKey) before the one
 // resolveCategoryNameFromKey lookup that actually hits the live
 // category list. resolveLineItemCategory itself is now a thin wrapper
 // around this -- no behavior change for any existing caller.
@@ -367,6 +391,7 @@ export function resolveLineItemTypeKey(
     return categories.find((c) => c.name === input.explicit)?.key ?? null;
   }
   if (isCompoundAssemblyDescription(input.description)) return CUSTOM_BUILD_CATEGORY_KEY;
+  if (isAlwaysGraphicsDescription(input.description)) return "graphics";
   const catalogKey = CATALOG_CATEGORY_KEY_MAP[(input.catalogCategory ?? "").trim().toLowerCase()];
   if (catalogKey) return catalogKey;
   for (const { pattern, key } of DESCRIPTION_PATTERNS) {

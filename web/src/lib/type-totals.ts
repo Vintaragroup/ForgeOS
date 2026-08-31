@@ -10,8 +10,14 @@
 // Line Items board or the Proposal PDF categorize/identify the same item.
 
 import type { Category, Prisma } from "@/generated/prisma/client";
-import type { LineItemType, SectionBuildType } from "@/generated/prisma/enums";
-import { isCompoundAssemblyDescription, leafCategoryKey, resolveAcquisitionMethod, TYPE_KEYS_WITH_METHOD_SPLIT } from "@/lib/line-item-category";
+import type { LineItemType, LineItemUsageTag, SectionBuildType } from "@/generated/prisma/enums";
+import {
+  isAlwaysGraphicsDescription,
+  isCompoundAssemblyDescription,
+  leafCategoryKey,
+  resolveAcquisitionMethod,
+  TYPE_KEYS_WITH_METHOD_SPLIT,
+} from "@/lib/line-item-category";
 import { resolveComposedMethod, resolveEffectiveCategory } from "@/lib/proposal-view-model";
 
 // Only two states for this report -- per direct confirmation, "pull from
@@ -37,35 +43,50 @@ const LEAF_KEY_TO_METHOD = new Map<string, SectionBuildType>(
   ),
 );
 
-// A booth's own explicit tag wins outright when it applies to this item's
-// Type (resolveComposedMethod -- the same eligibility resolveEffectiveCategory
-// itself checks): a real, explicit estimator decision. Next, an item whose
-// own category is itself a Method leaf (LEAF_KEY_TO_METHOD) -- also an
-// explicit, deliberate choice, just made directly on the item instead of
-// the whole booth. Only after both of those come up empty does this fall
-// back to a description-only heuristic (resolveAcquisitionMethod) -- e.g.
-// "bematrix" or explicit "rental" text in the description still reads as
-// Rental even on an untagged booth. Deliberately description-only, never
-// passing the item's own resolved `category` name into that heuristic: a
-// flat category's display name can itself contain a Method-sounding word
-// for unrelated historical reasons (the seeded "Custom Build / Rental"
-// flat category, for one -- confirmed live: every item under it was
-// misclassified as Rental purely because its own category name contains
-// the word "Rental", not because any of them actually were). Anything
-// left with no signal at all defaults to Purchase, per direct
-// confirmation -- unclear means "it has to be bought," not "assume
+// An item's own manual usageTag wins outright, above everything else --
+// per direct confirmation, this exists specifically to let an estimator
+// resolve a material (PVC, for one) that's genuinely ambiguous on its own,
+// so it's the single most specific, most deliberate signal available, more
+// so even than a whole-booth tag. Next, a booth's own explicit tag when it
+// applies to this item's Type (resolveComposedMethod -- the same
+// eligibility resolveEffectiveCategory itself checks): a real, explicit
+// estimator decision. Next, an item whose own category is itself a Method
+// leaf (LEAF_KEY_TO_METHOD) -- also an explicit, deliberate choice, just
+// made directly on the item instead of the whole booth. Next, SEG's own
+// always-Purchase rule. Only after all of those come up empty does this
+// fall back to a description-only heuristic (resolveAcquisitionMethod) --
+// e.g. "bematrix" or explicit "rental" text in the description still reads
+// as Rental even on an untagged booth. Deliberately description-only,
+// never passing the item's own resolved `category` name into that
+// heuristic: a flat category's display name can itself contain a Method-
+// sounding word for unrelated historical reasons (the seeded "Custom
+// Build / Rental" flat category, for one -- confirmed live: every item
+// under it was misclassified as Rental purely because its own category
+// name contains the word "Rental", not because any of them actually
+// were). Anything left with no signal at all defaults to Purchase, per
+// direct confirmation -- unclear means "it has to be bought," not "assume
 // there's rental stock for it."
 function resolvePullMethod(
-  li: { category: string | null; description: string },
+  li: { category: string | null; description: string; usageTag?: LineItemUsageTag | null },
   section: { groupLabel: string | null; buildType?: SectionBuildType | null },
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
 ): PullMethod {
+  if (li.usageTag === "RENTAL_PANEL") return "RENTAL";
+  if (li.usageTag === "GRAPHIC") return "PURCHASE";
+
   const taggedMethod = resolveComposedMethod(li, section, categories);
   if (taggedMethod) return taggedMethod === "RENTAL" ? "RENTAL" : "PURCHASE";
 
   const ownCategory = li.category ? categories.find((c) => c.name === li.category) : undefined;
   const leafMethod = ownCategory ? LEAF_KEY_TO_METHOD.get(ownCategory.key) : undefined;
   if (leafMethod) return leafMethod === "RENTAL" ? "RENTAL" : "PURCHASE";
+
+  // SEG is always a purchase/throwaway, per direct confirmation -- checked
+  // explicitly rather than relying solely on the generic heuristic below
+  // returning null for it (which it does today), as a guard against a
+  // hypothetical SEG description that happens to also contain "rental"
+  // text.
+  if (isAlwaysGraphicsDescription(li.description)) return "PURCHASE";
 
   const inferred = resolveAcquisitionMethod({ description: li.description });
   return inferred === "RENTAL" ? "RENTAL" : "PURCHASE";
@@ -198,6 +219,7 @@ export function buildTypeTotals<
     totalCost: Prisma.Decimal;
     isDraft: boolean;
     isClientOwned: boolean;
+    usageTag?: LineItemUsageTag | null;
   },
 >(
   sections: { groupLabel: string | null; buildType?: SectionBuildType | null; lineItems: T[] }[],

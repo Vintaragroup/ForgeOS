@@ -19,8 +19,10 @@ import { loadCatalogForMatching, matchDescription, type CatalogMatch } from "@/l
 import {
   inferCategoryFromDescription,
   inferIsClientOwned,
+  isAlwaysGraphicsDescription,
   mapCatalogCategoryToCanonical,
   mapDesignCostCategoryToCanonical,
+  resolveCategoryNameFromKey,
 } from "@/lib/line-item-category";
 
 const TITLE_SCAN_ROWS = 10; // "DESIGN COST ESTIMATE" + "Build Name:" always appear in the first few rows
@@ -339,7 +341,16 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
         // category-identifying word themselves. See
         // mapDesignCostCategoryToCanonical's own comment for why this
         // isn't routed through resolveLineItemCategory's generic chain.
+        //
+        // SEG is the one exception, checked before the banner mapping --
+        // confirmed live as a real miscategorization: a vendor's own
+        // "Wall Panels" banner group routinely mixes structural wall-panel
+        // frames with SEG fabric graphic panels, and the banner mapping
+        // alone would send both to Structure. SEG fabric is always
+        // Graphics regardless of which banner group it happens to sit
+        // under (see isAlwaysGraphicsDescription's own comment).
         category:
+          (isAlwaysGraphicsDescription(row.description) ? resolveCategoryNameFromKey(categories, "graphics") : null) ??
           mapDesignCostCategoryToCanonical(row.category, categories) ??
           mapCatalogCategoryToCanonical(row.catalogMatch?.category, categories) ??
           inferCategoryFromDescription(row.description, categories),

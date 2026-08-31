@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CUSTOM_BUILD_CATEGORY_KEY,
   inferCategoryFromDescription,
+  isAlwaysGraphicsDescription,
   isKnownCategory,
   leafCategoryKey,
   mapCatalogCategoryToCanonical,
@@ -115,6 +116,38 @@ describe("resolveLineItemTypeKey", () => {
 
   it("returns null when nothing resolves", () => {
     expect(resolveLineItemTypeKey({ description: "xyzzy unmatched text" }, [])).toBeNull();
+  });
+
+  it("resolves a bare 'SEG' description to graphics even though its own text also reads as Structure", () => {
+    const categories = [cat("Structure", "structure"), cat("Graphics", "graphics")];
+    // "wall" would otherwise match the structure pattern first if the SEG
+    // override didn't run ahead of it.
+    expect(resolveLineItemTypeKey({ description: "SEG w/ Blackout White - wall panel" }, categories)).toBe("graphics");
+  });
+
+  it("still lets a real explicit choice or a compound assembly win over the SEG override", () => {
+    const categories = [cat("Structure", "structure"), cat("Graphics", "graphics")];
+    expect(resolveLineItemTypeKey({ explicit: "Structure", description: "SEG w/ Blackout White" }, categories)).toBe(
+      "structure",
+    );
+    expect(
+      resolveLineItemTypeKey({ description: "Complete Booth Build\nIncludes SEG graphic wall" }, categories),
+    ).toBe(CUSTOM_BUILD_CATEGORY_KEY);
+  });
+});
+
+describe("isAlwaysGraphicsDescription", () => {
+  it("matches bare 'SEG' as a whole word, case-insensitively", () => {
+    expect(isAlwaysGraphicsDescription("SEG w/ Blackout White")).toBe(true);
+    expect(isAlwaysGraphicsDescription("seg fabric backwall")).toBe(true);
+  });
+
+  it("does not match 'segment' or other words merely containing 'seg'", () => {
+    expect(isAlwaysGraphicsDescription("Segment display bracket")).toBe(false);
+  });
+
+  it("does not match a description with no SEG reference at all", () => {
+    expect(isAlwaysGraphicsDescription("2418mm x 310mm Frame")).toBe(false);
   });
 });
 

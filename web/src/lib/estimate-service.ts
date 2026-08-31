@@ -8,7 +8,7 @@
 
 import { db } from "@/lib/db";
 import { Prisma, type Category } from "@/generated/prisma/client";
-import type { BidPackageStatus, LineItemType, SectionBuildType, SectionType } from "@/generated/prisma/enums";
+import type { BidPackageStatus, LineItemType, LineItemUsageTag, SectionBuildType, SectionType } from "@/generated/prisma/enums";
 import { inferCategoryFromDescription, mapDesignCostCategoryToCanonical } from "@/lib/line-item-category";
 import { resolveEffectiveCategory, resolveTypeKeyForCategoryKey } from "@/lib/proposal-view-model";
 
@@ -404,6 +404,10 @@ export async function addLineItem(
     // A real $0 by design (client already owns/supplies it) vs. simply not
     // yet priced -- see line-item-category.ts's inferIsClientOwned.
     isClientOwned?: boolean;
+    // Manual disambiguation for a genuinely ambiguous material (PVC, for
+    // one) -- see LineItemUsageTag's own schema comment. Never inferred,
+    // unlike category/isClientOwned above.
+    usageTag?: LineItemUsageTag | null;
     qty: DecimalInput;
     unit?: string | null;
     unitCost: DecimalInput;
@@ -425,6 +429,7 @@ export async function addLineItem(
       department: data.department ?? null,
       category: data.category ?? null,
       isClientOwned: data.isClientOwned ?? false,
+      usageTag: data.usageTag ?? null,
       qty: new Prisma.Decimal(data.qty),
       unit: data.unit ?? null,
       unitCost: new Prisma.Decimal(data.unitCost),
@@ -455,6 +460,7 @@ export async function addLineItemsBulk(
     department?: string | null;
     category?: string | null;
     isClientOwned?: boolean;
+    usageTag?: LineItemUsageTag | null;
     qty: DecimalInput;
     unit?: string | null;
     unitCost: DecimalInput;
@@ -495,6 +501,7 @@ export async function addLineItemsBulk(
           department: item.department ?? null,
           category: item.category ?? null,
           isClientOwned: item.isClientOwned ?? false,
+          usageTag: item.usageTag ?? null,
           qty: new Prisma.Decimal(item.qty),
           unit: item.unit ?? null,
           unitCost: new Prisma.Decimal(item.unitCost),
@@ -525,6 +532,7 @@ export async function updateLineItem(
     department?: string | null;
     category?: string | null;
     isClientOwned?: boolean;
+    usageTag?: LineItemUsageTag | null;
     qty?: DecimalInput;
     unit?: string | null;
     unitCost?: DecimalInput;
@@ -562,6 +570,7 @@ export async function updateLineItem(
       department: data.department !== undefined ? data.department : existing.department,
       category: data.category !== undefined ? data.category : existing.category,
       isClientOwned: data.isClientOwned ?? existing.isClientOwned,
+      usageTag: data.usageTag !== undefined ? data.usageTag : existing.usageTag,
       qty: new Prisma.Decimal(qty),
       unit: data.unit !== undefined ? data.unit : existing.unit,
       unitCost: new Prisma.Decimal(unitCost),
