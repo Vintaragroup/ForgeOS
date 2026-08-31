@@ -87,6 +87,15 @@ const LEAF_KEY_TO_TYPE_KEY = new Map<string, string>(
   ),
 );
 
+// Exported wrapper around LEAF_KEY_TO_TYPE_KEY so a caller outside this
+// file (e.g. estimate-service.ts's per-category margin resolution) can
+// find a Method leaf's Type parent without duplicating the reverse-map
+// logic -- returns undefined when `key` is already a Type (or a flat,
+// non-split category), not just when it's genuinely unknown.
+export function resolveTypeKeyForCategoryKey(key: string): string | undefined {
+  return LEAF_KEY_TO_TYPE_KEY.get(key);
+}
+
 // Whether a booth's tag (section.buildType) actually composes onto this
 // item -- true only when the item's own Type key is one of the five with a
 // real Method split (TYPE_KEYS_WITH_METHOD_SPLIT) and the section is

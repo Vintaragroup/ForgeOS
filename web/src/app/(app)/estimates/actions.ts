@@ -6,6 +6,7 @@ import {
   addOption,
   addSection,
   archiveEstimate,
+  clearCategoryMarginOverride,
   confirmDraftLineItem,
   createEstimateVersion,
   createNewVersionFromLocked,
@@ -15,6 +16,7 @@ import {
   moveLineItemWithinSection,
   moveSectionOrder,
   recomputeVersionTotals,
+  setCategoryMarginOverride,
   updateLineItem,
   updateMarginTarget,
   updateSectionBuildType,
@@ -50,6 +52,27 @@ export async function updateMarginTargetAction(
   const marginTargetPct = Number(formData.get("marginTargetPct"));
   if (!Number.isFinite(marginTargetPct)) throw new Error("Margin target must be a number");
   await updateMarginTarget(versionId, marginTargetPct);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function setCategoryMarginOverrideAction(
+  estimateId: string,
+  versionId: string,
+  categoryId: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const marginPct = Number(formData.get("marginPct"));
+  if (!Number.isFinite(marginPct)) throw new Error("Margin must be a number");
+  await setCategoryMarginOverride(versionId, categoryId, marginPct);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function clearCategoryMarginOverrideAction(estimateId: string, versionId: string, categoryId: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await clearCategoryMarginOverride(versionId, categoryId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

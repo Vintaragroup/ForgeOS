@@ -19,6 +19,7 @@ import {
   type BoothGroup,
   type ProposalViewSection,
 } from "@/lib/proposal-view-model";
+import { computeMarginGrossUp, resolveLineItemMarginPct } from "@/lib/estimate-service";
 
 // The extracted primary black logotype (see web/public/brand -- pulled from
 // the brand guide's own "3.1 Logotype" page since we don't have a separate
@@ -433,6 +434,18 @@ export interface ProposalPdfData {
   // amount. No real tax-rate API involved -- see catalog/tax-rates.
   taxRate: { label: string; rate: number } | null;
   grandTotal: Prisma.Decimal;
+  // The document's own margin target (the fallback rate for any category
+  // with no override of its own) and this version's live category margin
+  // overrides -- together with `categories`, these are exactly what
+  // estimate-service.ts's computeVersionTotals used server-side to arrive
+  // at `grandTotal`. Grossing up per line item here with the same
+  // resolveLineItemMarginPct/computeMarginGrossUp (not a re-derived
+  // formula, and not the old single grandTotal/totalCost ratio, which
+  // could only ever represent one uniform rate) keeps this document
+  // self-consistent with grandTotal by construction, the same guarantee
+  // the ratio approach used to provide.
+  marginTargetPct: Prisma.Decimal;
+  categoryMarginOverrides: { categoryId: string; marginPct: Prisma.Decimal }[];
   sentAt: Date | null;
   signedAt: Date | null;
   signedByName: string | null;
@@ -447,18 +460,28 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // booth's items stay under their own raw category exactly as before.
   const buckets = aggregateByCategory(data.sections, data.categories);
   // Every AggregatedLineItem.totalCost is raw cost (see proposal-view-
-  // model.ts -- no margin is ever applied there by design). The only
-  // place marginTargetPct is ever applied is once, to the whole version,
-  // producing data.grandTotal (estimate-service.ts's
-  // computeMarginGrossUp). Rather than re-deriving that formula here
-  // (which would need marginTargetPct threaded through as a new prop, and
-  // could drift from the already-stored, already-rounded grandTotal),
-  // sell() scales every cost figure by the ratio between the two totals
-  // already in hand -- self-consistent by construction: summing sell(x)
-  // over every bucket always reproduces data.grandTotal exactly.
+  // model.ts -- no margin is ever applied there by design). Different
+  // categories can now carry different margins (CategoryMarginOverride),
+  // so a single grandTotal/totalCost ratio can no longer represent "the"
+  // margin -- sellForCategory grosses up at exactly the rate
+  // estimate-service.ts's own computeVersionTotals used for that category
+  // (its override if set, else data.marginTargetPct), via the identical
+  // resolveLineItemMarginPct/computeMarginGrossUp functions. Since every
+  // AggregatedLineItem in one bucket already shares that bucket's own
+  // resolved category name, summing sellForCategory(item.totalCost,
+  // bucket.name) over every item still reproduces data.grandTotal exactly
+  // -- the same self-consistency guarantee the old ratio approach gave,
+  // just correct once margins vary per category instead of only when they
+  // don't.
+  const marginOverridesByCategoryId = new Map(data.categoryMarginOverrides.map((o) => [o.categoryId, o.marginPct]));
+  // Total raw cost across every bucket -- only used for the "Total cost"
+  // figure on the internal (showCost) preview, unrelated to sellForCategory
+  // below since cost never varies by margin.
   const totalCostSum = buckets.reduce((sum, b) => sum + bucketSubtotal(b.items), 0);
-  const priceRatio = totalCostSum > 0 ? data.grandTotal.toNumber() / totalCostSum : 1;
-  const sell = (cost: number) => cost * priceRatio;
+  const sellForCategory = (cost: number, categoryName: string) => {
+    const marginPct = resolveLineItemMarginPct(categoryName, data.categories, marginOverridesByCategoryId, data.marginTargetPct);
+    return computeMarginGrossUp(cost, marginPct).toNumber();
+  };
   const topLevelCategories = buildTopLevelCategoryViews(buckets, data.categories);
   const showServiceCategoryNames = new Set(data.categories.filter((c) => c.isShowService).map((c) => c.name));
   const lumpSumCategoryNames = new Set(data.categories.filter((c) => c.isLumpSum).map((c) => c.name));
@@ -491,7 +514,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // own isClientOwned value (a client-owned row already reads "Client
   // Owned" either way, so hidePrice only changes anything for a normally-
   // priced row).
-  const renderBody = (items: AggregatedLineItem[], hidePrice = false) => (
+  const renderBody = (items: AggregatedLineItem[], categoryName: string, hidePrice = false) => (
     <>
       {items.map((li) => (
         <View key={li.key} style={styles.tableRow} wrap={false}>
@@ -512,7 +535,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}),
             }}
           >
-            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sell(li.totalCost))}
+            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sellForCategory(li.totalCost, categoryName))}
           </Text>
         </View>
       ))}
@@ -535,7 +558,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     </>
   );
 
-  const renderServiceBody = (items: AggregatedLineItem[], hidePrice = false) => (
+  const renderServiceBody = (items: AggregatedLineItem[], categoryName: string, hidePrice = false) => (
     <>
       {items.map((li) => (
         <View key={li.key} style={styles.serviceRow} wrap={false}>
@@ -553,7 +576,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}),
             }}
           >
-            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sell(li.totalCost))}
+            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sellForCategory(li.totalCost, categoryName))}
           </Text>
         </View>
       ))}
@@ -564,6 +587,17 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     buckets,
     showServiceCategoryNames,
   );
+  // Sums each bucket's own grossed-up (per-that-category's-margin) amount,
+  // rather than grossing up the pre-summed raw-cost total once -- correct
+  // once buckets can carry different margins. rentalTotal/servicesTotal
+  // (raw cost, above) are kept for the Cost half of the Cost -> Price
+  // display when data.showCost is true.
+  const sellRentalTotal = buckets
+    .filter((b) => !showServiceCategoryNames.has(b.name))
+    .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
+  const sellServicesTotal = buckets
+    .filter((b) => showServiceCategoryNames.has(b.name))
+    .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
 
   return (
     <Document title={`Proposal — ${data.showName}`}>
@@ -691,7 +725,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   <Text style={styles.sectionHeaderText}>{categoryName}</Text>
                 </View>
                 <Text style={styles.sectionHeaderTotal}>
-                  {hidePrice ? "" : amountContent(sectionTotal, sell(sectionTotal), data.showCost)}
+                  {hidePrice ? "" : amountContent(sectionTotal, sellForCategory(sectionTotal, categoryName), data.showCost)}
                 </Text>
               </View>
               {categoryName === "Professional Services" &&
@@ -713,7 +747,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     <View style={styles.boothHeaderRow} minPresenceAhead={24}>
                       <Text style={styles.boothHeaderText}>{booth.boothLabel}</Text>
                       <Text style={styles.boothHeaderTotal}>
-                        {hidePrice ? "" : amountContent(booth.subtotal, sell(booth.subtotal), data.showCost)}
+                        {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
                       </Text>
                     </View>
                     {booth.elementGroups.map((group) => (
@@ -721,14 +755,14 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                         <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
                           <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
                           <Text style={styles.elementTypeHeaderTotal}>
-                            {hidePrice ? "" : amountContent(group.subtotal, sell(group.subtotal), data.showCost)}
+                            {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
                           </Text>
                         </View>
                         {isSummary
                           ? renderSummaryBody(group.items)
                           : isServiceStyle
-                            ? renderServiceBody(group.items, hidePrice)
-                            : renderBody(group.items, hidePrice)}
+                            ? renderServiceBody(group.items, categoryName, hidePrice)
+                            : renderBody(group.items, categoryName, hidePrice)}
                       </View>
                     ))}
                   </View>
@@ -736,8 +770,8 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               {isSummary
                 ? renderSummaryBody(flatOwnItems)
                 : isServiceStyle
-                  ? renderServiceBody(flatOwnItems, hidePrice)
-                  : renderBody(flatOwnItems, hidePrice)}
+                  ? renderServiceBody(flatOwnItems, categoryName, hidePrice)
+                  : renderBody(flatOwnItems, categoryName, hidePrice)}
               {flatChildren.map((child) => (
                 <View key={child.name} style={styles.subsection}>
                   <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
@@ -747,12 +781,12 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                         ? ""
                         : amountContent(
                             bucketSubtotal(child.items),
-                            sell(bucketSubtotal(child.items)),
+                            sellForCategory(bucketSubtotal(child.items), child.name),
                             data.showCost,
                           )}
                     </Text>
                   </View>
-                  {isSummary ? renderSummaryBody(child.items) : renderBody(child.items, hidePrice)}
+                  {isSummary ? renderSummaryBody(child.items) : renderBody(child.items, child.name, hidePrice)}
                 </View>
               ))}
             </View>
@@ -766,13 +800,13 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 <View style={styles.subtotalsRow}>
                   <Text style={styles.subtotalsRowLabel}>Rental components total</Text>
                   <Text style={styles.subtotalsRowValue}>
-                    {amountContent(rentalTotal, sell(rentalTotal), data.showCost)}
+                    {amountContent(rentalTotal, sellRentalTotal, data.showCost)}
                   </Text>
                 </View>
                 <View style={styles.subtotalsRow}>
                   <Text style={styles.subtotalsRowLabel}>Show services total</Text>
                   <Text style={styles.subtotalsRowValue}>
-                    {amountContent(servicesTotal, sell(servicesTotal), data.showCost)}
+                    {amountContent(servicesTotal, sellServicesTotal, data.showCost)}
                   </Text>
                 </View>
               </>
@@ -782,7 +816,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 taxable base is exactly the rental components total
                 (already computed above). No tax rate or jurisdiction
                 logic involved; this just labels which part of the total
-                is subject to tax at all. Uses sell(rentalTotal), not
+                is subject to tax at all. Uses sellRentalTotal, not
                 rentalTotal -- tax applies to what the client is actually
                 charged, not internal cost (this was a real, separate
                 latent bug: the base was cost even on the client-facing
@@ -790,7 +824,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
             <View style={styles.subtotalsRow}>
               <Text style={styles.subtotalsRowLabel}>Total taxable</Text>
               <Text style={styles.subtotalsRowValue}>
-                {amountContent(rentalTotal, sell(rentalTotal), data.showCost)}
+                {amountContent(rentalTotal, sellRentalTotal, data.showCost)}
               </Text>
             </View>
             {data.taxRate && (
@@ -800,7 +834,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     Estimated tax ({data.taxRate.label}, {(data.taxRate.rate * 100).toFixed(2)}%)
                   </Text>
                   <Text style={styles.subtotalsRowValue}>
-                    {moneyFromNumber(sell(rentalTotal) * data.taxRate.rate)}
+                    {moneyFromNumber(sellRentalTotal * data.taxRate.rate)}
                   </Text>
                 </View>
                 <Text style={styles.taxDisclaimer}>{TAX_ESTIMATE_DISCLAIMER}</Text>

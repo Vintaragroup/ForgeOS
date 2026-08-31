@@ -76,16 +76,16 @@ enum SystemRole {
 }
 
 model User {
-  id           String     @id @default(cuid())
-  name         String
-  email        String     @unique
-  role         String? // job title, e.g. "Estimator" -- not access control
-  department   String?
-  systemRole   SystemRole @default(EMPLOYEE)
+  id                String     @id @default(cuid())
+  name              String
+  email             String     @unique
+  role              String? // job title, e.g. "Estimator" -- not access control
+  department        String?
+  systemRole        SystemRole @default(EMPLOYEE)
   // scrypt "salt:hash" pair, set via `npm run set-password` -- never through
   // a web form, so there is no unauthenticated password-set endpoint. Null
   // until set, meaning the account can't log in yet. See src/lib/auth.ts.
-  passwordHash String?
+  passwordHash      String?
   // Item #7 of the security/hardening roadmap: embedded as a claim inside
   // the signed session cookie at issue time (session.ts's
   // buildSessionValue) and compared against this column on every request
@@ -106,12 +106,12 @@ model User {
   opportunities   Opportunity[]             @relation("OpportunityOwner")
   collaboratingOn OpportunityCollaborator[] @relation("OpportunityCollaborator")
 
-  approvedEstimateVersions EstimateVersion[] @relation("EstimateVersionApprover")
+  approvedEstimateVersions EstimateVersion[]     @relation("EstimateVersionApprover")
   uploadedAttachments      Attachment[]
   assignedTasks            Task[]
   recordedCostActuals      CostActual[]
-  adminAuditLogsActed      AdminAuditLog[]   @relation("AdminAuditLogActor")
-  adminAuditLogsTargeted   AdminAuditLog[]   @relation("AdminAuditLogTarget")
+  adminAuditLogsActed      AdminAuditLog[]       @relation("AdminAuditLogActor")
+  adminAuditLogsTargeted   AdminAuditLog[]       @relation("AdminAuditLogTarget")
   uploadedDocuments        Document[]
   deadlineActionsTaken     DeadlineAction[]
   aiUsageEvents            AiUsageEvent[]
@@ -585,8 +585,8 @@ enum LaborRateType {
 // web view, same meaning as EstimateSection.sortOrder but for this
 // unrelated grouping axis.
 model Category {
-  id   String @id @default(cuid())
-  name String @unique
+  id       String     @id @default(cuid())
+  name     String     @unique
   // Stable identifier the categorization heuristics (line-item-category.ts)
   // resolve against -- set once at creation (slugified from name, see
   // categories/actions.ts's createCategory) and never regenerated on a
@@ -597,7 +597,7 @@ model Category {
   // LineItem before updateCategory's rename cascade existed -- name drift
   // is handled for existing data by that cascade; key stability is what
   // prevents it for data written after the rename.
-  key      String @unique
+  key      String     @unique
   parentId String?
   parent   Category?  @relation("CategoryParent", fields: [parentId], references: [id])
   children Category[] @relation("CategoryParent")
@@ -619,7 +619,35 @@ model Category {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  marginOverrides CategoryMarginOverride[]
+
   @@map("categories")
+}
+
+// A per-EstimateVersion margin override for one Category -- lets an
+// estimator price e.g. Structure differently from Labor, instead of the
+// single version-wide EstimateVersion.marginTargetPct applying uniformly
+// everywhere. `categoryId` can point at a primary Type row (Structure) or
+// a Method leaf (Structure - Rental) -- the schema doesn't care; only
+// Type-level rows get an editable UI control for now (see
+// resolveLineItemMarginPct's own comment for the leaf-then-Type-then-
+// document fallback order this feeds). One row per (version, category);
+// deleting a row (not zeroing marginPct) is how an estimator reverts a
+// category back to inheriting the document's own target.
+model CategoryMarginOverride {
+  id                String          @id @default(cuid())
+  estimateVersionId String
+  estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
+  categoryId        String
+  category          Category        @relation(fields: [categoryId], references: [id])
+
+  marginPct Decimal @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([estimateVersionId, categoryId])
+  @@map("category_margin_overrides")
 }
 
 // Only meaningful for CITY_MARKET rows -- DEPARTMENT (shop) rates are a
@@ -862,15 +890,16 @@ model EstimateVersion {
   // shows generatedAt/lineItemCount so staleness is visible, not hidden).
   coverageAnalysis Json?
 
-  sections             EstimateSection[]
-  options              Option[]
-  bidPackages          BidPackage[]
-  proposals            Proposal[]
-  changeOrdersAsBase   ChangeOrder[]         @relation("ChangeOrderBaseVersion")
-  changeOrderAsResult  ChangeOrder?          @relation("ChangeOrderResultVersion")
-  cutListParts         CutListPart[]
-  cutSheets            CutSheet[]
-  vendorMatchApplyLogs VendorMatchApplyLog[]
+  sections                EstimateSection[]
+  options                 Option[]
+  bidPackages             BidPackage[]
+  proposals               Proposal[]
+  changeOrdersAsBase      ChangeOrder[]            @relation("ChangeOrderBaseVersion")
+  changeOrderAsResult     ChangeOrder?             @relation("ChangeOrderResultVersion")
+  cutListParts            CutListPart[]
+  cutSheets               CutSheet[]
+  vendorMatchApplyLogs    VendorMatchApplyLog[]
+  categoryMarginOverrides CategoryMarginOverride[]
 
   @@map("estimate_versions")
 }
@@ -1047,7 +1076,7 @@ model CutListPart {
   material   Material @relation(fields: [materialId], references: [id])
 
   description String
-  qty         Int     @default(1)
+  qty         Int      @default(1)
   // Inches, same convention as Material's stock fields above. width is
   // meaningless (left null) for a LINEAR material's part -- only length
   // (cut-to-length) applies; a SHEET material's part uses both.
@@ -1110,7 +1139,7 @@ model CutSheet {
   // not the part's originally entered width/length, so a renderer
   // (phase 3) can draw straight from this without re-deriving
   // orientation itself.
-  layout Json
+  layout      Json
 
   // Phase 5: set when this sheet was actually cut from an existing
   // remnant instead of fresh full-size stock -- null for an ordinary
@@ -1126,20 +1155,20 @@ model CutSheet {
   // packing run, if any, above the practical minimum size to bother
   // tracking. Deleted alongside this CutSheet on re-optimize (see
   // optimizeNestingForMaterial), not left as a stale orphan.
-  generatedRemnant MaterialRemnant? @relation("GeneratedRemnant")
+  generatedRemnant  MaterialRemnant? @relation("GeneratedRemnant")
 
   // Cut-list phase 8: survives re-optimize untouched (see
   // clearStaleCutSheets) -- CutList Plus's "pinned diagrams." A locked
   // sheet also always renders read-only (CutSheetDiagram, not the drag
   // editor), same as a locked EstimateVersion -- "locked" means
   // "finalized," not "protected from the optimizer but still draggable."
-  locked Boolean @default(false)
+  locked Boolean   @default(false)
   // Shop-floor confirmation this sheet was physically cut -- a
   // production action, deliberately NOT gated by EstimateVersion.isLocked
   // the way every other cut-list mutation is: cutting happens BECAUSE an
   // estimate is locked/accepted, gating it the same way would be
   // backwards.
-  cutAt DateTime?
+  cutAt  DateTime?
 
   createdAt DateTime @default(now())
 

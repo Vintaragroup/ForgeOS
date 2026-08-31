@@ -6,6 +6,7 @@ import {
   addLineItem,
   addOption,
   addSection,
+  clearCategoryMarginOverride,
   computeLineItemTotal,
   computeMarginGrossUp,
   computeOptionTotal,
@@ -25,11 +26,13 @@ import {
   recomputeVersionTotals,
   removeLineItemFromBidPackage,
   setBidPackageStatus,
+  setCategoryMarginOverride,
   updateLineItem,
   updateMarginTarget,
 } from "@/lib/estimate-service";
 
 afterEach(async () => {
+  await db.categoryMarginOverride.deleteMany();
   await db.lineItem.deleteMany();
   await db.attachment.deleteMany();
   await db.document.deleteMany();
@@ -40,11 +43,16 @@ afterEach(async () => {
   await db.estimate.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
+  await db.category.deleteMany();
 });
 
 afterAll(async () => {
   await db.$disconnect();
 });
+
+function makeCategory(name: string, key: string) {
+  return db.category.create({ data: { name, key } });
+}
 
 async function makeEstimate() {
   const company = await db.company.create({ data: { name: "Test Co" } });
@@ -112,8 +120,8 @@ describe("computeVersionTotals", () => {
     const totals = computeVersionTotals({
       marginTargetPct: 50,
       sections: [
-        { lineItems: [{ totalCost: 100 }, { totalCost: 200 }] },
-        { lineItems: [{ totalCost: 300 }] },
+        { groupLabel: null, buildType: null, lineItems: [{ totalCost: 100, category: null }, { totalCost: 200, category: null }] },
+        { groupLabel: null, buildType: null, lineItems: [{ totalCost: 300, category: null }] },
       ],
     });
 
@@ -129,6 +137,116 @@ describe("computeVersionTotals", () => {
     expect(totals.totalCost.toNumber()).toBe(0);
     expect(totals.grandTotal.toNumber()).toBe(0);
     expect(totals.grossMarginPct.toNumber()).toBe(0);
+  });
+
+  it("grosses up each category at its own overridden margin instead of one global rate", () => {
+    const categories = [
+      { id: "structure", name: "Structure", key: "structure", parentId: null },
+      { id: "labor", name: "Labor", key: "labor", parentId: null },
+    ];
+    const overrides = new Map([["structure", new Prisma.Decimal(0)]]);
+
+    const totals = computeVersionTotals(
+      {
+        marginTargetPct: 50,
+        sections: [
+          {
+            groupLabel: null,
+            buildType: null,
+            lineItems: [
+              { totalCost: 100, category: "Structure" },
+              { totalCost: 100, category: "Labor" },
+            ],
+          },
+        ],
+      },
+      categories,
+      overrides,
+    );
+
+    expect(totals.totalCost.toNumber()).toBe(200);
+    // Structure grosses up at its 0% override (100/1 = 100); Labor at the
+    // 50% document default (100/0.5 = 200) -- 300 total, not 400 (what a
+    // single global 50% rate over the combined 200 cost would give).
+    expect(totals.grandTotal.toNumber()).toBe(300);
+  });
+
+  it("falls back to the document target for a category with no override", () => {
+    const categories = [{ id: "structure", name: "Structure", key: "structure", parentId: null }];
+
+    const totals = computeVersionTotals(
+      { marginTargetPct: 50, sections: [{ groupLabel: null, buildType: null, lineItems: [{ totalCost: 100, category: "Structure" }] }] },
+      categories,
+      new Map(),
+    );
+
+    expect(totals.grandTotal.toNumber()).toBe(200);
+  });
+});
+
+describe("category margin overrides", () => {
+  it("prices an overridden category at its own rate, blending into a real margin that differs from the document target", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 50);
+    const structure = await makeCategory("Structure", "structure");
+    await makeCategory("Labor", "labor");
+    const section = await addSection(version.id, { name: "Section 1", sectionType: "CATEGORY" });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", category: "Structure", qty: 1, unitCost: 100 });
+    await addLineItem(version.id, section.id, { lineType: "LABOR", description: "Install", category: "Labor", qty: 1, unitCost: 100 });
+
+    await setCategoryMarginOverride(version.id, structure.id, 0);
+
+    const updated = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(updated.totalCost.toNumber()).toBe(200);
+    // Structure at its 0% override (100) + Labor at the 50% document
+    // default (200) = 300, not 400 (what one global 50% rate would give).
+    expect(updated.grandTotal.toNumber()).toBe(300);
+    // The document's own target is untouched by setting an override --
+    // it's the goal, not "the" margin.
+    expect(updated.marginTargetPct.toNumber()).toBe(50);
+    // The real, blended margin now differs from that target.
+    expect(updated.grossMarginPct.toNumber()).toBeCloseTo(33.33, 1);
+  });
+
+  it("clearing an override reverts a category to the document target", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 50);
+    const structure = await makeCategory("Structure", "structure");
+    const section = await addSection(version.id, { name: "Section 1", sectionType: "CATEGORY" });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", category: "Structure", qty: 1, unitCost: 100 });
+
+    await setCategoryMarginOverride(version.id, structure.id, 0);
+    expect((await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } })).grandTotal.toNumber()).toBe(100);
+
+    await clearCategoryMarginOverride(version.id, structure.id);
+    expect((await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } })).grandTotal.toNumber()).toBe(200);
+  });
+
+  it("rejects setting or clearing an override on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 50);
+    const structure = await makeCategory("Structure", "structure");
+    await lockEstimateVersion(version.id);
+
+    await expect(setCategoryMarginOverride(version.id, structure.id, 0)).rejects.toThrow(/locked/);
+    await expect(clearCategoryMarginOverride(version.id, structure.id)).rejects.toThrow(/locked/);
+  });
+
+  it("carries category margin overrides forward when creating a new version from a locked one", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 50);
+    const structure = await makeCategory("Structure", "structure");
+    const section = await addSection(version.id, { name: "Section 1", sectionType: "CATEGORY" });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", category: "Structure", qty: 1, unitCost: 100 });
+    await setCategoryMarginOverride(version.id, structure.id, 0);
+    await lockEstimateVersion(version.id);
+
+    const newVersion = await createNewVersionFromLocked(version.id);
+
+    const overrides = await db.categoryMarginOverride.findMany({ where: { estimateVersionId: newVersion.id } });
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0].categoryId).toBe(structure.id);
+    expect(overrides[0].marginPct.toNumber()).toBe(0);
   });
 });
 

@@ -34,6 +34,7 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
             // download for an already-sent Proposal, so the same fix
             // matters even more here.
             sections: { where: { optionId: null }, include: { lineItems: { where: { isDraft: false } } } },
+            categoryMarginOverrides: true,
           },
         },
       },
@@ -79,6 +80,8 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
         paymentMethodNote,
         taxRate,
         grandTotal: version.grandTotal,
+        marginTargetPct: version.marginTargetPct,
+        categoryMarginOverrides: version.categoryMarginOverrides,
         sentAt: proposal.sentAt,
         signedAt: proposal.signedAt,
         signedByName: proposal.signedByName,

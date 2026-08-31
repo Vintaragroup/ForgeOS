@@ -7,9 +7,10 @@
 // guarding against a markup-formula substitution."
 
 import { db } from "@/lib/db";
-import { Prisma } from "@/generated/prisma/client";
+import { Prisma, type Category } from "@/generated/prisma/client";
 import type { BidPackageStatus, LineItemType, SectionBuildType, SectionType } from "@/generated/prisma/enums";
 import { inferCategoryFromDescription, mapDesignCostCategoryToCanonical } from "@/lib/line-item-category";
+import { resolveEffectiveCategory, resolveTypeKeyForCategoryKey } from "@/lib/proposal-view-model";
 
 type Decimal = Prisma.Decimal;
 type DecimalInput = Decimal | number | string;
@@ -51,19 +52,81 @@ export interface VersionTotals {
   grossMarginPct: Decimal;
 }
 
+// Three-tier fallback for which margin % actually prices one line item:
+// (1) an override on the item's own exact resolved category -- supports a
+// future Method-leaf-level override (e.g. "Structure - Rental" priced
+// differently from "Structure - Purchase") with no schema change, even
+// though only Type-level rows get an editable UI control today; (2) an
+// override on that category's Type parent, when the resolved category is
+// itself a Method leaf (resolveTypeKeyForCategoryKey -- the same key-based
+// lookup proposal-view-model.ts's own Type/Method composition uses, never
+// Category.parentId, for the same real-data reason documented there); (3)
+// the document's own marginTargetPct, now a fallback/default rather than
+// the only margin that exists. A category with no override at any tier
+// still prices at the document's target, so this is fully backward
+// compatible when `overridesByCategoryId` is empty.
+export function resolveLineItemMarginPct(
+  effectiveCategoryName: string,
+  categories: Pick<Category, "id" | "name" | "key">[],
+  overridesByCategoryId: Map<string, Decimal>,
+  documentMarginPct: DecimalInput,
+): Decimal {
+  const category = categories.find((c) => c.name === effectiveCategoryName);
+  if (!category) return new Prisma.Decimal(documentMarginPct);
+
+  const own = overridesByCategoryId.get(category.id);
+  if (own) return own;
+
+  const typeKey = resolveTypeKeyForCategoryKey(category.key);
+  if (typeKey) {
+    const typeCategory = categories.find((c) => c.key === typeKey);
+    const typeOverride = typeCategory && overridesByCategoryId.get(typeCategory.id);
+    if (typeOverride) return typeOverride;
+  }
+
+  return new Prisma.Decimal(documentMarginPct);
+}
+
 // Mirrors Price Summary!J130/J131 ("GROSS MARGIN" = (sell-cost)/sell)
 // rather than just echoing marginTargetPct back -- computing it
 // independently is a sanity check that grandTotal was actually derived by
 // gross-up, not some other path.
-export function computeVersionTotals(version: {
-  marginTargetPct: DecimalInput;
-  sections: { lineItems: { totalCost: DecimalInput }[] }[];
-}): VersionTotals {
-  const totalCost = version.sections.reduce(
-    (sum, section) => sum.plus(computeSectionTotal(section.lineItems)),
-    new Prisma.Decimal(0),
-  );
-  const grandTotal = computeMarginGrossUp(totalCost, version.marginTargetPct);
+//
+// Grosses up PER LINE ITEM (each at its own resolveLineItemMarginPct-
+// resolved rate) and sums, rather than summing cost once and grossing up
+// the total -- this is what actually lets different categories carry
+// different margins. computeMarginGrossUp is a linear scalar
+// (cost * 100/(100-pct)), so whenever every item resolves to the same
+// margin (no overrides set), summing per-item gross-ups is mathematically
+// identical to grossing up the summed total once -- today's behavior is
+// preserved exactly, not approximated, when `categories`/
+// `overridesByCategoryId` carry no overrides.
+export function computeVersionTotals(
+  version: {
+    marginTargetPct: DecimalInput;
+    sections: {
+      groupLabel: string | null;
+      buildType?: SectionBuildType | null;
+      lineItems: { totalCost: DecimalInput; isDraft?: boolean; category: string | null }[];
+    }[];
+  },
+  categories: Pick<Category, "id" | "name" | "key" | "parentId">[] = [],
+  overridesByCategoryId: Map<string, Decimal> = new Map(),
+): VersionTotals {
+  let totalCost = new Prisma.Decimal(0);
+  let grandTotal = new Prisma.Decimal(0);
+
+  for (const section of version.sections) {
+    for (const li of section.lineItems) {
+      if (li.isDraft) continue;
+      const cost = new Prisma.Decimal(li.totalCost);
+      const categoryName = resolveEffectiveCategory(li, section, categories);
+      const marginPct = resolveLineItemMarginPct(categoryName, categories, overridesByCategoryId, version.marginTargetPct);
+      totalCost = totalCost.plus(cost);
+      grandTotal = grandTotal.plus(computeMarginGrossUp(cost, marginPct));
+    }
+  }
+
   const grossMarginPct = grandTotal.isZero()
     ? new Prisma.Decimal(0)
     : grandTotal.minus(totalCost).dividedBy(grandTotal).times(100);
@@ -713,16 +776,29 @@ export async function updateMarginTarget(estimateVersionId: string, marginTarget
   return recomputeVersionTotals(estimateVersionId);
 }
 
+// Shared by recomputeVersionTotals/lockEstimateVersion below -- both need
+// the live category list and this version's own margin overrides
+// alongside the version itself to gross up per line item instead of once
+// over the whole version's cost.
+async function fetchCategoriesAndMarginOverrides(estimateVersionId: string) {
+  const [categories, overrides] = await Promise.all([
+    db.category.findMany({ where: { deletedAt: null } }),
+    db.categoryMarginOverride.findMany({ where: { estimateVersionId } }),
+  ]);
+  const overridesByCategoryId = new Map(overrides.map((o) => [o.categoryId, o.marginPct]));
+  return { categories, overridesByCategoryId };
+}
+
 // Recomputes and persists totalCost/grandTotal/grossMarginPct without
 // locking -- lets the UI show a live-updating grand total as line items
 // change, per task #38's "live-computed totals."
 export async function recomputeVersionTotals(estimateVersionId: string) {
-  const version = await db.estimateVersion.findUniqueOrThrow({
-    where: { id: estimateVersionId },
-    include: VERSION_WITH_TOTALS_INCLUDE,
-  });
+  const [version, { categories, overridesByCategoryId }] = await Promise.all([
+    db.estimateVersion.findUniqueOrThrow({ where: { id: estimateVersionId }, include: VERSION_WITH_TOTALS_INCLUDE }),
+    fetchCategoriesAndMarginOverrides(estimateVersionId),
+  ]);
 
-  const totals = computeVersionTotals(version);
+  const totals = computeVersionTotals(version, categories, overridesByCategoryId);
 
   return db.estimateVersion.update({
     where: { id: estimateVersionId },
@@ -734,20 +810,43 @@ export async function recomputeVersionTotals(estimateVersionId: string) {
 // freezes totals and flips isLocked so addSection/addLineItem/etc. above
 // start rejecting further edits.
 export async function lockEstimateVersion(estimateVersionId: string) {
-  const version = await db.estimateVersion.findUniqueOrThrow({
-    where: { id: estimateVersionId },
-    include: VERSION_WITH_TOTALS_INCLUDE,
-  });
+  const [version, { categories, overridesByCategoryId }] = await Promise.all([
+    db.estimateVersion.findUniqueOrThrow({ where: { id: estimateVersionId }, include: VERSION_WITH_TOTALS_INCLUDE }),
+    fetchCategoriesAndMarginOverrides(estimateVersionId),
+  ]);
   if (version.isLocked) {
     throw new Error(`EstimateVersion ${estimateVersionId} is already locked.`);
   }
 
-  const totals = computeVersionTotals(version);
+  const totals = computeVersionTotals(version, categories, overridesByCategoryId);
 
   return db.estimateVersion.update({
     where: { id: estimateVersionId },
     data: { ...totals, isLocked: true, lockedAt: new Date() },
   });
+}
+
+// Sets (or replaces) this version's margin override for one category --
+// upsert since an estimator adjusting an already-overridden category's %
+// is the common case, not just the first-time set. Deleting the row (see
+// clearCategoryMarginOverride below), not writing a sentinel/null
+// marginPct, is how an override reverts a category back to inheriting the
+// document's own target -- keeps resolveLineItemMarginPct's own lookup a
+// plain "does a row exist" check.
+export async function setCategoryMarginOverride(estimateVersionId: string, categoryId: string, marginPct: DecimalInput) {
+  await assertUnlocked(estimateVersionId);
+  await db.categoryMarginOverride.upsert({
+    where: { estimateVersionId_categoryId: { estimateVersionId, categoryId } },
+    create: { estimateVersionId, categoryId, marginPct: new Prisma.Decimal(marginPct) },
+    update: { marginPct: new Prisma.Decimal(marginPct) },
+  });
+  await recomputeVersionTotals(estimateVersionId);
+}
+
+export async function clearCategoryMarginOverride(estimateVersionId: string, categoryId: string) {
+  await assertUnlocked(estimateVersionId);
+  await db.categoryMarginOverride.deleteMany({ where: { estimateVersionId, categoryId } });
+  await recomputeVersionTotals(estimateVersionId);
 }
 
 function lineItemCreateData(li: {
@@ -785,6 +884,7 @@ export async function createNewVersionFromLocked(estimateVersionId: string) {
     include: {
       sections: { where: { optionId: null }, include: { lineItems: true } },
       options: { include: { sections: { include: { lineItems: true } } } },
+      categoryMarginOverrides: true,
     },
   });
   if (!source.isLocked) {
@@ -834,6 +934,20 @@ export async function createNewVersionFromLocked(estimateVersionId: string) {
             })),
           },
         },
+      });
+    }
+
+    // Category margin overrides are a per-version estimator decision, same
+    // as marginTargetPct above -- carried forward so the new version
+    // starts priced the same way the locked one was, not reset to the
+    // document target for every category on every new version.
+    if (source.categoryMarginOverrides.length > 0) {
+      await tx.categoryMarginOverride.createMany({
+        data: source.categoryMarginOverrides.map((o) => ({
+          estimateVersionId: created.id,
+          categoryId: o.categoryId,
+          marginPct: o.marginPct,
+        })),
       });
     }
 

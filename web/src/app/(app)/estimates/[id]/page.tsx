@@ -28,6 +28,7 @@ import {
   approveVersionAction,
   archiveEstimateAction,
   bulkMoveLineItemsCategoryAction,
+  clearCategoryMarginOverrideAction,
   confirmDraftLineItemAction,
   createFirstVersion,
   createNewVersionAction,
@@ -36,6 +37,7 @@ import {
   lockVersionAction,
   moveLineItemAction,
   recordCostActualAction,
+  setCategoryMarginOverrideAction,
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
@@ -57,7 +59,7 @@ import {
 import { reconcileAgainstClientTemplate, type ClientTemplateReconciliation } from "@/lib/client-pricing-template-service";
 import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import type { CoverageGap } from "@/lib/ai/scope-coverage-service";
-import { computeOptionTotal } from "@/lib/estimate-service";
+import { computeMarginGrossUp, computeOptionTotal, resolveLineItemMarginPct } from "@/lib/estimate-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 import { findAlternateGroups } from "@/lib/ai/spreadsheet-line-item-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
@@ -239,6 +241,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     taxRates,
     laborRates,
     categories,
+    categoryMarginOverrides,
     attachments,
     pricingScheduleDocuments,
     scopeDocuments,
@@ -253,6 +256,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       orderBy: [{ rateType: "asc" }, { departmentName: "asc" }, { city: "asc" }, { laborTier: "asc" }],
     }),
     db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } }),
+    currentVersion
+      ? db.categoryMarginOverride.findMany({ where: { estimateVersionId: currentVersion.id } })
+      : Promise.resolve([]),
     db.attachment.findMany({
       where: { estimateId: estimate.id, deletedAt: null },
       orderBy: { createdAt: "desc" },
@@ -551,6 +557,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     opportunityId={estimate.opportunityId}
                     version={currentVersion}
                     categories={categories}
+                    categoryMarginOverrides={categoryMarginOverrides}
                     categoryOptions={categoryOptions}
                     laborRates={laborRateOptions}
                     attachments={attachments}
@@ -1059,6 +1066,7 @@ function LineItemsTab({
   opportunityId,
   version,
   categories,
+  categoryMarginOverrides,
   categoryOptions,
   laborRates,
   attachments,
@@ -1069,6 +1077,7 @@ function LineItemsTab({
   opportunityId: string;
   version: VersionWithSections;
   categories: { id: string; name: string; key: string; parentId: string | null }[];
+  categoryMarginOverrides: { categoryId: string; marginPct: Prisma.Decimal }[];
   categoryOptions: { value: string; label: string }[];
   laborRates: LaborRateOption[];
   attachments: { id: string; fileRef: string }[];
@@ -1077,6 +1086,7 @@ function LineItemsTab({
 }) {
   const buckets = bucketLineItemsByCategory(version.sections, categories);
   const primaryTabs = groupPrimaryCategoryTabs(buckets, categories);
+  const marginOverrideByCategoryId = new Map(categoryMarginOverrides.map((o) => [o.categoryId, o.marginPct]));
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
   const draftCount = version.sections.flatMap((s) => s.lineItems).filter((li) => li.isDraft).length;
 
@@ -1141,6 +1151,55 @@ function LineItemsTab({
           </div>
         )}
 
+        {!version.isLocked && (
+          <details className="mb-6 rounded-md border border-neutral-200">
+            <summary className="cursor-pointer list-none px-4 py-2.5 text-sm font-medium marker:content-none [&::-webkit-details-marker]:hidden">
+              Category margins
+              <span className="ml-2 font-normal text-neutral-500">
+                (Target: {version.marginTargetPct.toString()}% &middot; Blended actual: {version.grossMarginPct.toFixed(1)}%)
+              </span>
+            </summary>
+            <div className="flex flex-col gap-2 border-t border-neutral-200 p-4">
+              <p className="mb-1 text-xs text-neutral-500">
+                Leave blank to price a Type at the margin target above. An override only applies to that Type -- everything
+                else keeps inheriting the target until it gets its own override.
+              </p>
+              {primaryTabs.map((tab) => {
+                const override = marginOverrideByCategoryId.get(tab.id);
+                return (
+                  <div key={tab.id} className="flex flex-wrap items-center gap-2">
+                    <span className="w-40 text-sm text-neutral-700">{tab.label}</span>
+                    <form
+                      action={setCategoryMarginOverrideAction.bind(null, estimateId, version.id, tab.id)}
+                      className="flex items-center gap-2"
+                    >
+                      <div className="w-24">
+                        <Field
+                          label=""
+                          name="marginPct"
+                          type="number"
+                          defaultValue={override?.toString()}
+                          placeholder={`${version.marginTargetPct.toString()}%`}
+                        />
+                      </div>
+                      <Button variant="secondary" type="submit">
+                        Set
+                      </Button>
+                    </form>
+                    {override && (
+                      <form action={clearCategoryMarginOverrideAction.bind(null, estimateId, version.id, tab.id)}>
+                        <button type="submit" className="text-xs text-neutral-500 underline hover:text-neutral-700">
+                          Reset to target
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        )}
+
         {untaggedBoothLabels.length > 0 && (
           <div className="mb-6 rounded-md border border-amber-200 bg-amber-50 p-4">
             <h3 className="mb-1 text-sm font-semibold text-amber-900">
@@ -1196,6 +1255,8 @@ function LineItemsTab({
                   attachments={attachments}
                   users={users}
                   boothGroupsByCategoryName={boothGroupsByCategoryName}
+                  categories={categories}
+                  marginOverrideByCategoryId={marginOverrideByCategoryId}
                 />,
               ]),
             )}
@@ -2173,6 +2234,8 @@ function PrimaryCategoryTabContent({
   categoryOptions: { value: string; label: string }[];
   attachments: { id: string; fileRef: string }[];
   users: { id: string; name: string }[];
+  categories: { id: string; name: string; key: string; parentId: string | null }[];
+  marginOverrideByCategoryId: Map<string, Prisma.Decimal>;
 }) {
   if (!tab.hasMethodSplit) {
     return (
@@ -2221,6 +2284,8 @@ function CategoryTabContent({
   attachments,
   users,
   boothGroups,
+  categories,
+  marginOverrideByCategoryId,
 }: {
   bucket: RawCategoryBucket<SectionLineItem>;
   version: VersionWithSections;
@@ -2236,6 +2301,8 @@ function CategoryTabContent({
   // renders here via this grouped view, so the flat sectionGroups list
   // below excludes them (see flatSectionGroups) -- never both.
   boothGroups?: RawBoothGroup<SectionLineItem>[];
+  categories: { id: string; name: string; key: string; parentId: string | null }[];
+  marginOverrideByCategoryId: Map<string, Prisma.Decimal>;
 }) {
   const hasBoothGroups = !!boothGroups && boothGroups.length > 0;
   const flatSectionGroups = hasBoothGroups ? bucket.sectionGroups.filter((g) => !g.groupLabel) : bucket.sectionGroups;
@@ -2244,14 +2311,21 @@ function CategoryTabContent({
   // explicit category, never back to a guess.
   const moveCategoryOptions = categoryOptions.filter((o) => o.value !== "");
 
-  // Same ratio-based cost -> price scaling as proposal-pdf.tsx's sell()
-  // (commit ed6bc2d) -- simpler here since version.totalCost/grandTotal
-  // are already top-level fields on this page, no need to re-derive from
-  // buckets. Read-only: margin is still one version-level "Margin target
-  // (%)" field (above, on this tab), not editable per component.
-  const totalCostNum = version.totalCost.toNumber();
-  const priceRatio = totalCostNum > 0 ? version.grandTotal.toNumber() / totalCostNum : 1;
-  const sell = (cost: number) => cost * priceRatio;
+  // Grosses up at THIS bucket's own resolved category's margin (its
+  // override if set, else the document target) -- not one global
+  // grandTotal/totalCost ratio anymore, now that different categories can
+  // carry different margins. Approximate for the "All" merged Method view
+  // (mergeCategoryBucketsForAllMethods) specifically: that bucket's
+  // sectionGroups can span several leaf categories (Rental/Purchase/
+  // Custom Fabricated) that could each carry their own override, but this
+  // preview still prices the whole merged subtotal at the Type's own
+  // margin -- correct for every non-merged bucket (every flat category
+  // and every single-Method-filtered view, which is the common case), an
+  // approximation only for "All." Internal estimator preview only; the
+  // client-facing Proposal PDF (proposal-pdf.tsx) grosses up per line item
+  // for full correctness.
+  const bucketMarginPct = resolveLineItemMarginPct(bucket.category.name, categories, marginOverrideByCategoryId, version.marginTargetPct);
+  const sell = (cost: number) => computeMarginGrossUp(cost, bucketMarginPct).toNumber();
 
   if (flatSectionGroups.length === 0 && !hasBoothGroups) {
     const firstSection = version.sections[0];

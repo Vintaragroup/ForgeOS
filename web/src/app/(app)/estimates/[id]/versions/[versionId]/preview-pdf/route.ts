@@ -62,6 +62,7 @@ export async function GET(
         // same isDraft rule here keeps the whole document internally
         // consistent.
         sections: { where: { optionId: null }, include: { lineItems: { where: { isDraft: false } } } },
+        categoryMarginOverrides: true,
       },
     }),
     db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } }),
@@ -129,6 +130,8 @@ export async function GET(
         paymentMethodNote,
         taxRate,
         grandTotal: version.grandTotal,
+        marginTargetPct: version.marginTargetPct,
+        categoryMarginOverrides: version.categoryMarginOverrides,
         sentAt: null,
         signedAt: null,
         signedByName: null,
