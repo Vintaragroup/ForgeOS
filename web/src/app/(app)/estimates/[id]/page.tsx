@@ -73,6 +73,7 @@ import { auditLineItemCategories } from "@/lib/category-audit";
 import type { SectionBuildType } from "@/generated/prisma/enums";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { getVendorMatchApplyLog } from "@/lib/vendor-match-apply-log-service";
+import { buildTypeTotals } from "@/lib/type-totals";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
@@ -537,6 +538,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                 { id: "options", label: "Options (alternates)", count: currentVersion.options.length },
                 { id: "bid-packages", label: "Bid Packages", count: currentVersion.bidPackages.length },
                 { id: "documents", label: "Documents" },
+                { id: "type-totals", label: "Type Totals" },
                 { id: "review", label: "Review", count: reviewIssueCount },
                 { id: "proposal", label: "Proposal & Approval" },
                 { id: "cut-list", label: "Cut List" },
@@ -603,6 +605,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     estimateNameById={estimateNameById}
                   />
                 ),
+                "type-totals": <TypeTotalsTab version={currentVersion} categories={categories} />,
                 review: (
                   <ReviewTab
                     estimateId={estimate.id}
@@ -3170,6 +3173,64 @@ function DocumentsTab({
           )}
         </Card>
       )}
+    </div>
+  );
+}
+
+// "Type Totals" tab: a production/inventory pull-quantity rollup, not a
+// client-facing view -- how many of each exact physical part are needed
+// across the WHOLE estimate, merged across every booth/section, so the
+// shop knows how much to pull from stock once the job is awarded (a part
+// repeated across 6 booths shows one combined quantity here, unlike the
+// Proposal PDF, which deliberately keeps booth-scoped items separate).
+// Read-only; see buildTypeTotals for the actual rollup logic.
+//
+// Excludes Option/alternate sections the same way the Preview PDF modal's
+// own category list already does (page.tsx's previewSections) -- an
+// alternate hasn't been awarded, so it shouldn't count toward what
+// production needs to pull.
+function TypeTotalsTab({ version, categories }: { version: VersionWithSections; categories: Category[] }) {
+  const baseSections = version.sections.filter((s) => s.optionId === null);
+  const typeTotals = buildTypeTotals(baseSections, categories);
+
+  if (typeTotals.length === 0) {
+    return (
+      <Card className="p-6">
+        <p className="text-sm text-neutral-500">No material line items to total yet.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      {typeTotals.map((group) => (
+        <Card key={group.categoryName} className="p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-neutral-900">{group.categoryName}</h3>
+            <span className="text-sm font-medium text-neutral-700">{money(group.totalCost)}</span>
+          </div>
+          <div className="overflow-x-auto rounded-md border border-neutral-200">
+            <table className="w-full text-sm">
+              <thead className="bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
+                <tr>
+                  <th className="px-3 py-2">Description</th>
+                  <th className="px-3 py-2">Unit</th>
+                  <th className="px-3 py-2 text-right">Qty</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-100">
+                {group.parts.map((part) => (
+                  <tr key={part.key}>
+                    <td className="px-3 py-2">{part.description}</td>
+                    <td className="px-3 py-2 text-neutral-500">{part.unit ?? "--"}</td>
+                    <td className="px-3 py-2 text-right font-medium">{part.qty}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      ))}
     </div>
   );
 }
