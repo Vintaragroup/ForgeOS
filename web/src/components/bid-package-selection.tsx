@@ -4,7 +4,13 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
 
 // Eighth client component (see line-item-row.tsx's header comment on
 // the seventh). Lets a user select a freeform, cross-category set of
-// line items to group into a BidPackage -- the category board
+// line items for whichever bulk action applies -- originally just
+// grouping into a BidPackage (create-bid-package-bar.tsx), now also
+// bulk-recategorizing (move-selected-items-bar.tsx). Kept as one shared
+// selection rather than a separate Set per consumer: checking items
+// doesn't commit to anything until one of the bars' actions is actually
+// submitted, so there's no ambiguity in letting both read the same Set
+// and appear together whenever it's non-empty. The category board
 // (LineItemsTab's inner Tabs) keeps every category's content mounted
 // simultaneously, just hidden-toggled (see components/tabs.tsx's own
 // header comment), so a plain Set in this provider survives switching

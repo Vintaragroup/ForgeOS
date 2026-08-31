@@ -148,7 +148,7 @@ export function LineItemRow({
             className="mr-2 align-middle"
             checked={selection.selectedIds.has(id)}
             onChange={() => selection.toggle(id)}
-            aria-label="Select for a bid package"
+            aria-label="Select this line item (for a bid package or a bulk category move)"
           />
         )}
         {positionCode && (

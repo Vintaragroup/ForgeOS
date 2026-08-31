@@ -6,6 +6,7 @@ import {
   addOption,
   addSection,
   archiveEstimate,
+  bulkMoveLineItemsCategory,
   confirmDraftLineItem,
   createEstimateVersion,
   createNewVersionFromLocked,
@@ -95,6 +96,24 @@ export async function updateSectionItemsCategoryAction(
   const category = String(formData.get("category") ?? "").trim();
   if (!category) throw new Error("Category is required");
   await updateSectionItemsCategory(versionId, sectionId, category);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Called directly as a function from move-selected-items-bar.tsx, not
+// bound to a <form action> -- same reasoning as createBidPackageAction's
+// own header comment: the selected line-item ids live in client
+// selection state (bid-package-selection.tsx), not real form fields.
+export async function bulkMoveLineItemsCategoryAction(
+  estimateId: string,
+  versionId: string,
+  data: { category: string; lineItemIds: string[] },
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const category = data.category.trim();
+  if (!category) throw new Error("Choose a category to move the selected items to.");
+  if (data.lineItemIds.length === 0) throw new Error("Select at least one line item to move.");
+  await bulkMoveLineItemsCategory(versionId, data.lineItemIds, category);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

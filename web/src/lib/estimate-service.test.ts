@@ -6,6 +6,7 @@ import {
   addLineItem,
   addOption,
   addSection,
+  bulkMoveLineItemsCategory,
   computeLineItemTotal,
   computeMarginGrossUp,
   computeOptionTotal,
@@ -474,6 +475,92 @@ describe("Bid packages", () => {
     expect(updated.documentId).toBe(document.id);
     expect(updated.sourceQuote).toBe("Sleeper Floor");
     expect(updated.isDraft).toBe(false);
+  });
+});
+
+describe("bulkMoveLineItemsCategory", () => {
+  it("moves an arbitrary, cross-section set of selected items to a new category", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const sectionA = await addSection(version.id, { name: "Platform", sectionType: "CATEGORY" });
+    const sectionB = await addSection(version.id, { name: "Other Platform", sectionType: "CATEGORY" });
+    const itemA = await addLineItem(version.id, sectionA.id, {
+      lineType: "MATERIAL",
+      description: "Sleeper Floor Required 1\"",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+    const itemB = await addLineItem(version.id, sectionB.id, {
+      lineType: "MATERIAL",
+      description: "Sleeper Floor Required 1\"",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+    // Deliberately left off the selection -- only the two chosen items
+    // should move, not every item sharing their old category.
+    const untouched = await addLineItem(version.id, sectionA.id, {
+      lineType: "MATERIAL",
+      description: "FR Carpet",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    await bulkMoveLineItemsCategory(version.id, [itemA.id, itemB.id], "Structure");
+
+    const moved = await db.lineItem.findMany({ where: { id: { in: [itemA.id, itemB.id] } } });
+    expect(moved.every((li) => li.category === "Structure")).toBe(true);
+    const stillFlooring = await db.lineItem.findUniqueOrThrow({ where: { id: untouched.id } });
+    expect(stillFlooring.category).toBe("Flooring");
+  });
+
+  it("only moves items belonging to the given estimate version, even if a foreign id is included", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "A",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    const otherEstimate = await makeEstimate();
+    const otherVersion = await createEstimateVersion(otherEstimate.id, 0);
+    const otherSection = await addSection(otherVersion.id, { name: "Structure", sectionType: "CATEGORY" });
+    const otherItem = await addLineItem(otherVersion.id, otherSection.id, {
+      lineType: "MATERIAL",
+      description: "B",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+
+    await bulkMoveLineItemsCategory(version.id, [item.id, otherItem.id], "Structure");
+
+    const movedItem = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(movedItem.category).toBe("Structure");
+    const untouchedForeignItem = await db.lineItem.findUniqueOrThrow({ where: { id: otherItem.id } });
+    expect(untouchedForeignItem.category).toBe("Flooring");
+  });
+
+  it("rejects moving items on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "A",
+      category: "Flooring",
+      qty: 1,
+      unitCost: 0,
+    });
+    await lockEstimateVersion(version.id);
+
+    await expect(bulkMoveLineItemsCategory(version.id, [item.id], "Structure")).rejects.toThrow(/locked/);
   });
 });
 

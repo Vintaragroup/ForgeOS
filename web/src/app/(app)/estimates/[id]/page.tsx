@@ -22,6 +22,7 @@ import {
   addSectionAction,
   approveVersionAction,
   archiveEstimateAction,
+  bulkMoveLineItemsCategoryAction,
   confirmDraftLineItemAction,
   createFirstVersion,
   createNewVersionAction,
@@ -76,6 +77,7 @@ import { SectionScopedForm } from "@/components/section-scoped-form";
 import { findClosestCandidateId, type ProposedVendorSection, type VendorLineMatch } from "@/lib/ai/vendor-match-ai-service";
 import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
+import { MoveSelectedItemsBar } from "@/components/move-selected-items-bar";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
   applyAllHighConfidenceMatchesAction,
@@ -1259,7 +1261,18 @@ function LineItemsTab({
               ]),
             )}
           />
-          <CreateBidPackageBar createBidPackage={createBidPackageAction.bind(null, estimateId, version.id)} />
+          {/* One shared sticky wrapper, not one per bar -- position: sticky
+              doesn't reserve stacking space between independently-sticky
+              siblings, so two bars each pinned to their own `bottom-4`
+              paint directly on top of each other instead of stacking
+              (confirmed live: only the second one was ever visible). */}
+          <div className="sticky bottom-4 z-10 mt-4 flex flex-col gap-3">
+            <CreateBidPackageBar createBidPackage={createBidPackageAction.bind(null, estimateId, version.id)} />
+            <MoveSelectedItemsBar
+              moveSelected={bulkMoveLineItemsCategoryAction.bind(null, estimateId, version.id)}
+              categoryOptions={categoryOptions.filter((o) => o.value !== "")}
+            />
+          </div>
         </BidPackageSelectionProvider>
 
         {!version.isLocked && (

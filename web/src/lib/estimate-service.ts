@@ -172,6 +172,29 @@ export async function updateSectionItemsCategory(estimateVersionId: string, sect
   });
 }
 
+// Companion to updateSectionItemsCategory above, but for an arbitrary,
+// cross-section set of line items an estimator hand-picks via the Line
+// Items tab's own selection checkbox (bid-package-selection.tsx) --
+// covers the case a whole section's items don't share one Type
+// (e.g. a handful of items on a booth-tagged section were mis-typed at
+// import and need moving individually, not the section's other items
+// alongside them). Scoped to estimateVersionId the same defensive way
+// as every other bulk write here -- lineItemIds is caller-suppliable
+// (a client selection Set serialized into a direct server-action call,
+// not a real form field), so a fictitious/foreign id in the list is
+// simply excluded by the where clause rather than trusted.
+export async function bulkMoveLineItemsCategory(
+  estimateVersionId: string,
+  lineItemIds: string[],
+  category: string,
+) {
+  await assertUnlocked(estimateVersionId);
+  await db.lineItem.updateMany({
+    where: { id: { in: lineItemIds }, section: { estimateVersionId } },
+    data: { category },
+  });
+}
+
 // Swaps a section with its immediate neighbor (by current display order)
 // in the given direction -- siblings are every other section sharing the
 // same estimateVersionId AND optionId (an Option's own sections reorder
