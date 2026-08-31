@@ -86,9 +86,43 @@ export interface PartQuantity {
   method: PullMethod;
 }
 
+// Per direct confirmation: "how many frames total, no matter the size" --
+// a size-specific part row (e.g. "2418mm x 310mm Frame") is still the same
+// physical family as "614mm x 2418mm Frame" for a combined pull count,
+// even though they're two different SKUs above. Matched by keyword against
+// the raw description (order matters, most specific first -- same
+// convention as line-item-category.ts's own DESCRIPTION_PATTERNS), not by
+// a rigid "last word" parse: that would wrongly split "Compliant Door -
+// with Key" from "Compliant Door - with Code Keypad" into two families
+// (last word "Key" vs "Keypad") when both are plainly doors. A description
+// matching none of these stays out of every family total -- this seed list
+// only covers the part types confirmed so far (Frame, Accessories, Door);
+// extend it as more come up rather than guessing at a name.
+const PART_FAMILY_PATTERNS: { pattern: RegExp; label: string }[] = [
+  { pattern: /\bframes?\b/i, label: "Frame" },
+  { pattern: /\baccessor(?:y|ies)\b/i, label: "Accessories" },
+  { pattern: /\bdoors?\b/i, label: "Door" },
+];
+
+export function resolvePartFamily(description: string): string | null {
+  for (const { pattern, label } of PART_FAMILY_PATTERNS) {
+    if (pattern.test(description)) return label;
+  }
+  return null;
+}
+
+export interface PartFamilyTotal {
+  label: string;
+  qty: number;
+  totalCost: number;
+}
+
 export interface MethodTotal {
   totalCost: number;
   parts: PartQuantity[];
+  // Only families with at least one matching, non-assembly part -- sorted
+  // alphabetically by label. See resolvePartFamily.
+  families: PartFamilyTotal[];
 }
 
 export interface TypeTotal {
@@ -159,7 +193,29 @@ export function buildTypeTotals<
 
   function methodTotal(parts: PartQuantity[], method: PullMethod): MethodTotal {
     const filtered = parts.filter((p) => p.method === method).sort((a, b) => a.description.localeCompare(b.description));
-    return { totalCost: filtered.reduce((sum, p) => sum + p.totalCost, 0), parts: filtered };
+
+    // Rolled up from these same already-computed parts (not re-scanned from
+    // raw line items), so a family's total always matches the sum of its
+    // own size-specific rows below it. A compound assembly (key starts
+    // "assembly:") never contributes -- it's a one-off structure, not a
+    // repeatable part, even if its long narrative description happens to
+    // contain a family keyword incidentally.
+    const familiesByLabel = new Map<string, PartFamilyTotal>();
+    for (const part of filtered) {
+      if (part.key.startsWith("assembly:")) continue;
+      const label = resolvePartFamily(part.description);
+      if (!label) continue;
+      const existing = familiesByLabel.get(label);
+      if (existing) {
+        existing.qty += part.qty;
+        existing.totalCost += part.totalCost;
+      } else {
+        familiesByLabel.set(label, { label, qty: part.qty, totalCost: part.totalCost });
+      }
+    }
+    const families = [...familiesByLabel.values()].sort((a, b) => a.label.localeCompare(b.label));
+
+    return { totalCost: filtered.reduce((sum, p) => sum + p.totalCost, 0), parts: filtered, families };
   }
 
   return categories

@@ -3305,6 +3305,19 @@ function TypeTotalsMethodTable({ label, methodTotal }: { label: string; methodTo
         <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{label}</h4>
         <span className="text-xs font-medium text-neutral-500">{money(methodTotal.totalCost)}</span>
       </div>
+      {methodTotal.families.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {methodTotal.families.map((family) => (
+            <span
+              key={family.label}
+              className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-700"
+              title={`${family.label} across every size/variant`}
+            >
+              {family.label}: {family.qty}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="overflow-x-auto rounded-md border border-neutral-200">
         <table className="w-full text-sm">
           <thead className="bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">

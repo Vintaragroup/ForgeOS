@@ -190,4 +190,67 @@ describe("buildTypeTotals", () => {
       expect(structure.rental.parts).toHaveLength(0);
     });
   });
+
+  describe("part family rollups", () => {
+    it("combines differently-sized frames into one Frame family total", () => {
+      const sections = [
+        {
+          groupLabel: null,
+          buildType: null,
+          lineItems: [
+            li({ id: "a", description: "2418mm x 310mm bematrix Frame", qty: 4, totalCost: 400 }),
+            li({ id: "b", description: "614mm x 2418mm bematrix Frame", qty: 6, totalCost: 600 }),
+          ],
+        },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.rental.parts).toHaveLength(2);
+      expect(structure.rental.families).toEqual([{ label: "Frame", qty: 10, totalCost: 1000 }]);
+    });
+
+    it("keeps differently-worded door variants under one Door family despite different trailing qualifiers", () => {
+      const sections = [
+        {
+          groupLabel: null,
+          buildType: null,
+          lineItems: [
+            li({ id: "a", description: "36 x 84in Compliant Door - with Key", qty: 2 }),
+            li({ id: "b", description: "36 x 84in Compliant Door - with Code Keypad", qty: 1 }),
+          ],
+        },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.purchase.families).toEqual([{ label: "Door", qty: 3, totalCost: 200 }]);
+    });
+
+    it("excludes a compound assembly from family totals even if its description contains a family keyword", () => {
+      const sections = [
+        {
+          groupLabel: null,
+          buildType: null,
+          lineItems: [li({ id: "a", description: "Complete Booth Build\nIncludes bematrix frame and doors", qty: 1, totalCost: 5000 })],
+        },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.rental.families).toEqual([]);
+      expect(structure.purchase.families).toEqual([]);
+    });
+
+    it("leaves a part with no matching family keyword out of every family total", () => {
+      const sections = [
+        { groupLabel: null, buildType: null, lineItems: [li({ id: "a", description: "Water-permeable roof", qty: 1 })] },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.purchase.families).toEqual([]);
+      expect(structure.purchase.parts).toHaveLength(1);
+    });
+  });
 });
