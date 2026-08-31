@@ -53,10 +53,13 @@ import {
   previewImportAction,
   proposeScopeItemsAction,
   recategorizeLineItemsAction,
+  reconcilePullSheetAction,
   runClientTemplateReconciliationAction,
   runScopeCoverageAnalysisAction,
 } from "./import-actions";
 import { reconcileAgainstClientTemplate, type ClientTemplateReconciliation } from "@/lib/client-pricing-template-service";
+import type { ReconciliationResult, ReconciliationRow } from "@/lib/cad-reconciliation-service";
+import { PDF_MIME } from "@/lib/ai/text-extraction";
 import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import type { CoverageGap } from "@/lib/ai/scope-coverage-service";
 import { computeMarginGrossUp, computeOptionTotal, resolveLineItemMarginPct } from "@/lib/estimate-service";
@@ -145,6 +148,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     recategorized: recategorizedParam,
     recategorizeChecked: recategorizeCheckedParam,
     reconcileDocumentId: reconcileDocumentIdParam,
+    reconcileResult: reconcileResultParam,
   } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   const reconcileDocumentId = Array.isArray(reconcileDocumentIdParam) ? reconcileDocumentIdParam[0] : reconcileDocumentIdParam;
@@ -182,6 +186,15 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       buildResult = JSON.parse(buildResultRaw) as BuildEstimateResult;
     } catch {
       buildResult = null; // malformed/tampered query param -- ignore rather than crash the page
+    }
+  }
+  const reconcileResultRaw = Array.isArray(reconcileResultParam) ? reconcileResultParam[0] : reconcileResultParam;
+  let reconcileResult: ReconciliationResult | null = null;
+  if (reconcileResultRaw) {
+    try {
+      reconcileResult = JSON.parse(reconcileResultRaw) as ReconciliationResult;
+    } catch {
+      reconcileResult = null; // malformed/tampered query param -- ignore rather than crash the page
     }
   }
 
@@ -257,6 +270,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     pricingScheduleDocuments,
     scopeDocuments,
     vendorQuoteDocuments,
+    cadDocuments,
     vendorMatchApplyLog,
   ] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -310,6 +324,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     // widget (see document-service.ts's assignDocumentBidPackage).
     db.document.findMany({
       where: { opportunityId: estimate.opportunityId, documentType: "VENDOR_QUOTE", bidPackageId: null, deletedAt: null },
+      orderBy: { createdAt: "desc" },
+    }),
+    // Feeds the CAD Pull Sheet reconciliation picker (cad-reconciliation-
+    // service.ts) -- independent of extractionStatus/AI vision analysis,
+    // since that reconciliation reads the PDF's own raw bytes directly and
+    // needs no prior "analyze" step to have run.
+    db.document.findMany({
+      where: { opportunityId: estimate.opportunityId, documentType: "DRAWING", mimeType: PDF_MIME, deletedAt: null },
       orderBy: { createdAt: "desc" },
     }),
     currentVersion ? getVendorMatchApplyLog(currentVersion.id) : Promise.resolve([]),
@@ -374,6 +396,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const createFirstVersionWithId = createFirstVersion.bind(null, estimate.id);
   const previewImportWithId = previewImportAction.bind(null, estimate.id);
   const proposeScopeItemsWithId = proposeScopeItemsAction.bind(null, estimate.id);
+  const reconcilePullSheetWithId = reconcilePullSheetAction.bind(null, estimate.id);
   const archiveEstimateWithIds = archiveEstimateAction.bind(null, estimate.id, estimate.opportunityId);
   const buildEstimateWithIds = currentVersion
     ? buildFullEstimateFromDocumentsAction.bind(null, estimate.id, currentVersion.id, estimate.opportunityId)
@@ -621,6 +644,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     proposedItems={proposedItems}
                     proposeCatalog={proposeCatalog}
                     estimateNameById={estimateNameById}
+                    cadDocuments={cadDocuments}
+                    reconcilePullSheetAction={reconcilePullSheetWithId}
+                    reconcileResult={reconcileResult}
                   />
                 ),
                 "type-totals": <TypeTotalsTab version={currentVersion} categories={categories} />,
@@ -2750,6 +2776,9 @@ function DocumentsTab({
   proposedItems,
   proposeCatalog,
   estimateNameById,
+  cadDocuments,
+  reconcilePullSheetAction,
+  reconcileResult,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -2772,6 +2801,9 @@ function DocumentsTab({
   proposedItems: ProposedLineItem[] | null;
   proposeCatalog: Awaited<ReturnType<typeof loadCatalogForMatching>>;
   estimateNameById: Map<string, string>;
+  cadDocuments: { id: string; filename: string }[];
+  reconcilePullSheetAction: (formData: FormData) => void | Promise<void>;
+  reconcileResult: ReconciliationResult | null;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -3263,6 +3295,97 @@ function DocumentsTab({
           )}
         </Card>
       )}
+
+      <Card className="p-6">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          Reconcile CAD Pull Sheet ↔ Excel quote
+        </h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Cross-checks a CAD drawing&apos;s last-page Pull Sheet table against its matching Excel quote (the same
+          booth workbook the Import above reads) -- matched by Part Number for BeMatrix hardware and by Sq. Ft. for
+          Wall Panels, flagging anything that disagrees or exists on only one side. Read-only: nothing here changes
+          any line item.
+        </p>
+        {cadDocuments.length === 0 || pricingScheduleDocuments.length === 0 ? (
+          <Notice
+            message="Upload both a CAD drawing (PDF) and its matching Excel quote on the Opportunity's Documents card first."
+            actionHref={`/opportunities/${opportunityId}`}
+            actionLabel="Go to Opportunity"
+          />
+        ) : (
+          <form action={reconcilePullSheetAction} className="flex items-end gap-3">
+            <div className="flex-1">
+              <SelectField
+                label="CAD drawing"
+                name="cadDocumentId"
+                options={cadDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+              />
+            </div>
+            <div className="flex-1">
+              <SelectField
+                label="Excel quote"
+                name="excelDocumentId"
+                options={pricingScheduleDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+              />
+            </div>
+            <Button variant="secondary">Reconcile</Button>
+          </form>
+        )}
+
+        {reconcileResult && reconcileResult.status === "UNSUPPORTED" && (
+          <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {reconcileResult.reason}
+          </p>
+        )}
+
+        {reconcileResult && reconcileResult.status === "COMPLETE" && (
+          <ReconciliationResultTable rows={reconcileResult.rows} />
+        )}
+      </Card>
+    </div>
+  );
+}
+
+const RECONCILIATION_STATUS_STYLE: Record<ReconciliationRow["status"], string> = {
+  MATCHED: "border-green-200 bg-green-50 text-green-800",
+  QTY_MISMATCH: "border-red-200 bg-red-50 text-red-800",
+  AREA_MISMATCH: "border-red-200 bg-red-50 text-red-800",
+  AMBIGUOUS: "border-amber-200 bg-amber-50 text-amber-800",
+  ONLY_IN_CAD: "border-amber-200 bg-amber-50 text-amber-800",
+  ONLY_IN_EXCEL: "border-amber-200 bg-amber-50 text-amber-800",
+};
+
+// Rows grouped MATCHED-last, most-actionable-first -- an estimator opening
+// this report cares about what disagrees, not re-confirming the (usually
+// large) majority that already lines up.
+const RECONCILIATION_STATUS_ORDER: ReconciliationRow["status"][] = [
+  "QTY_MISMATCH",
+  "AREA_MISMATCH",
+  "AMBIGUOUS",
+  "ONLY_IN_CAD",
+  "ONLY_IN_EXCEL",
+  "MATCHED",
+];
+
+function ReconciliationResultTable({ rows }: { rows: ReconciliationRow[] }) {
+  const sorted = [...rows].sort(
+    (a, b) => RECONCILIATION_STATUS_ORDER.indexOf(a.status) - RECONCILIATION_STATUS_ORDER.indexOf(b.status),
+  );
+  const matchedCount = rows.filter((r) => r.status === "MATCHED").length;
+
+  return (
+    <div className="mt-4 border-t border-neutral-200 pt-4">
+      <p className="mb-3 text-sm text-neutral-700">
+        <span className="font-medium">{matchedCount}</span> matched, {rows.length - matchedCount} needing a look, out
+        of {rows.length} total.
+      </p>
+      <div className="flex flex-col gap-2">
+        {sorted.map((row, i) => (
+          <div key={i} className={`rounded-md border px-3 py-2 text-sm ${RECONCILIATION_STATUS_STYLE[row.status]}`}>
+            <span className="font-medium">{row.status.replace(/_/g, " ")}</span> — {row.detail}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

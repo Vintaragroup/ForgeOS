@@ -168,6 +168,68 @@ function numericOrNull(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// A genuine BeMatrix part number always has 2+ separate digit runs (e.g.
+// "606 0310 0434", "614 2418 S04 TG") -- confirmed live against the real
+// Type/Part Number column, which also holds pure category-label
+// placeholders with zero digits at all ("Wall Panel", "AV", "LIGHTING",
+// "Miscellaneous") for rows that were never assigned a real SKU. Requiring
+// two digit runs (not "contains a digit") also correctly rejects those
+// placeholders without needing to hardcode the specific label strings,
+// which vary by file's own Graphic Panels section.
+const REAL_PART_NUMBER_PATTERN = /\d{2,}.*\d{2,}/;
+
+export interface DesignCostReconciliationRow {
+  rowNumber: number;
+  // The raw Type/Part Number cell text -- kept alongside the parsed
+  // `partNumber` so a caller can also recognize genuine "Wall Panel" rows
+  // (the only ones with a real, CAD-comparable Sq. Ft. value; "Graphic
+  // Panels" section rows reuse this same Sq. Ft. column as a meaningless
+  // "1" placeholder, confirmed live).
+  type: string;
+  partNumber: string | null;
+  description: string;
+  qty: number;
+  sqFt: number | null;
+}
+
+// Reads the two columns previewDesignCostEstimateImport deliberately
+// doesn't retain (Type/Part Number as a real SKU, and Sq. Ft. as its own
+// value rather than folded into unitCost) -- built for
+// cad-reconciliation-service.ts's CAD-Pull-Sheet-vs-Excel-quote audit,
+// entirely separate from previewDesignCostEstimateImport's own row loop
+// so that tested, already-live import path is unaffected.
+export async function readDesignCostRowsForReconciliation(
+  workbook: ExcelJS.Workbook,
+): Promise<DesignCostReconciliationRow[]> {
+  const sheet = findDesignCostEstimateSheet(workbook);
+  if (!sheet) return [];
+  const header = findHeaderRow(sheet);
+  if (!header) return [];
+
+  const rows: DesignCostReconciliationRow[] = [];
+  for (let rowNumber = header.rowNumber + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    if (isBannerRow(row)) continue;
+
+    const qty = numericOrNull(row.getCell(header.qtyCol).value);
+    if (qty === null) continue;
+
+    const type = cellText(row.getCell(header.typeCol).value);
+    const description = cellText(row.getCell(header.descCol).value) || type;
+    if (!description) continue; // spacer row, same fallback as previewDesignCostEstimateImport
+
+    rows.push({
+      rowNumber,
+      type,
+      partNumber: REAL_PART_NUMBER_PATTERN.test(type) ? type : null,
+      description,
+      qty,
+      sqFt: numericOrNull(row.getCell(header.sqFtCol).value),
+    });
+  }
+  return rows;
+}
+
 export async function previewDesignCostEstimateImport(
   documentId: string,
   opportunityId: string,

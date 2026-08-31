@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import ExcelJS from "exceljs";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { uploadDocument } from "@/lib/document-service";
@@ -7,6 +8,7 @@ import { createEstimateVersion } from "@/lib/estimate-service";
 import {
   commitDesignCostEstimateImport,
   previewDesignCostEstimateImport,
+  readDesignCostRowsForReconciliation,
 } from "@/lib/design-cost-estimate-import-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
 
@@ -21,13 +23,17 @@ import { previewPricingImport } from "@/lib/pricing-import-service";
 // what this parser needs to survive -- it never reads the sheet's own
 // Total Cost/Retail/subtotal cells, only the raw Qty/Unit Cost/Sq. Ft.
 // inputs, which stay valid in both files.
+// These 4 now live under this folder's own Archive/ subfolder -- a real
+// reorganization that happened after this test was first written (a
+// sibling, differently-named set now lives directly under quotes/ instead,
+// used by cad-reconciliation-service.test.ts/cad-pull-sheet-service.test.ts).
 const SECTION_211_PATH = path.resolve(
   import.meta.dirname,
-  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/SUPER BOWL A 6.3.0 SECTION 211 - Estimate - A.6.3.0.xlsx",
+  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/Archive/SUPER BOWL A 6.3.0 SECTION 211 - Estimate - A.6.3.0.xlsx",
 );
 const SECTION_203_PATH = path.resolve(
   import.meta.dirname,
-  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/SUPER BOWL A 6.3.0 SECTION 203 2027 - Estimate - A.6.3.0.xlsx",
+  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/Archive/SUPER BOWL A 6.3.0 SECTION 203 2027 - Estimate - A.6.3.0.xlsx",
 );
 // Section 429 and 430 are a confirmed byte-identical mirror pair -- both
 // literally carry "A6.8.0 SECTION 329" as their own internal Build Name
@@ -35,11 +41,19 @@ const SECTION_203_PATH = path.resolve(
 // independently priced.
 const SECTION_429_PATH = path.resolve(
   import.meta.dirname,
-  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/SUPER BOWL A 6.8.0 SECTION 429 - Estimate - A6.8.0 SECTION 329.xlsx",
+  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/Archive/SUPER BOWL A 6.8.0 SECTION 429 - Estimate - A6.8.0 SECTION 329.xlsx",
 );
 const SECTION_430_PATH = path.resolve(
   import.meta.dirname,
-  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/SUPER BOWL A 6.8.0 SECTION 430 - Estimate - A6.8.0 SECTION 329.xlsx",
+  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/Archive/SUPER BOWL A 6.8.0 SECTION 430 - Estimate - A6.8.0 SECTION 329.xlsx",
+);
+// The CURRENT quote for Section 203 (distinct from the archived
+// SECTION_203_PATH above) -- this is the file cad-pull-sheet-service.ts's
+// own Section 203 CAD fixture actually corresponds to, confirmed live:
+// its Part Numbers and Sq. Ft. values match that CAD Pull Sheet exactly.
+const CURRENT_SECTION_203_PATH = path.resolve(
+  import.meta.dirname,
+  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/quotes/SUPER BOWL A 6.3.0 SECTION 203.xlsx",
 );
 
 async function makeDocumentFrom(filePath: string, filename: string) {
@@ -230,5 +244,35 @@ describe("commitDesignCostEstimateImport", () => {
     expect(byDescription("EMERGANCY EXIT")?.category).toBe("Graphics");
     expect(byDescription("Warehouse")?.category).toBe("Labor");
     expect(lineItems.filter((li) => li.category === "Other").length).toBeLessThan(lineItems.length * 0.05);
+  });
+});
+
+describe("readDesignCostRowsForReconciliation", () => {
+  it("reads real Part Numbers and Sq. Ft. values, distinct from category-label placeholders in the same column", async () => {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load((await readFile(CURRENT_SECTION_203_PATH)) as unknown as ArrayBuffer);
+
+    const rows = await readDesignCostRowsForReconciliation(workbook);
+    expect(rows.length).toBeGreaterThan(0);
+
+    // A real BeMatrix hardware row -- confirmed live to match this same
+    // fixture's CAD Pull Sheet counterpart exactly (cad-pull-sheet-
+    // service.test.ts's BM1).
+    const frame = rows.find((r) => r.description === "1/3M X 1/2M FRAME");
+    expect(frame?.partNumber).toBe("606 0310 0434");
+    expect(frame?.qty).toBe(1);
+    expect(frame?.sqFt).toBeNull();
+
+    // A real Wall Panel row -- confirmed live to match the same CAD Pull
+    // Sheet's Area (SqFt) exactly (cad-pull-sheet-service.test.ts's P1).
+    const panel = rows.find((r) => r.sqFt === 7.72);
+    expect(panel?.type.toLowerCase()).toBe("wall panel");
+    expect(panel?.partNumber).toBeNull();
+
+    // "Graphic Panels" section rows reuse the Type/Part Number column for
+    // a plain category label ("AV", "LIGHTING", ...), never a real SKU --
+    // must not be misread as one just because the column holds text.
+    const misc = rows.find((r) => r.type === "LIGHTING");
+    expect(misc?.partNumber).toBeNull();
   });
 });

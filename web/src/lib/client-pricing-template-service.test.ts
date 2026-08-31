@@ -24,9 +24,11 @@ const EXHIBIT_1_PATH = path.resolve(
   import.meta.dirname,
   "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Exhibit 1 - SBLXI - Financial Proposal Schedule Temporary Booth Build.xlsx",
 );
+// Lives under this folder's own Archive/ subfolder -- a real
+// reorganization that happened after this test was first written.
 const SECTION_211_PATH = path.resolve(
   import.meta.dirname,
-  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/SUPER BOWL A 6.3.0 SECTION 211 - Estimate - A.6.3.0.xlsx",
+  "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/Archive/SUPER BOWL A 6.3.0 SECTION 211 - Estimate - A.6.3.0.xlsx",
 );
 
 async function loadWorkbook(filePath: string) {

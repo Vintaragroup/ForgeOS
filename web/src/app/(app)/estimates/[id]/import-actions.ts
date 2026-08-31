@@ -10,6 +10,7 @@ import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service"
 import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
 import { buildEstimateFromAllDocuments } from "@/lib/ai/estimate-synthesis-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
+import { reconcilePullSheetAgainstExcel } from "@/lib/cad-reconciliation-service";
 import {
   confirmAllDraftLineItems,
   recategorizeLineItems,
@@ -194,4 +195,20 @@ export async function recategorizeLineItemsAction(estimateId: string, versionId:
   const { checked, updated } = await recategorizeLineItems(opportunityId, versionId);
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}?tab=review&recategorized=${updated}&recategorizeChecked=${checked}`);
+}
+
+// Read-only audit, same posture as runScopeCoverageAnalysisAction above --
+// never mutates a LineItem. Unlike that action, its result isn't a single
+// per-version blob, so it's carried through the redirect's own query
+// param, same ephemeral-result pattern proposeScopeItemsAction/buildResult
+// already use.
+export async function reconcilePullSheetAction(estimateId: string, formData: FormData) {
+  await requireEstimateAccess(estimateId);
+  const cadDocumentId = String(formData.get("cadDocumentId") ?? "").trim();
+  const excelDocumentId = String(formData.get("excelDocumentId") ?? "").trim();
+  if (!cadDocumentId || !excelDocumentId) {
+    throw new Error("Choose both a CAD drawing and its matching Excel quote");
+  }
+  const result = await reconcilePullSheetAgainstExcel(cadDocumentId, excelDocumentId);
+  redirect(`/estimates/${estimateId}?tab=documents&reconcileResult=${encodeURIComponent(JSON.stringify(result))}`);
 }
