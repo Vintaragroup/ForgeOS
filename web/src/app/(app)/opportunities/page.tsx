@@ -59,7 +59,7 @@ export default async function OpportunitiesPage({
       company: true,
       owner: true,
       estimates: {
-        where: { deletedAt: null },
+        where: { deletedAt: null, archivedAt: null },
         orderBy: { createdAt: "desc" },
         take: 1,
         include: {

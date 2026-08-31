@@ -6,6 +6,7 @@ import {
   addLineItem,
   addOption,
   addSection,
+  archiveEstimate,
   clearCategoryMarginOverride,
   computeLineItemTotal,
   computeMarginGrossUp,
@@ -27,6 +28,7 @@ import {
   removeLineItemFromBidPackage,
   setBidPackageStatus,
   setCategoryMarginOverride,
+  unarchiveEstimate,
   updateLineItem,
   updateMarginTarget,
 } from "@/lib/estimate-service";
@@ -388,6 +390,53 @@ describe("estimate version lifecycle", () => {
 
     const refreshed = await recomputeVersionTotals(version.id);
     expect(refreshed.totalCost.toNumber()).toBe(0);
+  });
+});
+
+describe("estimate archiving", () => {
+  it("sets archivedAt, not deletedAt, and unarchive clears it again", async () => {
+    const estimate = await makeEstimate();
+
+    const archived = await archiveEstimate(estimate.id);
+    expect(archived.archivedAt).not.toBeNull();
+    expect(archived.deletedAt).toBeNull();
+
+    const unarchived = await unarchiveEstimate(estimate.id);
+    expect(unarchived.archivedAt).toBeNull();
+  });
+
+  it("rejects a line-item edit on an archived estimate's version, and allows it again once unarchived", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+
+    await archiveEstimate(estimate.id);
+
+    await expect(
+      addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Blocked", qty: 1, unitCost: 1 }),
+    ).rejects.toThrow(/archived/);
+
+    await unarchiveEstimate(estimate.id);
+
+    await expect(
+      addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Allowed", qty: 1, unitCost: 1 }),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects creating a new version on an archived estimate", async () => {
+    const estimate = await makeEstimate();
+    await archiveEstimate(estimate.id);
+
+    await expect(createEstimateVersion(estimate.id, 0)).rejects.toThrow(/archived/);
+  });
+
+  it("rejects copying a locked version forward on an archived estimate", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    await lockEstimateVersion(version.id);
+    await archiveEstimate(estimate.id);
+
+    await expect(createNewVersionFromLocked(version.id)).rejects.toThrow(/archived/);
   });
 });
 

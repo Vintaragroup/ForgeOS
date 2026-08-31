@@ -18,7 +18,7 @@ export default async function EstimatesPage() {
   if (!user) redirect("/login");
 
   const estimates = await db.estimate.findMany({
-    where: { deletedAt: null, opportunity: opportunityAccessWhere(user) },
+    where: { deletedAt: null, archivedAt: null, opportunity: opportunityAccessWhere(user) },
     orderBy: { createdAt: "desc" },
     include: {
       opportunity: { include: { company: true } },

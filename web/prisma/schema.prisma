@@ -540,6 +540,15 @@ model Estimate {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  // Distinct from deletedAt above -- deletedAt means "gone everywhere,"
+  // the same convention every other model in this app uses (Document,
+  // Attachment, Proposal, Opportunity); archivedAt means "hidden from the
+  // active Estimates list, but still fully viewable for reference and
+  // restorable." Set/cleared by archiveEstimate/unarchiveEstimate
+  // (estimate-service.ts); assertUnlocked and the top-level Estimate
+  // mutations reject any edit while it's set.
+  archivedAt DateTime?
+
   versions     EstimateVersion[]
   changeOrders ChangeOrder[]
   attachments  Attachment[]

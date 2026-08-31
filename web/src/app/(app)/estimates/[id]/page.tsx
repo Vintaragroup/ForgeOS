@@ -41,6 +41,7 @@ import {
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
+  unarchiveEstimateAction,
   untagSectionBuildTypeAction,
   updateSectionBuildTypeAction,
   updateSectionItemsCategoryAction,
@@ -398,6 +399,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const proposeScopeItemsWithId = proposeScopeItemsAction.bind(null, estimate.id);
   const reconcilePullSheetWithId = reconcilePullSheetAction.bind(null, estimate.id);
   const archiveEstimateWithIds = archiveEstimateAction.bind(null, estimate.id, estimate.opportunityId);
+  const unarchiveEstimateWithIds = unarchiveEstimateAction.bind(null, estimate.id, estimate.opportunityId);
   const buildEstimateWithIds = currentVersion
     ? buildFullEstimateFromDocumentsAction.bind(null, estimate.id, currentVersion.id, estimate.opportunityId)
     : null;
@@ -519,6 +521,18 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
           Details
         </h2>
+        {estimate.archivedAt && (
+          <div className="mb-4 flex items-center justify-between gap-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm text-amber-900">
+              Archived {estimate.archivedAt.toLocaleDateString()} — hidden from the Opportunity&apos;s active
+              Estimates list and read-only. Everything here (documents, line items, proposals) stays viewable;
+              unarchive to resume editing.
+            </p>
+            <form action={unarchiveEstimateWithIds}>
+              <Button variant="secondary">Unarchive</Button>
+            </form>
+          </div>
+        )}
         <form action={updateEstimateDetailsWithId} className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-4">
             <Field
@@ -537,17 +551,21 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
               ]}
             />
           </div>
-          <div>
-            <Button>Save details</Button>
-          </div>
+          {!estimate.archivedAt && (
+            <div>
+              <Button>Save details</Button>
+            </div>
+          )}
         </form>
-        <ConfirmForm
-          action={archiveEstimateWithIds}
-          confirmMessage="Archive this estimate? This can't be undone."
-          className="mt-4 border-t border-neutral-200 pt-4"
-        >
-          <Button variant="danger">Archive estimate</Button>
-        </ConfirmForm>
+        {!estimate.archivedAt && (
+          <ConfirmForm
+            action={archiveEstimateWithIds}
+            confirmMessage="Archive this estimate? It's hidden from the Opportunity's active Estimates list and becomes read-only, but stays fully viewable under Archived estimates and can be unarchived later."
+            className="mt-4 border-t border-neutral-200 pt-4"
+          >
+            <Button variant="danger">Archive estimate</Button>
+          </ConfirmForm>
+        )}
       </Card>
 
       {!currentVersion ? (

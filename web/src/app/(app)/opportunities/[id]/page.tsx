@@ -634,7 +634,13 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     where: { id, deletedAt: null },
     include: {
       company: true,
+      // Excludes archivedAt too, not just deletedAt -- was missing this
+      // filter entirely before, so an archived estimate (and everything
+      // derived from this list below: estimateId, namedEstimates,
+      // currentEstimateVersion) never actually disappeared from here.
+      // Archived estimates get their own separate query/section below.
       estimates: {
+        where: { deletedAt: null, archivedAt: null },
         orderBy: { createdAt: "desc" },
         include: {
           taxRate: true,
@@ -659,6 +665,16 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   // 403, so an unauthorized request can't tell the difference between
   // "no such opportunity" and "exists but you can't see it."
   if (!(await canAccessOpportunity(user, opportunity.id))) notFound();
+
+  // Separate from the active `opportunity.estimates` list above -- kept
+  // out of that include (and everything derived from it) so an archived
+  // estimate never counts as "the" estimate for this Opportunity, but
+  // still surfaced here so it stays reachable for reference (see the
+  // Estimates card's own "Archived estimates" sub-section below).
+  const archivedEstimates = await db.estimate.findMany({
+    where: { opportunityId: opportunity.id, deletedAt: null, archivedAt: { not: null } },
+    orderBy: { archivedAt: "desc" },
+  });
 
   // A Pricing Schedule document never goes through Analyze -- it's parsed
   // directly on the Estimate page's Import panel instead (see
@@ -1074,6 +1090,22 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             </form>
           )}
         </div>
+        {archivedEstimates.length > 0 && (
+          <CollapsibleSection title={`Archived estimates (${archivedEstimates.length})`} defaultOpen={false} className="mt-4">
+            <ul className="flex flex-col gap-2 text-sm">
+              {archivedEstimates.map((e) => (
+                <li key={e.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
+                  <span>
+                    {e.name ?? `Estimate ${e.id.slice(0, 8)}`} — archived {e.archivedAt!.toLocaleDateString()}
+                  </span>
+                  <Link href={`/estimates/${e.id}`} className="text-neutral-900 hover:underline">
+                    Open estimate →
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </CollapsibleSection>
+        )}
       </CollapsibleSection>
 
       <CollapsibleSection title="Documents" id="documents">

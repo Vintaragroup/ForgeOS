@@ -216,4 +216,85 @@ describe("buildEstimateFromAllDocuments", () => {
     const committedLineItem = await db.lineItem.findFirstOrThrow({ where: { documentId: document.id } });
     expect(committedLineItem.sourcePageNumber).toBe(1);
   });
+
+  it("skips a DRAWING whose matching Pricing Schedule (same filename stem) is already committed, instead of duplicating its scope with a zero-cost AI summary", async () => {
+    const opportunity = await makeOpportunity();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    // Stands in for a real commitPricingImport run -- alreadyCommitted only
+    // checks for an existing LineItem against this documentId, so a
+    // manually-seeded row is equivalent and avoids needing a real xlsx
+    // fixture here, same shortcut the "already committed" test above uses.
+    const pricingDoc = await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "SUPER BOWL A 6.8.2 SECTION 428.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        sizeBytes: 100,
+        storageKey: "test-key-xlsx",
+        documentType: "PRICING_SCHEDULE",
+        extractionStatus: "COMPLETE",
+      },
+    });
+    const section = await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "Structure", sectionType: "CATEGORY", sortOrder: 0 },
+    });
+    await db.lineItem.create({
+      data: {
+        sectionId: section.id,
+        lineType: "MATERIAL",
+        description: "606 0310 0434 -- 1/3M X 1/2M FRAME",
+        qty: 1,
+        unitCost: 195,
+        totalCost: 195,
+        documentId: pricingDoc.id,
+      },
+    });
+
+    const drawingDoc = await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "SUPER BOWL A 6.8.2 SECTION 428.pdf",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 100,
+        storageKey: "test-key-pdf",
+        documentType: "DRAWING",
+        extractionStatus: "COMPLETE",
+      },
+    });
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "Complete Booth Build",
+        qty: 1,
+        qtyIsExplicit: false,
+        unit: "EA",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "",
+        pageNumber: 1,
+      },
+    ];
+    await db.document.update({
+      where: { id: drawingDoc.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+
+    const result = await buildEstimateFromAllDocuments(version.id, opportunity.id, null);
+
+    expect(result.imported).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      // The seeded-already-committed xlsx itself, via the ordinary
+      // pricingDocs loop -- unrelated to this test's own assertion, just
+      // the existing "already imported" behavior firing as normal.
+      { filename: "SUPER BOWL A 6.8.2 SECTION 428.xlsx", reason: "Already imported into this estimate." },
+      {
+        filename: "SUPER BOWL A 6.8.2 SECTION 428.pdf",
+        reason:
+          "A pricing schedule/vendor quote with the same name is already imported -- that already covers this drawing's scope with real pricing.",
+      },
+    ]);
+    const drawingLineItem = await db.lineItem.findFirst({ where: { documentId: drawingDoc.id } });
+    expect(drawingLineItem).toBeNull();
+  });
 });

@@ -141,17 +141,28 @@ const VERSION_WITH_TOTALS_INCLUDE = {
   sections: { where: { optionId: null }, include: { lineItems: true } },
 } satisfies Prisma.EstimateVersionInclude;
 
+export function assertEstimateNotArchived(estimate: { id: string; archivedAt: Date | null }) {
+  if (estimate.archivedAt) {
+    throw new Error(`Estimate ${estimate.id} is archived and cannot be edited -- unarchive it first.`);
+  }
+}
+
 export async function assertUnlocked(estimateVersionId: string) {
   const version = await db.estimateVersion.findUniqueOrThrow({
     where: { id: estimateVersionId },
+    include: { estimate: { select: { id: true, archivedAt: true } } },
   });
   if (version.isLocked) {
     throw new Error(`EstimateVersion ${estimateVersionId} is locked and cannot be edited.`);
   }
+  assertEstimateNotArchived(version.estimate);
   return version;
 }
 
 export async function createEstimateVersion(estimateId: string, marginTargetPct: DecimalInput = 0) {
+  const estimate = await db.estimate.findUniqueOrThrow({ where: { id: estimateId }, select: { id: true, archivedAt: true } });
+  assertEstimateNotArchived(estimate);
+
   const previousCurrent = await db.estimateVersion.findFirst({
     where: { estimateId, isCurrent: true },
     orderBy: { versionNumber: "desc" },
@@ -658,8 +669,17 @@ export async function moveLineItemToEstimate(opportunityId: string, lineItemId: 
   return { fromEstimateVersionId, toEstimateVersionId: targetVersion.id };
 }
 
+// Sets archivedAt, NOT deletedAt -- see the field's own schema.prisma
+// comment. Hides this estimate from the active Estimates lists (the
+// Opportunity page, the global /estimates index) while leaving it fully
+// viewable (documents, line items, proposals) and restorable; edits are
+// rejected by assertEstimateNotArchived until unarchiveEstimate runs.
 export async function archiveEstimate(id: string) {
-  return db.estimate.update({ where: { id }, data: { deletedAt: new Date() } });
+  return db.estimate.update({ where: { id }, data: { archivedAt: new Date() } });
+}
+
+export async function unarchiveEstimate(id: string) {
+  return db.estimate.update({ where: { id }, data: { archivedAt: null } });
 }
 
 // opportunityId is the caller's already-access-checked opportunity (from
@@ -894,11 +914,13 @@ export async function createNewVersionFromLocked(estimateVersionId: string) {
       sections: { where: { optionId: null }, include: { lineItems: true } },
       options: { include: { sections: { include: { lineItems: true } } } },
       categoryMarginOverrides: true,
+      estimate: { select: { id: true, archivedAt: true } },
     },
   });
   if (!source.isLocked) {
     throw new Error(`EstimateVersion ${estimateVersionId} is not locked; only locked versions can be copied.`);
   }
+  assertEstimateNotArchived(source.estimate);
 
   return db.$transaction(async (tx) => {
     await tx.estimateVersion.update({ where: { id: source.id }, data: { isCurrent: false } });

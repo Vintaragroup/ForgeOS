@@ -6,6 +6,7 @@ import {
   addOption,
   addSection,
   archiveEstimate,
+  assertEstimateNotArchived,
   clearCategoryMarginOverride,
   confirmDraftLineItem,
   createEstimateVersion,
@@ -17,6 +18,7 @@ import {
   moveSectionOrder,
   recomputeVersionTotals,
   setCategoryMarginOverride,
+  unarchiveEstimate,
   updateLineItem,
   updateMarginTarget,
   updateSectionBuildType,
@@ -348,6 +350,8 @@ export async function recordCostActualAction(estimateId: string, lineItemId: str
 
 export async function updateEstimateDetails(estimateId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
+  const estimate = await db.estimate.findUniqueOrThrow({ where: { id: estimateId }, select: { id: true, archivedAt: true } });
+  assertEstimateNotArchived(estimate);
   const budgetRaw = String(formData.get("budget") ?? "").trim();
   const taxRateId = emptyToNull(formData.get("taxRateId"));
 
@@ -361,11 +365,24 @@ export async function updateEstimateDetails(estimateId: string, formData: FormDa
   revalidatePath(`/estimates/${estimateId}`);
 }
 
+// Redirects back to the estimate's own page (not the Opportunity, unlike
+// this action's old delete-flavored behavior) -- an archived estimate
+// stays fully viewable, so the natural next screen is the Archived
+// banner/Unarchive control there, not being routed away from it.
 export async function archiveEstimateAction(estimateId: string, opportunityId: string) {
   await requireEstimateAccess(estimateId);
   await archiveEstimate(estimateId);
   revalidatePath(`/opportunities/${opportunityId}`);
-  redirect(`/opportunities/${opportunityId}`);
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}`);
+}
+
+export async function unarchiveEstimateAction(estimateId: string, opportunityId: string) {
+  await requireEstimateAccess(estimateId);
+  await unarchiveEstimate(estimateId);
+  revalidatePath(`/opportunities/${opportunityId}`);
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}`);
 }
 
 function emptyToNull(value: FormDataEntryValue | null): string | null {

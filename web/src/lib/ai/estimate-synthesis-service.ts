@@ -31,6 +31,20 @@ async function alreadyCommitted(estimateVersionId: string, documentId: string): 
   return !!existing;
 }
 
+// A CAD drawing and its vendor's own per-booth pricing workbook share the
+// same filename stem in every real job seen so far (e.g. "SUPER BOWL A
+// 6.8.2 SECTION 428.pdf" / "SUPER BOWL A 6.8.2 SECTION 428.xlsx") --
+// confirmed live against a real production job where this exact pairing
+// existed for all 13 booths. Used below to recognize "this drawing's
+// scope was already captured, in more detail and with real pricing, by
+// its matching workbook" -- without it, the vision-based drawing pipeline
+// has no way to know that, and produces a crude, zero-cost "Complete
+// Booth Build" summary line duplicating scope the real import already
+// priced correctly.
+function filenameStem(filename: string): string {
+  return filename.replace(/\.[^.]+$/, "").trim().toLowerCase();
+}
+
 // Shared by the text-scope and drawing loops below -- same skip/propose/
 // commit shape, differing only in which propose function actually reads
 // the document (extracted text vs. vision page images) and the "kind"
@@ -127,9 +141,30 @@ export async function buildEstimateFromAllDocuments(
   });
   await proposeAndCommit(estimateVersionId, opportunityId, userId, scopeDocs, "scope", proposeLineItemsFromScope, imported, skipped);
 
-  const drawingDocs = await db.document.findMany({
+  // Real per-booth pricing schedules (Pricing Schedule or Vendor Quote --
+  // the same two types the manual "Import from document" picker accepts)
+  // already committed for THIS version -- their filename stems mark a
+  // drawing as "already covered," see filenameStem's own comment.
+  const committedPricingDocs = await db.document.findMany({
+    where: { opportunityId, deletedAt: null, documentType: { in: ["PRICING_SCHEDULE", "VENDOR_QUOTE"] }, ...notOtherProject },
+    select: { id: true, filename: true },
+  });
+  const committedPricingStems = new Set<string>();
+  for (const doc of committedPricingDocs) {
+    if (await alreadyCommitted(estimateVersionId, doc.id)) committedPricingStems.add(filenameStem(doc.filename));
+  }
+
+  const allDrawingDocs = await db.document.findMany({
     where: { opportunityId, deletedAt: null, documentType: "DRAWING", ...notOtherProject },
     orderBy: { createdAt: "asc" },
+  });
+  const drawingDocs = allDrawingDocs.filter((doc) => {
+    if (!committedPricingStems.has(filenameStem(doc.filename))) return true;
+    skipped.push({
+      filename: doc.filename,
+      reason: "A pricing schedule/vendor quote with the same name is already imported -- that already covers this drawing's scope with real pricing.",
+    });
+    return false;
   });
   await proposeAndCommit(estimateVersionId, opportunityId, userId, drawingDocs, "drawing", proposeLineItemsFromDrawing, imported, skipped);
 
