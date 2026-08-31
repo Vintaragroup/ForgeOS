@@ -30,6 +30,7 @@ import {
   CUSTOM_BUILD_CATEGORY_KEY,
   inferCategoryFromDescription,
   inferIsClientOwned,
+  isAlwaysGraphicsDescription,
   isCompoundAssemblyDescription,
   mapCatalogCategoryToCanonical,
   mapScopeCategoryToCanonical,
@@ -487,14 +488,22 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
           unitCost: catalogMatch?.unitCost ?? 0,
           // A compound "Complete X Build" assembly line wins outright (see
           // line-item-category.ts -- catalog match is unreliable against
-          // that much text). Otherwise prefer a confident catalog match's
-          // own category over the AI's coarser scope bucket, and fall
-          // back to the description heuristic only if neither resolved.
+          // that much text). SEG is checked next -- confirmed live as a
+          // real miscategorization: the AI's own coarse scope bucket (e.g.
+          // "Booth Structure & Walls") otherwise wins over the item's own
+          // description for every line in that bucket, including SEG
+          // fabric graphics lines that don't belong there (see
+          // isAlwaysGraphicsDescription's own comment -- same bug pattern
+          // already fixed in design-cost-estimate-import-service.ts).
+          // Otherwise prefer a confident catalog match's own category over
+          // the AI's coarser scope bucket, and fall back to the
+          // description heuristic only if neither resolved.
           category: isCompoundAssemblyDescription(item.description)
             ? resolveCategoryNameFromKey(liveCategories, CUSTOM_BUILD_CATEGORY_KEY)
-            : (mapCatalogCategoryToCanonical(catalogMatch?.category, liveCategories) ??
+            : (isAlwaysGraphicsDescription(item.description) ? resolveCategoryNameFromKey(liveCategories, "graphics") : null) ??
+              mapCatalogCategoryToCanonical(catalogMatch?.category, liveCategories) ??
               mapScopeCategoryToCanonical(category, liveCategories) ??
-              inferCategoryFromDescription(item.description, liveCategories)),
+              inferCategoryFromDescription(item.description, liveCategories),
           isClientOwned: inferIsClientOwned(item.description),
           documentId,
           sourceQuote: item.sourceQuote,

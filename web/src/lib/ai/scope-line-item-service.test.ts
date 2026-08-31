@@ -183,6 +183,62 @@ describe("commitScopeLineItems", () => {
     expect(allLineItems.every((li) => li.sourcePageNumber === null)).toBe(true);
   });
 
+  it("resolves a SEG-worded item to Graphics even though the AI filed its whole scope bucket under Booth Structure & Walls", async () => {
+    // Confirmed against real data: a real committed item ("SEG fabric for
+    // wall systems") landed under Structure because mapScopeCategoryToCanonical
+    // maps the AI's own "Booth Structure & Walls" bucket wholesale, before
+    // the item's own description was ever checked -- same bug pattern as
+    // design-cost-estimate-import-service.ts, fixed the same way here.
+    await db.category.createMany({
+      data: [
+        { name: "Structure", key: "structure" },
+        { name: "Graphics", key: "graphics" },
+      ],
+    });
+    const document = await makeAnalyzedDocument("some scope text");
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "SEG fabric for wall systems",
+        qty: 1,
+        qtyIsExplicit: false,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+      },
+      {
+        description: "Custom SEG structure resembling a golf tee",
+        qty: 1,
+        qtyIsExplicit: false,
+        unit: "EA",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitScopeLineItems(version.id, document.id);
+
+    const lineItems = await db.lineItem.findMany({ where: { documentId: document.id } });
+    const segFabric = lineItems.find((li) => li.description.includes("SEG fabric"));
+    expect(segFabric?.category).toBe("Graphics");
+
+    // The false-positive guard: "SEG" here is an unrelated internal
+    // reference on a custom-fabricated structural element, not fabric
+    // graphics -- it must still resolve via the normal scope-bucket
+    // mapping (Structure), not get swept into Graphics just because the
+    // word "SEG" appears.
+    const golfTee = lineItems.find((li) => li.description.includes("golf tee"));
+    expect(golfTee?.category).toBe("Structure");
+  });
+
   it("uses a model-reported pageNumber directly when present, bypassing text-search page lookup -- the drawing-sourced case", async () => {
     // A DOCX-mime document (no PDF page text at all) proves this isn't
     // accidentally working via locateQuotePage -- drawing-line-item-
