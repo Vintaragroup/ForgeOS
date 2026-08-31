@@ -32,6 +32,7 @@ import {
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
+  untagSectionBuildTypeAction,
   updateSectionBuildTypeAction,
   updateSectionItemsCategoryAction,
 } from "../actions";
@@ -2296,10 +2297,23 @@ function CategoryTabContent({
             <div key={booth.boothLabel} className="overflow-hidden rounded-md border border-neutral-200">
               <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
                 <h4 className="text-sm font-semibold uppercase tracking-wide">{booth.boothLabel}</h4>
-                <div className="text-xs">
-                  <span className="text-neutral-400">Cost {money(booth.subtotal)}</span>
-                  <span className="mx-1.5 text-neutral-500">&rarr;</span>
-                  <span className="font-semibold">{money(sell(booth.subtotal))}</span>
+                <div className="flex items-center gap-3">
+                  <div className="text-xs">
+                    <span className="text-neutral-400">Cost {money(booth.subtotal)}</span>
+                    <span className="mx-1.5 text-neutral-500">&rarr;</span>
+                    <span className="font-semibold">{money(sell(booth.subtotal))}</span>
+                  </div>
+                  {!version.isLocked && (
+                    <form action={untagSectionBuildTypeAction.bind(null, estimateId, version.id, booth.boothLabel)}>
+                      <button
+                        type="submit"
+                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                        title="Move this component's items back to their own raw categories"
+                      >
+                        Untag
+                      </button>
+                    </form>
+                  )}
                 </div>
               </div>
               <div className="flex flex-col gap-5 p-4">

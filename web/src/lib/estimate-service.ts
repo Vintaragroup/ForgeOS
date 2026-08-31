@@ -135,10 +135,19 @@ export async function addSection(
 // always an explicit human choice, never inferred from import data.
 // Scoped to estimateVersionId so a groupLabel that happens to repeat
 // across a different version can never be cross-contaminated.
+//
+// buildType accepts null (untag) as well as a real value: a component
+// whose real content spans genuinely different categories the estimator
+// wants to keep distinct (a vendor AV bid comparison mixed into a booth
+// build, a hanging-sign component whose graphics shouldn't disappear into
+// Custom Build) needs a way back to "resolve by each item's own raw
+// category" -- confirmed live need, not hypothetical: tagging a
+// Fuse-AV-bid-comparison-style section swallowed ~$50k of real Audio/
+// Visual pricing into Custom Build with no way to surface it again.
 export async function updateSectionBuildType(
   estimateVersionId: string,
   groupLabel: string,
-  buildType: SectionBuildType,
+  buildType: SectionBuildType | null,
 ) {
   await assertUnlocked(estimateVersionId);
   await db.estimateSection.updateMany({

@@ -77,6 +77,13 @@ export async function updateSectionBuildTypeAction(
   revalidatePath(`/estimates/${estimateId}`);
 }
 
+export async function untagSectionBuildTypeAction(estimateId: string, versionId: string, groupLabel: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await updateSectionBuildType(versionId, groupLabel, null);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
 export async function updateSectionItemsCategoryAction(
   estimateId: string,
   versionId: string,
