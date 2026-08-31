@@ -253,4 +253,72 @@ describe("buildTypeTotals", () => {
       expect(structure.purchase.parts).toHaveLength(1);
     });
   });
+
+  describe("SEG/Graphics square footage", () => {
+    it("uses qty directly as square footage when the line's own unit is already SQFT", () => {
+      const sections = [
+        { groupLabel: null, buildType: null, lineItems: [li({ id: "a", description: "SEG w/ Blackout White", unit: "SQFT", qty: 168 })] },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.purchase.families).toEqual([{ label: "SEG/Graphics", qty: 168, totalCost: 100, totalSqft: 168 }]);
+    });
+
+    it("computes area from an inch-marked WxH pair in the description for an each-counted panel", () => {
+      const sections = [
+        {
+          groupLabel: null,
+          buildType: null,
+          lineItems: [li({ id: "a", description: `SEG w/ Blackout White - 168 15/16" x 95 1/16"`, unit: "EA", qty: 2 })],
+        },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      // (168.9375 * 95.0625 / 144) * 2 panels
+      const expectedSqft = ((168 + 15 / 16) * (95 + 1 / 16) / 144) * 2;
+      expect(structure.purchase.families[0].label).toBe("SEG/Graphics");
+      expect(structure.purchase.families[0].totalSqft).toBeCloseTo(expectedSqft, 4);
+    });
+
+    it("also matches the word 'graphic' (not just SEG), and sums square footage across multiple matching rows", () => {
+      const sections = [
+        {
+          groupLabel: null,
+          buildType: null,
+          lineItems: [
+            li({ id: "a", description: "Graphic panel", unit: "SQFT", qty: 50 }),
+            li({ id: "b", description: "SEG fabric backwall", unit: "SQFT", qty: 25 }),
+          ],
+        },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.purchase.families).toEqual([{ label: "SEG/Graphics", qty: 75, totalCost: 200, totalSqft: 75 }]);
+    });
+
+    it("still counts a SEG/Graphics part in qty even when no area can be measured, without a false 0 sqft", () => {
+      const sections = [
+        { groupLabel: null, buildType: null, lineItems: [li({ id: "a", description: "Graphic decal", unit: "EA", qty: 3 })] },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.purchase.families).toEqual([{ label: "SEG/Graphics", qty: 3, totalCost: 100 }]);
+      expect(structure.purchase.families[0].totalSqft).toBeUndefined();
+    });
+
+    it("never misreads a millimeter dimension (no inch marks) as inches, even on a SEG/Graphics-matched part", () => {
+      const sections = [
+        { groupLabel: null, buildType: null, lineItems: [li({ id: "a", description: "Graphic panel 2418mm x 310mm", unit: "EA", qty: 4 })] },
+      ];
+
+      const [structure] = buildTypeTotals(sections, categories);
+
+      expect(structure.purchase.families).toEqual([{ label: "SEG/Graphics", qty: 4, totalCost: 100 }]);
+      expect(structure.purchase.families[0].totalSqft).toBeUndefined();
+    });
+  });
 });

@@ -96,25 +96,75 @@ export interface PartQuantity {
 // with Key" from "Compliant Door - with Code Keypad" into two families
 // (last word "Key" vs "Keypad") when both are plainly doors. A description
 // matching none of these stays out of every family total -- this seed list
-// only covers the part types confirmed so far (Frame, Accessories, Door);
-// extend it as more come up rather than guessing at a name.
-const PART_FAMILY_PATTERNS: { pattern: RegExp; label: string }[] = [
+// only covers the part types confirmed so far (Frame, Accessories, Door,
+// SEG/Graphics); extend it as more come up rather than guessing at a name.
+//
+// trackSqft (SEG/Graphics only, per direct confirmation): this family also
+// needs total square footage, not just a panel count -- see
+// computeSqftForPart below for how that's derived per part.
+const PART_FAMILY_PATTERNS: { pattern: RegExp; label: string; trackSqft?: boolean }[] = [
   { pattern: /\bframes?\b/i, label: "Frame" },
   { pattern: /\baccessor(?:y|ies)\b/i, label: "Accessories" },
   { pattern: /\bdoors?\b/i, label: "Door" },
+  { pattern: /\bseg\b|\bgraphics?\b/i, label: "SEG/Graphics", trackSqft: true },
 ];
 
-export function resolvePartFamily(description: string): string | null {
-  for (const { pattern, label } of PART_FAMILY_PATTERNS) {
-    if (pattern.test(description)) return label;
+export function resolvePartFamily(description: string): { label: string; trackSqft?: boolean } | null {
+  for (const { pattern, label, trackSqft } of PART_FAMILY_PATTERNS) {
+    if (pattern.test(description)) return { label, trackSqft };
   }
   return null;
+}
+
+// A whole number optionally followed by a mixed fraction (e.g. "168",
+// "15/16", or "168 15/16") -- the real, observed dimension-string
+// convention for a fabric/graphic panel's cut size (confirmed live: "SEG
+// w/ Blackout White - 168 15/16" x 95 1/16""), same fraction notation a
+// shop tape measure reads in.
+function parseInchesToken(token: string): number {
+  const [wholePart, fractionPart] = token.trim().split(/\s+/);
+  const whole = Number(wholePart);
+  if (!fractionPart) return whole;
+  const [numerator, denominator] = fractionPart.split("/").map(Number);
+  return whole + numerator / denominator;
+}
+
+// Requires a literal `"` after EACH number -- deliberately, so this can
+// never misread a millimeter dimension (e.g. "2418mm x 310mm Frame", the
+// BeMatrix aluminum-profile convention) as inches. A description with no
+// inch-marked WxH pair simply doesn't contribute an area -- consistent
+// with this file's "don't guess" posture elsewhere (see e.g.
+// resolvePullMethod's own comment), not a best-effort parse.
+const INCH_DIMENSION_PATTERN = /(\d+(?:\s+\d+\/\d+)?)\s*"\s*x\s*(\d+(?:\s+\d+\/\d+)?)\s*"/i;
+
+const SQFT_UNIT_PATTERN = /^sq\.?\s*ft\.?$/i;
+
+// Two independent, real signals for a panel's area, per direct
+// confirmation that "panel count" and "total square feet" need to both be
+// available: (1) the line's own unit is already SQFT (qty IS the area,
+// e.g. a consolidated "168 SQFT of SEG material" row -- no dimension
+// parsing needed or possible), or (2) the description carries an explicit
+// inch-marked WxH pair for an individually-counted panel (unit EA, qty =
+// panel count), area = (W * H / 144) per panel * qty. Returns undefined
+// (not 0) when neither signal is present, so a family's totalSqft only
+// ever reflects rows it could actually measure, never a false "0 sqft."
+function computeSqftForPart(part: { unit: string | null; description: string; qty: number }): number | undefined {
+  if (part.unit && SQFT_UNIT_PATTERN.test(part.unit.trim())) return part.qty;
+  const match = INCH_DIMENSION_PATTERN.exec(part.description);
+  if (!match) return undefined;
+  const width = parseInchesToken(match[1]);
+  const height = parseInchesToken(match[2]);
+  return ((width * height) / 144) * part.qty;
 }
 
 export interface PartFamilyTotal {
   label: string;
   qty: number;
   totalCost: number;
+  // Only present for an area-tracked family (SEG/Graphics) -- undefined,
+  // not 0, when none of its parts had a measurable area (see
+  // computeSqftForPart).
+  totalSqft?: number;
 }
 
 export interface MethodTotal {
@@ -203,14 +253,16 @@ export function buildTypeTotals<
     const familiesByLabel = new Map<string, PartFamilyTotal>();
     for (const part of filtered) {
       if (part.key.startsWith("assembly:")) continue;
-      const label = resolvePartFamily(part.description);
-      if (!label) continue;
-      const existing = familiesByLabel.get(label);
+      const family = resolvePartFamily(part.description);
+      if (!family) continue;
+      const sqft = family.trackSqft ? computeSqftForPart(part) : undefined;
+      const existing = familiesByLabel.get(family.label);
       if (existing) {
         existing.qty += part.qty;
         existing.totalCost += part.totalCost;
+        if (sqft !== undefined) existing.totalSqft = (existing.totalSqft ?? 0) + sqft;
       } else {
-        familiesByLabel.set(label, { label, qty: part.qty, totalCost: part.totalCost });
+        familiesByLabel.set(family.label, { label: family.label, qty: part.qty, totalCost: part.totalCost, totalSqft: sqft });
       }
     }
     const families = [...familiesByLabel.values()].sort((a, b) => a.label.localeCompare(b.label));

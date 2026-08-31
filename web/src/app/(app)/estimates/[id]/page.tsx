@@ -3314,6 +3314,7 @@ function TypeTotalsMethodTable({ label, methodTotal }: { label: string; methodTo
               title={`${family.label} across every size/variant`}
             >
               {family.label}: {family.qty}
+              {family.totalSqft !== undefined && ` · ${family.totalSqft.toFixed(1)} sqft`}
             </span>
           ))}
         </div>
