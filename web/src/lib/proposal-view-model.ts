@@ -87,30 +87,49 @@ const LEAF_KEY_TO_TYPE_KEY = new Map<string, string>(
   ),
 );
 
+// Whether a booth's tag (section.buildType) actually composes onto this
+// item -- true only when the item's own Type key is one of the five with a
+// real Method split (TYPE_KEYS_WITH_METHOD_SPLIT) and the section is
+// tagged. Identified from the item's own stable `key` via
+// LEAF_KEY_TO_TYPE_KEY, NOT its parentId -- confirmed necessary against
+// real data, where a Type's own parentId can be non-null for a reason
+// unrelated to this taxonomy (a category hand-edited in
+// /catalog/categories; see groupPrimaryCategoryTabs' own comment for the
+// same issue there). Trusting parentId here would misresolve that Type's
+// own untagged items as if they were themselves a Method leaf of whatever
+// category parentId happens to (wrongly) point to.
+//
+// Exported so a caller that needs the raw composed Method itself, not just
+// the resulting category name (e.g. type-totals.ts's Rental-vs-Purchase
+// classification for the production pull-quantity report), can reuse this
+// exact eligibility check instead of re-deriving it.
+export function resolveComposedMethod(
+  li: { category: string | null },
+  section: { groupLabel: string | null; buildType?: SectionBuildType | null },
+  categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
+): SectionBuildType | null {
+  const ownCategory = li.category ? categories.find((c) => c.name === li.category) : undefined;
+  if (!section.groupLabel || !section.buildType || !ownCategory) return null;
+  const typeKey = LEAF_KEY_TO_TYPE_KEY.get(ownCategory.key) ?? ownCategory.key;
+  return (TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).includes(typeKey) ? section.buildType : null;
+}
+
 export function resolveEffectiveCategory(
   li: { category: string | null },
   section: { groupLabel: string | null; buildType?: SectionBuildType | null },
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
 ): string {
   const ownCategory = li.category ? categories.find((c) => c.name === li.category) : undefined;
-  if (section.groupLabel && section.buildType && ownCategory) {
+  const composedMethod = resolveComposedMethod(li, section, categories);
+  if (composedMethod && ownCategory) {
     // This item's own Type key: itself if it's already a Type (flat, or
     // one of the five with a real Method split), or the Type its own key
     // composes onto if it's already a Method leaf (re-tagging a booth
     // that was tagged before, or an item whose own category was hand-set
-    // to a leaf directly). Identified from ownCategory's own stable `key`
-    // via LEAF_KEY_TO_TYPE_KEY, NOT its parentId -- confirmed necessary
-    // against real data, where a Type's own parentId can be non-null for
-    // a reason unrelated to this taxonomy (a category hand-edited in
-    // /catalog/categories; see groupPrimaryCategoryTabs' own comment for
-    // the same issue there). Trusting parentId here would misresolve
-    // that Type's own untagged items as if they were themselves a Method
-    // leaf of whatever category parentId happens to (wrongly) point to.
+    // to a leaf directly).
     const typeKey = LEAF_KEY_TO_TYPE_KEY.get(ownCategory.key) ?? ownCategory.key;
-    if ((TYPE_KEYS_WITH_METHOD_SPLIT as readonly string[]).includes(typeKey)) {
-      const resolved = resolveCategoryNameFromKey(categories, leafCategoryKey(typeKey, section.buildType));
-      if (resolved) return resolved;
-    }
+    const resolved = resolveCategoryNameFromKey(categories, leafCategoryKey(typeKey, composedMethod));
+    if (resolved) return resolved;
   }
   return ownCategory ? ownCategory.name : "Other";
 }

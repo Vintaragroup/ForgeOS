@@ -73,7 +73,7 @@ import { auditLineItemCategories } from "@/lib/category-audit";
 import type { SectionBuildType } from "@/generated/prisma/enums";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { getVendorMatchApplyLog } from "@/lib/vendor-match-apply-log-service";
-import { buildTypeTotals } from "@/lib/type-totals";
+import { buildTypeTotals, type MethodTotal } from "@/lib/type-totals";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
@@ -3209,28 +3209,48 @@ function TypeTotalsTab({ version, categories }: { version: VersionWithSections; 
             <h3 className="text-sm font-semibold text-neutral-900">{group.categoryName}</h3>
             <span className="text-sm font-medium text-neutral-700">{money(group.totalCost)}</span>
           </div>
-          <div className="overflow-x-auto rounded-md border border-neutral-200">
-            <table className="w-full text-sm">
-              <thead className="bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
-                <tr>
-                  <th className="px-3 py-2">Description</th>
-                  <th className="px-3 py-2">Unit</th>
-                  <th className="px-3 py-2 text-right">Qty</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-100">
-                {group.parts.map((part) => (
-                  <tr key={part.key}>
-                    <td className="px-3 py-2">{part.description}</td>
-                    <td className="px-3 py-2 text-neutral-500">{part.unit ?? "--"}</td>
-                    <td className="px-3 py-2 text-right font-medium">{part.qty}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <TypeTotalsMethodTable label="Rental" methodTotal={group.rental} />
+          <TypeTotalsMethodTable label="Purchase" methodTotal={group.purchase} />
         </Card>
       ))}
+    </div>
+  );
+}
+
+// One acquisition-Method sub-table within a Type card (see TypeTotalsTab) --
+// Rental (drawn from our own rental stock) vs. Purchase (bought fresh,
+// including raw fabrication inputs like plywood/aluminum that never carry
+// a Method tag at all). Omitted entirely when empty, rather than shown as
+// an empty section, so a Type with only Purchase parts doesn't also show a
+// bare "Rental" heading with nothing under it.
+function TypeTotalsMethodTable({ label, methodTotal }: { label: string; methodTotal: MethodTotal }) {
+  if (methodTotal.parts.length === 0) return null;
+  return (
+    <div className="mb-4 last:mb-0">
+      <div className="mb-2 flex items-center justify-between">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{label}</h4>
+        <span className="text-xs font-medium text-neutral-500">{money(methodTotal.totalCost)}</span>
+      </div>
+      <div className="overflow-x-auto rounded-md border border-neutral-200">
+        <table className="w-full text-sm">
+          <thead className="bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
+            <tr>
+              <th className="px-3 py-2">Description</th>
+              <th className="px-3 py-2">Unit</th>
+              <th className="px-3 py-2 text-right">Qty</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-neutral-100">
+            {methodTotal.parts.map((part) => (
+              <tr key={part.key}>
+                <td className="px-3 py-2">{part.description}</td>
+                <td className="px-3 py-2 text-neutral-500">{part.unit ?? "--"}</td>
+                <td className="px-3 py-2 text-right font-medium">{part.qty}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
