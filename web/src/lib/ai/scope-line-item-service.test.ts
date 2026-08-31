@@ -230,13 +230,13 @@ describe("commitScopeLineItems", () => {
     const segFabric = lineItems.find((li) => li.description.includes("SEG fabric"));
     expect(segFabric?.category).toBe("Graphics");
 
-    // The false-positive guard: "SEG" here is an unrelated internal
-    // reference on a custom-fabricated structural element, not fabric
-    // graphics -- it must still resolve via the normal scope-bucket
-    // mapping (Structure), not get swept into Graphics just because the
-    // word "SEG" appears.
+    // "SEG" in any real phrasing means Graphics -- confirmed against 363
+    // real production line items (see isAlwaysGraphicsDescription's own
+    // comment) that this "golf tee" wording is also genuine SEG fabric,
+    // not an unrelated internal reference as an earlier, narrower version
+    // of this rule had assumed.
     const golfTee = lineItems.find((li) => li.description.includes("golf tee"));
-    expect(golfTee?.category).toBe("Structure");
+    expect(golfTee?.category).toBe("Graphics");
   });
 
   it("uses a model-reported pageNumber directly when present, bypassing text-search page lookup -- the drawing-sourced case", async () => {

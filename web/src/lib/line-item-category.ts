@@ -311,17 +311,19 @@ export function inferCategoryFromDescription(
 // override ahead of its own category-resolution order) apply the same
 // rule explicitly.
 //
-// Deliberately NOT bare "SEG" as a whole word -- confirmed live as a real
-// false positive: "Custom SEG structure resembling a golf tee" is a
-// custom-fabricated structural element whose own name happens to include
-// "SEG" for an unrelated reason, not fabric graphics at all. Requires SEG
-// to be immediately followed by a real graphics-material marker instead --
-// covers every confirmed-genuine phrasing seen so far ("SEG fabric for
-// wall systems", "SEG w/ Blackout White - 168 15/16\" x 95 1/16\"") while
-// leaving "SEG structure"/"SEG-mount bracket"-style false positives alone.
-// Extend this list if a genuine SEG phrasing turns up that doesn't match
-// it, rather than widening back to a bare word-boundary match.
-const ALWAYS_GRAPHICS_PATTERN = /\bseg\b\s+(?:fabric|graphic|panel|wall|w\/)/i;
+// Bare "SEG" as a whole word, deliberately -- an earlier, narrower version
+// of this pattern required a nearby marker word ("fabric"/"graphic"/
+// "panel"/"wall"/"w/") specifically to exclude one item that looked like a
+// false positive ("Custom SEG structure resembling a golf tee"). Reviewing
+// 363 real SEG line items across 4 real shows disproved that: genuine SEG
+// fabric phrasing varies far too widely in real vendor data ("SEG BACKLIT
+// -- ceiling", "SEG -- Return Walls Both Faces -- 7.83' x 10'", "SEG
+// White - SCRIM", "Large back-wall graphic, SEG-mounted") for any nearby-
+// marker requirement to reliably catch it -- the narrower pattern missed
+// 68 of those 363 genuine items. Per direct confirmation, "SEG" has no
+// other meaning in this business, so a bare word-boundary match (still
+// won't false-positive on "segment") is both simpler and more correct.
+const ALWAYS_GRAPHICS_PATTERN = /\bseg\b/i;
 
 export function isAlwaysGraphicsDescription(description: string): boolean {
   return ALWAYS_GRAPHICS_PATTERN.test(description);

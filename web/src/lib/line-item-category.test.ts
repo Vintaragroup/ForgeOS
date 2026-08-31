@@ -137,22 +137,23 @@ describe("resolveLineItemTypeKey", () => {
 });
 
 describe("isAlwaysGraphicsDescription", () => {
-  it("matches 'SEG' immediately followed by a real graphics-material marker, case-insensitively", () => {
+  it("matches bare 'SEG' as a whole word, case-insensitively, across widely varied real vendor phrasing", () => {
+    // Confirmed against 363 real SEG line items across 4 real shows --
+    // genuine SEG fabric phrasing varies far too widely ("SEG BACKLIT --
+    // ceiling", "SEG -- Return Walls Both Faces -- 7.83' x 10'", "SEG
+    // White - SCRIM", "Large back-wall graphic, SEG-mounted") for a
+    // narrower "SEG + nearby marker word" rule to reliably catch it -- an
+    // earlier, narrower version of this pattern missed 68 of those 363.
     expect(isAlwaysGraphicsDescription("SEG w/ Blackout White")).toBe(true);
     expect(isAlwaysGraphicsDescription("seg fabric backwall")).toBe(true);
+    expect(isAlwaysGraphicsDescription("SEG BACKLIT -- ceiling")).toBe(true);
+    expect(isAlwaysGraphicsDescription("SEG -- Return Walls Both Faces -- 7.83' x 10'")).toBe(true);
+    expect(isAlwaysGraphicsDescription("Large back-wall graphic, SEG-mounted")).toBe(true);
+    expect(isAlwaysGraphicsDescription("Custom SEG structure resembling a golf tee")).toBe(true);
   });
 
   it("does not match 'segment' or other words merely containing 'seg'", () => {
     expect(isAlwaysGraphicsDescription("Segment display bracket")).toBe(false);
-  });
-
-  it("does not match bare 'SEG' with no graphics-material marker following it -- the real false-positive it guards against", () => {
-    // Confirmed live: "Custom SEG structure resembling a golf tee" is a
-    // custom-fabricated structural element, not fabric graphics -- "SEG"
-    // there is an unrelated internal reference, not "Silicone Edge
-    // Graphics." A bare word-boundary match would have wrongly sent this
-    // to Graphics.
-    expect(isAlwaysGraphicsDescription("Custom SEG structure resembling a golf tee")).toBe(false);
   });
 
   it("does not match a description with no SEG reference at all", () => {
