@@ -11,6 +11,7 @@ import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
 import { buildEstimateFromAllDocuments } from "@/lib/ai/estimate-synthesis-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import { reconcilePullSheetAgainstExcel } from "@/lib/cad-reconciliation-service";
+import { applyPullSheetEnrichment, previewPullSheetEnrichment } from "@/lib/cad-enrichment-service";
 import {
   confirmAllDraftLineItems,
   recategorizeLineItems,
@@ -211,4 +212,30 @@ export async function reconcilePullSheetAction(estimateId: string, formData: For
   }
   const result = await reconcilePullSheetAgainstExcel(cadDocumentId, excelDocumentId);
   redirect(`/estimates/${estimateId}?tab=documents&reconcileResult=${encodeURIComponent(JSON.stringify(result))}`);
+}
+
+// Preview/apply, same posture as previewImportAction/commitImportAction --
+// never writes anything until Apply, and Apply re-derives the identical
+// preview rather than trusting a stale one carried through the redirect.
+export async function previewPullSheetEnrichmentAction(estimateId: string, versionId: string, formData: FormData) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const cadDocumentId = String(formData.get("cadDocumentId") ?? "").trim();
+  if (!cadDocumentId) throw new Error("Choose a CAD drawing");
+  const result = await previewPullSheetEnrichment(versionId, cadDocumentId);
+  redirect(
+    `/estimates/${estimateId}?tab=documents&enrichCadDocumentId=${cadDocumentId}&enrichResult=${encodeURIComponent(JSON.stringify(result))}`,
+  );
+}
+
+export async function applyPullSheetEnrichmentAction(estimateId: string, versionId: string, formData: FormData) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  const cadDocumentId = String(formData.get("cadDocumentId") ?? "").trim();
+  if (!cadDocumentId) throw new Error("Choose a CAD drawing");
+  const result = await applyPullSheetEnrichment(opportunityId, versionId, cadDocumentId);
+  if ("status" in result) throw new Error(result.reason);
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}?tab=documents&enrichApplied=${result.updated}`);
 }

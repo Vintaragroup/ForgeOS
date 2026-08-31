@@ -51,7 +51,9 @@ import {
   commitImportAction,
   commitScopeItemsAction,
   confirmAllDraftLineItemsAction,
+  applyPullSheetEnrichmentAction,
   previewImportAction,
+  previewPullSheetEnrichmentAction,
   proposeScopeItemsAction,
   recategorizeLineItemsAction,
   reconcilePullSheetAction,
@@ -60,6 +62,7 @@ import {
 } from "./import-actions";
 import { reconcileAgainstClientTemplate, type ClientTemplateReconciliation } from "@/lib/client-pricing-template-service";
 import type { ReconciliationResult, ReconciliationRow } from "@/lib/cad-reconciliation-service";
+import type { EnrichmentPreviewResult } from "@/lib/cad-enrichment-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
 import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import type { CoverageGap } from "@/lib/ai/scope-coverage-service";
@@ -150,6 +153,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     recategorizeChecked: recategorizeCheckedParam,
     reconcileDocumentId: reconcileDocumentIdParam,
     reconcileResult: reconcileResultParam,
+    enrichCadDocumentId: enrichCadDocumentIdParam,
+    enrichResult: enrichResultParam,
+    enrichApplied: enrichAppliedParam,
   } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   const reconcileDocumentId = Array.isArray(reconcileDocumentIdParam) ? reconcileDocumentIdParam[0] : reconcileDocumentIdParam;
@@ -198,6 +204,19 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       reconcileResult = null; // malformed/tampered query param -- ignore rather than crash the page
     }
   }
+  const enrichCadDocumentId = Array.isArray(enrichCadDocumentIdParam) ? enrichCadDocumentIdParam[0] : enrichCadDocumentIdParam;
+  const enrichResultRaw = Array.isArray(enrichResultParam) ? enrichResultParam[0] : enrichResultParam;
+  let enrichResult: EnrichmentPreviewResult | null = null;
+  if (enrichResultRaw) {
+    try {
+      enrichResult = JSON.parse(enrichResultRaw) as EnrichmentPreviewResult;
+    } catch {
+      enrichResult = null; // malformed/tampered query param -- ignore rather than crash the page
+    }
+  }
+  const enrichApplied = enrichAppliedParam
+    ? Number(Array.isArray(enrichAppliedParam) ? enrichAppliedParam[0] : enrichAppliedParam) || 0
+    : null;
 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -398,6 +417,12 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const previewImportWithId = previewImportAction.bind(null, estimate.id);
   const proposeScopeItemsWithId = proposeScopeItemsAction.bind(null, estimate.id);
   const reconcilePullSheetWithId = reconcilePullSheetAction.bind(null, estimate.id);
+  const previewPullSheetEnrichmentWithIds = currentVersion
+    ? previewPullSheetEnrichmentAction.bind(null, estimate.id, currentVersion.id)
+    : null;
+  const applyPullSheetEnrichmentWithIds = currentVersion
+    ? applyPullSheetEnrichmentAction.bind(null, estimate.id, currentVersion.id)
+    : null;
   const archiveEstimateWithIds = archiveEstimateAction.bind(null, estimate.id, estimate.opportunityId);
   const unarchiveEstimateWithIds = unarchiveEstimateAction.bind(null, estimate.id, estimate.opportunityId);
   const buildEstimateWithIds = currentVersion
@@ -665,6 +690,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     cadDocuments={cadDocuments}
                     reconcilePullSheetAction={reconcilePullSheetWithId}
                     reconcileResult={reconcileResult}
+                    previewPullSheetEnrichmentAction={previewPullSheetEnrichmentWithIds}
+                    applyPullSheetEnrichmentAction={applyPullSheetEnrichmentWithIds}
+                    enrichCadDocumentId={enrichCadDocumentId}
+                    enrichResult={enrichResult}
+                    enrichApplied={enrichApplied}
                   />
                 ),
                 "type-totals": <TypeTotalsTab version={currentVersion} categories={categories} />,
@@ -2797,6 +2827,11 @@ function DocumentsTab({
   cadDocuments,
   reconcilePullSheetAction,
   reconcileResult,
+  previewPullSheetEnrichmentAction,
+  applyPullSheetEnrichmentAction,
+  enrichCadDocumentId,
+  enrichResult,
+  enrichApplied,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -2822,6 +2857,11 @@ function DocumentsTab({
   cadDocuments: { id: string; filename: string }[];
   reconcilePullSheetAction: (formData: FormData) => void | Promise<void>;
   reconcileResult: ReconciliationResult | null;
+  previewPullSheetEnrichmentAction: ((formData: FormData) => void | Promise<void>) | null;
+  applyPullSheetEnrichmentAction: ((formData: FormData) => void | Promise<void>) | null;
+  enrichCadDocumentId: string | undefined;
+  enrichResult: EnrichmentPreviewResult | null;
+  enrichApplied: number | null;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -3360,6 +3400,77 @@ function DocumentsTab({
           <ReconciliationResultTable rows={reconcileResult.rows} />
         )}
       </Card>
+
+      {previewPullSheetEnrichmentAction && applyPullSheetEnrichmentAction && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Enrich line items from CAD Pull Sheet
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Fills in the dimension a terse Excel description leaves out (e.g. &quot;1/3M X 1/2M FRAME&quot; →
+            &quot;1/3M X 1/2M FRAME (310mm x 434mm)&quot;), matched to the already-imported line item by Part
+            Number -- this only ever appends to an existing description, never creates a new line item or changes
+            cost/qty.
+          </p>
+          {cadDocuments.length === 0 ? (
+            <Notice
+              message="Upload a CAD drawing (PDF) on the Opportunity's Documents card first."
+              actionHref={`/opportunities/${opportunityId}`}
+              actionLabel="Go to Opportunity"
+            />
+          ) : (
+            <form action={previewPullSheetEnrichmentAction} className="flex items-end gap-3">
+              <div className="flex-1">
+                <SelectField
+                  label="CAD drawing"
+                  name="cadDocumentId"
+                  defaultValue={enrichCadDocumentId ?? ""}
+                  options={cadDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+                />
+              </div>
+              <Button variant="secondary">Preview enrichment</Button>
+            </form>
+          )}
+
+          {enrichApplied !== null && (
+            <p className="mt-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+              Updated {enrichApplied} line item{enrichApplied === 1 ? "" : "s"}.
+            </p>
+          )}
+
+          {enrichResult && "status" in enrichResult && (
+            <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {enrichResult.reason}
+            </p>
+          )}
+
+          {enrichResult && !("status" in enrichResult) && (
+            <div className="mt-4 border-t border-neutral-200 pt-4">
+              <p className="mb-3 text-sm text-neutral-700">
+                <span className="font-medium">{enrichResult.proposals.length}</span> item
+                {enrichResult.proposals.length === 1 ? "" : "s"} to enrich, {enrichResult.alreadyComplete} already
+                complete, {enrichResult.noCadMatch} with no CAD match.
+              </p>
+              {enrichResult.proposals.length > 0 && (
+                <>
+                  <div className="mb-3 flex flex-col gap-2">
+                    {enrichResult.proposals.map((p) => (
+                      <div key={p.lineItemId} className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm">
+                        <div className="text-neutral-500 line-through">{p.currentDescription}</div>
+                        <div className="text-neutral-900">{p.proposedDescription}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <form action={applyPullSheetEnrichmentAction}>
+                    <input type="hidden" name="cadDocumentId" value={enrichCadDocumentId ?? ""} />
+                    <Button>Apply {enrichResult.proposals.length} enrichment{enrichResult.proposals.length === 1 ? "" : "s"}</Button>
+                  </form>
+                </>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

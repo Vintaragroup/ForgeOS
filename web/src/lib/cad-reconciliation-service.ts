@@ -42,7 +42,10 @@ export type ReconciliationResult =
 // a different one."
 const AREA_MISMATCH_MAX = 5;
 
-function normalizePartNumber(value: string): string {
+// Exported for cad-enrichment-service.ts, which matches the same CAD Pull
+// Sheet against already-committed LineItems (by LineItem.positionCode)
+// instead of raw Excel rows -- same normalization, same grouping shape.
+export function normalizePartNumber(value: string): string {
   return value.trim().replace(/\s+/g, " ").toUpperCase();
 }
 
@@ -50,13 +53,21 @@ function isWallPanelType(type: string): boolean {
   return type.trim().toLowerCase() === "wall panel";
 }
 
-interface PartNumberGroup {
+export interface PartNumberGroup {
   labels: string[];
   qty: number;
   description: string;
+  // The CAD's own Size column (e.g. "310mm x 434mm") -- cad-reconciliation-
+  // service.ts itself never reads this, but cad-enrichment-service.ts
+  // does, to fill in the dimension a terse Excel description leaves out.
+  // From the first row seen for this Part Number; every real instance of
+  // the same SKU shares one size, so it doesn't matter which. Only ever
+  // set on the CAD side -- the Excel side (groupExcelByPartNumber below)
+  // has no equivalent column.
+  size?: string | null;
 }
 
-function groupCadByPartNumber(rows: ParsedPullSheetRow[]): Map<string, PartNumberGroup> {
+export function groupCadByPartNumber(rows: ParsedPullSheetRow[]): Map<string, PartNumberGroup> {
   const groups = new Map<string, PartNumberGroup>();
   for (const row of rows) {
     if (!row.partNumber) continue;
@@ -66,7 +77,7 @@ function groupCadByPartNumber(rows: ParsedPullSheetRow[]): Map<string, PartNumbe
       existing.qty += row.qty;
       existing.labels.push(row.id);
     } else {
-      groups.set(key, { labels: [row.id], qty: row.qty, description: row.description });
+      groups.set(key, { labels: [row.id], qty: row.qty, description: row.description, size: row.size });
     }
   }
   return groups;

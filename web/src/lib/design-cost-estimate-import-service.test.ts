@@ -150,6 +150,18 @@ describe("previewDesignCostEstimateImport", () => {
     expect(brokenRow?.unitCost).toBe(0);
   });
 
+  it("captures a real hardware Part Number, and leaves it null for a category-label row that only looks like one", async () => {
+    const { opportunity, document } = await makeDocumentFrom(CURRENT_SECTION_203_PATH, "Section 203 current.xlsx");
+
+    const preview = await previewDesignCostEstimateImport(document.id, opportunity.id);
+
+    const frame = preview.rows.find((r) => r.description === "1/3M X 1/2M FRAME");
+    expect(frame?.partNumber).toBe("606 0310 0434");
+
+    const misc = preview.rows.find((r) => r.description.toLowerCase().includes("emergancy exit"));
+    expect(misc?.partNumber).toBeNull();
+  });
+
   it("captures a matching Build Name across two files that mirror the same design (203 and 211 both 'A.6.3.0')", async () => {
     const { opportunity: opp1, document: doc211 } = await makeDocumentFrom(SECTION_211_PATH, "Section 211.xlsx");
     const { document: doc203 } = await makeDocumentFrom(SECTION_203_PATH, "Section 203.xlsx");
@@ -200,6 +212,17 @@ describe("commitDesignCostEstimateImport", () => {
     expect(updatedDoc.buildName).toBe("A.6.3.0");
 
     await expect(commitDesignCostEstimateImport(version.id, document.id)).rejects.toThrow(/already been imported/);
+  });
+
+  it("stamps a real hardware Part Number onto the committed LineItem's positionCode", async () => {
+    const { opportunity, document } = await makeDocumentFrom(CURRENT_SECTION_203_PATH, "Section 203 current.xlsx");
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitDesignCostEstimateImport(version.id, document.id);
+
+    const frame = await db.lineItem.findFirstOrThrow({ where: { documentId: document.id, description: "1/3M X 1/2M FRAME" } });
+    expect(frame.positionCode).toBe("606 0310 0434");
   });
 
   // Confirmed live on a real production estimate: every one of these

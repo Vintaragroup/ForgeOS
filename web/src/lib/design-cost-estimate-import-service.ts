@@ -46,6 +46,14 @@ export interface ParsedDesignCostRow {
   // chain.
   unitCost: number;
   catalogMatch: CatalogMatch | null;
+  // The raw Type/Part Number cell, kept only when it looks like a real
+  // SKU (see REAL_PART_NUMBER_PATTERN below) -- stamped onto the
+  // committed LineItem's own positionCode (commitDesignCostEstimateImport)
+  // so a CAD Pull Sheet's matching row can be found later by exact key
+  // (cad-enrichment-service.ts), the same join this file's own
+  // readDesignCostRowsForReconciliation already uses for the read-only
+  // reconciliation report.
+  partNumber: string | null;
 }
 
 export interface DesignCostEstimatePreview {
@@ -306,6 +314,7 @@ export async function previewDesignCostEstimateImport(
       qty,
       unitCost,
       catalogMatch: matchDescription(description, catalog),
+      partNumber: REAL_PART_NUMBER_PATTERN.test(type) ? type : null,
     });
   }
 
@@ -419,6 +428,12 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
         isClientOwned: inferIsClientOwned(row.description),
         documentId,
         sourceQuote: row.sourceQuote,
+        // The exact join key a matching CAD Pull Sheet's Part Number
+        // column shares -- lets cad-enrichment-service.ts fill in the
+        // dimension this workbook's own terse description leaves out
+        // ("1/3M X 1/2M FRAME" vs. the CAD's "310mm x 434mm"), without
+        // creating a second, duplicate line item for the same part.
+        positionCode: row.partNumber,
       })),
     );
     created.push({ section, count: lineItems.length });

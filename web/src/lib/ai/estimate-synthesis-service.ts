@@ -18,6 +18,7 @@ import type { Document } from "@/generated/prisma/client";
 import { commitPricingImport } from "@/lib/pricing-import-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
 import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service";
+import { filenameStem } from "@/lib/document-filename";
 
 export interface BuildEstimateResult {
   imported: { filename: string; kind: "pricing" | "scope" | "drawing"; rowsImported: number }[];
@@ -29,20 +30,6 @@ async function alreadyCommitted(estimateVersionId: string, documentId: string): 
     where: { documentId, section: { estimateVersionId, optionId: null } },
   });
   return !!existing;
-}
-
-// A CAD drawing and its vendor's own per-booth pricing workbook share the
-// same filename stem in every real job seen so far (e.g. "SUPER BOWL A
-// 6.8.2 SECTION 428.pdf" / "SUPER BOWL A 6.8.2 SECTION 428.xlsx") --
-// confirmed live against a real production job where this exact pairing
-// existed for all 13 booths. Used below to recognize "this drawing's
-// scope was already captured, in more detail and with real pricing, by
-// its matching workbook" -- without it, the vision-based drawing pipeline
-// has no way to know that, and produces a crude, zero-cost "Complete
-// Booth Build" summary line duplicating scope the real import already
-// priced correctly.
-function filenameStem(filename: string): string {
-  return filename.replace(/\.[^.]+$/, "").trim().toLowerCase();
 }
 
 // Shared by the text-scope and drawing loops below -- same skip/propose/
