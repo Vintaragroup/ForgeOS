@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { addSection, createEstimateVersion, lockEstimateVersion } from "@/lib/estimate-service";
 import { executeChatTool } from "@/lib/ai/chat-tools-service";
@@ -666,5 +666,86 @@ describe("executeChatTool", () => {
       expect(created.sectionId).toBe(laborSection.id);
       expect(await db.estimateSection.count({ where: { estimateVersionId: version.id } })).toBe(1);
     });
+  });
+});
+
+describe("tool issue logging", () => {
+  it("logs a structured [chat-tool-issue] warning when a tool hits a real problem", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const opportunity = await makeOpportunity();
+
+    await executeChatTool("find_section", JSON.stringify({ name: "Nonexistent Section" }), {
+      opportunityId: opportunity.id,
+      userId: null,
+    });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [line] = warnSpy.mock.calls[0] as [string];
+    expect(line).toMatch(/^\[chat-tool-issue\] /);
+    const entry = JSON.parse(line.replace(/^\[chat-tool-issue\] /, ""));
+    expect(entry).toMatchObject({ tool: "find_section", issueType: "not_found", opportunityId: opportunity.id, userId: null });
+    expect(entry.argsPreview).toContain("Nonexistent Section");
+
+    warnSpy.mockRestore();
+  });
+
+  it("does not log anything for a clean successful lookup", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const opportunity = await makeOpportunity();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    await createEstimateVersion(estimate.id);
+
+    await executeChatTool("get_line_items", "{}", { opportunityId: opportunity.id, userId: null });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("does not log anything when propose_line_item auto-creates a new section (a success, not an issue)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const opportunity = await makeOpportunity();
+    await db.category.create({ data: { name: "Professional Services", key: "professional-services" } });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id);
+    await db.estimateSection.create({ data: { estimateVersionId: version.id, name: "Labor", sectionType: "CATEGORY" } });
+
+    const result = await executeChatTool(
+      "propose_line_item",
+      JSON.stringify({ sectionName: "Professional Services", description: "Show Site Lead", lineType: "LABOR", qty: 1, unitCost: 100 }),
+      { opportunityId: opportunity.id, userId: null },
+    );
+
+    expect(result).toMatch(/created new, standalone/);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("logs 'missing_args' when propose_line_item is called without required fields", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const opportunity = await makeOpportunity();
+
+    await executeChatTool("propose_line_item", "{}", { opportunityId: opportunity.id, userId: null });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [line] = warnSpy.mock.calls[0] as [string];
+    const entry = JSON.parse(line.replace(/^\[chat-tool-issue\] /, ""));
+    expect(entry.issueType).toBe("missing_args");
+
+    warnSpy.mockRestore();
+  });
+
+  it("logs 'invalid_argument' for malformed JSON, without throwing", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const opportunity = await makeOpportunity();
+
+    const result = await executeChatTool("get_line_items", "{not json", { opportunityId: opportunity.id, userId: null });
+
+    expect(result).toMatch(/weren't valid JSON/);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [line] = warnSpy.mock.calls[0] as [string];
+    const entry = JSON.parse(line.replace(/^\[chat-tool-issue\] /, ""));
+    expect(entry).toMatchObject({ tool: "get_line_items", issueType: "invalid_argument" });
+
+    warnSpy.mockRestore();
   });
 });

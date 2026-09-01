@@ -47,6 +47,18 @@
 //   (updateLineItem/moveLineItemWithinSection/updateSectionBuildType have
 //   no draft-staging concept at all), so giving chat access to them needs
 //   its own pending-change design first, not a reuse of this one.
+//
+// Every real gap found in this file so far (combined "Name (GroupLabel)"
+// strings, a category with no section, an ambiguous same-named section)
+// was only ever discovered because someone patiently reported a
+// confusing chat transcript back. A user who's quick to give up on an AI
+// feature won't do that -- they'll just stop typing, and that failure
+// would otherwise be invisible. Each tool function below now returns a
+// short, stable issue category (not the message text, which can reword)
+// alongside its content whenever it doesn't cleanly succeed, and
+// executeChatTool logs it -- cheap, no new infra (Vercel already
+// captures server logs), and it surfaces exactly the friction points a
+// silently-abandoning user would otherwise take with them.
 import type OpenAI from "openai";
 import { db } from "@/lib/db";
 import { getIndexedDocumentIds, retrieveRelevantChunks } from "@/lib/ai/document-embedding-service";
@@ -148,6 +160,28 @@ export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+// A short, stable machine-readable category for why a tool call didn't
+// cleanly succeed -- logged instead of the message text itself (see
+// logToolIssue), since the text can be reworded without warning and
+// would silently break a string-matching classifier the next time it
+// changed. Deliberately excludes a genuinely empty-but-successful result
+// (e.g. "no line items matched those filters") -- that's expected
+// behavior for a real search, not friction worth tracking.
+type ToolIssue = "missing_args" | "invalid_argument" | "not_found" | "ambiguous" | "unsupported" | "locked" | "exception";
+
+interface ToolResult {
+  content: string;
+  issue?: ToolIssue;
+}
+
+function ok(content: string): ToolResult {
+  return { content };
+}
+
+function fail(content: string, issueType: ToolIssue): ToolResult {
+  return { content, issue: issueType };
+}
+
 // Bounds how much one tool call can hand back -- generous relative to a
 // single reply's needs, but this is a tool RESULT feeding back into the
 // same conversation's context, not a fresh budget of its own; an
@@ -160,7 +194,7 @@ const DOCUMENT_EXCERPT_TOP_K = 6;
 async function getLineItemsTool(
   opportunityId: string,
   args: { estimateName?: string; category?: string; sectionName?: string; isDraft?: boolean; searchText?: string },
-): Promise<string> {
+): Promise<ToolResult> {
   const estimates = await db.estimate.findMany({
     where: {
       opportunityId,
@@ -189,9 +223,12 @@ async function getLineItemsTool(
   });
 
   if (estimates.length === 0) {
-    return args.estimateName
-      ? `No estimate named "${args.estimateName}" was found on this opportunity.`
-      : "No live estimate found on this opportunity.";
+    return fail(
+      args.estimateName
+        ? `No estimate named "${args.estimateName}" was found on this opportunity.`
+        : "No live estimate found on this opportunity.",
+      "not_found",
+    );
   }
 
   const category = args.category?.toLowerCase();
@@ -219,18 +256,19 @@ async function getLineItemsTool(
     }
   }
 
-  if (rows.length === 0) return "No line items matched those filters.";
-  if (rows.length <= MAX_LINE_ITEM_ROWS) return rows.join("\n");
+  // A real, expected outcome for a real search -- not logged as friction.
+  if (rows.length === 0) return ok("No line items matched those filters.");
+  if (rows.length <= MAX_LINE_ITEM_ROWS) return ok(rows.join("\n"));
   const shown = rows.slice(0, MAX_LINE_ITEM_ROWS).join("\n");
-  return `${shown}\n\n(${rows.length - MAX_LINE_ITEM_ROWS} more item(s) matched but aren't shown -- narrow the filters for the rest.)`;
+  return ok(`${shown}\n\n(${rows.length - MAX_LINE_ITEM_ROWS} more item(s) matched but aren't shown -- narrow the filters for the rest.)`);
 }
 
 async function getDocumentExcerptTool(
   opportunityId: string,
   args: { documentName?: string; query?: string },
   userId: string | null,
-): Promise<string> {
-  if (!args.documentName || !args.query) return "Both documentName and query are required.";
+): Promise<ToolResult> {
+  if (!args.documentName || !args.query) return fail("Both documentName and query are required.", "missing_args");
 
   const documents = await db.document.findMany({
     where: { opportunityId, deletedAt: null },
@@ -242,23 +280,24 @@ async function getDocumentExcerptTool(
     documents.find((d) => d.filename.toLowerCase().includes(needle));
   if (!doc) {
     const available = documents.map((d) => d.filename).join(", ") || "(no documents on this opportunity)";
-    return `No document named "${args.documentName}" was found. Available documents: ${available}.`;
+    return fail(`No document named "${args.documentName}" was found. Available documents: ${available}.`, "not_found");
   }
 
   const indexed = await getIndexedDocumentIds(opportunityId);
   if (indexed.has(doc.id)) {
     const chunks = await retrieveRelevantChunks(opportunityId, args.query, userId, DOCUMENT_EXCERPT_TOP_K, doc.id);
-    if (chunks.length === 0) return `No relevant excerpt found in "${doc.filename}" for that query.`;
-    return chunks.map((c) => `[${doc.filename}, excerpt ${c.chunkIndex + 1}]\n${c.content}`).join("\n\n");
+    // A real, expected outcome for a real semantic search -- not friction.
+    if (chunks.length === 0) return ok(`No relevant excerpt found in "${doc.filename}" for that query.`);
+    return ok(chunks.map((c) => `[${doc.filename}, excerpt ${c.chunkIndex + 1}]\n${c.content}`).join("\n\n"));
   }
 
   // Not indexed yet -- same bounded full-text fallback posture as
   // chat-context-service.ts's own per-document fallback.
   if (!doc.extractedText) {
-    return `"${doc.filename}" has no extracted text to search (not yet analyzed, or an unsupported document type).`;
+    return fail(`"${doc.filename}" has no extracted text to search (not yet analyzed, or an unsupported document type).`, "unsupported");
   }
-  if (doc.extractedText.length <= MAX_FALLBACK_TEXT_CHARS) return doc.extractedText;
-  return `${doc.extractedText.slice(0, MAX_FALLBACK_TEXT_CHARS)}\n\n[truncated -- "${doc.filename}" is longer than shown here]`;
+  if (doc.extractedText.length <= MAX_FALLBACK_TEXT_CHARS) return ok(doc.extractedText);
+  return ok(`${doc.extractedText.slice(0, MAX_FALLBACK_TEXT_CHARS)}\n\n[truncated -- "${doc.filename}" is longer than shown here]`);
 }
 
 const LINE_TYPES = new Set(["MATERIAL", "LABOR", "FEE"]);
@@ -302,11 +341,8 @@ function splitNameAndGroupLabel(raw: string): { name: string; groupLabel: string
 // get_line_items' filtered listing would otherwise conflate them. Also
 // the thing that lets propose_line_item's own sectionName/groupLabel be
 // resolved correctly on the first attempt instead of by trial and error.
-async function findSectionTool(
-  opportunityId: string,
-  args: { name?: string; estimateName?: string },
-): Promise<string> {
-  if (!args.name) return "name is required.";
+async function findSectionTool(opportunityId: string, args: { name?: string; estimateName?: string }): Promise<ToolResult> {
+  if (!args.name) return fail("name is required.", "missing_args");
 
   const estimates = await db.estimate.findMany({
     where: {
@@ -331,17 +367,23 @@ async function findSectionTool(
   });
 
   if (estimates.length === 0) {
-    return args.estimateName
-      ? `No estimate named "${args.estimateName}" was found on this opportunity.`
-      : "No live estimate found on this opportunity.";
+    return fail(
+      args.estimateName
+        ? `No estimate named "${args.estimateName}" was found on this opportunity.`
+        : "No live estimate found on this opportunity.",
+      "not_found",
+    );
   }
   if (estimates.length > 1 && !args.estimateName) {
-    return `This opportunity has more than one estimate -- specify estimateName. Options: ${estimates.map((e) => e.name).filter(Boolean).join(", ")}.`;
+    return fail(
+      `This opportunity has more than one estimate -- specify estimateName. Options: ${estimates.map((e) => e.name).filter(Boolean).join(", ")}.`,
+      "ambiguous",
+    );
   }
 
   const estimate = estimates[0];
   const version = estimate.versions[0];
-  if (!version) return `Estimate "${estimate.name ?? "Untitled"}" has no active version yet.`;
+  if (!version) return fail(`Estimate "${estimate.name ?? "Untitled"}" has no active version yet.`, "not_found");
 
   const needle = args.name.toLowerCase();
   const lines: string[] = [];
@@ -390,14 +432,15 @@ async function findSectionTool(
       db.category.findMany({ where: { deletedAt: null }, select: { name: true }, orderBy: { sortOrder: "asc" } }),
     ]);
     const distinctSectionNames = [...new Set(version.sections.map((s) => s.name))];
-    return (
+    return fail(
       `Not found -- no section or category named "${args.name}" exists.\n` +
-      `Real categories: ${categories.map((c) => c.name).join(", ") || "(none)"}.\n` +
-      `Distinct section names on this estimate (${version.sections.length} section(s) total): ${distinctSectionNames.join(", ") || "(none)"}.`
+        `Real categories: ${categories.map((c) => c.name).join(", ") || "(none)"}.\n` +
+        `Distinct section names on this estimate (${version.sections.length} section(s) total): ${distinctSectionNames.join(", ") || "(none)"}.`,
+      "not_found",
     );
   }
 
-  return lines.join("\n");
+  return ok(lines.join("\n"));
 }
 
 async function proposeLineItemTool(
@@ -414,12 +457,12 @@ async function proposeLineItemTool(
     unitCost?: number;
   },
   userId: string | null,
-): Promise<string> {
+): Promise<ToolResult> {
   if (!args.sectionName || !args.description || !args.lineType || args.qty === undefined || args.unitCost === undefined) {
-    return "sectionName, description, lineType, qty, and unitCost are all required.";
+    return fail("sectionName, description, lineType, qty, and unitCost are all required.", "missing_args");
   }
   if (!LINE_TYPES.has(args.lineType)) {
-    return `lineType must be one of MATERIAL, LABOR, FEE (got "${args.lineType}").`;
+    return fail(`lineType must be one of MATERIAL, LABOR, FEE (got "${args.lineType}").`, "invalid_argument");
   }
 
   const estimates = await db.estimate.findMany({
@@ -446,17 +489,23 @@ async function proposeLineItemTool(
   });
 
   if (estimates.length === 0) {
-    return args.estimateName
-      ? `No estimate named "${args.estimateName}" was found on this opportunity.`
-      : "No live estimate found on this opportunity.";
+    return fail(
+      args.estimateName
+        ? `No estimate named "${args.estimateName}" was found on this opportunity.`
+        : "No live estimate found on this opportunity.",
+      "not_found",
+    );
   }
   if (estimates.length > 1 && !args.estimateName) {
-    return `This opportunity has more than one estimate -- specify estimateName. Options: ${estimates.map((e) => e.name).filter(Boolean).join(", ")}.`;
+    return fail(
+      `This opportunity has more than one estimate -- specify estimateName. Options: ${estimates.map((e) => e.name).filter(Boolean).join(", ")}.`,
+      "ambiguous",
+    );
   }
 
   const estimate = estimates[0];
   const version = estimate.versions[0];
-  if (!version) return `Estimate "${estimate.name ?? "Untitled"}" has no active version to add to yet.`;
+  if (!version) return fail(`Estimate "${estimate.name ?? "Untitled"}" has no active version to add to yet.`, "not_found");
 
   const needle = args.sectionName.toLowerCase();
   let candidates =
@@ -515,7 +564,10 @@ async function proposeLineItemTool(
       }
       args.category = args.category ?? asCategory.name;
     } else {
-      return `No section named "${args.sectionName}" was found, and it isn't a real category either. Available sections: ${listSectionOptions(version.sections)}.`;
+      return fail(
+        `No section named "${args.sectionName}" was found, and it isn't a real category either. Available sections: ${listSectionOptions(version.sections)}.`,
+        "not_found",
+      );
     }
   }
 
@@ -540,9 +592,10 @@ async function proposeLineItemTool(
       projectWide.length > 0 && projectWide.length < candidates.length
         ? ` If this item is project-wide rather than tied to one specific booth/component, the most likely fit is: ${listSectionOptions(projectWide)} -- confirm with the user if unsure.`
         : "";
-    return (
+    return fail(
       `More than one section is named "${args.sectionName}" -- specify groupLabel to pick which one. ` +
-      `Options: ${listSectionOptions(candidates)}.${hint}`
+        `Options: ${listSectionOptions(candidates)}.${hint}`,
+      "ambiguous",
     );
   }
 
@@ -563,7 +616,26 @@ async function proposeLineItemTool(
     userId,
   );
 
-  return `Added a DRAFT line item to "${formatSectionLabel(section)}"${createdSectionNote}${args.category ? ` (category: ${args.category})` : ""}: ${args.description} -- qty ${args.qty}${args.unit ? ` ${args.unit}` : ""} × $${args.unitCost.toFixed(2)} = $${created.totalCost.toFixed(2)}. It won't count toward any total until it's reviewed and confirmed on the Line Items tab.`;
+  return ok(
+    `Added a DRAFT line item to "${formatSectionLabel(section)}"${createdSectionNote}${args.category ? ` (category: ${args.category})` : ""}: ${args.description} -- qty ${args.qty}${args.unit ? ` ${args.unit}` : ""} × $${args.unitCost.toFixed(2)} = $${created.totalCost.toFixed(2)}. It won't count toward any total until it's reviewed and confirmed on the Line Items tab.`,
+  );
+}
+
+// Cheap, no new infra: a single structured console line per issue, which
+// Vercel already captures and aggregates in its runtime logs. The point
+// isn't a dashboard (yet) -- it's that a user who gets stuck and just
+// stops typing, instead of reporting it, no longer leaves zero trace.
+// Deliberately not wired to recordAiUsage (ai-usage-service.ts): that
+// table is a cost ledger, not a friction log, and mixing the two would
+// make both harder to query.
+function logToolIssue(entry: {
+  tool: string;
+  issueType: ToolIssue;
+  opportunityId: string;
+  userId: string | null;
+  argsPreview: string;
+}): void {
+  console.warn(`[chat-tool-issue] ${JSON.stringify(entry)}`);
 }
 
 // Dispatches one model-requested tool call to its real implementation and
@@ -579,23 +651,42 @@ export async function executeChatTool(
   try {
     args = rawArguments ? JSON.parse(rawArguments) : {};
   } catch {
-    return "Those arguments weren't valid JSON -- try the call again.";
+    const result = fail("Those arguments weren't valid JSON -- try the call again.", "invalid_argument");
+    logToolIssue({ tool: name, issueType: result.issue!, opportunityId: context.opportunityId, userId: context.userId, argsPreview: rawArguments.slice(0, 300) });
+    return result.content;
   }
 
+  let result: ToolResult;
   try {
     switch (name) {
       case "get_line_items":
-        return await getLineItemsTool(context.opportunityId, args);
+        result = await getLineItemsTool(context.opportunityId, args);
+        break;
       case "get_document_excerpt":
-        return await getDocumentExcerptTool(context.opportunityId, args, context.userId);
+        result = await getDocumentExcerptTool(context.opportunityId, args, context.userId);
+        break;
       case "find_section":
-        return await findSectionTool(context.opportunityId, args);
+        result = await findSectionTool(context.opportunityId, args);
+        break;
       case "propose_line_item":
-        return await proposeLineItemTool(context.opportunityId, args, context.userId);
+        result = await proposeLineItemTool(context.opportunityId, args, context.userId);
+        break;
       default:
-        return `Unknown tool "${name}".`;
+        result = fail(`Unknown tool "${name}".`, "invalid_argument");
     }
   } catch (err) {
-    return `That lookup failed: ${err instanceof Error ? err.message : "unknown error"}.`;
+    const message = err instanceof Error ? err.message : "unknown error";
+    result = fail(`That lookup failed: ${message}.`, /locked/i.test(message) ? "locked" : "exception");
   }
+
+  if (result.issue) {
+    logToolIssue({
+      tool: name,
+      issueType: result.issue,
+      opportunityId: context.opportunityId,
+      userId: context.userId,
+      argsPreview: rawArguments.slice(0, 300),
+    });
+  }
+  return result.content;
 }
