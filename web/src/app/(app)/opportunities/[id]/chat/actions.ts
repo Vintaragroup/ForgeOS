@@ -2,7 +2,7 @@
 
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
-import { getCitableLineItems, sendMessage } from "@/lib/chat-service";
+import { getCitableLineItems, getCitableQuotes, sendMessage } from "@/lib/chat-service";
 import { db } from "@/lib/db";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import { linkifyMentions } from "@/lib/citation";
@@ -29,12 +29,13 @@ export async function sendWidgetMessageAction(opportunityId: string, content: st
 
   try {
     const { assistantMessage, documentsDropped, lineItemsOmitted } = await sendMessage(opportunityId, user.id, trimmed);
-    const [documents, citableLineItems] = await Promise.all([
+    const [documents, citableLineItems, citableQuotes] = await Promise.all([
       db.document.findMany({
         where: { opportunityId, deletedAt: null },
         select: { id: true, filename: true },
       }),
       getCitableLineItems(opportunityId),
+      getCitableQuotes(opportunityId),
     ]);
     // Both signals already computed by buildChatContext -- previously
     // thrown away here, leaving no way to tell a confident-but-wrong
@@ -49,7 +50,7 @@ export async function sendWidgetMessageAction(opportunityId: string, content: st
     return {
       id: assistantMessage.id,
       role: assistantMessage.role,
-      content: linkifyMentions(assistantMessage.content, opportunityId, documents, citableLineItems),
+      content: linkifyMentions(assistantMessage.content, opportunityId, documents, citableLineItems, citableQuotes),
       notice: noticeParts.length > 0 ? noticeParts.join(" ") : null,
     };
   } catch (err) {

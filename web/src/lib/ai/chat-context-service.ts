@@ -7,6 +7,16 @@
 
 import { db } from "@/lib/db";
 import type { DocumentType } from "@/generated/prisma/enums";
+import { truncateForCitation } from "@/lib/citation";
+
+// Long enough to be a genuinely identifiable excerpt, short enough that a
+// hundred sourced line items don't quietly crowd out the rest of the
+// context budget -- see truncateForCitation's own comment for why the
+// exact same truncated text also has to be what getCitableQuotes
+// (chat-service.ts) later searches a reply for. Exported so that file
+// truncates with this identical value rather than a second literal that
+// could quietly drift from this one.
+export const MAX_QUOTE_CONTEXT_CHARS = 140;
 
 // PRICING_SCHEDULE is deliberately absent -- its raw cell text is a worse
 // signal than the imported LineItems already summarized below (see
@@ -45,13 +55,24 @@ type EstimateLineItem = {
   unit: string | null;
   unitCost: { toFixed(n: number): string };
   totalCost: { toFixed(n: number): string };
+  // Real, already-verified grounding -- a pricing-schedule row's own
+  // cell text or an AI-proposed item's verified quote (see LineItem's
+  // own schema comment), never asked of the model as a guess. Null for a
+  // manually added row, or one imported before this existed.
+  sourceQuote: string | null;
+  sourcePageNumber: number | null;
+  document: { filename: string } | null;
 };
 
 function formatLineItemLine(sectionLabel: string, li: EstimateLineItem): string {
   const status = li.isDraft ? "DRAFT" : "CONFIRMED";
   const qty = `${li.qty.toString()}${li.unit ? ` ${li.unit}` : ""}`;
   const category = li.category ? ` (${li.category})` : "";
-  return `  - [${status}] ${sectionLabel}: ${li.description} -- qty ${qty} × $${li.unitCost.toFixed(2)} = $${li.totalCost.toFixed(2)}${category}`;
+  const line = `  - [${status}] ${sectionLabel}: ${li.description} -- qty ${qty} × $${li.unitCost.toFixed(2)} = $${li.totalCost.toFixed(2)}${category}`;
+  if (!li.sourceQuote || !li.document) return line;
+  const { display } = truncateForCitation(li.sourceQuote, MAX_QUOTE_CONTEXT_CHARS);
+  const page = li.sourcePageNumber ? `, p.${li.sourcePageNumber}` : "";
+  return `${line}\n      ↳ from "${display}" -- ${li.document.filename}${page}`;
 }
 
 // One estimate's worth of context: header stats (always included, same as
@@ -139,7 +160,12 @@ export async function buildChatContext(opportunityId: string): Promise<ChatConte
             include: {
               sections: {
                 orderBy: { sortOrder: "asc" },
-                include: { lineItems: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } },
+                include: {
+                  lineItems: {
+                    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+                    include: { document: { select: { filename: true } } },
+                  },
+                },
               },
             },
           },

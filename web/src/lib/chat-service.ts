@@ -5,11 +5,12 @@
 // rather than a compromise.
 
 import { db } from "@/lib/db";
-import { buildChatContext, getRecentMessages } from "@/lib/ai/chat-context-service";
+import { buildChatContext, getRecentMessages, MAX_QUOTE_CONTEXT_CHARS } from "@/lib/ai/chat-context-service";
 import { ADVANCED_MODEL, BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getProjectContext } from "@/lib/ai/scope-document-context";
+import { citationHref, truncateForCitation, type CitableQuote } from "@/lib/citation";
 
 const CHAT_MESSAGE_LIMIT = 20;
 const CHAT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
@@ -104,4 +105,55 @@ export async function getCitableLineItems(opportunityId: string) {
       ),
     ),
   );
+}
+
+// Real citations for linkifyMentions -- every live estimate's current-
+// version line items that carry a verified sourceQuote (a pricing-
+// schedule row's own cell text, or an AI-proposed item's verified quote;
+// see LineItem's own schema comment), turned into a precise citationHref
+// straight to that quote's exact page in the source document. This is
+// the actual "structured citation" half of chat Phase 2 -- unlike
+// getCitableLineItems' description matching above, there's nothing
+// guessed here: the quote/page/document link already existed and was
+// already verified before chat ever surfaced it (same link
+// LineItemsTable's own sourceHref uses on the Estimate page).
+export async function getCitableQuotes(opportunityId: string): Promise<CitableQuote[]> {
+  const estimates = await db.estimate.findMany({
+    where: { opportunityId, deletedAt: null, archivedAt: null },
+    select: {
+      versions: {
+        where: { isCurrent: true },
+        take: 1,
+        select: {
+          sections: {
+            select: {
+              lineItems: {
+                where: { sourceQuote: { not: null }, documentId: { not: null } },
+                select: {
+                  sourceQuote: true,
+                  sourcePageNumber: true,
+                  document: { select: { id: true, mimeType: true } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const items = estimates.flatMap((e) => e.versions.flatMap((v) => v.sections.flatMap((s) => s.lineItems)));
+
+  return items.flatMap((li) => {
+    if (!li.sourceQuote || !li.document) return [];
+    // The truncated form is what the model actually saw in its context
+    // (chat-context-service.ts's formatLineItemLine) and so the only form
+    // it can plausibly echo back -- citationHref itself still gets the
+    // FULL sourceQuote, since the document viewer needs the real text to
+    // find and highlight it on the page, not a truncated prefix of it.
+    const { matchable } = truncateForCitation(li.sourceQuote, MAX_QUOTE_CONTEXT_CHARS);
+    const href = citationHref(opportunityId, li.document, { sourceQuote: li.sourceQuote, pageNumber: li.sourcePageNumber });
+    if (!href || matchable.length === 0) return [];
+    return [{ match: matchable, href }];
+  });
 }

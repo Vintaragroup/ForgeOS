@@ -10,6 +10,24 @@
 // XLSX cell highlight (?q=<quote>#hl, same fragment convention as DOCX).
 import { DOCX_MIME, PDF_MIME, XLSX_MIME } from "@/lib/ai/text-extraction";
 
+// A long sourceQuote shown in full to the chat model would eat into the
+// same character budget every document competes for (chat-context-
+// service.ts), for a fact ("which document/page a line item came from")
+// that rarely needs the whole quote to make the point. `matchable` is
+// the truncated text WITHOUT the ellipsis -- used both as what's shown to
+// the model (with `display`'s ellipsis appended) and as the candidate
+// text linkifyMentions later searches for in the model's reply, so a
+// model that echoes the quote back verbatim (confirmed common in
+// practice, same as it does for filenames) still gets a real citation
+// link rather than one that silently never matches because the search
+// text and the shown text quietly diverged.
+export function truncateForCitation(text: string, maxLength: number): { display: string; matchable: string } {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxLength) return { display: trimmed, matchable: trimmed };
+  const cut = trimmed.slice(0, maxLength).trim();
+  return { display: `${cut}…`, matchable: cut };
+}
+
 // `returnTo` is an optional relative URL (path + hash, e.g.
 // `/estimates/abc123#line-item-xyz`) the document viewer's Back link
 // should return to instead of its generic Opportunity-documents fallback
@@ -106,32 +124,55 @@ export interface CitableLineItem {
 // long and distinctive on their own.
 const MIN_LINE_ITEM_MATCH_LENGTH = 12;
 
+// A source-document excerpt eligible to be linkified -- see
+// chat-service.ts's getCitableQuotes. `match` is a line item's
+// (possibly-truncated, see truncateForCitation) sourceQuote; `href` is
+// already a real citationHref -- a precise page-and-quote-highlight link
+// into the actual document, not just its viewer's homepage the way a
+// bare filename mention resolves. This is the "real" half of Phase 2's
+// structured citation: sourceQuote/sourcePageNumber were already stored
+// on LineItem by the pricing-schedule import or AI-verified extraction
+// (see LineItem's own schema comment) -- this just finally surfaces that
+// existing, already-verified link inside a chat reply instead of leaving
+// it to only ever be reachable from the Estimate page's line item table.
+export interface CitableQuote {
+  match: string;
+  href: string;
+}
+
 // Chat's system prompt (chat-context-service.ts) already tells the model
 // to name the source document and the estimate/section a line item is in
 // -- confirmed in practice, it reliably does. Rather than asking for a
 // second, separately-fallible structured citation (a new schema, a new
 // place for the model to hallucinate a document or item that doesn't
-// exist), this just finds real filenames and line-item descriptions the
-// reply already mentions and turns them into markdown links -- straight
-// to that document's viewer, or to that exact row via its
-// `#line-item-<id>` anchor (line-item-row.tsx), the same anchor
-// citationHref above already relies on elsewhere. Returns the ORIGINAL
-// markdown text with `[matched](href)` spliced in, not a rendered
-// string, so ChatWidget's single react-markdown pass still handles bold/
-// lists/etc. around the link normally. Longest match first (across both
-// documents and line items together) so a short one that happens to be a
-// substring of a longer one doesn't steal it.
+// exist), this just finds real filenames, line-item descriptions, and
+// line-item source quotes the reply already mentions and turns them into
+// markdown links -- straight to that document's viewer (or, for a real
+// sourceQuote, the exact page with that quote highlighted), or to that
+// exact line item row via its `#line-item-<id>` anchor (line-item-
+// row.tsx), the same anchor citationHref above already relies on
+// elsewhere. Returns the ORIGINAL markdown text with `[matched](href)`
+// spliced in, not a rendered string, so ChatWidget's single react-
+// markdown pass still handles bold/lists/etc. around the link normally.
+// Longest match first (across all three candidate kinds together) so a
+// short one that happens to be a substring of a longer one doesn't steal
+// it -- in practice a real sourceQuote is almost always the longest,
+// most specific candidate in play, so it naturally wins over a shorter
+// description or filename spanning the same text.
 //
-// This is a best-effort text match, not a real citation -- it can miss a
+// Description-based line-item links and filename links are still a
+// best-effort text match, not a real citation -- they can miss a
 // paraphrased mention, and (bounded by MIN_LINE_ITEM_MATCH_LENGTH) won't
-// touch a short generic description at all. The chat roadmap's Phase 2
-// replaces this with the model returning a structured reference instead
-// of this being guessed after the fact.
+// touch a short generic description at all. Quote-based links don't have
+// that problem the same way: sourceQuote is real, already-verified data,
+// not a guess -- the only failure mode there is the model paraphrasing
+// instead of quoting it back verbatim.
 export function linkifyMentions(
   text: string,
   opportunityId: string,
   documents: { id: string; filename: string }[],
   lineItems: CitableLineItem[] = [],
+  quotes: CitableQuote[] = [],
 ): string {
   const candidates = [
     ...documents
@@ -140,6 +181,7 @@ export function linkifyMentions(
     ...lineItems
       .filter((li) => li.description.trim().length >= MIN_LINE_ITEM_MATCH_LENGTH)
       .map((li) => ({ match: li.description, href: `/estimates/${li.estimateId}#line-item-${li.id}` })),
+    ...quotes.filter((q) => q.match.trim().length > 0),
   ];
   if (candidates.length === 0) return text;
   const byLengthDesc = [...candidates].sort((a, b) => b.match.length - a.match.length);

@@ -23,7 +23,7 @@ import { deleteMisattributedLineItemAction, moveLineItemToEstimateAction } from 
 import { findMisattributedLineItems, type MisattributedLineItem } from "@/lib/line-item-audit-service";
 import type { ClarificationQuestion } from "@/lib/ai/clarification-questions-service";
 import { listDocuments } from "@/lib/document-service";
-import { getCitableLineItems, getThreadMessages } from "@/lib/chat-service";
+import { getCitableLineItems, getCitableQuotes, getThreadMessages } from "@/lib/chat-service";
 import {
   EXTRACTABLE_OPPORTUNITY_FIELDS,
   type DocumentSummary,
@@ -693,21 +693,23 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   );
   const isMultiProject = namedEstimates.length >= 2;
 
-  const [companies, users, contacts, documents, chatMessages, citableLineItems, taxRates, misattributedLineItems] = await Promise.all([
-    db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
-    db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
-    db.contact.findMany({
-      where: { deletedAt: null, companyId: opportunity.companyId },
-      orderBy: { name: "asc" },
-    }),
-    listDocuments(opportunity.id),
-    getThreadMessages(opportunity.id),
-    getCitableLineItems(opportunity.id),
-    db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
-    // Zero-cost for the common single-project Opportunity -- returns []
-    // immediately without a query (see findMisattributedLineItems).
-    isMultiProject ? findMisattributedLineItems(opportunity.id) : Promise.resolve([] as MisattributedLineItem[]),
-  ]);
+  const [companies, users, contacts, documents, chatMessages, citableLineItems, citableQuotes, taxRates, misattributedLineItems] =
+    await Promise.all([
+      db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
+      db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
+      db.contact.findMany({
+        where: { deletedAt: null, companyId: opportunity.companyId },
+        orderBy: { name: "asc" },
+      }),
+      listDocuments(opportunity.id),
+      getThreadMessages(opportunity.id),
+      getCitableLineItems(opportunity.id),
+      getCitableQuotes(opportunity.id),
+      db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
+      // Zero-cost for the common single-project Opportunity -- returns []
+      // immediately without a query (see findMisattributedLineItems).
+      isMultiProject ? findMisattributedLineItems(opportunity.id) : Promise.resolve([] as MisattributedLineItem[]),
+    ]);
 
   const updateWithId = updateOpportunity.bind(null, opportunity.id);
   const deleteWithId = deleteOpportunity.bind(null, opportunity.id);
@@ -1388,7 +1390,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         initialMessages={chatMessages.map((m) => ({
           id: m.id,
           role: m.role,
-          content: linkifyMentions(m.content, opportunity.id, documents, citableLineItems),
+          content: linkifyMentions(m.content, opportunity.id, documents, citableLineItems, citableQuotes),
         }))}
       />
     </div>

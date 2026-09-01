@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { citationHref, linkifyMentions, parseFreeTextDate } from "@/lib/citation";
+import { citationHref, linkifyMentions, parseFreeTextDate, truncateForCitation } from "@/lib/citation";
 
 describe("parseFreeTextDate", () => {
   it("parses a plain date the Date constructor already understands", () => {
@@ -108,6 +108,18 @@ describe("citationHref", () => {
   });
 });
 
+describe("truncateForCitation", () => {
+  it("returns the text unchanged, in both fields, when it's already within the limit", () => {
+    expect(truncateForCitation("short quote", 140)).toEqual({ display: "short quote", matchable: "short quote" });
+  });
+
+  it("truncates long text, appending an ellipsis only to display, not to matchable", () => {
+    const { display, matchable } = truncateForCitation("a".repeat(200), 140);
+    expect(matchable).toBe("a".repeat(140));
+    expect(display).toBe(`${"a".repeat(140)}…`);
+  });
+});
+
 describe("linkifyMentions", () => {
   const opportunityId = "opp1";
   const documents = [
@@ -158,5 +170,41 @@ describe("linkifyMentions", () => {
     const result = linkifyMentions("Labor is the biggest cost driver here.", opportunityId, [], lineItems);
 
     expect(result).toBe("Labor is the biggest cost driver here.");
+  });
+
+  it("links a quoted source excerpt to its precise citationHref, not just the document's viewer homepage", () => {
+    const quotes = [
+      { match: "10' x 10' anodized aluminum frame system", href: "/opportunities/opp1/documents/doc1/view?page=4&q=xyz" },
+    ];
+
+    const result = linkifyMentions(
+      'It comes from "10\' x 10\' anodized aluminum frame system" in the RFP.',
+      opportunityId,
+      [],
+      [],
+      quotes,
+    );
+
+    expect(result).toBe(
+      'It comes from "[10\' x 10\' anodized aluminum frame system](/opportunities/opp1/documents/doc1/view?page=4&q=xyz)" in the RFP.',
+    );
+  });
+
+  it("prefers the longer, more specific quote match over a shorter description spanning the same text", () => {
+    // A pathological but real-shaped case: the line item's own description
+    // is a prefix of its sourceQuote. The quote (longer) should win the
+    // match, giving the precise page+quote link instead of the generic
+    // #line-item anchor.
+    const result = linkifyMentions(
+      "That's the 10x10 aluminum frame structure, quoted directly.",
+      opportunityId,
+      [],
+      [{ id: "li1", estimateId: "est1", description: "10x10 aluminum frame structure" }],
+      [{ match: "10x10 aluminum frame structure, quoted directly", href: "/opportunities/opp1/documents/doc1/view?page=4" }],
+    );
+
+    expect(result).toBe(
+      "That's the [10x10 aluminum frame structure, quoted directly](/opportunities/opp1/documents/doc1/view?page=4).",
+    );
   });
 });

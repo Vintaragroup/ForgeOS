@@ -160,6 +160,82 @@ describe("buildChatContext", () => {
     expect(context.lineItemsOmitted).toBe(0);
   });
 
+  it("surfaces a sourced line item's document, page, and quote as real grounding", async () => {
+    const opportunity = await makeOpportunity();
+    const document = await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "RFP Final.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storageKey: "x",
+        documentType: "RFP",
+        extractionStatus: "COMPLETE",
+      },
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id);
+    const section = await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "Structure", sectionType: "CATEGORY" },
+    });
+    await db.lineItem.create({
+      data: {
+        sectionId: section.id,
+        lineType: "MATERIAL",
+        description: "10x10 aluminum frame",
+        qty: 1,
+        unitCost: 1,
+        totalCost: 1,
+        documentId: document.id,
+        sourceQuote: "10' x 10' anodized aluminum frame system",
+        sourcePageNumber: 4,
+      },
+    });
+
+    const context = await buildChatContext(opportunity.id);
+
+    expect(context.systemPrompt).toContain('↳ from "10\' x 10\' anodized aluminum frame system" -- RFP Final.pdf, p.4');
+  });
+
+  it("truncates a long sourceQuote in context, without an ellipsis in the matchable prefix", async () => {
+    const opportunity = await makeOpportunity();
+    const document = await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "RFP Final.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storageKey: "x",
+        documentType: "RFP",
+        extractionStatus: "COMPLETE",
+      },
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id);
+    const section = await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "Structure", sectionType: "CATEGORY" },
+    });
+    const longQuote = "x".repeat(200);
+    await db.lineItem.create({
+      data: {
+        sectionId: section.id,
+        lineType: "MATERIAL",
+        description: "Long-quoted item",
+        qty: 1,
+        unitCost: 1,
+        totalCost: 1,
+        documentId: document.id,
+        sourceQuote: longQuote,
+        sourcePageNumber: 1,
+      },
+    });
+
+    const context = await buildChatContext(opportunity.id);
+
+    expect(context.systemPrompt).toContain(`"${"x".repeat(140)}…"`);
+    expect(context.systemPrompt).not.toContain("x".repeat(141));
+  });
+
   it("surfaces every named Estimate on the Opportunity, not just the most recently created one", async () => {
     const opportunity = await makeOpportunity();
 
