@@ -522,22 +522,52 @@ describe("executeChatTool", () => {
       expect(created.category).toBe("Professional Services");
     });
 
-    it("explains the category/section distinction when the category has no established section yet, instead of guessing one", async () => {
+    it("creates a clean standalone section for a real category with no established home yet, rather than forcing it into an unrelated booth section", async () => {
       const opportunity = await makeOpportunity();
       await db.category.create({ data: { name: "Professional Services", key: "professional-services" } });
       const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
       const version = await createEstimateVersion(estimate.id);
-      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Bid Comparison" });
+      // A real existing section, unrelated to the category being added --
+      // proves the new item does NOT get forced in here.
+      const receptionLabor = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "FS - Reception Counter" });
 
       const result = await executeChatTool(
         "propose_line_item",
-        JSON.stringify({ sectionName: "Professional Services", description: "Show site management", lineType: "LABOR", qty: 40, unit: "hrs", unitCost: 65 }),
+        JSON.stringify({ sectionName: "Professional Services", description: "Show Site Lead", lineType: "LABOR", qty: 60, unit: "hrs", unitCost: 325 }),
         { opportunityId: opportunity.id, userId: null },
       );
 
-      expect(result).toMatch(/proposal category, not a section/);
-      expect(result).toContain("Bid Comparison");
-      expect(await db.lineItem.count()).toBe(0);
+      expect(result).toMatch(/DRAFT/);
+      expect(result).toMatch(/created new, standalone/);
+
+      const created = await db.lineItem.findFirstOrThrow({ where: { description: "Show Site Lead" } });
+      expect(created.category).toBe("Professional Services");
+      expect(created.sectionId).not.toBe(receptionLabor.id); // never forced into the unrelated booth section
+
+      const newSection = await db.estimateSection.findUniqueOrThrow({ where: { id: created.sectionId } });
+      expect(newSection).toMatchObject({ name: "Professional Services", groupLabel: null, estimateVersionId: version.id });
+    });
+
+    it("reuses an already-established section for a category, rather than creating a duplicate section every time", async () => {
+      const opportunity = await makeOpportunity();
+      await db.category.create({ data: { name: "Professional Services", key: "professional-services" } });
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const laborSection = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Bid Comparison" });
+      await db.lineItem.create({
+        data: { sectionId: laborSection.id, lineType: "LABOR", description: "Existing PS item", category: "Professional Services", qty: 1, unitCost: 1, totalCost: 1 },
+      });
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Professional Services", description: "Show Site Lead", lineType: "LABOR", qty: 60, unit: "hrs", unitCost: 325 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).not.toMatch(/created new, standalone/);
+      const created = await db.lineItem.findFirstOrThrow({ where: { description: "Show Site Lead" } });
+      expect(created.sectionId).toBe(laborSection.id);
+      expect(await db.estimateSection.count({ where: { estimateVersionId: version.id } })).toBe(1);
     });
   });
 });

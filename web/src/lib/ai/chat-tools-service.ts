@@ -33,16 +33,24 @@
 //   isDraft: true -- the same safety net imports and AI scope proposals
 //   already use, not a new one. A draft counts toward nothing until a
 //   person confirms it on the Line Items tab, so a wrong AI suggestion
-//   costs nothing. Editing an existing item, moving one between sections,
-//   or retagging a booth are deliberately NOT here yet: unlike a brand
-//   new row, those all mutate a real existing row immediately today
+//   costs nothing. It can also create a brand-new, standalone
+//   EstimateSection when the target is a real category with nowhere to
+//   go yet (see its own comment below) -- real usage showed a user
+//   asking for a project-wide item, like a show-site-lead labor line,
+//   got stuck being offered only booth-specific sections to force it
+//   into. A new, empty section carries the same "nothing counts until
+//   reviewed" safety as the draft item itself, so this is likewise never
+//   gated behind a confirmation question -- just always disclosed in the
+//   result. Editing an existing item, moving one between sections, or
+//   retagging a booth are deliberately NOT here yet: unlike a brand new
+//   row, those all mutate a real existing row immediately today
 //   (updateLineItem/moveLineItemWithinSection/updateSectionBuildType have
 //   no draft-staging concept at all), so giving chat access to them needs
 //   its own pending-change design first, not a reuse of this one.
 import type OpenAI from "openai";
 import { db } from "@/lib/db";
 import { getIndexedDocumentIds, retrieveRelevantChunks } from "@/lib/ai/document-embedding-service";
-import { addLineItem } from "@/lib/estimate-service";
+import { addLineItem, addSection } from "@/lib/estimate-service";
 import type { LineItemType } from "@/generated/prisma/enums";
 
 export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -107,7 +115,7 @@ export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "propose_line_item",
       description:
-        "Add a new line item to an existing section on this opportunity's estimate. It is ALWAYS created as a draft -- it will not count toward any total, and won't appear as a real line until a person reviews and confirms it on the Line Items tab. Use this when the user asks you to add, create, or price out a new item. sectionName and category are two DIFFERENT things: sectionName is the physical container (tied to a specific booth/component, e.g. \"Labor\" under \"FS - Reception Counter\" -- the same name is commonly reused across many different booths, so pass groupLabel too whenever the user's request implies a specific one, or when a plain sectionName turns out to be ambiguous). category is the separate proposal-facing tag shown on the client PDF (e.g. \"Professional Services\", \"Labor\", \"Structure\") -- a user asking to add something \"under\" or \"in\" a named category (like \"Professional Services\") means category, not sectionName, and there may be no section literally named that at all. Always tell the user afterward that it's a draft awaiting their confirmation.",
+        "Add a new line item to this opportunity's estimate. It is ALWAYS created as a draft -- it will not count toward any total, and won't appear as a real line until a person reviews and confirms it on the Line Items tab. Use this when the user asks you to add, create, or price out a new item. sectionName and category are two DIFFERENT things: sectionName is the physical container (tied to a specific booth/component, e.g. \"Labor\" under \"FS - Reception Counter\" -- the same name is commonly reused across many different booths, so pass groupLabel too whenever the user's request implies a specific one, or when a plain sectionName turns out to be ambiguous -- call find_section first if unsure). category is the separate proposal-facing tag shown on the client PDF (e.g. \"Professional Services\", \"Labor\", \"Structure\") -- a user asking to add something \"under\" or \"in\" a named category (like \"Professional Services\"), or describing something as project-wide/not tied to one booth, means category, not sectionName. If sectionName resolves to a real category with no section holding it yet, a clean new standalone section (not tied to any booth) is created automatically to hold it -- this is reported back, never silent. Always tell the user afterward that it's a draft awaiting their confirmation.",
       parameters: {
         type: "object",
         properties: {
@@ -426,14 +434,14 @@ async function proposeLineItemTool(
       ? version.sections.filter((s) => s.name.toLowerCase() === needle)
       : version.sections.filter((s) => s.name.toLowerCase().includes(needle));
 
+  let createdSectionNote = "";
   if (candidates.length === 0) {
     // sectionName might actually be a category (a proposal-facing tag,
     // not a physical section -- see the tool description) -- distinct
     // concepts that are easy for a request in plain English to conflate.
     // Rather than silently defaulting to some arbitrary section, check
     // whether it's a real category and, if there's already a section
-    // holding that category's items, reuse it -- otherwise say so
-    // plainly instead of guessing.
+    // holding that category's items, reuse it.
     const asCategory = await db.category.findFirst({
       where: { name: { equals: args.sectionName, mode: "insensitive" }, deletedAt: null },
       select: { name: true },
@@ -442,16 +450,23 @@ async function proposeLineItemTool(
       const holder = version.sections.find((s) => s.lineItems.some((li) => li.category === asCategory.name));
       if (holder) {
         candidates = [holder];
-        args.category = args.category ?? asCategory.name;
       } else {
-        return (
-          `"${args.sectionName}" is a proposal category, not a section -- no section is named that, and no existing line item ` +
-          `is tagged with that category yet in this estimate, so there's no established section to add to automatically. ` +
-          `Ask which existing section to place it in (a project-level one, or a specific booth's), then call this again with ` +
-          `that sectionName (and groupLabel if it repeats across booths) plus category: "${asCategory.name}". ` +
-          `Some existing sections: ${listSectionOptions(version.sections)}.`
-        );
+        // No section holds this category at all -- rather than force the
+        // item into whichever unrelated booth section happens to exist
+        // (the actual complaint that led here: a project-wide item like
+        // "Show Site Lead" has no business being filed under one
+        // specific booth's Reception Counter section), create a clean,
+        // standalone section for it -- groupLabel: null, the same shape
+        // this estimate's own non-booth sections (e.g. "Other") already
+        // use. A brand-new, empty section carries no more risk than the
+        // draft line item itself: nothing counts until a person reviews
+        // it, same safety net as everywhere else in this tool. Always
+        // disclosed in the result below, never a silent structural change.
+        const created = await addSection(version.id, { name: asCategory.name, sectionType: "CATEGORY", groupLabel: null });
+        candidates = [{ id: created.id, name: created.name, groupLabel: created.groupLabel, lineItems: [] }];
+        createdSectionNote = ` (created new, standalone -- not tied to any specific booth, since none existed yet)`;
       }
+      args.category = args.category ?? asCategory.name;
     } else {
       return `No section named "${args.sectionName}" was found, and it isn't a real category either. Available sections: ${listSectionOptions(version.sections)}.`;
     }
@@ -487,7 +502,7 @@ async function proposeLineItemTool(
     userId,
   );
 
-  return `Added a DRAFT line item to "${formatSectionLabel(section)}"${args.category ? ` (category: ${args.category})` : ""}: ${args.description} -- qty ${args.qty}${args.unit ? ` ${args.unit}` : ""} × $${args.unitCost.toFixed(2)} = $${created.totalCost.toFixed(2)}. It won't count toward any total until it's reviewed and confirmed on the Line Items tab.`;
+  return `Added a DRAFT line item to "${formatSectionLabel(section)}"${createdSectionNote}${args.category ? ` (category: ${args.category})` : ""}: ${args.description} -- qty ${args.qty}${args.unit ? ` ${args.unit}` : ""} × $${args.unitCost.toFixed(2)} = $${created.totalCost.toFixed(2)}. It won't count toward any total until it's reviewed and confirmed on the Line Items tab.`;
 }
 
 // Dispatches one model-requested tool call to its real implementation and
