@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { addLineItem, addSection, createEstimateVersion, lockEstimateVersion } from "@/lib/estimate-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
-import { suggestSectionDescription } from "@/lib/ai/section-description-service";
+import { suggestBoothDescription, suggestSectionDescription } from "@/lib/ai/section-description-service";
 
 afterEach(async () => {
   await db.lineItemAuditLog.deleteMany();
@@ -49,5 +49,39 @@ describe("suggestSectionDescription", () => {
     // A locked version must fail on the lock check, not on the (also-true)
     // missing-API-key condition -- confirms assertUnlocked runs first.
     await expect(suggestSectionDescription(section.id, null)).rejects.toThrow(/locked/);
+  });
+});
+
+describe("suggestBoothDescription", () => {
+  it("throws AiNotConfiguredError without writing boothPendingDescription on any section sharing the groupLabel", async () => {
+    const { version } = await makeSection();
+    const groupLabel = "SECTION 211";
+    const sectionA = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+    const sectionB = await addSection(version.id, { name: "Wall Panels", sectionType: "COMPONENT", groupLabel });
+
+    await expect(suggestBoothDescription(version.id, groupLabel, null)).rejects.toBeInstanceOf(AiNotConfiguredError);
+
+    const [refreshedA, refreshedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(refreshedA.boothPendingDescription).toBeNull();
+    expect(refreshedB.boothPendingDescription).toBeNull();
+  });
+
+  it("rejects on a locked version, without ever reaching the AI call", async () => {
+    const { version } = await makeSection();
+    const groupLabel = "SECTION 211";
+    const section = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    await expect(suggestBoothDescription(version.id, groupLabel, null)).rejects.toThrow(/locked/);
+  });
+
+  it("throws when no section exists for the given groupLabel", async () => {
+    const { version } = await makeSection();
+
+    await expect(suggestBoothDescription(version.id, "NO SUCH BOOTH", null)).rejects.toThrow(/no sections/i);
   });
 });

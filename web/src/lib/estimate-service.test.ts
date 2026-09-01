@@ -8,6 +8,7 @@ import {
   addOption,
   addSection,
   archiveEstimate,
+  clearBoothPendingDescription,
   clearCategoryMarginOverride,
   clearSectionPendingDescription,
   computeLineItemTotal,
@@ -31,6 +32,7 @@ import {
   setBidPackageStatus,
   setCategoryMarginOverride,
   unarchiveEstimate,
+  updateBoothDescription,
   updateLineItem,
   updateMarginTarget,
   updateSectionDescription,
@@ -1205,5 +1207,62 @@ describe("updateSectionDescription / clearSectionPendingDescription", () => {
 
     await expect(updateSectionDescription(section.id, "Reception counter")).rejects.toThrow();
     await expect(clearSectionPendingDescription(section.id)).rejects.toThrow();
+  });
+});
+
+describe("updateBoothDescription / clearBoothPendingDescription", () => {
+  it("updateBoothDescription sets boothDescription and clears boothPendingDescription on every section sharing the groupLabel", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "SECTION 211";
+    const sectionA = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+    const sectionB = await addSection(version.id, { name: "Wall Panels", sectionType: "COMPONENT", groupLabel });
+    await db.estimateSection.updateMany({ where: { estimateVersionId: version.id, groupLabel }, data: { boothPendingDescription: "AI suggestion" } });
+
+    await updateBoothDescription(version.id, groupLabel, "Acme Corp booth");
+
+    const [updatedA, updatedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(updatedA.boothDescription).toBe("Acme Corp booth");
+    expect(updatedA.boothPendingDescription).toBeNull();
+    expect(updatedB.boothDescription).toBe("Acme Corp booth");
+    expect(updatedB.boothPendingDescription).toBeNull();
+  });
+
+  it("clearBoothPendingDescription clears only boothPendingDescription across every section sharing the groupLabel", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "SECTION 211";
+    const sectionA = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+    const sectionB = await addSection(version.id, { name: "Wall Panels", sectionType: "COMPONENT", groupLabel });
+    await db.estimateSection.updateMany({
+      where: { estimateVersionId: version.id, groupLabel },
+      data: { boothDescription: "Approved title", boothPendingDescription: "A new suggestion" },
+    });
+
+    await clearBoothPendingDescription(version.id, groupLabel);
+
+    const [updatedA, updatedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(updatedA.boothDescription).toBe("Approved title");
+    expect(updatedA.boothPendingDescription).toBeNull();
+    expect(updatedB.boothDescription).toBe("Approved title");
+    expect(updatedB.boothPendingDescription).toBeNull();
+  });
+
+  it("rejects both mutations on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "SECTION 211";
+    const section = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    await expect(updateBoothDescription(version.id, groupLabel, "Acme Corp booth")).rejects.toThrow();
+    await expect(clearBoothPendingDescription(version.id, groupLabel)).rejects.toThrow();
   });
 });

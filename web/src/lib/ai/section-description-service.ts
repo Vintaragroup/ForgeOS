@@ -88,3 +88,73 @@ export async function suggestSectionDescription(sectionId: string, userId: strin
 
   return parsed.description;
 }
+
+// Booth-level counterpart, for the H1 heading -- same propose-then-commit
+// shape, but summarizes across every section sharing the booth's
+// groupLabel rather than one section's own materials (see
+// EstimateSection.boothDescription's own schema comment on why a booth
+// has no model of its own to hang this off of).
+export async function suggestBoothDescription(
+  estimateVersionId: string,
+  groupLabel: string,
+  userId: string | null,
+): Promise<string> {
+  await assertUnlocked(estimateVersionId);
+
+  const sections = await db.estimateSection.findMany({
+    where: { estimateVersionId, groupLabel },
+    include: { lineItems: { select: { description: true }, take: MAX_ITEM_DESCRIPTIONS } },
+  });
+  if (sections.length === 0) throw new Error(`No sections found for booth "${groupLabel}".`);
+
+  const version = await db.estimateVersion.findUniqueOrThrow({
+    where: { id: estimateVersionId },
+    select: { estimate: { select: { opportunityId: true } } },
+  });
+
+  const client = getOpenAiClient();
+  const itemList = sections
+    .flatMap((s) => s.lineItems.map((li) => li.description))
+    .slice(0, MAX_ITEM_DESCRIPTIONS)
+    .map((d) => `- ${d}`)
+    .join("\n");
+
+  const completion = await client.chat.completions.create({
+    model: BASIC_MODEL,
+    temperature: 0.2,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You write short titles for a trade-show exhibit booth, given its raw booth label and the list of " +
+          "materials/line items across every component in it. Describe the physical booth or exhibit (what it " +
+          "is, e.g. a client/booth name or its distinguishing feature), not the raw label or acquisition method " +
+          "it was filed under.",
+      },
+      {
+        role: "user",
+        content: `Booth label: ${groupLabel}\nMaterials:\n${itemList || "(no line items yet)"}`,
+      },
+    ],
+    response_format: { type: "json_schema", json_schema: buildSuggestionSchema() },
+  });
+
+  await recordAiUsage({
+    userId,
+    feature: "SECTION_DESCRIPTION",
+    model: BASIC_MODEL,
+    usage: completion.usage,
+    opportunityId: version.estimate.opportunityId,
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned an empty response.");
+  const parsed = JSON.parse(content) as { description: string };
+
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { boothPendingDescription: parsed.description },
+  });
+
+  return parsed.description;
+}

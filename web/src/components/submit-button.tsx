@@ -33,11 +33,15 @@ export function SubmitButton({
   pendingText,
   variant,
   className,
+  title,
+  "aria-label": ariaLabel,
 }: {
   children: ReactNode;
   pendingText: string;
   variant?: "primary" | "secondary" | "danger";
   className?: string;
+  title?: string;
+  "aria-label"?: string;
 }) {
   const { pending } = useFormStatus();
   const variantClasses = variant ? `rounded-md px-4 py-2 text-sm font-medium transition-colors ${VARIANT_STYLES[variant]}` : "";
@@ -45,6 +49,8 @@ export function SubmitButton({
     <button
       type="submit"
       disabled={pending}
+      title={title}
+      aria-label={ariaLabel}
       className={`inline-flex items-center justify-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-60 ${variantClasses} ${className ?? ""}`}
     >
       {pending && (

@@ -166,6 +166,8 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
     groupLabel: string | null;
     description?: string | null;
     pendingDescription?: string | null;
+    boothDescription?: string | null;
+    boothPendingDescription?: string | null;
   }) {
     return {
       id: overrides.id,
@@ -173,6 +175,8 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
       groupLabel: overrides.groupLabel,
       description: overrides.description ?? null,
       pendingDescription: overrides.pendingDescription ?? null,
+      boothDescription: overrides.boothDescription ?? null,
+      boothPendingDescription: overrides.boothPendingDescription ?? null,
       lineItems: [li({ id: `${overrides.id}-item`, totalCost: 100 })],
     };
   }
@@ -210,6 +214,29 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
     expect(booth.elementGroups[0].sectionIds).toEqual(["s1", "s2"]);
     expect(booth.elementGroups[0].isMapped).toBe(true);
     expect(booth.elementGroups[0].description).toBeNull();
+  });
+
+  it("carries the booth-level (H1) description/pendingDescription from the first section seen for that booth", () => {
+    const sections = [
+      editableSection({
+        id: "s1",
+        name: "BeMatrix",
+        groupLabel: "SECTION 211",
+        boothDescription: "Acme Corp booth",
+      }),
+      editableSection({
+        id: "s2",
+        name: "Wall Panels",
+        groupLabel: "SECTION 211",
+        boothDescription: "Acme Corp booth",
+      }),
+    ];
+
+    const [booth] = groupBoothLineItemsForEditing(sections);
+
+    expect(booth.boothLabel).toBe("SECTION 211");
+    expect(booth.boothDescription).toBe("Acme Corp booth");
+    expect(booth.boothPendingDescription).toBeNull();
   });
 });
 
@@ -420,8 +447,20 @@ describe("mergeCategoryBucketsForAllMethods / mergeBoothGroupsForAllMethods", ()
   });
 
   it("unions booth groups from the Type's own bucket and every Method bucket's category name", () => {
-    const boothA: RawBoothGroup<unknown> = { boothLabel: "Booth A", elementGroups: [], subtotal: 100 };
-    const boothB: RawBoothGroup<unknown> = { boothLabel: "Booth B", elementGroups: [], subtotal: 200 };
+    const boothA: RawBoothGroup<unknown> = {
+      boothLabel: "Booth A",
+      elementGroups: [],
+      subtotal: 100,
+      boothDescription: null,
+      boothPendingDescription: null,
+    };
+    const boothB: RawBoothGroup<unknown> = {
+      boothLabel: "Booth B",
+      elementGroups: [],
+      subtotal: 200,
+      boothDescription: null,
+      boothPendingDescription: null,
+    };
     const boothGroupsByCategoryName = new Map<string, RawBoothGroup<unknown>[]>([
       ["Structure", [boothA]],
       ["Structure - Rental", [boothB]],

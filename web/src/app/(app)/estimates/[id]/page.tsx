@@ -28,6 +28,7 @@ import {
   approveVersionAction,
   archiveEstimateAction,
   bulkMoveLineItemsCategoryAction,
+  clearBoothPendingDescriptionAction,
   clearCategoryMarginOverrideAction,
   clearSectionPendingDescriptionAction,
   confirmDraftLineItemAction,
@@ -39,7 +40,9 @@ import {
   moveLineItemAction,
   recordCostActualAction,
   setCategoryMarginOverrideAction,
+  suggestBoothDescriptionAction,
   suggestSectionDescriptionAction,
+  updateBoothDescriptionAction,
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
@@ -2483,7 +2486,19 @@ function CategoryTabContent({
           {boothGroups!.map((booth) => (
             <div key={booth.boothLabel} className="overflow-hidden rounded-md border border-neutral-200">
               <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
-                <h4 className="text-sm font-semibold uppercase tracking-wide">{booth.boothLabel}</h4>
+                <h4 className="text-sm font-semibold uppercase tracking-wide">
+                  <SectionHeadingEditor
+                    fallbackLabel={booth.boothLabel}
+                    description={booth.boothDescription}
+                    pendingDescription={booth.boothPendingDescription}
+                    isMapped={false}
+                    isLocked={version.isLocked}
+                    theme="dark"
+                    suggestAction={suggestBoothDescriptionAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                    updateAction={updateBoothDescriptionAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                    rejectAction={clearBoothPendingDescriptionAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                  />
+                </h4>
                 <div className="flex items-center gap-3">
                   <div className="text-xs">
                     <span className="text-neutral-400">Cost {money(booth.subtotal)}</span>

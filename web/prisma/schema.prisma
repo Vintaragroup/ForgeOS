@@ -1028,6 +1028,19 @@ model EstimateSection {
   // approved description until the user explicitly accepts the new text.
   pendingDescription String?
 
+  // Same description/pendingDescription pair as above, but for the booth
+  // H1 heading (the raw groupLabel, e.g. "Section 428 - Booth - Page 9")
+  // rather than this section's own H2. A booth has no model of its own --
+  // it's just every EstimateSection sharing one groupLabel -- so these two
+  // fields are kept in sync across all of them the same way buildType is
+  // (updateBoothDescription/clearBoothPendingDescription use the same
+  // updateMany-by-groupLabel pattern as updateSectionBuildType). Reading
+  // any one section's value is always correct since they're never allowed
+  // to diverge; the view layer only ever reads it off the first section
+  // encountered for a given booth (groupBoothLineItemsForEditing).
+  boothDescription        String?
+  boothPendingDescription String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

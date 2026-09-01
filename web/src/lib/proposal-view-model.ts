@@ -532,6 +532,13 @@ export interface RawBoothGroup<T> {
   boothLabel: string;
   elementGroups: RawElementTypeGroup<T>[];
   subtotal: number;
+  // The booth's own H1-level description/pendingDescription -- see
+  // EstimateSection.boothDescription's own schema comment. Read off the
+  // first section encountered for this booth; kept in sync across every
+  // section sharing the booth's groupLabel by updateBoothDescription/
+  // clearBoothPendingDescription, so any one section's value is correct.
+  boothDescription: string | null;
+  boothPendingDescription: string | null;
 }
 
 // Same booth -> element-type structure as groupBoothLineItems above, but
@@ -559,15 +566,25 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     groupLabel: string | null;
     description: string | null;
     pendingDescription: string | null;
+    boothDescription: string | null;
+    boothPendingDescription: string | null;
     lineItems: T[];
   }[],
 ): RawBoothGroup<T>[] {
   const byBooth = new Map<string, Map<string, EditableSectionBucket<T>>>();
+  const boothDescriptions = new Map<string, { description: string | null; pendingDescription: string | null }>();
 
   for (const section of sections) {
     if (!section.groupLabel) continue;
     const boothLabel = section.groupLabel;
     const elementType = elementTypeForSection(section.name);
+
+    if (!boothDescriptions.has(boothLabel)) {
+      boothDescriptions.set(boothLabel, {
+        description: section.boothDescription,
+        pendingDescription: section.boothPendingDescription,
+      });
+    }
 
     let byElementType = byBooth.get(boothLabel);
     if (!byElementType) {
@@ -618,7 +635,14 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
         .filter((g) => g.items.length > 0);
       if (elementGroups.length === 0) return null;
       const subtotal = elementGroups.reduce((sum, g) => sum + g.subtotal, 0);
-      return { boothLabel, elementGroups, subtotal };
+      const boothDesc = boothDescriptions.get(boothLabel) ?? { description: null, pendingDescription: null };
+      return {
+        boothLabel,
+        elementGroups,
+        subtotal,
+        boothDescription: boothDesc.description,
+        boothPendingDescription: boothDesc.pendingDescription,
+      };
     })
     .filter((g): g is RawBoothGroup<T> => g !== null);
 }
@@ -640,13 +664,24 @@ export function boothGroupsByCategoryForEditing<
     buildType?: SectionBuildType | null;
     description: string | null;
     pendingDescription: string | null;
+    boothDescription: string | null;
+    boothPendingDescription: string | null;
     lineItems: T[];
   }[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
 ): Map<string, RawBoothGroup<T>[]> {
   const sectionsByCategoryName = new Map<
     string,
-    { id: string; name: string; groupLabel: string | null; description: string | null; pendingDescription: string | null; lineItems: T[] }[]
+    {
+      id: string;
+      name: string;
+      groupLabel: string | null;
+      description: string | null;
+      pendingDescription: string | null;
+      boothDescription: string | null;
+      boothPendingDescription: string | null;
+      lineItems: T[];
+    }[]
   >();
   for (const section of sections) {
     if (!section.groupLabel || !section.buildType) continue;
@@ -664,6 +699,8 @@ export function boothGroupsByCategoryForEditing<
         groupLabel: section.groupLabel,
         description: section.description,
         pendingDescription: section.pendingDescription,
+        boothDescription: section.boothDescription,
+        boothPendingDescription: section.boothPendingDescription,
         lineItems: items,
       };
       const arr = sectionsByCategoryName.get(categoryName);

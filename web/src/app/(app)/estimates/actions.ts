@@ -7,6 +7,7 @@ import {
   addSection,
   archiveEstimate,
   assertEstimateNotArchived,
+  clearBoothPendingDescription,
   clearCategoryMarginOverride,
   clearSectionPendingDescription,
   confirmDraftLineItem,
@@ -20,12 +21,13 @@ import {
   recomputeVersionTotals,
   setCategoryMarginOverride,
   unarchiveEstimate,
+  updateBoothDescription,
   updateLineItem,
   updateMarginTarget,
   updateSectionBuildType,
   updateSectionDescription,
 } from "@/lib/estimate-service";
-import { suggestSectionDescription } from "@/lib/ai/section-description-service";
+import { suggestBoothDescription, suggestSectionDescription } from "@/lib/ai/section-description-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
 import { recordCostActual } from "@/lib/cost-actual-service";
@@ -176,6 +178,38 @@ export async function updateSectionDescriptionAction(estimateId: string, section
 export async function clearSectionPendingDescriptionAction(estimateId: string, sectionId: string) {
   await requireEstimateAccess(estimateId);
   await clearSectionPendingDescription(sectionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Booth-level counterparts, for the H1 heading -- same three actions,
+// keyed by (versionId, groupLabel) instead of a single sectionId since a
+// booth is every section sharing one groupLabel (see
+// EstimateSection.boothDescription's own schema comment).
+export async function suggestBoothDescriptionAction(estimateId: string, versionId: string, groupLabel: string) {
+  const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await suggestBoothDescription(versionId, groupLabel, user.id);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateBoothDescriptionAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const description = String(formData.get("description") ?? "").trim();
+  if (!description) throw new Error("Description is required");
+  await updateBoothDescription(versionId, groupLabel, description);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function clearBoothPendingDescriptionAction(estimateId: string, versionId: string, groupLabel: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await clearBoothPendingDescription(versionId, groupLabel);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

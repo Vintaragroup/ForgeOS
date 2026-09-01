@@ -261,6 +261,26 @@ export async function clearSectionPendingDescription(sectionId: string) {
   });
 }
 
+// Booth-level counterparts to the two mutations above, for the H1
+// heading -- same updateMany-by-groupLabel pattern as
+// updateSectionBuildType, since a booth is every section sharing one
+// groupLabel rather than a model of its own.
+export async function updateBoothDescription(estimateVersionId: string, groupLabel: string, description: string) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { boothDescription: description, boothPendingDescription: null },
+  });
+}
+
+export async function clearBoothPendingDescription(estimateVersionId: string, groupLabel: string) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { boothPendingDescription: null },
+  });
+}
+
 // A category move's scope -- a whole section (the per-section "Move
 // section" dropdown, for a section with no groupLabel so ineligible for the
 // Rental/Custom Build tagging above, e.g. a generic "Platform" section whose
