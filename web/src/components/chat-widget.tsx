@@ -9,6 +9,10 @@ interface ChatMessageData {
   id: string;
   role: string;
   segments: TextSegment[];
+  // Set only on a just-sent reply, when buildChatContext had to leave
+  // documents or line items out of the prompt for length -- not persisted,
+  // so it never appears on messages loaded from history.
+  notice?: string | null;
 }
 
 // A filename the model mentioned, turned into a link by
@@ -142,13 +146,17 @@ export function ChatWidget({
         ) : (
           <ul className="flex flex-col gap-2">
             {messages.map((m) => (
-              <li
-                key={m.id}
-                className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
-                  m.role === "user" ? "ml-auto bg-brand-black text-white" : "bg-neutral-100 text-neutral-900"
-                }`}
-              >
-                <MessageContent segments={m.segments} />
+              <li key={m.id} className={m.role === "user" ? "ml-auto max-w-[85%]" : "max-w-[85%]"}>
+                <div
+                  className={`rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+                    m.role === "user" ? "bg-brand-black text-white" : "bg-neutral-100 text-neutral-900"
+                  }`}
+                >
+                  <MessageContent segments={m.segments} />
+                </div>
+                {m.notice && (
+                  <p className="mt-1 px-1 text-xs text-amber-600">{m.notice}</p>
+                )}
               </li>
             ))}
           </ul>

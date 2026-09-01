@@ -85,7 +85,9 @@ import { LineItemRow } from "@/components/line-item-row";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { getProjectContext } from "@/lib/ai/scope-document-context";
-import { citationHref } from "@/lib/citation";
+import { citationHref, linkifyDocumentMentions } from "@/lib/citation";
+import { getThreadMessages } from "@/lib/chat-service";
+import { ChatWidget } from "@/components/chat-widget";
 import { auditLineItemCategories } from "@/lib/category-audit";
 import type { SectionBuildType } from "@/generated/prisma/enums";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
@@ -301,6 +303,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     cadDocuments,
     vendorMatchApplyLog,
     lineItemAuditLog,
+    chatMessages,
+    allOpportunityDocuments,
   ] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.proposalTemplate.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -375,6 +379,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           include: { actor: { select: { name: true } } },
         })
       : Promise.resolve([]),
+    // Same one-thread-per-opportunity chat as the Opportunity page and
+    // Document Viewer (chat-service.ts) -- mounted here too so a
+    // question can be asked without leaving the estimate.
+    getThreadMessages(estimate.opportunityId),
+    db.document.findMany({
+      where: { opportunityId: estimate.opportunityId, deletedAt: null },
+      select: { id: true, filename: true },
+    }),
   ]);
 
   // A Pricing Schedule document stays selectable in "Import from
@@ -753,6 +765,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           </Suspense>
         </>
       )}
+
+      <ChatWidget
+        opportunityId={estimate.opportunityId}
+        opportunityName={estimate.opportunity.showName}
+        initialMessages={chatMessages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          segments: linkifyDocumentMentions(m.content, estimate.opportunityId, allOpportunityDocuments),
+        }))}
+      />
     </div>
   );
 }

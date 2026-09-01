@@ -28,15 +28,26 @@ export async function sendWidgetMessageAction(opportunityId: string, content: st
   if (!trimmed) throw new Error("Message can't be empty.");
 
   try {
-    const { assistantMessage } = await sendMessage(opportunityId, user.id, trimmed);
+    const { assistantMessage, documentsDropped, lineItemsOmitted } = await sendMessage(opportunityId, user.id, trimmed);
     const documents = await db.document.findMany({
       where: { opportunityId, deletedAt: null },
       select: { id: true, filename: true },
     });
+    // Both signals already computed by buildChatContext -- previously
+    // thrown away here, leaving no way to tell a confident-but-wrong
+    // answer apart from one that actually saw everything.
+    const noticeParts: string[] = [];
+    if (documentsDropped.length > 0) {
+      noticeParts.push(`${documentsDropped.length} document(s) didn't fit and were left out: ${documentsDropped.join(", ")}`);
+    }
+    if (lineItemsOmitted > 0) {
+      noticeParts.push(`${lineItemsOmitted} line item(s) didn't fit and were left out of this answer.`);
+    }
     return {
       id: assistantMessage.id,
       role: assistantMessage.role,
       segments: linkifyDocumentMentions(assistantMessage.content, opportunityId, documents),
+      notice: noticeParts.length > 0 ? noticeParts.join(" ") : null,
     };
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {

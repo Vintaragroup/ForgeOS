@@ -6,9 +6,10 @@
 
 import { db } from "@/lib/db";
 import { buildChatContext, getRecentMessages } from "@/lib/ai/chat-context-service";
-import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { ADVANCED_MODEL, BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getProjectContext } from "@/lib/ai/scope-document-context";
 
 const CHAT_MESSAGE_LIMIT = 20;
 const CHAT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
@@ -29,13 +30,23 @@ export async function sendMessage(opportunityId: string, userId: string, content
 
   await db.chatMessage.create({ data: { threadId: thread.id, role: "user", content } });
 
-  const [{ systemPrompt, documentsDropped }, history] = await Promise.all([
+  const [{ systemPrompt, documentsDropped, lineItemsOmitted }, history, projectContext] = await Promise.all([
     buildChatContext(opportunityId),
     getRecentMessages(thread.id),
+    getProjectContext(opportunityId),
   ]);
 
+  // Answering across 2+ named Estimates on one Opportunity is the same
+  // cross-topic attribution judgment call document-summary-service.ts and
+  // meeting-notes-summary-service.ts already reserve ADVANCED_MODEL for --
+  // confirmed there that BASIC_MODEL misattributes unambiguous content
+  // between two real projects. The common single-estimate case (or an
+  // Opportunity with no named Estimates to disambiguate between) stays on
+  // BASIC_MODEL.
+  const model = projectContext.estimates.length > 0 ? ADVANCED_MODEL : BASIC_MODEL;
+
   const completion = await client.chat.completions.create({
-    model: BASIC_MODEL,
+    model,
     messages: [
       { role: "system", content: systemPrompt },
       ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
@@ -45,7 +56,7 @@ export async function sendMessage(opportunityId: string, userId: string, content
   await recordAiUsage({
     userId,
     feature: "CHAT",
-    model: BASIC_MODEL,
+    model,
     usage: completion.usage,
     opportunityId,
   });
@@ -55,7 +66,7 @@ export async function sendMessage(opportunityId: string, userId: string, content
     data: { threadId: thread.id, role: "assistant", content: reply },
   });
 
-  return { assistantMessage, documentsDropped };
+  return { assistantMessage, documentsDropped, lineItemsOmitted };
 }
 
 export async function getThreadMessages(opportunityId: string) {
