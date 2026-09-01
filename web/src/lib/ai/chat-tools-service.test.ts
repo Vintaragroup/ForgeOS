@@ -573,6 +573,30 @@ describe("executeChatTool", () => {
       expect(created.sectionId).toBe(boothA.id);
     });
 
+    it("flags the likely project-wide option when disambiguating, without silently choosing it or hiding the rest", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Bid Comparison" });
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "FS - Reception Counter" });
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "FS - Sign 3ft10 Qty4" });
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Labor", description: "Production Lead Show Site", lineType: "LABOR", qty: 40, unit: "hrs", unitCost: 185 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      // The full, undifferentiated option list is still always present...
+      expect(result).toContain("Bid Comparison");
+      expect(result).toContain("FS - Reception Counter");
+      expect(result).toContain("FS - Sign 3ft10 Qty4");
+      // ...plus an explicit, separate hint pointing at the one candidate
+      // that doesn't look tied to a specific booth.
+      expect(result).toMatch(/project-wide.*most likely fit is: Labor \(Bid Comparison\)/);
+      expect(await db.lineItem.count()).toBe(0); // still asks, never guesses
+    });
+
     it("recognizes a real category name passed as sectionName, and reuses the section an existing item of that category already sits in", async () => {
       const opportunity = await makeOpportunity();
       await db.category.create({ data: { name: "Professional Services", key: "professional-services" } });

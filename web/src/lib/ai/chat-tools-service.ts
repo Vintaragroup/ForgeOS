@@ -526,9 +526,23 @@ async function proposeLineItemTool(
   }
 
   if (candidates.length > 1) {
+    // A hint, never a silent choice -- the full option list is always
+    // still returned alongside it, and this can be wrong for an estimate
+    // using a different naming convention. A booth/component instance's
+    // groupLabel commonly follows this estimate's own "SHORT-CODE -
+    // Description" pattern (e.g. "FS - Reception Counter"); one with no
+    // such separator (e.g. "Bid Comparison") reads as a general/overall
+    // bucket instead -- exactly the one a project-wide item belongs in,
+    // and the one real usage showed getting lost/omitted when a model
+    // had to pick it out of a long undifferentiated list on its own.
+    const projectWide = candidates.filter((s) => s.groupLabel && !/\s-\s/.test(s.groupLabel));
+    const hint =
+      projectWide.length > 0 && projectWide.length < candidates.length
+        ? ` If this item is project-wide rather than tied to one specific booth/component, the most likely fit is: ${listSectionOptions(projectWide)} -- confirm with the user if unsure.`
+        : "";
     return (
       `More than one section is named "${args.sectionName}" -- specify groupLabel to pick which one. ` +
-      `Options: ${listSectionOptions(candidates)}.`
+      `Options: ${listSectionOptions(candidates)}.${hint}`
     );
   }
 
