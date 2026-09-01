@@ -280,6 +280,22 @@ function listSectionOptions(sections: { name: string; groupLabel: string | null 
   return `${labels.slice(0, MAX_SECTION_OPTIONS_SHOWN).join(", ")}, and ${labels.length - MAX_SECTION_OPTIONS_SHOWN} more`;
 }
 
+// Every section/category listing in this file renders as "Name
+// (GroupLabel)" via formatSectionLabel -- which means it's also the
+// single most natural string for a model to echo straight back when it
+// wants to reference one it just saw, instead of correctly splitting it
+// into separate name/groupLabel arguments the way the tool schemas
+// actually ask for. Rather than fail outright on that (confirmed in
+// practice: a real section like "Labor (Bid Comparison)" reported as
+// "doesn't exist" purely because the combined string was passed as one
+// value), both find_section and propose_line_item retry against this
+// parsed form before giving up.
+function splitNameAndGroupLabel(raw: string): { name: string; groupLabel: string | null } {
+  const match = raw.match(/^(.*?)\s*\(([^()]+)\)\s*$/);
+  if (!match) return { name: raw.trim(), groupLabel: null };
+  return { name: match[1].trim(), groupLabel: match[2].trim() };
+}
+
 // Answers "does this exist" definitively -- a section or category with
 // zero items is a real, reportable fact (see the tool's own
 // description), not the same thing as "not found" the way
@@ -306,6 +322,7 @@ async function findSectionTool(
         take: 1,
         select: {
           sections: {
+            orderBy: [{ groupLabel: "asc" }, { name: "asc" }],
             select: { name: true, groupLabel: true, lineItems: { select: { isDraft: true, category: true } } },
           },
         },
@@ -329,7 +346,17 @@ async function findSectionTool(
   const needle = args.name.toLowerCase();
   const lines: string[] = [];
 
-  const sectionMatches = version.sections.filter((s) => s.name.toLowerCase() === needle);
+  let sectionMatches = version.sections.filter((s) => s.name.toLowerCase() === needle);
+  if (sectionMatches.length === 0) {
+    const split = splitNameAndGroupLabel(args.name);
+    if (split.groupLabel) {
+      const splitNeedle = split.name.toLowerCase();
+      const groupNeedle = split.groupLabel.toLowerCase();
+      sectionMatches = version.sections.filter(
+        (s) => s.name.toLowerCase() === splitNeedle && s.groupLabel?.toLowerCase() === groupNeedle,
+      );
+    }
+  }
   if (sectionMatches.length > 0) {
     lines.push(`"${args.name}" is a section name -- found, ${sectionMatches.length} matching section(s):`);
     for (const s of sectionMatches) {
@@ -409,7 +436,10 @@ async function proposeLineItemTool(
         take: 1,
         select: {
           id: true,
-          sections: { select: { id: true, name: true, groupLabel: true, lineItems: { select: { category: true } } } },
+          sections: {
+            orderBy: [{ groupLabel: "asc" }, { name: "asc" }],
+            select: { id: true, name: true, groupLabel: true, lineItems: { select: { category: true } } },
+          },
         },
       },
     },
@@ -433,6 +463,23 @@ async function proposeLineItemTool(
     version.sections.filter((s) => s.name.toLowerCase() === needle).length > 0
       ? version.sections.filter((s) => s.name.toLowerCase() === needle)
       : version.sections.filter((s) => s.name.toLowerCase().includes(needle));
+
+  // sectionName might be a combined "Name (GroupLabel)" string (see
+  // splitNameAndGroupLabel's own comment) rather than a bare name --
+  // retry against the parsed form before falling through to the
+  // category check below, since a real (name, groupLabel) match is a
+  // far stronger signal than a guess at a category with the same name.
+  if (candidates.length === 0 && !args.groupLabel) {
+    const split = splitNameAndGroupLabel(args.sectionName);
+    if (split.groupLabel) {
+      const splitNeedle = split.name.toLowerCase();
+      const groupNeedle = split.groupLabel.toLowerCase();
+      const retried = version.sections.filter(
+        (s) => s.name.toLowerCase() === splitNeedle && s.groupLabel?.toLowerCase() === groupNeedle,
+      );
+      if (retried.length > 0) candidates = retried;
+    }
+  }
 
   let createdSectionNote = "";
   if (candidates.length === 0) {

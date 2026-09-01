@@ -1050,7 +1050,7 @@ function LineItemsTable({
   categoryOptions: { value: string; label: string }[];
 }) {
   return (
-    <table className="w-full min-w-[38rem] text-sm">
+    <table className="w-full min-w-152 text-sm">
       <thead>
         <tr className="text-left text-neutral-500">
           <th className="px-2 pb-1.5 font-normal">Description</th>
@@ -2881,7 +2881,7 @@ function AddLineItemForm({
         action={addLineItemWithIds}
         className="mt-2.5 grid grid-cols-2 gap-3 rounded-md border border-dashed border-neutral-300 bg-neutral-50 p-3 sm:flex sm:flex-wrap sm:items-end"
       >
-        <div className="col-span-2 sm:order-2 sm:flex-1 sm:min-w-[10rem]">
+        <div className="col-span-2 sm:order-2 sm:flex-1 sm:min-w-40">
           <Field label="Description" name="description" required />
         </div>
         <div className="sm:order-1 sm:w-36">
@@ -2910,7 +2910,7 @@ function AddLineItemForm({
             </label>
           </>
         )}
-        <div className="col-span-2 sm:order-[13]">
+        <div className="col-span-2 sm:order-13">
           <Button variant="secondary">Add line item</Button>
         </div>
       </form>
@@ -3344,7 +3344,7 @@ function DocumentsTab({
                               name={`optionName__${sheetName}`}
                               defaultValue={`${group.alternateGroupLabel} — ${sheetName}`}
                               placeholder="Option name"
-                              className="min-w-[12rem] flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-900"
+                              className="min-w-48 flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-900"
                             />
                           </div>
                         ))}

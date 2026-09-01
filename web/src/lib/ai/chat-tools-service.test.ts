@@ -272,6 +272,23 @@ describe("executeChatTool", () => {
       expect(result).toContain("Labor (Bid Comparison): 2 line item(s) (1 confirmed, 1 draft)");
     });
 
+    it("resolves a combined \"Name (GroupLabel)\" string passed as name, not just a bare section name", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Bid Comparison" });
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "FS - Reception Counter" });
+
+      const result = await executeChatTool("find_section", JSON.stringify({ name: "Labor (Bid Comparison)" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+
+      expect(result).toMatch(/found, 1 matching section/);
+      expect(result).toContain("Labor (Bid Comparison)");
+      expect(result).not.toContain("Reception Counter");
+    });
+
     it("reports multiple matching sections separately when the name repeats across booths", async () => {
       const opportunity = await makeOpportunity();
       const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
@@ -368,6 +385,62 @@ describe("executeChatTool", () => {
       expect(rows[0].qty.toNumber()).toBe(2);
       expect(rows[0].unitCost.toNumber()).toBe(450);
       expect(rows[0].totalCost.toNumber()).toBe(900);
+    });
+
+    it("resolves a combined \"Name (GroupLabel)\" string passed as sectionName -- the exact format the model's own prior tool output displays sections in", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const bidComparisonLabor = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Bid Comparison" });
+      // A same-named decoy in a different group -- proves the combined
+      // string actually disambiguates, not just falls back to "first Labor".
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "FS - Reception Counter" });
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({
+          sectionName: "Labor (Bid Comparison)",
+          description: "Standard Labor Show Site",
+          lineType: "LABOR",
+          qty: 2,
+          unit: "hrs",
+          unitCost: 185,
+        }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/DRAFT/);
+      const created = await db.lineItem.findFirstOrThrow({ where: { description: "Standard Labor Show Site" } });
+      expect(created.sectionId).toBe(bidComparisonLabor.id);
+    });
+
+    it("resolves a combined \"Name (GroupLabel)\" string for a totally different section name -- proves this isn't Labor-specific", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const target = await addSection(version.id, { name: "Graphics", sectionType: "CATEGORY", groupLabel: "SS - Lounge Structure" });
+      // Decoys: same name in a different group, and a different name
+      // entirely in the SAME group -- proves both parts of the pair
+      // (name AND groupLabel) are actually being matched, not just one.
+      await addSection(version.id, { name: "Graphics", sectionType: "CATEGORY", groupLabel: "FS - Sign 6ft6" });
+      await addSection(version.id, { name: "Custom Build", sectionType: "CATEGORY", groupLabel: "SS - Lounge Structure" });
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({
+          sectionName: "Graphics (SS - Lounge Structure)",
+          description: "Extra vinyl panel",
+          lineType: "MATERIAL",
+          qty: 1,
+          unit: "ea",
+          unitCost: 300,
+        }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/DRAFT/);
+      const created = await db.lineItem.findFirstOrThrow({ where: { description: "Extra vinyl panel" } });
+      expect(created.sectionId).toBe(target.id);
     });
 
     it("records the real actor on the resulting audit log entry", async () => {

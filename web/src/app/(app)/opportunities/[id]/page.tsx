@@ -1072,7 +1072,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         )}
         <div className="flex flex-wrap items-end gap-3">
           <form action={convertWithId} className="flex flex-wrap items-end gap-3">
-            <div className="min-w-[14rem]">
+            <div className="min-w-56">
               <Field
                 label="Name (optional)"
                 name="name"
