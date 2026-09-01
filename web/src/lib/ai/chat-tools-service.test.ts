@@ -1,10 +1,11 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { createEstimateVersion } from "@/lib/estimate-service";
+import { addSection, createEstimateVersion, lockEstimateVersion } from "@/lib/estimate-service";
 import { executeChatTool } from "@/lib/ai/chat-tools-service";
 
 afterEach(async () => {
   await db.documentChunk.deleteMany();
+  await db.lineItemAuditLog.deleteMany();
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
   await db.estimateVersion.deleteMany();
@@ -245,6 +246,125 @@ describe("executeChatTool", () => {
       });
 
       expect(result).toMatch(/That lookup failed/);
+    });
+  });
+
+  describe("propose_line_item", () => {
+    it("creates a draft line item in the named section, and never a confirmed one", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const section = await addSection(version.id, { name: "Rigging", sectionType: "COMPONENT" });
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Rigging", description: "Motor for truss", lineType: "MATERIAL", qty: 2, unit: "ea", unitCost: 450 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/DRAFT/);
+      expect(result).toMatch(/won't count toward any total/);
+
+      const rows = await db.lineItem.findMany({ where: { sectionId: section.id } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ description: "Motor for truss", isDraft: true, unit: "ea" });
+      expect(rows[0].qty.toNumber()).toBe(2);
+      expect(rows[0].unitCost.toNumber()).toBe(450);
+      expect(rows[0].totalCost.toNumber()).toBe(900);
+    });
+
+    it("records the real actor on the resulting audit log entry", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Rigging", sectionType: "COMPONENT" });
+      const user = await db.user.create({ data: { name: "Estimator", email: `e-${Date.now()}@example.com` } });
+
+      await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Rigging", description: "Motor for truss", lineType: "MATERIAL", qty: 1, unitCost: 450 }),
+        { opportunityId: opportunity.id, userId: user.id },
+      );
+
+      const log = await db.lineItemAuditLog.findFirstOrThrow({ where: { estimateVersionId: version.id, action: "CREATE" } });
+      expect(log.actorId).toBe(user.id);
+    });
+
+    it("rejects missing required fields without touching the database", async () => {
+      const opportunity = await makeOpportunity();
+      const result = await executeChatTool("propose_line_item", JSON.stringify({ sectionName: "Rigging" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+      expect(result).toMatch(/are all required/);
+    });
+
+    it("rejects an invalid lineType", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Rigging", sectionType: "COMPONENT" });
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Rigging", description: "X", lineType: "NOT_REAL", qty: 1, unitCost: 1 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/lineType must be one of/);
+    });
+
+    it("lists available sections when the named one doesn't exist", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Rigging", sectionType: "COMPONENT" });
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Nonexistent Section", description: "X", lineType: "MATERIAL", qty: 1, unitCost: 1 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/No section named "Nonexistent Section"/);
+      expect(result).toContain("Rigging");
+    });
+
+    it("asks for a specific estimate name when the opportunity has more than one", async () => {
+      const opportunity = await makeOpportunity();
+      const a = await db.estimate.create({ data: { opportunityId: opportunity.id, name: "Booth A" } });
+      await createEstimateVersion(a.id);
+      const b = await db.estimate.create({ data: { opportunityId: opportunity.id, name: "Booth B" } });
+      await createEstimateVersion(b.id);
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Rigging", description: "X", lineType: "MATERIAL", qty: 1, unitCost: 1 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/more than one estimate/);
+      expect(result).toContain("Booth A");
+      expect(result).toContain("Booth B");
+    });
+
+    it("rejects adding to a locked version", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Rigging", sectionType: "COMPONENT" });
+      await lockEstimateVersion(version.id);
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Rigging", description: "X", lineType: "MATERIAL", qty: 1, unitCost: 1 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/locked/);
+
+      const rows = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+      expect(rows).toHaveLength(0);
     });
   });
 });

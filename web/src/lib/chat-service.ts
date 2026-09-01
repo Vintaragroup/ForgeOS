@@ -12,6 +12,13 @@
 // the results back for another completion -- capped at MAX_TOOL_ROUNDS so
 // a model that keeps calling tools without ever settling can't turn one
 // chat message into an unbounded number of paid API calls.
+//
+// Phase 5 added the first tool that writes anything: propose_line_item.
+// It's still safe to run through this exact same loop unattended --
+// every write it makes is a LineItem.isDraft: true row, inert until a
+// person confirms it on the Line Items tab, the same review gate an
+// import or AI scope proposal already goes through. No new confirmation
+// UI needed here specifically because that gate already exists.
 
 import { db } from "@/lib/db";
 import { buildChatContext, getRecentMessages, MAX_QUOTE_CONTEXT_CHARS } from "@/lib/ai/chat-context-service";
