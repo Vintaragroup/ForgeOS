@@ -3,6 +3,15 @@
 // today; a streamed chat UI would be the third and first with real
 // client-side state. Matches the rest of the app's Server Action style
 // rather than a compromise.
+//
+// Chat roadmap Phase 4 added real tool-calling on top of that: the model
+// can request get_line_items/get_document_excerpt (chat-tools-service.ts)
+// mid-answer instead of only ever working from what buildChatContext
+// decided to include upfront. sendMessage below now loops -- completion,
+// then (if the model asked for one or more tools) execute each and feed
+// the results back for another completion -- capped at MAX_TOOL_ROUNDS so
+// a model that keeps calling tools without ever settling can't turn one
+// chat message into an unbounded number of paid API calls.
 
 import { db } from "@/lib/db";
 import { buildChatContext, getRecentMessages, MAX_QUOTE_CONTEXT_CHARS } from "@/lib/ai/chat-context-service";
@@ -11,9 +20,18 @@ import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getProjectContext } from "@/lib/ai/scope-document-context";
 import { citationHref, truncateForCitation, type CitableQuote } from "@/lib/citation";
+import { CHAT_TOOLS, executeChatTool } from "@/lib/ai/chat-tools-service";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
 const CHAT_MESSAGE_LIMIT = 20;
 const CHAT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
+
+// One initial completion plus up to this many tool-augmented follow-ups.
+// A real question needing get_line_items AND get_document_excerpt (or
+// two of the same tool for two different filters/documents) still
+// finishes well inside this; it exists purely as a runaway guard, not a
+// realistic ceiling.
+const MAX_TOOL_ROUNDS = 4;
 
 async function getOrCreateThread(opportunityId: string) {
   const existing = await db.chatThread.findUnique({ where: { opportunityId } });
@@ -46,23 +64,41 @@ export async function sendMessage(opportunityId: string, userId: string, content
   // BASIC_MODEL.
   const model = projectContext.estimates.length > 0 ? ADVANCED_MODEL : BASIC_MODEL;
 
-  const completion = await client.chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-    ],
-  });
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+  ];
 
-  await recordAiUsage({
-    userId,
-    feature: "CHAT",
-    model,
-    usage: completion.usage,
-    opportunityId,
-  });
+  let reply = "(no response)";
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const completion = await client.chat.completions.create({ model, messages, tools: CHAT_TOOLS });
 
-  const reply = completion.choices[0]?.message?.content?.trim() || "(no response)";
+    await recordAiUsage({ userId, feature: "CHAT", model, usage: completion.usage, opportunityId });
+
+    const message = completion.choices[0]?.message;
+    const toolCalls = message?.tool_calls;
+    if (!message || !toolCalls || toolCalls.length === 0) {
+      reply = message?.content?.trim() || "(no response)";
+      break;
+    }
+
+    // The assistant's own tool-call request has to go back into the
+    // transcript before its results do -- the API rejects a `tool` role
+    // message that doesn't follow the assistant turn that asked for it.
+    messages.push(message);
+    for (const call of toolCalls) {
+      const result =
+        call.type === "function"
+          ? await executeChatTool(call.function.name, call.function.arguments, { opportunityId, userId })
+          : "Unsupported tool call type.";
+      messages.push({ role: "tool", tool_call_id: call.id, content: result });
+    }
+
+    if (round === MAX_TOOL_ROUNDS - 1) {
+      reply = "I wasn't able to finish looking that up in time -- try narrowing your question.";
+    }
+  }
+
   const assistantMessage = await db.chatMessage.create({
     data: { threadId: thread.id, role: "assistant", content: reply },
   });

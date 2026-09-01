@@ -155,21 +155,27 @@ export interface RetrievedChunk {
 // DocumentChunk.embedding is what keeps this fast as the corpus grows) --
 // deliberately opportunity-wide, not per-document, so the top K chunks
 // can come from whichever document(s) actually answer the question,
-// concentrated or spread across several.
+// concentrated or spread across several. Chat roadmap Phase 4's
+// get_document_excerpt tool passes `documentId` to narrow this to one
+// document instead -- the model's own follow-up when the opportunity-wide
+// top K above didn't happen to surface something from a document it
+// already knows exists.
 export async function retrieveRelevantChunks(
   opportunityId: string,
   question: string,
   userId: string | null = null,
   topK: number = RETRIEVAL_TOP_K,
+  documentId?: string,
 ): Promise<RetrievedChunk[]> {
   const [queryEmbedding] = await embedTexts([question], { userId, opportunityId });
   const vectorLiteral = toVectorLiteral(queryEmbedding);
+  const documentFilter = documentId ? Prisma.sql`AND dc."documentId" = ${documentId}` : Prisma.empty;
 
   return db.$queryRaw<RetrievedChunk[]>`
     SELECT dc."documentId" AS "documentId", d."filename" AS "filename", dc."chunkIndex" AS "chunkIndex", dc."content" AS "content"
     FROM "document_chunks" dc
     JOIN "documents" d ON d."id" = dc."documentId"
-    WHERE dc."opportunityId" = ${opportunityId}
+    WHERE dc."opportunityId" = ${opportunityId} ${documentFilter}
     ORDER BY dc."embedding" <=> ${vectorLiteral}::vector
     LIMIT ${topK}
   `;
