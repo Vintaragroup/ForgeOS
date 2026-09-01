@@ -230,6 +230,37 @@ export async function updateSectionBuildType(
   });
 }
 
+// Approve-with-text (green check on an AI suggestion) or a manual save --
+// either way the result lands in `description` and any pending suggestion
+// is cleared, since it's now superseded either by the user's own approval
+// or by their own hand-typed text.
+export async function updateSectionDescription(sectionId: string, description: string) {
+  const section = await db.estimateSection.findUniqueOrThrow({
+    where: { id: sectionId },
+    select: { estimateVersionId: true },
+  });
+  await assertUnlocked(section.estimateVersionId);
+  await db.estimateSection.update({
+    where: { id: sectionId },
+    data: { description, pendingDescription: null },
+  });
+}
+
+// Reject (red X) -- clears only the pending suggestion, leaving
+// `description` untouched (null in the common case, reverting the UI back
+// to its empty/"Suggest with AI" prompt state).
+export async function clearSectionPendingDescription(sectionId: string) {
+  const section = await db.estimateSection.findUniqueOrThrow({
+    where: { id: sectionId },
+    select: { estimateVersionId: true },
+  });
+  await assertUnlocked(section.estimateVersionId);
+  await db.estimateSection.update({
+    where: { id: sectionId },
+    data: { pendingDescription: null },
+  });
+}
+
 // A category move's scope -- a whole section (the per-section "Move
 // section" dropdown, for a section with no groupLabel so ineligible for the
 // Rental/Custom Build tagging above, e.g. a generic "Platform" section whose

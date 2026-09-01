@@ -29,6 +29,7 @@ import {
   archiveEstimateAction,
   bulkMoveLineItemsCategoryAction,
   clearCategoryMarginOverrideAction,
+  clearSectionPendingDescriptionAction,
   confirmDraftLineItemAction,
   createFirstVersion,
   createNewVersionAction,
@@ -38,14 +39,17 @@ import {
   moveLineItemAction,
   recordCostActualAction,
   setCategoryMarginOverrideAction,
+  suggestSectionDescriptionAction,
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
   unarchiveEstimateAction,
   untagSectionBuildTypeAction,
   updateSectionBuildTypeAction,
+  updateSectionDescriptionAction,
   updateSectionItemsCategoryAction,
 } from "../actions";
+import { SectionHeadingEditor } from "@/components/section-heading-editor";
 import {
   buildFullEstimateFromDocumentsAction,
   commitImportAction,
@@ -2504,7 +2508,16 @@ function CategoryTabContent({
                   <div key={group.elementType}>
                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded bg-neutral-100 px-3 py-1.5">
                       <h5 className="text-xs font-semibold uppercase tracking-wide text-neutral-600">
-                        {group.elementType}
+                        <SectionHeadingEditor
+                          fallbackLabel={group.elementType}
+                          description={group.description}
+                          pendingDescription={group.pendingDescription}
+                          isMapped={group.isMapped}
+                          isLocked={version.isLocked}
+                          suggestAction={suggestSectionDescriptionAction.bind(null, estimateId, group.sectionIds[0])}
+                          updateAction={updateSectionDescriptionAction.bind(null, estimateId, group.sectionIds[0])}
+                          rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionIds[0])}
+                        />
                       </h5>
                       <div className="text-xs text-neutral-600">
                         <span className="text-neutral-400">Cost {money(group.subtotal)}</span>
@@ -2532,7 +2545,16 @@ function CategoryTabContent({
       {flatSectionGroups.map((group) => (
         <div key={group.sectionId} className="border-t border-neutral-200 pt-4 first:border-t-0 first:pt-0">
           <h4 className="mb-3 flex flex-wrap items-center gap-2 text-sm font-medium text-neutral-700">
-            {group.sectionName}
+            <SectionHeadingEditor
+              fallbackLabel={group.sectionName}
+              description={group.description}
+              pendingDescription={group.pendingDescription}
+              isMapped={group.isMapped}
+              isLocked={version.isLocked}
+              suggestAction={suggestSectionDescriptionAction.bind(null, estimateId, group.sectionId)}
+              updateAction={updateSectionDescriptionAction.bind(null, estimateId, group.sectionId)}
+              rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionId)}
+            />
             {group.groupLabel && <span className="font-normal text-neutral-500">— {group.groupLabel}</span>}
             {!version.isLocked && (
               <form

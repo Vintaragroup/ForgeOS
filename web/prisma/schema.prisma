@@ -335,6 +335,7 @@ enum AiFeature {
   RFP_CLARIFICATION_QUESTIONS
   VENDOR_LINE_MATCH
   SPREADSHEET_LINE_ITEMS
+  SECTION_DESCRIPTION
 }
 
 // One row per OpenAI call, for case-based model routing's cost/token
@@ -1011,6 +1012,21 @@ model EstimateSection {
   // parent version either way, so locking/rollup queries share one path.
   optionId String?
   option   Option? @relation(fields: [optionId], references: [id])
+
+  // User-approved short description, shown in place of the raw fallback
+  // heading (elementTypeForSection's own unmapped case, proposal-view-
+  // model.ts) wherever that fallback would otherwise appear. Null until
+  // set by hand or approved from an AI suggestion below. Never applies to
+  // a section whose name already resolves through ELEMENT_TYPE_MAP --
+  // those keep their fixed label regardless of this field.
+  description String?
+
+  // AI-suggested description awaiting the user's approve/reject via the
+  // green check / red X. Kept separate from `description` so a manually
+  // typed description never goes through an approval step, and so
+  // "regenerate" can freely overwrite this without touching an already-
+  // approved description until the user explicitly accepts the new text.
+  pendingDescription String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

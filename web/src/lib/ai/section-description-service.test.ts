@@ -1,0 +1,53 @@
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { db } from "@/lib/db";
+import { addLineItem, addSection, createEstimateVersion, lockEstimateVersion } from "@/lib/estimate-service";
+import { AiNotConfiguredError } from "@/lib/ai/openai-client";
+import { suggestSectionDescription } from "@/lib/ai/section-description-service";
+
+afterEach(async () => {
+  await db.lineItemAuditLog.deleteMany();
+  await db.lineItem.deleteMany();
+  await db.estimateSection.deleteMany();
+  await db.estimateVersion.deleteMany();
+  await db.estimate.deleteMany();
+  await db.opportunity.deleteMany();
+  await db.company.deleteMany();
+});
+
+afterAll(async () => {
+  await db.$disconnect();
+});
+
+async function makeSection() {
+  const company = await db.company.create({ data: { name: "Test Co" } });
+  const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+  const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+  const version = await createEstimateVersion(estimate.id, 0);
+  const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
+  return { section, version };
+}
+
+describe("suggestSectionDescription", () => {
+  // OPENAI_API_KEY is deliberately unset in .env.test -- same posture as
+  // document-summary-service.test.ts: this verifies the "AI features not
+  // configured" path leaves pendingDescription untouched, not the real
+  // OpenAI call itself (that needs a real key, tested manually).
+  it("throws AiNotConfiguredError without writing pendingDescription", async () => {
+    const { section } = await makeSection();
+
+    await expect(suggestSectionDescription(section.id, null)).rejects.toBeInstanceOf(AiNotConfiguredError);
+
+    const refreshed = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    expect(refreshed.pendingDescription).toBeNull();
+  });
+
+  it("rejects on a locked version, without ever reaching the AI call", async () => {
+    const { section, version } = await makeSection();
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    // A locked version must fail on the lock check, not on the (also-true)
+    // missing-API-key condition -- confirms assertUnlocked runs first.
+    await expect(suggestSectionDescription(section.id, null)).rejects.toThrow(/locked/);
+  });
+});

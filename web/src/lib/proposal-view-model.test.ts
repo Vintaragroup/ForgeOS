@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { Prisma } from "@/generated/prisma/client";
 import {
   aggregateByCategory,
+  bucketLineItemsByCategory,
   groupBoothLineItems,
+  groupBoothLineItemsForEditing,
   groupPrimaryCategoryTabs,
   mergeBoothGroupsForAllMethods,
   mergeCategoryBucketsForAllMethods,
@@ -157,6 +159,82 @@ describe("groupBoothLineItems", () => {
   });
 });
 
+describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-through", () => {
+  function editableSection(overrides: {
+    id: string;
+    name: string;
+    groupLabel: string | null;
+    description?: string | null;
+    pendingDescription?: string | null;
+  }) {
+    return {
+      id: overrides.id,
+      name: overrides.name,
+      groupLabel: overrides.groupLabel,
+      description: overrides.description ?? null,
+      pendingDescription: overrides.pendingDescription ?? null,
+      lineItems: [li({ id: `${overrides.id}-item`, totalCost: 100 })],
+    };
+  }
+
+  it("carries an unmapped section's description/pendingDescription onto its bucket, marked not-mapped", () => {
+    const sections = [
+      editableSection({ id: "s1", name: "Custom Build", groupLabel: "FS - Reception Counter", description: "Reception counter" }),
+    ];
+
+    const [booth] = groupBoothLineItemsForEditing(sections);
+
+    expect(booth.elementGroups[0].elementType).toBe("Custom Build");
+    expect(booth.elementGroups[0].sectionIds).toEqual(["s1"]);
+    expect(booth.elementGroups[0].description).toBe("Reception counter");
+    expect(booth.elementGroups[0].isMapped).toBe(false);
+  });
+
+  it("marks a mapped section (e.g. BeMatrix -> Wall Structure) as isMapped regardless of its own description fields", () => {
+    const sections = [editableSection({ id: "s1", name: "BeMatrix", groupLabel: "SECTION 211", description: "should be ignored" })];
+
+    const [booth] = groupBoothLineItemsForEditing(sections);
+
+    expect(booth.elementGroups[0].elementType).toBe("Wall Structure");
+    expect(booth.elementGroups[0].isMapped).toBe(true);
+  });
+
+  it("treats two distinct sections merging into one (boothLabel, elementType) bucket as isMapped with no single description", () => {
+    const sections = [
+      editableSection({ id: "s1", name: "Custom Build", groupLabel: "FS - Reception Counter", description: "Reception counter" }),
+      editableSection({ id: "s2", name: "Custom Build", groupLabel: "FS - Reception Counter", description: "A different component" }),
+    ];
+
+    const [booth] = groupBoothLineItemsForEditing(sections);
+
+    expect(booth.elementGroups[0].sectionIds).toEqual(["s1", "s2"]);
+    expect(booth.elementGroups[0].isMapped).toBe(true);
+    expect(booth.elementGroups[0].description).toBeNull();
+  });
+});
+
+describe("bucketLineItemsByCategory -- description/pendingDescription carry-through", () => {
+  it("carries a section's description, pendingDescription, and isMapped through to its RawCategorySectionGroup", () => {
+    const sections = [
+      {
+        id: "s1",
+        name: "Custom Build",
+        groupLabel: null,
+        description: null,
+        pendingDescription: "Suggested title",
+        lineItems: [li({ id: "a", category: "Structure" })],
+      },
+    ];
+
+    const [bucket] = bucketLineItemsByCategory(sections, categories);
+    const [group] = bucket.sectionGroups;
+
+    expect(group.description).toBeNull();
+    expect(group.pendingDescription).toBe("Suggested title");
+    expect(group.isMapped).toBe(false);
+  });
+});
+
 describe("resolveEffectiveCategory", () => {
   it("resolves a tagged booth's Type to its Method leaf even when the Type's own parentId is wrongly non-null", () => {
     // Confirmed against real data: a Type category's parentId can be
@@ -308,7 +386,16 @@ describe("mergeCategoryBucketsForAllMethods / mergeBoothGroupsForAllMethods", ()
   const purchase = { id: "structure_purchase", name: "Structure - Purchase", key: "structure_purchase" };
 
   function group(sectionId: string, categoryName: string) {
-    return { sectionId, sectionName: sectionId, groupLabel: null, categoryName, lineItems: [] };
+    return {
+      sectionId,
+      sectionName: sectionId,
+      groupLabel: null,
+      categoryName,
+      lineItems: [],
+      description: null,
+      pendingDescription: null,
+      isMapped: false,
+    };
   }
 
   const tab = {

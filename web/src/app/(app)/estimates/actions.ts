@@ -8,6 +8,7 @@ import {
   archiveEstimate,
   assertEstimateNotArchived,
   clearCategoryMarginOverride,
+  clearSectionPendingDescription,
   confirmDraftLineItem,
   createEstimateVersion,
   createNewVersionFromLocked,
@@ -22,7 +23,9 @@ import {
   updateLineItem,
   updateMarginTarget,
   updateSectionBuildType,
+  updateSectionDescription,
 } from "@/lib/estimate-service";
+import { suggestSectionDescription } from "@/lib/ai/section-description-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
 import { recordCostActual } from "@/lib/cost-actual-service";
@@ -145,6 +148,34 @@ export async function moveSectionAction(estimateId: string, sectionId: string, d
   await requireEstimateAccess(estimateId);
   const opportunityId = await estimateOpportunityId(estimateId);
   await moveSectionOrder(opportunityId, sectionId, direction);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// The three section-heading-editor.tsx actions -- see its own header
+// comment for the Empty/Pending/Approved state machine these drive.
+// "Suggest with AI" (Empty -> Pending) and "regenerate" (Approved/Pending
+// -> Pending again) are the same call.
+export async function suggestSectionDescriptionAction(estimateId: string, sectionId: string) {
+  const user = await requireEstimateAccess(estimateId);
+  await suggestSectionDescription(sectionId, user.id);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Approve (green check, formData carries the pending text back unchanged)
+// or a manual save (formData carries the user's own typed text) -- either
+// way this is the one call that ever writes `description`.
+export async function updateSectionDescriptionAction(estimateId: string, sectionId: string, formData: FormData) {
+  await requireEstimateAccess(estimateId);
+  const description = String(formData.get("description") ?? "").trim();
+  if (!description) throw new Error("Description is required");
+  await updateSectionDescription(sectionId, description);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Reject (red X) -- reverts to the Empty state.
+export async function clearSectionPendingDescriptionAction(estimateId: string, sectionId: string) {
+  await requireEstimateAccess(estimateId);
+  await clearSectionPendingDescription(sectionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

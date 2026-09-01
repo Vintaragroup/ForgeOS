@@ -362,6 +362,14 @@ export function elementTypeForSection(sectionName: string): string {
   return ELEMENT_TYPE_MAP[sectionName.trim().toLowerCase()] ?? sectionName;
 }
 
+// Exported for section-heading-editor.tsx's own state machine: a mapped
+// section (one of the 6 fixed banner categories above) keeps its current
+// fixed label always, with no edit/AI-suggestion UI at all -- only the
+// unmapped/fallback case is ever eligible for a custom description.
+export function isMappedElementType(sectionName: string): boolean {
+  return sectionName.trim().toLowerCase() in ELEMENT_TYPE_MAP;
+}
+
 export interface ElementTypeGroup {
   elementType: string;
   items: AggregatedLineItem[];
@@ -503,6 +511,21 @@ export interface RawElementTypeGroup<T> {
   elementType: string;
   items: T[];
   subtotal: number;
+  // The section(s) this bucket's items came from -- almost always exactly
+  // one (a bucket is keyed by (boothLabel, elementType), and normally only
+  // one section per booth resolves to a given elementType). description/
+  // pendingDescription/editability below only ever apply when this is
+  // length 1 -- see isMapped's own comment for the >1 case.
+  sectionIds: string[];
+  description: string | null;
+  pendingDescription: string | null;
+  // True when elementType came from a real ELEMENT_TYPE_MAP entry, OR
+  // when sectionIds.length > 1 (two distinct sections merged into one
+  // bucket -- documented edge case, not solved further in v1: shown with
+  // its fixed elementType label and no edit UI, same as a real mapped
+  // section, rather than picking one of the merged sections' descriptions
+  // arbitrarily).
+  isMapped: boolean;
 }
 
 export interface RawBoothGroup<T> {
@@ -519,10 +542,27 @@ export interface RawBoothGroup<T> {
 // caller's own, richer LineItem shape (unitCost, isDraft, category, ...)
 // passes straight through unchanged; this only ever needs `totalCost` (a
 // Decimal, for subtotal math) and `sortOrder` (for display order) off it.
+interface EditableSectionBucket<T> {
+  items: T[];
+  sectionIds: string[];
+  // description/pendingDescription of the bucket's first (and, in the
+  // overwhelmingly common case, only) contributing section -- see
+  // RawElementTypeGroup's own comment on the >1-section merge case.
+  description: string | null;
+  pendingDescription: string | null;
+}
+
 export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Decimal; sortOrder: number }>(
-  sections: { name: string; groupLabel: string | null; lineItems: T[] }[],
+  sections: {
+    id: string;
+    name: string;
+    groupLabel: string | null;
+    description: string | null;
+    pendingDescription: string | null;
+    lineItems: T[];
+  }[],
 ): RawBoothGroup<T>[] {
-  const byBooth = new Map<string, Map<string, T[]>>();
+  const byBooth = new Map<string, Map<string, EditableSectionBucket<T>>>();
 
   for (const section of sections) {
     if (!section.groupLabel) continue;
@@ -536,10 +576,11 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     }
     let bucket = byElementType.get(elementType);
     if (!bucket) {
-      bucket = [];
+      bucket = { items: [], sectionIds: [], description: section.description, pendingDescription: section.pendingDescription };
       byElementType.set(elementType, bucket);
     }
-    bucket.push(...section.lineItems);
+    bucket.items.push(...section.lineItems);
+    bucket.sectionIds.push(section.id);
   }
 
   const elementTypeRank = (name: string) => {
@@ -552,10 +593,24 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     .map(([boothLabel, byElementType]) => {
       const elementGroups = [...byElementType.entries()]
         .sort(([a], [b]) => elementTypeRank(a) - elementTypeRank(b))
-        .map(([elementType, items]) => {
-          const sorted = [...items].sort((a, b) => a.sortOrder - b.sortOrder);
+        .map(([elementType, bucket]) => {
+          const sorted = [...bucket.items].sort((a, b) => a.sortOrder - b.sortOrder);
           const subtotal = sorted.reduce((sum, li) => sum + li.totalCost.toNumber(), 0);
-          return { elementType, items: sorted, subtotal };
+          const merged = bucket.sectionIds.length > 1;
+          return {
+            elementType,
+            items: sorted,
+            subtotal,
+            sectionIds: bucket.sectionIds,
+            description: merged ? null : bucket.description,
+            pendingDescription: merged ? null : bucket.pendingDescription,
+            // elementType here is already resolved -- a mapped section's
+            // elementType is always one of ELEMENT_TYPE_ORDER's 6 fixed
+            // target names (elementTypeForSection's own mapping), so
+            // checking membership there is equivalent to (and simpler
+            // than) re-deriving it from the raw section name.
+            isMapped: merged || ELEMENT_TYPE_ORDER.includes(elementType),
+          };
         })
         // Same reasoning as groupBoothLineItems' own filter above -- an
         // all-draft section still creates an (elementType, bucket) entry
@@ -578,10 +633,21 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
 export function boothGroupsByCategoryForEditing<
   T extends { totalCost: Prisma.Decimal; sortOrder: number; category: string | null },
 >(
-  sections: { name: string; groupLabel: string | null; buildType?: SectionBuildType | null; lineItems: T[] }[],
+  sections: {
+    id: string;
+    name: string;
+    groupLabel: string | null;
+    buildType?: SectionBuildType | null;
+    description: string | null;
+    pendingDescription: string | null;
+    lineItems: T[];
+  }[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
 ): Map<string, RawBoothGroup<T>[]> {
-  const sectionsByCategoryName = new Map<string, { name: string; groupLabel: string | null; lineItems: T[] }[]>();
+  const sectionsByCategoryName = new Map<
+    string,
+    { id: string; name: string; groupLabel: string | null; description: string | null; pendingDescription: string | null; lineItems: T[] }[]
+  >();
   for (const section of sections) {
     if (!section.groupLabel || !section.buildType) continue;
     const itemsByCategoryName = new Map<string, T[]>();
@@ -592,7 +658,14 @@ export function boothGroupsByCategoryForEditing<
       else itemsByCategoryName.set(categoryName, [li]);
     }
     for (const [categoryName, items] of itemsByCategoryName) {
-      const clone = { name: section.name, groupLabel: section.groupLabel, lineItems: items };
+      const clone = {
+        id: section.id,
+        name: section.name,
+        groupLabel: section.groupLabel,
+        description: section.description,
+        pendingDescription: section.pendingDescription,
+        lineItems: items,
+      };
       const arr = sectionsByCategoryName.get(categoryName);
       if (arr) arr.push(clone);
       else sectionsByCategoryName.set(categoryName, [clone]);
@@ -620,6 +693,12 @@ export interface RawCategorySectionGroup<T> {
   // ("Structure - Rental"), not the merged view's Type name ("Structure").
   categoryName: string;
   lineItems: T[];
+  description: string | null;
+  pendingDescription: string | null;
+  // Same meaning as RawElementTypeGroup's own isMapped -- true when
+  // sectionName resolves through ELEMENT_TYPE_MAP, so this group's heading
+  // stays fixed with no edit/AI-suggestion UI.
+  isMapped: boolean;
 }
 
 export interface RawCategoryBucket<T> {
@@ -651,6 +730,8 @@ export function bucketLineItemsByCategory<T extends { category: string | null }>
     name: string;
     groupLabel: string | null;
     buildType?: SectionBuildType | null;
+    description: string | null;
+    pendingDescription: string | null;
     lineItems: T[];
   }[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
@@ -682,6 +763,9 @@ export function bucketLineItemsByCategory<T extends { category: string | null }>
           groupLabel: section.groupLabel,
           categoryName,
           lineItems: [],
+          description: section.description,
+          pendingDescription: section.pendingDescription,
+          isMapped: isMappedElementType(section.name),
         };
         sectionMap.set(section.id, group);
       }

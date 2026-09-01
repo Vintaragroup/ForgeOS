@@ -9,6 +9,7 @@ import {
   addSection,
   archiveEstimate,
   clearCategoryMarginOverride,
+  clearSectionPendingDescription,
   computeLineItemTotal,
   computeMarginGrossUp,
   computeOptionTotal,
@@ -32,6 +33,7 @@ import {
   unarchiveEstimate,
   updateLineItem,
   updateMarginTarget,
+  updateSectionDescription,
 } from "@/lib/estimate-service";
 
 afterEach(async () => {
@@ -1161,5 +1163,47 @@ describe("opportunity-ownership checks (cross-resource ID authorization)", () =>
   it("moveSectionOrder rejects a sectionId that belongs to a different opportunity", async () => {
     const { opportunityB, sectionA } = await makeTwoOpportunities();
     await expect(moveSectionOrder(opportunityB.id, sectionA.id, "up")).rejects.toThrow();
+  });
+});
+
+describe("updateSectionDescription / clearSectionPendingDescription", () => {
+  it("updateSectionDescription sets description and clears any pendingDescription", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
+    await db.estimateSection.update({ where: { id: section.id }, data: { pendingDescription: "AI suggestion" } });
+
+    await updateSectionDescription(section.id, "Reception counter");
+
+    const updated = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    expect(updated.description).toBe("Reception counter");
+    expect(updated.pendingDescription).toBeNull();
+  });
+
+  it("clearSectionPendingDescription clears only pendingDescription, leaving description untouched", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
+    await db.estimateSection.update({
+      where: { id: section.id },
+      data: { description: "Approved title", pendingDescription: "A new suggestion" },
+    });
+
+    await clearSectionPendingDescription(section.id);
+
+    const updated = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    expect(updated.description).toBe("Approved title");
+    expect(updated.pendingDescription).toBeNull();
+  });
+
+  it("rejects both mutations on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    await expect(updateSectionDescription(section.id, "Reception counter")).rejects.toThrow();
+    await expect(clearSectionPendingDescription(section.id)).rejects.toThrow();
   });
 });
