@@ -665,6 +665,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                 options: (
                   <OptionsTab
                     estimateId={estimate.id}
+                    opportunityId={estimate.opportunityId}
                     version={currentVersion}
                     laborRates={laborRateOptions}
                     categoryOptions={categoryOptions}
@@ -769,7 +770,21 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
         };
       };
     };
-    options: { include: { sections: { include: { lineItems: true } } } };
+    options: {
+      include: {
+        sections: {
+          include: {
+            lineItems: {
+              include: {
+                costActuals: true;
+                document: { select: { id: true; mimeType: true; filename: true } };
+                bidPackage: { select: { id: true; name: true } };
+              };
+            };
+          };
+        };
+      };
+    };
     bidPackages: {
       include: {
         lineItems: {
@@ -1404,11 +1419,13 @@ function LineItemsTab({
 // visually subordinate to the line-items category board.
 function OptionsTab({
   estimateId,
+  opportunityId,
   version,
   laborRates,
   categoryOptions,
 }: {
   estimateId: string;
+  opportunityId: string;
   version: VersionWithSections;
   laborRates: LaborRateOption[];
   categoryOptions: { value: string; label: string }[];
@@ -1438,7 +1455,8 @@ function OptionsTab({
             <OptionCard
               key={option.id}
               estimateId={estimateId}
-              versionId={version.id}
+              opportunityId={opportunityId}
+              version={version}
               option={option}
               isLocked={version.isLocked}
               laborRates={laborRates}
@@ -2550,6 +2568,21 @@ function CategoryTabContent({
                         categoryOptions={categoryOptions}
                       />
                     </div>
+                    {!version.isLocked && (
+                      <div className="mt-2">
+                        {/* sectionIds is almost always length 1 (see RawElementTypeGroup's
+                            own comment); a new item always attaches to the first, same
+                            representative section the description editor above already uses. */}
+                        <AddLineItemForm
+                          estimateId={estimateId}
+                          versionId={version.id}
+                          sectionId={group.sectionIds[0]}
+                          laborRates={laborRates}
+                          categoryOptions={categoryOptions}
+                          defaultCategory={bucket.category.name}
+                        />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -2620,20 +2653,22 @@ function CategoryTabContent({
 
 function OptionCard({
   estimateId,
-  versionId,
+  opportunityId,
+  version,
   option,
   isLocked,
   laborRates,
   categoryOptions,
 }: {
   estimateId: string;
-  versionId: string;
+  opportunityId: string;
+  version: VersionWithSections;
   option: VersionWithSections["options"][number];
   isLocked: boolean;
   laborRates: { id: string; label: string; department: string | null; rate: number }[];
   categoryOptions: { value: string; label: string }[];
 }) {
-  const addOptionSectionWithIds = addOptionSectionAction.bind(null, estimateId, versionId, option.id);
+  const addOptionSectionWithIds = addOptionSectionAction.bind(null, estimateId, version.id, option.id);
   const optionTotal = computeOptionTotal(option.sections);
 
   return (
@@ -2646,26 +2681,21 @@ function OptionCard({
         <div key={section.id} className="mb-3">
           <h5 className="mb-2 text-sm text-neutral-500">{section.name}</h5>
           {section.lineItems.length > 0 && (
-            <table className="mb-2 w-full text-sm">
-              <tbody>
-                {section.lineItems.map((li) => (
-                  <tr key={li.id} className="border-t border-neutral-100">
-                    <td className="py-1.5">{li.description}</td>
-                    <td className="py-1.5 text-right">
-                      {li.qty.toString()}
-                      {li.unit && <span className="ml-1 text-neutral-400">{li.unit}</span>}
-                    </td>
-                    <td className="py-1.5 text-right">{money(li.unitCost)}</td>
-                    <td className="py-1.5 text-right">{money(li.totalCost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="mb-2 overflow-x-auto rounded-md border border-neutral-200">
+              <LineItemsTable
+                lineItems={section.lineItems}
+                version={version}
+                estimateId={estimateId}
+                opportunityId={opportunityId}
+                laborRates={laborRates}
+                categoryOptions={categoryOptions}
+              />
+            </div>
           )}
           {!isLocked && (
             <AddLineItemForm
               estimateId={estimateId}
-              versionId={versionId}
+              versionId={version.id}
               sectionId={section.id}
               laborRates={laborRates}
               categoryOptions={categoryOptions}
@@ -2798,12 +2828,25 @@ function AddLineItemForm({
   defaultCategory?: string;
 }) {
   const addLineItemWithIds = addLineItemAction.bind(null, estimateId, versionId, sectionId);
+  // Zero-JS disclosure (native <details>/<summary>, same pattern as
+  // CollapsibleSection) -- collapsed by default to an icon-only trigger so
+  // every group gets one small "add" affordance instead of a permanently
+  // open form box taking up space in each section/booth/option.
   return (
-    <div className="rounded-md border border-dashed border-neutral-300 bg-neutral-50 p-3">
-      <div className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-        Add line item
-      </div>
-      <form action={addLineItemWithIds} className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
+    <details className="group/add-line-item">
+      <summary
+        className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-full border border-dashed border-neutral-300 text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 marker:content-none [&::-webkit-details-marker]:hidden"
+        title="Add line item"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+        <span className="sr-only">Add line item</span>
+      </summary>
+      <form
+        action={addLineItemWithIds}
+        className="mt-2.5 grid grid-cols-2 gap-3 rounded-md border border-dashed border-neutral-300 bg-neutral-50 p-3 sm:flex sm:flex-wrap sm:items-end"
+      >
         <div className="col-span-2 sm:order-2 sm:flex-1 sm:min-w-[10rem]">
           <Field label="Description" name="description" required />
         </div>
@@ -2837,7 +2880,7 @@ function AddLineItemForm({
           <Button variant="secondary">Add line item</Button>
         </div>
       </form>
-    </div>
+    </details>
   );
 }
 
