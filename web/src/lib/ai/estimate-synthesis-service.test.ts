@@ -1,9 +1,29 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
+import { uploadDocument } from "@/lib/document-service";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import { buildEstimateFromAllDocuments } from "@/lib/ai/estimate-synthesis-service";
+
+// Real fixture: the client's own bid-comparison template -- confirmed live
+// to resolve to kind "pricing-schedule" (a real, deterministic parse, not
+// an AI fallback) via pricing-import-service.ts's own flat-schedule
+// detector, which is exactly why the skip below can't be unconditional.
+const CLIENT_TEMPLATE_PATH = path.resolve(
+  import.meta.dirname,
+  "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Exhibit 1 - SBLXI - Financial Proposal Schedule Temporary Booth Build.xlsx",
+);
+
+async function makeClientTemplateDocument(opportunityId: string) {
+  const bytes = await readFile(CLIENT_TEMPLATE_PATH);
+  const file = new File([bytes], "Exhibit 1.xlsx", {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  return uploadDocument(opportunityId, { file, documentType: "PRICING_SCHEDULE" });
+}
 
 afterEach(async () => {
   await db.lineItem.deleteMany();
@@ -296,5 +316,72 @@ describe("buildEstimateFromAllDocuments", () => {
     ]);
     const drawingLineItem = await db.lineItem.findFirst({ where: { documentId: drawingDoc.id } });
     expect(drawingLineItem).toBeNull();
+  });
+
+  it("imports a client-template-shaped document normally when it's the only pricing source for the job", async () => {
+    const opportunity = await makeOpportunity();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+    const clientTemplateDoc = await makeClientTemplateDocument(opportunity.id);
+
+    const result = await buildEstimateFromAllDocuments(version.id, opportunity.id, null);
+
+    expect(result.imported).toEqual([{ filename: "Exhibit 1.xlsx", kind: "pricing", rowsImported: expect.any(Number) }]);
+    const committed = await db.lineItem.count({ where: { documentId: clientTemplateDoc.id } });
+    expect(committed).toBeGreaterThan(0);
+  });
+
+  it("skips a client-template-shaped document once real granular vendor data already exists for this job", async () => {
+    const opportunity = await makeOpportunity();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    // Stands in for a real, already-committed per-booth vendor workbook --
+    // buildProposals/the skip check here only reads positionCode, so a
+    // seeded row is equivalent to a real commitDesignCostEstimateImport
+    // run, same shortcut this file's other tests already use.
+    const vendorDoc = await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "SUPER BOWL A 6.3.0 SECTION 203.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        sizeBytes: 100,
+        storageKey: "test-key-vendor",
+        documentType: "PRICING_SCHEDULE",
+      },
+    });
+    const section = await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "Structure", sectionType: "CATEGORY", sortOrder: 0 },
+    });
+    await db.lineItem.create({
+      data: {
+        sectionId: section.id,
+        lineType: "MATERIAL",
+        description: "1/3M X 1/2M FRAME",
+        qty: 1,
+        unitCost: 195,
+        totalCost: 195,
+        documentId: vendorDoc.id,
+        positionCode: "606 0310 0434",
+      },
+    });
+
+    const clientTemplateDoc = await makeClientTemplateDocument(opportunity.id);
+    const result = await buildEstimateFromAllDocuments(version.id, opportunity.id, null);
+
+    expect(result.imported).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      // vendorDoc itself, via the ordinary "already has a committed row"
+      // check -- unrelated to this test's own assertion, since it stands
+      // in for a real already-imported vendor workbook.
+      { filename: "SUPER BOWL A 6.3.0 SECTION 203.xlsx", reason: "Already imported into this estimate." },
+      {
+        filename: "Exhibit 1.xlsx",
+        reason:
+          "This is the client's own bid-comparison template, and a real vendor workbook already covers this job's scope in more detail -- use Reconcile Against Client Template instead of importing it as line items.",
+      },
+    ]);
+    const committed = await db.lineItem.count({ where: { documentId: clientTemplateDoc.id } });
+    expect(committed).toBe(0);
   });
 });

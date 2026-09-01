@@ -13,12 +13,16 @@
 // other 4 (a mistagged pricing schedule, a mistagged drawing, and one
 // analyzed-but-never-proposed scope doc) were sitting there unused.
 
+import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
 import type { Document } from "@/generated/prisma/client";
-import { commitPricingImport } from "@/lib/pricing-import-service";
+import { getDocumentBytes } from "@/lib/document-service";
+import { commitPricingImport, previewPricingImport } from "@/lib/pricing-import-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
 import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service";
 import { filenameStem } from "@/lib/document-filename";
+import { findClientPricingTemplateSheet } from "@/lib/client-pricing-template-service";
+import { XLSX_MIME } from "@/lib/ai/text-extraction";
 
 export interface BuildEstimateResult {
   imported: { filename: string; kind: "pricing" | "scope" | "drawing"; rowsImported: number }[];
@@ -101,10 +105,54 @@ export async function buildEstimateFromAllDocuments(
     where: { opportunityId, deletedAt: null, documentType: "PRICING_SCHEDULE", ...notOtherProject },
     orderBy: { createdAt: "asc" },
   });
+
+  // The client's own bid-comparison template (e.g. "Exhibit 1...") is
+  // legitimately IMPORTABLE via the flat-schedule parser -- confirmed
+  // live, it deterministically resolves to kind "pricing-schedule" with
+  // real rows, some catalog-matched -- and is meant to be the estimator's
+  // real pricing source on a job with no vendor-engineered workbook yet
+  // (pricing-import-service.test.ts's own fixture comment: "the correct,
+  // intended way to import this file's rows"). The actual problem is
+  // narrower: on a job that ALSO has a real per-booth vendor workbook
+  // (design-cost-estimate import), the client's own coarse "Complete
+  // Booth Build" narrative rows just double-count the same scope the
+  // vendor workbook already covers granularly and priced -- confirmed
+  // live, a real production estimate ended up with 17 such $0-mostly
+  // rows once both were imported. So: skip a client-template-shaped
+  // document only once real granular vendor data already exists (or will,
+  // from this same batch) -- never skip it when it's the only pricing
+  // source this job has.
+  const hasCommittedVendorData = await db.lineItem.findFirst({
+    where: { section: { estimateVersionId, optionId: null }, positionCode: { not: null } },
+  });
+  let hasGranularVendorSource = !!hasCommittedVendorData;
+  if (!hasGranularVendorSource) {
+    for (const doc of pricingDocs) {
+      const preview = await previewPricingImport(doc.id, opportunityId).catch(() => null);
+      if (preview?.kind === "design-cost-estimate") {
+        hasGranularVendorSource = true;
+        break;
+      }
+    }
+  }
+
   for (const doc of pricingDocs) {
     if (await alreadyCommitted(estimateVersionId, doc.id)) {
       skipped.push({ filename: doc.filename, reason: "Already imported into this estimate." });
       continue;
+    }
+    if (hasGranularVendorSource && doc.mimeType === XLSX_MIME) {
+      const { bytes } = await getDocumentBytes(doc.id);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+      if (findClientPricingTemplateSheet(workbook)) {
+        skipped.push({
+          filename: doc.filename,
+          reason:
+            "This is the client's own bid-comparison template, and a real vendor workbook already covers this job's scope in more detail -- use Reconcile Against Client Template instead of importing it as line items.",
+        });
+        continue;
+      }
     }
     try {
       const result = await commitPricingImport(estimateVersionId, doc.id);
