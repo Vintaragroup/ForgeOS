@@ -2,10 +2,10 @@
 
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
-import { sendMessage } from "@/lib/chat-service";
+import { getCitableLineItems, sendMessage } from "@/lib/chat-service";
 import { db } from "@/lib/db";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
-import { linkifyDocumentMentions } from "@/lib/citation";
+import { linkifyMentions } from "@/lib/citation";
 
 // Called directly from the floating ChatWidget client component (not via
 // a <form action>) -- Server Actions can be imported and awaited from
@@ -29,10 +29,13 @@ export async function sendWidgetMessageAction(opportunityId: string, content: st
 
   try {
     const { assistantMessage, documentsDropped, lineItemsOmitted } = await sendMessage(opportunityId, user.id, trimmed);
-    const documents = await db.document.findMany({
-      where: { opportunityId, deletedAt: null },
-      select: { id: true, filename: true },
-    });
+    const [documents, citableLineItems] = await Promise.all([
+      db.document.findMany({
+        where: { opportunityId, deletedAt: null },
+        select: { id: true, filename: true },
+      }),
+      getCitableLineItems(opportunityId),
+    ]);
     // Both signals already computed by buildChatContext -- previously
     // thrown away here, leaving no way to tell a confident-but-wrong
     // answer apart from one that actually saw everything.
@@ -46,7 +49,7 @@ export async function sendWidgetMessageAction(opportunityId: string, content: st
     return {
       id: assistantMessage.id,
       role: assistantMessage.role,
-      segments: linkifyDocumentMentions(assistantMessage.content, opportunityId, documents),
+      content: linkifyMentions(assistantMessage.content, opportunityId, documents, citableLineItems),
       notice: noticeParts.length > 0 ? noticeParts.join(" ") : null,
     };
   } catch (err) {

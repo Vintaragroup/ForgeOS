@@ -2,38 +2,66 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import ReactMarkdown, { type Components } from "react-markdown";
 import { sendWidgetMessageAction } from "@/app/(app)/opportunities/[id]/chat/actions";
-import type { TextSegment } from "@/lib/citation";
 
 interface ChatMessageData {
   id: string;
   role: string;
-  segments: TextSegment[];
+  // Markdown, with any document/line-item mention linkifyMentions
+  // (citation.ts) recognized already rewritten to real markdown links
+  // server-side -- rendered through the same single react-markdown pass
+  // as everything else, rather than a separate plain-text/link split, so
+  // a link inside a bullet list or bolded phrase renders correctly
+  // instead of breaking the surrounding formatting.
+  content: string;
   // Set only on a just-sent reply, when buildChatContext had to leave
   // documents or line items out of the prompt for length -- not persisted,
   // so it never appears on messages loaded from history.
   notice?: string | null;
 }
 
-// A filename the model mentioned, turned into a link by
-// linkifyDocumentMentions (citation.ts) server-side before this ever
-// reaches the client -- rendered plain vs. linked per segment rather than
-// dumping raw HTML, so this stays as safe as any other React text content.
-function MessageContent({ segments }: { segments: TextSegment[] }) {
-  return (
-    <>
-      {segments.map((seg, i) =>
-        seg.href ? (
-          <Link key={i} href={seg.href} className="underline decoration-dotted underline-offset-2 hover:decoration-solid">
-            {seg.text}
-          </Link>
-        ) : (
-          <span key={i}>{seg.text}</span>
-        ),
-      )}
-    </>
-  );
-}
+// Deliberately plain: no headings, no tables, no raw HTML passthrough
+// (react-markdown never executes raw HTML in the source unless told to --
+// left that way on purpose, since document text quoted back by the model
+// is untrusted input). A short paragraph, an occasional list, bold for
+// emphasis, and a link is the entire vocabulary a chat reply here
+// actually needs -- see chat-context-service.ts's SYSTEM_PREAMBLE, which
+// asks for exactly that register.
+const markdownComponents: Components = {
+  p: ({ children }) => <p className="mb-2 leading-relaxed last:mb-0">{children}</p>,
+  ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
+  ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  a: ({ href, children }) =>
+    href ? (
+      <Link href={href} className="underline decoration-dotted underline-offset-2 hover:decoration-solid">
+        {children}
+      </Link>
+    ) : (
+      <>{children}</>
+    ),
+  code: ({ className, children }) =>
+    /language-/.test(className ?? "") ? (
+      <code className={className}>{children}</code>
+    ) : (
+      <code className="rounded bg-neutral-900/[0.06] px-1 py-0.5 font-mono text-[0.85em]">{children}</code>
+    ),
+  pre: ({ children }) => (
+    <pre className="mb-2 overflow-x-auto rounded-md bg-neutral-900 p-2.5 text-xs text-neutral-100 last:mb-0">{children}</pre>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="mb-2 border-l-2 border-neutral-300 pl-3 text-neutral-600 last:mb-0">{children}</blockquote>
+  ),
+  // Downgraded to a bold line rather than an actual heading -- a real
+  // <h1>/<h2> reads as a document section inside a ~24rem chat bubble,
+  // not a reply (see the SYSTEM_PREAMBLE comment this mirrors).
+  h1: ({ children }) => <p className="mb-1 font-semibold">{children}</p>,
+  h2: ({ children }) => <p className="mb-1 font-semibold">{children}</p>,
+  h3: ({ children }) => <p className="mb-1 font-semibold">{children}</p>,
+};
 
 // The third client component in this app (after app-nav.tsx and
 // confirm-form.tsx) -- a floating widget needs real open/minimized/
@@ -62,13 +90,13 @@ export function ChatWidget({
   useEffect(() => {
     if (!open) return;
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, open]);
+  }, [messages, open, isPending]);
 
   function submitMessage() {
     const content = input.trim();
     if (!content || isPending) return;
     setError(null);
-    setMessages((prev) => [...prev, { id: `pending-${Date.now()}`, role: "user", segments: [{ text: content, href: null }] }]);
+    setMessages((prev) => [...prev, { id: `pending-${Date.now()}`, role: "user", content }]);
     setInput("");
     startTransition(async () => {
       try {
@@ -102,7 +130,7 @@ export function ChatWidget({
 
   return (
     <div
-      className={`fixed right-5 bottom-5 z-50 flex flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl transition-[width,height] ${
+      className={`fixed right-5 bottom-5 z-50 flex flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl transition-[width,height] ${
         maximized ? "h-[85vh] w-[30rem] max-w-[calc(100vw-2.5rem)]" : "h-[32rem] w-96 max-w-[calc(100vw-2.5rem)]"
       }`}
     >
@@ -138,30 +166,40 @@ export function ChatWidget({
         </div>
       </div>
 
-      <div ref={listRef} className="flex-1 overflow-y-auto p-3">
+      <div ref={listRef} className="flex-1 overflow-y-auto px-3.5 py-4">
         {messages.length === 0 ? (
           <p className="p-4 text-center text-sm text-neutral-400">
             Ask about this opportunity&apos;s documents or its current estimate.
           </p>
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="flex flex-col gap-4">
             {messages.map((m) => (
-              <li key={m.id} className={m.role === "user" ? "ml-auto max-w-[85%]" : "max-w-[85%]"}>
-                <div
-                  className={`rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
-                    m.role === "user" ? "bg-brand-black text-white" : "bg-neutral-100 text-neutral-900"
-                  }`}
-                >
-                  <MessageContent segments={m.segments} />
+              <li key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div className={m.role === "user" ? "max-w-[85%]" : "max-w-full"}>
+                  <div
+                    className={
+                      m.role === "user"
+                        ? "rounded-2xl rounded-br-md bg-brand-black px-3.5 py-2 text-sm text-white [&_a]:decoration-white/60"
+                        : "text-sm text-neutral-800"
+                    }
+                  >
+                    <ReactMarkdown components={markdownComponents}>{m.content}</ReactMarkdown>
+                  </div>
+                  {m.notice && <p className="mt-1.5 text-xs text-amber-600">{m.notice}</p>}
                 </div>
-                {m.notice && (
-                  <p className="mt-1 px-1 text-xs text-amber-600">{m.notice}</p>
-                )}
               </li>
             ))}
+            {isPending && (
+              <li className="flex justify-start">
+                <div className="flex items-center gap-1 py-1" aria-label="Assistant is typing">
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-300 motion-reduce:animate-none [animation-delay:-0.3s]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-300 motion-reduce:animate-none [animation-delay:-0.15s]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-300 motion-reduce:animate-none" />
+                </div>
+              </li>
+            )}
           </ul>
         )}
-        {isPending && <p className="mt-2 px-1 text-xs text-neutral-400">Thinking…</p>}
       </div>
 
       {error && (

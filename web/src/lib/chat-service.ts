@@ -76,3 +76,32 @@ export async function getThreadMessages(opportunityId: string) {
   });
   return thread?.messages ?? [];
 }
+
+// Every live estimate's current-version line items, shaped for
+// linkifyMentions (citation.ts) to match against a chat reply and turn a
+// description the assistant echoes back into a real link straight to
+// that row (estimateId comes from the Estimate each item's version rolls
+// up to, not a column on LineItem itself). Read fresh on every call
+// rather than cached -- always reflects the estimate as it stands right
+// now, not as it stood whenever a given message was actually sent, same
+// posture as re-resolving a document's viewer link on every render.
+export async function getCitableLineItems(opportunityId: string) {
+  const estimates = await db.estimate.findMany({
+    where: { opportunityId, deletedAt: null, archivedAt: null },
+    select: {
+      id: true,
+      versions: {
+        where: { isCurrent: true },
+        take: 1,
+        select: { sections: { select: { lineItems: { select: { id: true, description: true } } } } },
+      },
+    },
+  });
+  return estimates.flatMap((estimate) =>
+    estimate.versions.flatMap((version) =>
+      version.sections.flatMap((section) =>
+        section.lineItems.map((li) => ({ id: li.id, estimateId: estimate.id, description: li.description })),
+      ),
+    ),
+  );
+}

@@ -29,7 +29,13 @@ export interface ChatContext {
   lineItemsOmitted: number;
 }
 
-const SYSTEM_PREAMBLE = `You are an assistant helping an event/exhibit contractor understand a specific sales opportunity. Answer using only the information below -- the opportunity's details, its uploaded documents, and its estimate(s). When you state a fact from a document, name the document it came from. When you refer to a line item, name the estimate and section it's in. If something isn't covered by the material below, say so plainly rather than guessing.`;
+// Rendered through react-markdown in a ~24rem chat bubble (ChatWidget),
+// not a full page -- short paragraphs and light formatting read as a
+// conversation there; a big heading or a deeply nested list reads as a
+// document that wandered into the wrong window.
+const SYSTEM_PREAMBLE = `You are an assistant helping an event/exhibit contractor understand a specific sales opportunity. Answer using only the information below -- the opportunity's details, its uploaded documents, and its estimate(s). When you state a fact from a document, name the document it came from, exactly as given (e.g. "RFP Final.pdf"). When you refer to a line item, quote its exact description as given and name the estimate and section it's in. If something isn't covered by the material below, say so plainly rather than guessing.
+
+Write like you're chatting, not drafting a report: short paragraphs, plain sentences, markdown only where it earns its place (a short bullet list for several distinct items, bold for a key number or term). Skip headings entirely, and don't preface an answer with a restatement of the question.`;
 
 type EstimateLineItem = {
   description: string;

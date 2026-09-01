@@ -31,6 +31,7 @@
     "pg": "^8.22.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0",
     "sanitize-html": "^2.17.7",
     "unpdf": "^1.8.0",
     "zod": "^4.4.3"

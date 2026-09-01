@@ -23,13 +23,13 @@ import { deleteMisattributedLineItemAction, moveLineItemToEstimateAction } from 
 import { findMisattributedLineItems, type MisattributedLineItem } from "@/lib/line-item-audit-service";
 import type { ClarificationQuestion } from "@/lib/ai/clarification-questions-service";
 import { listDocuments } from "@/lib/document-service";
-import { getThreadMessages } from "@/lib/chat-service";
+import { getCitableLineItems, getThreadMessages } from "@/lib/chat-service";
 import {
   EXTRACTABLE_OPPORTUNITY_FIELDS,
   type DocumentSummary,
   type ExtractableOpportunityField,
 } from "@/lib/ai/document-summary-service";
-import { citationHref, linkifyDocumentMentions, parseFreeTextDate } from "@/lib/citation";
+import { citationHref, linkifyMentions, parseFreeTextDate } from "@/lib/citation";
 import { XLSX_MIME } from "@/lib/ai/text-extraction";
 import { taxRateLabel, taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import {
@@ -693,7 +693,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   );
   const isMultiProject = namedEstimates.length >= 2;
 
-  const [companies, users, contacts, documents, chatMessages, taxRates, misattributedLineItems] = await Promise.all([
+  const [companies, users, contacts, documents, chatMessages, citableLineItems, taxRates, misattributedLineItems] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.contact.findMany({
@@ -702,6 +702,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     }),
     listDocuments(opportunity.id),
     getThreadMessages(opportunity.id),
+    getCitableLineItems(opportunity.id),
     db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
     // Zero-cost for the common single-project Opportunity -- returns []
     // immediately without a query (see findMisattributedLineItems).
@@ -1387,7 +1388,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         initialMessages={chatMessages.map((m) => ({
           id: m.id,
           role: m.role,
-          segments: linkifyDocumentMentions(m.content, opportunity.id, documents),
+          content: linkifyMentions(m.content, opportunity.id, documents, citableLineItems),
         }))}
       />
     </div>

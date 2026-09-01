@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { citationHref, linkifyDocumentMentions, parseFreeTextDate } from "@/lib/citation";
+import { citationHref, linkifyMentions, parseFreeTextDate } from "@/lib/citation";
 
 describe("parseFreeTextDate", () => {
   it("parses a plain date the Date constructor already understands", () => {
@@ -108,45 +108,55 @@ describe("citationHref", () => {
   });
 });
 
-describe("linkifyDocumentMentions", () => {
+describe("linkifyMentions", () => {
   const opportunityId = "opp1";
   const documents = [
     { id: "doc1", filename: "RFP Final.pdf" },
     { id: "doc2", filename: "Vendor Services Agreement.docx" },
   ];
+  const lineItems = [
+    { id: "li1", estimateId: "est1", description: "10x10 aluminum frame structure" },
+    { id: "li2", estimateId: "est1", description: "Labor" },
+  ];
 
-  it("links a real filename mentioned in the reply, leaving surrounding text plain", () => {
-    const segments = linkifyDocumentMentions(
-      'The rate is in "Vendor Services Agreement.docx".',
-      opportunityId,
-      documents,
-    );
+  it("links a real filename mentioned in the reply, leaving surrounding text untouched", () => {
+    const result = linkifyMentions('The rate is in "Vendor Services Agreement.docx".', opportunityId, documents);
 
-    expect(segments.map((s) => s.text).join("")).toBe('The rate is in "Vendor Services Agreement.docx".');
-    const linked = segments.find((s) => s.href);
-    expect(linked?.text).toBe("Vendor Services Agreement.docx");
-    expect(linked?.href).toBe("/opportunities/opp1/documents/doc2/view");
+    expect(result).toBe('The rate is in "[Vendor Services Agreement.docx](/opportunities/opp1/documents/doc2/view)".');
   });
 
   it("links every distinct filename mentioned, in order", () => {
-    const segments = linkifyDocumentMentions(
+    const result = linkifyMentions(
       "See RFP Final.pdf for dates and Vendor Services Agreement.docx for terms.",
       opportunityId,
       documents,
     );
-    const links = segments.filter((s) => s.href);
-    expect(links).toHaveLength(2);
-    expect(links[0].href).toBe("/opportunities/opp1/documents/doc1/view");
-    expect(links[1].href).toBe("/opportunities/opp1/documents/doc2/view");
+
+    expect(result).toBe(
+      "See [RFP Final.pdf](/opportunities/opp1/documents/doc1/view) for dates and " +
+        "[Vendor Services Agreement.docx](/opportunities/opp1/documents/doc2/view) for terms.",
+    );
   });
 
-  it("returns the whole text as one plain segment when nothing matches", () => {
-    const segments = linkifyDocumentMentions("Nothing relevant mentioned here.", opportunityId, documents);
-    expect(segments).toEqual([{ text: "Nothing relevant mentioned here.", href: null }]);
+  it("returns the text unchanged when nothing matches", () => {
+    expect(linkifyMentions("Nothing relevant mentioned here.", opportunityId, documents)).toBe(
+      "Nothing relevant mentioned here.",
+    );
   });
 
-  it("returns the whole text as one plain segment when there are no documents", () => {
-    const segments = linkifyDocumentMentions("RFP Final.pdf", opportunityId, []);
-    expect(segments).toEqual([{ text: "RFP Final.pdf", href: null }]);
+  it("returns the text unchanged when there are no documents or line items", () => {
+    expect(linkifyMentions("RFP Final.pdf", opportunityId, [])).toBe("RFP Final.pdf");
+  });
+
+  it("links a line item description long enough to be distinctive, to its estimate anchor", () => {
+    const result = linkifyMentions("That's the 10x10 aluminum frame structure you added.", opportunityId, [], lineItems);
+
+    expect(result).toBe("That's the [10x10 aluminum frame structure](/estimates/est1#line-item-li1) you added.");
+  });
+
+  it("does not link a description too short/generic to be a safe match", () => {
+    const result = linkifyMentions("Labor is the biggest cost driver here.", opportunityId, [], lineItems);
+
+    expect(result).toBe("Labor is the biggest cost driver here.");
   });
 });
