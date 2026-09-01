@@ -56,6 +56,7 @@ afterEach(async () => {
   await db.document.deleteMany();
   await db.bidPackage.deleteMany();
   await db.estimateSection.deleteMany();
+  await db.lineItemAuditLog.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.opportunity.deleteMany();

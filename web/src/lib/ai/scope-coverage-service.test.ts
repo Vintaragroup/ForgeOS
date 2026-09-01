@@ -12,6 +12,7 @@ import {
 afterEach(async () => {
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
+  await db.lineItemAuditLog.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.document.deleteMany();

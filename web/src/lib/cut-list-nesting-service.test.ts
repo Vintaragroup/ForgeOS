@@ -20,6 +20,7 @@ afterEach(async () => {
   await db.materialRemnant.deleteMany();
   await db.cutSheet.deleteMany();
   await db.cutListPart.deleteMany();
+  await db.lineItemAuditLog.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.material.deleteMany();

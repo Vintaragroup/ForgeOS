@@ -14,6 +14,7 @@ afterEach(async () => {
   await db.proposalTemplate.deleteMany();
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
+  await db.lineItemAuditLog.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.opportunity.deleteMany();

@@ -16,8 +16,8 @@ export async function moveLineItemToEstimateAction(opportunityId: string, lineIt
 }
 
 export async function deleteMisattributedLineItemAction(opportunityId: string, lineItemId: string) {
-  await requireOpportunityAccess(opportunityId);
-  const { estimateVersionId } = await deleteLineItem(opportunityId, lineItemId);
+  const user = await requireOpportunityAccess(opportunityId);
+  const { estimateVersionId } = await deleteLineItem(opportunityId, lineItemId, user.id);
   await recomputeVersionTotals(estimateVersionId);
   revalidatePath(`/opportunities/${opportunityId}`);
 }

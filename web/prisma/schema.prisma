@@ -112,6 +112,7 @@ model User {
   recordedCostActuals      CostActual[]
   adminAuditLogsActed      AdminAuditLog[]       @relation("AdminAuditLogActor")
   adminAuditLogsTargeted   AdminAuditLog[]       @relation("AdminAuditLogTarget")
+  lineItemAuditLogs        LineItemAuditLog[]
   uploadedDocuments        Document[]
   deadlineActionsTaken     DeadlineAction[]
   aiUsageEvents            AiUsageEvent[]
@@ -922,8 +923,58 @@ model EstimateVersion {
   cutSheets               CutSheet[]
   vendorMatchApplyLogs    VendorMatchApplyLog[]
   categoryMarginOverrides CategoryMarginOverride[]
+  lineItemAuditLogs       LineItemAuditLog[]
 
   @@map("estimate_versions")
+}
+
+enum LineItemAuditAction {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+// Permanent, append-only record of every create/update/delete a person or
+// the system makes to a LineItem -- there was none of this before (the
+// "History" tab only ever tracked VendorMatchApplyLog, a different
+// feature entirely), confirmed live as a real gap: a real production job
+// had dozens of line items deleted with zero record of what was removed
+// or by whom.
+model LineItemAuditLog {
+  id String @id @default(cuid())
+
+  estimateVersionId String
+  estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
+
+  // Deliberately NOT a live foreign key to LineItem -- this row must
+  // survive deleteLineItem's own real hard delete untouched. A deleted
+  // row's only remaining record is whatever `detail` below captured.
+  lineItemId String?
+  // The line item's own description at the moment of this action, so a
+  // deleted or since-renamed row still reads sensibly here without a
+  // live FK to resolve.
+  description String
+
+  action LineItemAuditAction
+  // CREATE: a snapshot of the fields set (or, for a bulk import, a
+  // { count, documentId } summary -- see addLineItemsBulk's own comment
+  // on why that's one row per batch, not one per item). UPDATE: ONLY the
+  // fields that actually changed, as { field: { before, after } } -- a
+  // re-save with no real change writes no row at all. DELETE: a full
+  // snapshot of the row as it existed right before removal.
+  detail Json?
+
+  // Null means system/import-driven -- most bulk import pipelines
+  // (pricing schedules, AI proposals, vendor-match apply) have no real
+  // user session behind them, and this is never fabricated to fill the
+  // column. A human's own edit/delete via the UI always has one.
+  actorId String?
+  actor   User?   @relation(fields: [actorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([estimateVersionId, createdAt])
+  @@map("line_item_audit_logs")
 }
 
 model EstimateSection {

@@ -397,6 +397,24 @@ export async function setBidPackageStatus(bidPackageId: string, status: BidPacka
   return db.bidPackage.update({ where: { id: bidPackageId }, data: { status } });
 }
 
+// Shared by every LineItem CRUD function below -- see LineItemAuditLog's
+// own schema comment for why lineItemId is never a live FK (must survive
+// deleteLineItem's real hard delete) and why actorId is optional (most of
+// this file's ~18 call sites are import/AI pipelines with no real user
+// session, and null is the honest answer there, not a fabricated one).
+async function recordLineItemAudit(
+  estimateVersionId: string,
+  action: "CREATE" | "UPDATE" | "DELETE",
+  description: string,
+  actorId: string | null,
+  detail: Prisma.InputJsonValue | undefined,
+  lineItemId: string | null = null,
+) {
+  await db.lineItemAuditLog.create({
+    data: { estimateVersionId, lineItemId, description, action, detail, actorId },
+  });
+}
+
 // estimateVersionId is the caller's already-verified version (see
 // opportunity-access.ts's assertVersionBelongsToEstimate) -- sectionId
 // alone doesn't prove it belongs to that version, the same cross-
@@ -428,11 +446,12 @@ export async function addLineItem(
     isDraft?: boolean;
     attachmentId?: string | null;
   },
+  actorId?: string | null,
 ) {
   const section = await db.estimateSection.findFirstOrThrow({ where: { id: sectionId, estimateVersionId } });
   await assertUnlocked(section.estimateVersionId);
 
-  return db.lineItem.create({
+  const created = await db.lineItem.create({
     data: {
       sectionId,
       lineType: data.lineType,
@@ -449,6 +468,15 @@ export async function addLineItem(
       attachmentId: data.attachmentId ?? null,
     },
   });
+  await recordLineItemAudit(
+    estimateVersionId,
+    "CREATE",
+    created.description,
+    actorId ?? null,
+    { qty: created.qty.toString(), unitCost: created.unitCost.toString(), category: created.category },
+    created.id,
+  );
+  return created;
 }
 
 // Phase 7.1: bulk insert for document-sourced imports (a real pricing
@@ -492,6 +520,7 @@ export async function addLineItemsBulk(
     positionCode?: string | null;
   }[],
   options?: { isDraft?: boolean; bidPackageId?: string | null },
+  actorId?: string | null,
 ) {
   await assertUnlocked(estimateVersionId);
   if (items.length === 0) return [];
@@ -529,6 +558,17 @@ export async function addLineItemsBulk(
   );
 
   await recomputeVersionTotals(estimateVersionId);
+  // One summary row for the whole batch, not one per item -- a real
+  // import already lands hundreds of rows in one call (see this
+  // function's own header comment), and per-item logging here would
+  // flood the log with noise nobody would actually read.
+  await recordLineItemAudit(
+    estimateVersionId,
+    "CREATE",
+    `Bulk import: ${created.length} item${created.length === 1 ? "" : "s"}`,
+    actorId ?? null,
+    { count: created.length, documentId: items[0]?.documentId ?? null },
+  );
   return created;
 }
 
@@ -563,6 +603,7 @@ export async function updateLineItem(
     // a match is what adds it.
     bidPackageId?: string | null;
   },
+  actorId?: string | null,
 ) {
   const existing = await db.lineItem.findFirstOrThrow({
     where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
@@ -573,25 +614,51 @@ export async function updateLineItem(
   const qty = data.qty ?? existing.qty;
   const unitCost = data.unitCost ?? existing.unitCost;
 
-  return db.lineItem.update({
-    where: { id: lineItemId },
-    data: {
-      description: data.description ?? existing.description,
-      lineType: data.lineType ?? existing.lineType,
-      department: data.department !== undefined ? data.department : existing.department,
-      category: data.category !== undefined ? data.category : existing.category,
-      isClientOwned: data.isClientOwned ?? existing.isClientOwned,
-      usageTag: data.usageTag !== undefined ? data.usageTag : existing.usageTag,
-      qty: new Prisma.Decimal(qty),
-      unit: data.unit !== undefined ? data.unit : existing.unit,
-      unitCost: new Prisma.Decimal(unitCost),
-      totalCost: computeLineItemTotal(qty, unitCost),
-      documentId: data.documentId !== undefined ? data.documentId : existing.documentId,
-      sourceQuote: data.sourceQuote !== undefined ? data.sourceQuote : existing.sourceQuote,
-      isDraft: data.isDraft ?? existing.isDraft,
-      bidPackageId: data.bidPackageId !== undefined ? data.bidPackageId : existing.bidPackageId,
-    },
-  });
+  const resolved = {
+    description: data.description ?? existing.description,
+    lineType: data.lineType ?? existing.lineType,
+    department: data.department !== undefined ? data.department : existing.department,
+    category: data.category !== undefined ? data.category : existing.category,
+    isClientOwned: data.isClientOwned ?? existing.isClientOwned,
+    usageTag: data.usageTag !== undefined ? data.usageTag : existing.usageTag,
+    qty: new Prisma.Decimal(qty),
+    unit: data.unit !== undefined ? data.unit : existing.unit,
+    unitCost: new Prisma.Decimal(unitCost),
+    totalCost: computeLineItemTotal(qty, unitCost),
+    documentId: data.documentId !== undefined ? data.documentId : existing.documentId,
+    sourceQuote: data.sourceQuote !== undefined ? data.sourceQuote : existing.sourceQuote,
+    isDraft: data.isDraft ?? existing.isDraft,
+    bidPackageId: data.bidPackageId !== undefined ? data.bidPackageId : existing.bidPackageId,
+  };
+
+  // Only the fields that actually changed -- a re-save with identical
+  // values (a common no-op form submit) writes no audit row at all,
+  // rather than flooding the log with entries that say nothing happened.
+  const changes: Record<string, { before: unknown; after: unknown }> = {};
+  for (const key of Object.keys(resolved) as (keyof typeof resolved)[]) {
+    const before = existing[key];
+    const after = resolved[key];
+    const changed = before instanceof Prisma.Decimal ? !before.equals(after as Prisma.Decimal) : before !== after;
+    if (changed) {
+      changes[key] = {
+        before: before instanceof Prisma.Decimal ? before.toString() : before,
+        after: after instanceof Prisma.Decimal ? after.toString() : after,
+      };
+    }
+  }
+
+  const updated = await db.lineItem.update({ where: { id: lineItemId }, data: resolved });
+  if (Object.keys(changes).length > 0) {
+    await recordLineItemAudit(
+      existing.section.estimateVersionId,
+      "UPDATE",
+      updated.description,
+      actorId ?? null,
+      changes as Prisma.InputJsonValue,
+      updated.id,
+    );
+  }
+  return updated;
 }
 
 // Same swap-with-neighbor-then-renumber-all approach as moveSectionOrder,
@@ -698,13 +765,27 @@ export async function unarchiveEstimate(id: string) {
 // real access-control axis (see opportunity-access.ts's own header
 // comment): SystemRole answers "admin area or not," this answers "can
 // this user see this opportunity and everything under it."
-export async function deleteLineItem(opportunityId: string, lineItemId: string) {
+export async function deleteLineItem(opportunityId: string, lineItemId: string, actorId?: string | null) {
   const existing = await db.lineItem.findFirstOrThrow({
     where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
     include: { section: true },
   });
   await assertUnlocked(existing.section.estimateVersionId);
+  // Captured BEFORE the delete -- this snapshot is the only remaining
+  // record of the row once it's gone (LineItemAuditLog.lineItemId is
+  // deliberately not a live FK, see its own schema comment).
+  const snapshot = {
+    category: existing.category,
+    lineType: existing.lineType,
+    qty: existing.qty.toString(),
+    unit: existing.unit,
+    unitCost: existing.unitCost.toString(),
+    totalCost: existing.totalCost.toString(),
+    isDraft: existing.isDraft,
+    documentId: existing.documentId,
+  };
   const deleted = await db.lineItem.delete({ where: { id: lineItemId } });
+  await recordLineItemAudit(existing.section.estimateVersionId, "DELETE", existing.description, actorId ?? null, snapshot, lineItemId);
   return { ...deleted, estimateVersionId: existing.section.estimateVersionId };
 }
 

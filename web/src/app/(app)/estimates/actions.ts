@@ -180,7 +180,7 @@ export async function addLineItemAction(
   sectionId: string,
   formData: FormData,
 ) {
-  await requireEstimateAccess(estimateId);
+  const user = await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   const description = String(formData.get("description") ?? "").trim();
   if (!description) throw new Error("Line item description is required");
@@ -206,19 +206,24 @@ export async function addLineItemAction(
   const isDraft = formData.get("isDraft") === "on";
   const attachmentId = emptyToNull(formData.get("attachmentId"));
 
-  await addLineItem(versionId, sectionId, {
-    lineType,
-    description,
-    department,
-    category,
-    isClientOwned,
-    usageTag,
-    qty,
-    unit,
-    unitCost,
-    isDraft,
-    attachmentId,
-  });
+  await addLineItem(
+    versionId,
+    sectionId,
+    {
+      lineType,
+      description,
+      department,
+      category,
+      isClientOwned,
+      usageTag,
+      qty,
+      unit,
+      unitCost,
+      isDraft,
+      attachmentId,
+    },
+    user.id,
+  );
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
@@ -236,7 +241,7 @@ export async function updateLineItemAction(
   lineItemId: string,
   formData: FormData,
 ) {
-  await requireEstimateAccess(estimateId);
+  const user = await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   const opportunityId = await estimateOpportunityId(estimateId);
   const description = String(formData.get("description") ?? "").trim();
@@ -256,17 +261,22 @@ export async function updateLineItemAction(
     throw new Error("Qty and unit cost must be numbers");
   }
 
-  await updateLineItem(opportunityId, lineItemId, {
-    description,
-    lineType,
-    department,
-    category,
-    isClientOwned,
-    usageTag,
-    qty,
-    unit,
-    unitCost,
-  });
+  await updateLineItem(
+    opportunityId,
+    lineItemId,
+    {
+      description,
+      lineType,
+      department,
+      category,
+      isClientOwned,
+      usageTag,
+      qty,
+      unit,
+      unitCost,
+    },
+    user.id,
+  );
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
@@ -279,9 +289,9 @@ export async function moveLineItemAction(estimateId: string, lineItemId: string,
 }
 
 export async function deleteLineItemAction(estimateId: string, lineItemId: string) {
-  await requireEstimateAccess(estimateId);
+  const user = await requireEstimateAccess(estimateId);
   const opportunityId = await estimateOpportunityId(estimateId);
-  const { estimateVersionId } = await deleteLineItem(opportunityId, lineItemId);
+  const { estimateVersionId } = await deleteLineItem(opportunityId, lineItemId, user.id);
   await recomputeVersionTotals(estimateVersionId);
   revalidatePath(`/estimates/${estimateId}`);
 }

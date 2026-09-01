@@ -4,6 +4,7 @@ import { Prisma } from "@/generated/prisma/client";
 import {
   addAttachment,
   addLineItem,
+  addLineItemsBulk,
   addOption,
   addSection,
   archiveEstimate,
@@ -41,11 +42,13 @@ afterEach(async () => {
   await db.bidPackage.deleteMany();
   await db.estimateSection.deleteMany();
   await db.option.deleteMany();
+  await db.lineItemAuditLog.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
   await db.category.deleteMany();
+  await db.user.deleteMany();
 });
 
 afterAll(async () => {
@@ -437,6 +440,119 @@ describe("estimate archiving", () => {
     await archiveEstimate(estimate.id);
 
     await expect(createNewVersionFromLocked(version.id)).rejects.toThrow(/archived/);
+  });
+});
+
+describe("line item audit log", () => {
+  it("writes a CREATE row with the given actorId, and none at all when actorId is omitted (every existing import call site)", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const user = await db.user.create({ data: { name: "Estimator", email: `e-${Date.now()}@example.com` } });
+
+    const withActor = await addLineItem(
+      version.id,
+      section.id,
+      { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 },
+      user.id,
+    );
+    const noActor = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Screws",
+      qty: 1,
+      unitCost: 5,
+    });
+
+    const logs = await db.lineItemAuditLog.findMany({ where: { estimateVersionId: version.id }, orderBy: { createdAt: "asc" } });
+    expect(logs).toHaveLength(2);
+    expect(logs[0]).toMatchObject({ action: "CREATE", lineItemId: withActor.id, description: "Plywood", actorId: user.id });
+    expect(logs[1]).toMatchObject({ action: "CREATE", lineItemId: noActor.id, description: "Screws", actorId: null });
+  });
+
+  it("writes an UPDATE row containing only the changed fields, and no row at all when nothing actually changed", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const lineItem = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Plywood",
+      qty: 10,
+      unitCost: 20,
+    });
+    const user = await db.user.create({ data: { name: "Estimator", email: `e-${Date.now()}@example.com` } });
+
+    // No-op save -- identical qty, nothing else passed. Must write nothing.
+    await updateLineItem(estimate.opportunityId, lineItem.id, { qty: 10 }, user.id);
+    expect(await db.lineItemAuditLog.count({ where: { estimateVersionId: version.id, action: "UPDATE" } })).toBe(0);
+
+    await updateLineItem(estimate.opportunityId, lineItem.id, { qty: 15, description: "Plywood (revised)" }, user.id);
+
+    const logs = await db.lineItemAuditLog.findMany({ where: { estimateVersionId: version.id, action: "UPDATE" } });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ action: "UPDATE", lineItemId: lineItem.id, actorId: user.id });
+    expect(logs[0].detail).toMatchObject({
+      qty: { before: "10", after: "15" },
+      description: { before: "Plywood", after: "Plywood (revised)" },
+    });
+    // Only the changed fields -- category was never touched, so it must
+    // not appear in detail at all.
+    expect(logs[0].detail).not.toHaveProperty("category");
+  });
+
+  it("writes a DELETE row with a full snapshot that survives the LineItem's own hard delete", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const lineItem = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Plywood",
+      qty: 10,
+      unitCost: 20,
+    });
+    const user = await db.user.create({ data: { name: "Estimator", email: `e-${Date.now()}@example.com` } });
+
+    await deleteLineItem(estimate.opportunityId, lineItem.id, user.id);
+
+    expect(await db.lineItem.findUnique({ where: { id: lineItem.id } })).toBeNull();
+
+    const logs = await db.lineItemAuditLog.findMany({ where: { estimateVersionId: version.id } });
+    // One CREATE (from addLineItem above) + one DELETE.
+    const deleteLog = logs.find((l) => l.action === "DELETE");
+    expect(deleteLog).toMatchObject({ lineItemId: lineItem.id, description: "Plywood", actorId: user.id });
+    expect(deleteLog?.detail).toMatchObject({ qty: "10", unitCost: "20", totalCost: "200" });
+  });
+
+  it("writes exactly one summary row for a bulk import, regardless of item count", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const company = await db.company.create({ data: { name: "Doc Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Doc Show" } });
+    const document = await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "Schedule.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        sizeBytes: 100,
+        storageKey: "test-key",
+        documentType: "PRICING_SCHEDULE",
+      },
+    });
+
+    await addLineItemsBulk(version.id, section.id, [
+      { lineType: "MATERIAL", description: "Row 1", qty: 1, unitCost: 10, documentId: document.id },
+      { lineType: "MATERIAL", description: "Row 2", qty: 1, unitCost: 10, documentId: document.id },
+      { lineType: "MATERIAL", description: "Row 3", qty: 1, unitCost: 10, documentId: document.id },
+    ]);
+
+    const logs = await db.lineItemAuditLog.findMany({ where: { estimateVersionId: version.id } });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ action: "CREATE", lineItemId: null, actorId: null });
+    expect(logs[0].detail).toMatchObject({ count: 3, documentId: document.id });
+
+    await db.document.deleteMany({ where: { id: document.id } });
+    await db.opportunity.deleteMany({ where: { id: opportunity.id } });
+    await db.company.deleteMany({ where: { id: company.id } });
   });
 });
 

@@ -292,6 +292,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     vendorQuoteDocuments,
     cadDocuments,
     vendorMatchApplyLog,
+    lineItemAuditLog,
   ] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.proposalTemplate.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -355,6 +356,17 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       orderBy: { createdAt: "desc" },
     }),
     currentVersion ? getVendorMatchApplyLog(currentVersion.id) : Promise.resolve([]),
+    // Capped at 200 -- deliberately not unpaginated, per the real
+    // performance problem an unpaginated 782-line-item estimate caused
+    // earlier this session.
+    currentVersion
+      ? db.lineItemAuditLog.findMany({
+          where: { estimateVersionId: currentVersion.id },
+          orderBy: { createdAt: "desc" },
+          take: 200,
+          include: { actor: { select: { name: true } } },
+        })
+      : Promise.resolve([]),
   ]);
 
   // A Pricing Schedule document stays selectable in "Import from
@@ -726,7 +738,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                   />
                 ),
                 "cut-list": <CutListTab estimateId={estimate.id} versionId={currentVersion.id} />,
-                history: <HistoryTab log={vendorMatchApplyLog} />,
+                history: <HistoryTab log={vendorMatchApplyLog} auditLog={lineItemAuditLog} />,
               }}
             />
           </Suspense>
@@ -4141,92 +4153,156 @@ const APPLY_METHOD_LABELS: Record<string, string> = {
 // stored text, not live joins that could go blank.
 function HistoryTab({
   log,
+  auditLog,
 }: {
   log: Awaited<ReturnType<typeof getVendorMatchApplyLog>>;
+  auditLog: LineItemAuditLogEntry[];
 }) {
-  if (log.length === 0) {
-    return (
-      <Card className="p-6">
-        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Vendor match apply history
-        </h2>
-        <p className="text-sm text-neutral-500">
-          Nothing applied yet. Every vendor-match Apply click -- single row, bulk group, &quot;all high-confidence,&quot;
-          or a hand-picked selection -- will show up here permanently, even after the estimate itself changes.
-        </p>
-      </Card>
-    );
-  }
+  return (
+    <div className="flex flex-col gap-6">
+      {log.length === 0 ? (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Vendor match apply history
+          </h2>
+          <p className="text-sm text-neutral-500">
+            Nothing applied yet. Every vendor-match Apply click -- single row, bulk group, &quot;all high-confidence,&quot;
+            or a hand-picked selection -- will show up here permanently, even after the estimate itself changes.
+          </p>
+        </Card>
+      ) : (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Vendor match apply history
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            A permanent record of every vendor price applied to this estimate -- who, what, and when. Unlike the Bid
+            Packages tab (which only shows current state), a row here never disappears, even if the line item it priced
+            is later renamed, deleted, or re-priced.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-neutral-500">
+                  <th className="px-3 pb-1.5 font-normal">When</th>
+                  <th className="px-3 pb-1.5 font-normal">Who</th>
+                  <th className="px-3 pb-1.5 font-normal">How</th>
+                  <th className="px-3 pb-1.5 font-normal">Bid package</th>
+                  <th className="px-3 pb-1.5 font-normal">Applied to</th>
+                  <th className="px-3 pb-1.5 font-normal">From vendor line(s)</th>
+                  <th className="px-3 pb-1.5 text-right font-normal">Qty</th>
+                  <th className="px-3 pb-1.5 text-right font-normal">Unit cost</th>
+                  <th className="px-3 pb-1.5 text-right font-normal">Total</th>
+                  <th className="px-3 pb-1.5 font-normal">Source document</th>
+                </tr>
+              </thead>
+              <tbody>
+                {log.map((entry) => (
+                  <tr key={entry.id} className="border-t border-neutral-100 align-top">
+                    <td className="whitespace-nowrap px-3 py-2 text-neutral-500">
+                      {entry.createdAt.toLocaleString("en-US", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                    </td>
+                    <td className="px-3 py-2">{entry.actor.name}</td>
+                    <td className="px-3 py-2">{APPLY_METHOD_LABELS[entry.method] ?? entry.method}</td>
+                    <td className="px-3 py-2 text-neutral-500">{entry.bidPackageName}</td>
+                    <td className="px-3 py-2">
+                      {entry.targetDescription}
+                      {entry.targetSectionLabel && (
+                        <span className="ml-1.5 text-xs text-neutral-400">{entry.targetSectionLabel}</span>
+                      )}
+                      {!entry.lineItemId && (
+                        <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
+                          line item since deleted
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-neutral-500">
+                      {entry.vendorLineDescriptions}
+                      {entry.vendorLineCount > 1 && (
+                        <span className="ml-1.5 text-xs text-neutral-400">({entry.vendorLineCount} lines)</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right">{entry.qty.toNumber()}</td>
+                    <td className="px-3 py-2 text-right">{money(entry.unitCost)}</td>
+                    <td className="px-3 py-2 text-right">{money(entry.totalCost)}</td>
+                    <td className="px-3 py-2 text-neutral-500">
+                      {entry.documentFilename}
+                      {!entry.documentId && (
+                        <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">deleted</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
+      <LineItemChangeHistoryCard auditLog={auditLog} />
+    </div>
+  );
+}
+
+type LineItemAuditLogEntry = Prisma.LineItemAuditLogGetPayload<{ include: { actor: { select: { name: true } } } }>;
+
+const AUDIT_ACTION_LABEL: Record<string, string> = { CREATE: "Created", UPDATE: "Updated", DELETE: "Deleted" };
+const AUDIT_ACTION_STYLE: Record<string, string> = {
+  CREATE: "border-green-200 bg-green-50 text-green-800",
+  UPDATE: "border-neutral-200 bg-neutral-50 text-neutral-700",
+  DELETE: "border-red-200 bg-red-50 text-red-800",
+};
+
+function LineItemChangeHistoryCard({ auditLog }: { auditLog: LineItemAuditLogEntry[] }) {
   return (
     <Card className="p-6">
-      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-        Vendor match apply history
-      </h2>
+      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Line item change history</h2>
       <p className="mb-4 text-sm text-neutral-500">
-        A permanent record of every vendor price applied to this estimate -- who, what, and when. Unlike the Bid
-        Packages tab (which only shows current state), a row here never disappears, even if the line item it priced
-        is later renamed, deleted, or re-priced.
+        A permanent record of every line item created, edited, or deleted on this estimate -- who, what, and when. A
+        deleted row&apos;s snapshot lives here even after the line item itself is gone. &quot;System/Import&quot; means an
+        automated import or AI proposal, not a person clicking a button. Showing the most recent 200.
       </p>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-neutral-500">
-              <th className="px-3 pb-1.5 font-normal">When</th>
-              <th className="px-3 pb-1.5 font-normal">Who</th>
-              <th className="px-3 pb-1.5 font-normal">How</th>
-              <th className="px-3 pb-1.5 font-normal">Bid package</th>
-              <th className="px-3 pb-1.5 font-normal">Applied to</th>
-              <th className="px-3 pb-1.5 font-normal">From vendor line(s)</th>
-              <th className="px-3 pb-1.5 text-right font-normal">Qty</th>
-              <th className="px-3 pb-1.5 text-right font-normal">Unit cost</th>
-              <th className="px-3 pb-1.5 text-right font-normal">Total</th>
-              <th className="px-3 pb-1.5 font-normal">Source document</th>
-            </tr>
-          </thead>
-          <tbody>
-            {log.map((entry) => (
-              <tr key={entry.id} className="border-t border-neutral-100 align-top">
-                <td className="whitespace-nowrap px-3 py-2 text-neutral-500">
-                  {entry.createdAt.toLocaleString("en-US", {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
-                </td>
-                <td className="px-3 py-2">{entry.actor.name}</td>
-                <td className="px-3 py-2">{APPLY_METHOD_LABELS[entry.method] ?? entry.method}</td>
-                <td className="px-3 py-2 text-neutral-500">{entry.bidPackageName}</td>
-                <td className="px-3 py-2">
-                  {entry.targetDescription}
-                  {entry.targetSectionLabel && (
-                    <span className="ml-1.5 text-xs text-neutral-400">{entry.targetSectionLabel}</span>
-                  )}
-                  {!entry.lineItemId && (
-                    <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
-                      line item since deleted
-                    </span>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-neutral-500">
-                  {entry.vendorLineDescriptions}
-                  {entry.vendorLineCount > 1 && (
-                    <span className="ml-1.5 text-xs text-neutral-400">({entry.vendorLineCount} lines)</span>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-right">{entry.qty.toNumber()}</td>
-                <td className="px-3 py-2 text-right">{money(entry.unitCost)}</td>
-                <td className="px-3 py-2 text-right">{money(entry.totalCost)}</td>
-                <td className="px-3 py-2 text-neutral-500">
-                  {entry.documentFilename}
-                  {!entry.documentId && (
-                    <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">deleted</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {auditLog.length === 0 ? (
+        <p className="text-sm text-neutral-500">No line item changes recorded yet.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {auditLog.map((entry) => (
+            <div key={entry.id} className="rounded-md border border-neutral-200 px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded border px-1.5 py-0.5 text-xs font-medium ${AUDIT_ACTION_STYLE[entry.action]}`}>
+                  {AUDIT_ACTION_LABEL[entry.action] ?? entry.action}
+                </span>
+                <span className="font-medium">{entry.description}</span>
+                <span className="text-neutral-400">·</span>
+                <span className="text-neutral-500">{entry.actor?.name ?? "System/Import"}</span>
+                <span className="text-neutral-400">·</span>
+                <span className="text-neutral-500">
+                  {entry.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
+                </span>
+              </div>
+              {entry.action === "UPDATE" && entry.detail && typeof entry.detail === "object" && (
+                <ul className="mt-1 flex flex-col gap-0.5 text-xs text-neutral-600">
+                  {Object.entries(entry.detail as Record<string, { before: unknown; after: unknown }>).map(([field, change]) => (
+                    <li key={field}>
+                      <span className="font-medium">{field}</span>: {String(change.before ?? "—")} → {String(change.after ?? "—")}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {entry.action === "DELETE" && entry.detail && typeof entry.detail === "object" && (
+                <p className="mt-1 text-xs text-neutral-600">
+                  {Object.entries(entry.detail as Record<string, unknown>)
+                    .map(([field, value]) => `${field}: ${value ?? "—"}`)
+                    .join(" · ")}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }
