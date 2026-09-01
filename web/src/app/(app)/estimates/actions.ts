@@ -19,6 +19,7 @@ import {
   moveLineItemWithinSection,
   moveSectionOrder,
   recomputeVersionTotals,
+  restoreLineItem,
   setCategoryMarginOverride,
   unarchiveEstimate,
   updateBoothDescription,
@@ -357,6 +358,14 @@ export async function deleteLineItemAction(estimateId: string, lineItemId: strin
   const user = await requireEstimateAccess(estimateId);
   const opportunityId = await estimateOpportunityId(estimateId);
   const { estimateVersionId } = await deleteLineItem(opportunityId, lineItemId, user.id);
+  await recomputeVersionTotals(estimateVersionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function restoreLineItemAction(estimateId: string, auditLogId: string) {
+  const user = await requireEstimateAccess(estimateId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  const { estimateVersionId } = await restoreLineItem(opportunityId, auditLogId, user.id);
   await recomputeVersionTotals(estimateVersionId);
   revalidatePath(`/estimates/${estimateId}`);
 }

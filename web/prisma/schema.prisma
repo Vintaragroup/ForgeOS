@@ -973,6 +973,11 @@ enum LineItemAuditAction {
   CREATE
   UPDATE
   DELETE
+  // A line item re-created from an earlier DELETE row's own snapshot
+  // (restoreLineItem, estimate-service.ts) -- distinct from a genuinely
+  // new CREATE so the history reads honestly ("this is the same item
+  // coming back," not "someone typed this in fresh").
+  RESTORE
 }
 
 // Permanent, append-only record of every create/update/delete a person or
@@ -1001,8 +1006,13 @@ model LineItemAuditLog {
   // { count, documentId } summary -- see addLineItemsBulk's own comment
   // on why that's one row per batch, not one per item). UPDATE: ONLY the
   // fields that actually changed, as { field: { before, after } } -- a
-  // re-save with no real change writes no row at all. DELETE: a full
-  // snapshot of the row as it existed right before removal.
+  // re-save with no real change writes no row at all. DELETE: a genuinely
+  // full snapshot of every restorable field (see deleteLineItem's own
+  // comment for the exact shape) -- including sectionId/sortOrder, which
+  // is what lets restoreLineItem put the row back in the same section at
+  // the same position rather than just at the bottom of wherever it's
+  // dropped. RESTORE: { restoredFromAuditLogId } pointing back at the
+  // DELETE row its snapshot came from.
   detail Json?
 
   // Null means system/import-driven -- most bulk import pipelines

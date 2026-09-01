@@ -29,6 +29,7 @@ import {
   recategorizeLineItems,
   recomputeVersionTotals,
   removeLineItemFromBidPackage,
+  restoreLineItem,
   setBidPackageStatus,
   setCategoryMarginOverride,
   unarchiveEstimate,
@@ -557,6 +558,132 @@ describe("line item audit log", () => {
     await db.document.deleteMany({ where: { id: document.id } });
     await db.opportunity.deleteMany({ where: { id: opportunity.id } });
     await db.company.deleteMany({ where: { id: company.id } });
+  });
+
+  it("captures sectionId and sortOrder in the DELETE snapshot, not just cost fields", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const lineItem = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Plywood",
+      qty: 10,
+      unitCost: 20,
+    });
+
+    await deleteLineItem(estimate.opportunityId, lineItem.id);
+
+    const deleteLog = await db.lineItemAuditLog.findFirstOrThrow({
+      where: { estimateVersionId: version.id, action: "DELETE" },
+    });
+    expect(deleteLog.detail).toMatchObject({ sectionId: section.id, sortOrder: 0 });
+  });
+});
+
+describe("restoreLineItem", () => {
+  it("puts a deleted line item back in the same section at the same sortOrder, reusing its original id", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const lineItem = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Plywood",
+      qty: 10,
+      unitCost: 20,
+      category: "Structure",
+    });
+    // Simulates a real drag-reordered position -- moveLineItemWithinSection
+    // is what actually writes sortOrder in the app, but a direct update is
+    // equivalent here and avoids needing a second sibling row.
+    await db.lineItem.update({ where: { id: lineItem.id }, data: { sortOrder: 3 } });
+
+    const user = await db.user.create({ data: { name: "Estimator", email: `e-${Date.now()}@example.com` } });
+    const deleted = await deleteLineItem(estimate.opportunityId, lineItem.id, user.id);
+    const deleteLog = await db.lineItemAuditLog.findFirstOrThrow({
+      where: { estimateVersionId: version.id, action: "DELETE" },
+    });
+
+    const restored = await restoreLineItem(estimate.opportunityId, deleteLog.id, user.id);
+
+    expect(restored.id).toBe(lineItem.id); // same id, not a fresh one
+    expect(restored.estimateVersionId).toBe(deleted.estimateVersionId);
+
+    const row = await db.lineItem.findUniqueOrThrow({ where: { id: lineItem.id } });
+    expect(row.sectionId).toBe(section.id);
+    expect(row.sortOrder).toBe(3);
+    expect(row.description).toBe("Plywood");
+    expect(row.category).toBe("Structure");
+    expect(row.qty.toNumber()).toBe(10);
+    expect(row.unitCost.toNumber()).toBe(20);
+
+    const restoreLog = await db.lineItemAuditLog.findFirstOrThrow({
+      where: { estimateVersionId: version.id, action: "RESTORE" },
+    });
+    expect(restoreLog).toMatchObject({ lineItemId: lineItem.id, actorId: user.id });
+    expect(restoreLog.detail).toMatchObject({ restoredFromAuditLogId: deleteLog.id });
+  });
+
+  it("rejects restoring the same deletion twice", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const lineItem = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 1, unitCost: 1 });
+    await deleteLineItem(estimate.opportunityId, lineItem.id);
+    const deleteLog = await db.lineItemAuditLog.findFirstOrThrow({
+      where: { estimateVersionId: version.id, action: "DELETE" },
+    });
+
+    await restoreLineItem(estimate.opportunityId, deleteLog.id);
+
+    await expect(restoreLineItem(estimate.opportunityId, deleteLog.id)).rejects.toThrow(/already been restored/);
+  });
+
+  it("rejects restoring into a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const lineItem = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 1, unitCost: 1 });
+    await deleteLineItem(estimate.opportunityId, lineItem.id);
+    const deleteLog = await db.lineItemAuditLog.findFirstOrThrow({
+      where: { estimateVersionId: version.id, action: "DELETE" },
+    });
+
+    await lockEstimateVersion(version.id);
+
+    await expect(restoreLineItem(estimate.opportunityId, deleteLog.id)).rejects.toThrow(/locked/);
+  });
+
+  it("rejects restoring when the original section no longer exists", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const lineItem = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 1, unitCost: 1 });
+    await deleteLineItem(estimate.opportunityId, lineItem.id);
+    const deleteLog = await db.lineItemAuditLog.findFirstOrThrow({
+      where: { estimateVersionId: version.id, action: "DELETE" },
+    });
+
+    await db.estimateSection.delete({ where: { id: section.id } });
+
+    await expect(restoreLineItem(estimate.opportunityId, deleteLog.id)).rejects.toThrow(/section .* no longer exists/i);
+  });
+
+  it("rejects restoring a DELETE row recorded before the snapshot included location", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    // A pre-widening snapshot -- exactly deleteLineItem's old, narrower
+    // shape, with no sectionId/sortOrder at all.
+    const oldStyleLog = await db.lineItemAuditLog.create({
+      data: {
+        estimateVersionId: version.id,
+        lineItemId: "old-item-id",
+        description: "Legacy row",
+        action: "DELETE",
+        detail: { category: "Structure", lineType: "MATERIAL", qty: "1", unitCost: "1", totalCost: "1" },
+      },
+    });
+
+    await expect(restoreLineItem(estimate.opportunityId, oldStyleLog.id)).rejects.toThrow(/predates the restore feature/);
   });
 });
 

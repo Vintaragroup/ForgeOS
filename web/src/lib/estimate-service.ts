@@ -8,7 +8,14 @@
 
 import { db } from "@/lib/db";
 import { Prisma, type Category } from "@/generated/prisma/client";
-import type { BidPackageStatus, LineItemType, LineItemUsageTag, SectionBuildType, SectionType } from "@/generated/prisma/enums";
+import type {
+  BidPackageStatus,
+  LineItemAuditAction,
+  LineItemType,
+  LineItemUsageTag,
+  SectionBuildType,
+  SectionType,
+} from "@/generated/prisma/enums";
 import { inferCategoryFromDescription, mapDesignCostCategoryToCanonical } from "@/lib/line-item-category";
 import { resolveEffectiveCategory, resolveTypeKeyForCategoryKey } from "@/lib/proposal-view-model";
 
@@ -455,7 +462,7 @@ export async function setBidPackageStatus(bidPackageId: string, status: BidPacka
 // session, and null is the honest answer there, not a fabricated one).
 async function recordLineItemAudit(
   estimateVersionId: string,
-  action: "CREATE" | "UPDATE" | "DELETE",
+  action: LineItemAuditAction,
   description: string,
   actorId: string | null,
   detail: Prisma.InputJsonValue | undefined,
@@ -816,6 +823,34 @@ export async function unarchiveEstimate(id: string) {
 // real access-control axis (see opportunity-access.ts's own header
 // comment): SystemRole answers "admin area or not," this answers "can
 // this user see this opportunity and everything under it."
+// Every field restoreLineItem needs to put the row back exactly as it
+// was -- sectionId/sortOrder are what make "restored to the same
+// location" real rather than just "restored to the bottom of wherever."
+// Kept as its own named shape (not just `typeof existing`) since this is
+// a serialization contract: Decimal fields go to string, and it's read
+// back out of a loosely-typed Json column by restoreLineItem, in a
+// different function, potentially a long time later.
+interface LineItemDeleteSnapshot {
+  sectionId: string;
+  sortOrder: number;
+  lineType: LineItemType;
+  department: string | null;
+  category: string | null;
+  isClientOwned: boolean;
+  usageTag: LineItemUsageTag | null;
+  qty: string;
+  unit: string | null;
+  unitCost: string;
+  totalCost: string;
+  isDraft: boolean;
+  attachmentId: string | null;
+  documentId: string | null;
+  sourceQuote: string | null;
+  sourcePageNumber: number | null;
+  positionCode: string | null;
+  bidPackageId: string | null;
+}
+
 export async function deleteLineItem(opportunityId: string, lineItemId: string, actorId?: string | null) {
   const existing = await db.lineItem.findFirstOrThrow({
     where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
@@ -824,20 +859,113 @@ export async function deleteLineItem(opportunityId: string, lineItemId: string, 
   await assertUnlocked(existing.section.estimateVersionId);
   // Captured BEFORE the delete -- this snapshot is the only remaining
   // record of the row once it's gone (LineItemAuditLog.lineItemId is
-  // deliberately not a live FK, see its own schema comment).
-  const snapshot = {
-    category: existing.category,
+  // deliberately not a live FK, see its own schema comment), and the
+  // only thing restoreLineItem below has to work from.
+  const snapshot: LineItemDeleteSnapshot = {
+    sectionId: existing.sectionId,
+    sortOrder: existing.sortOrder,
     lineType: existing.lineType,
+    department: existing.department,
+    category: existing.category,
+    isClientOwned: existing.isClientOwned,
+    usageTag: existing.usageTag,
     qty: existing.qty.toString(),
     unit: existing.unit,
     unitCost: existing.unitCost.toString(),
     totalCost: existing.totalCost.toString(),
     isDraft: existing.isDraft,
+    attachmentId: existing.attachmentId,
     documentId: existing.documentId,
+    sourceQuote: existing.sourceQuote,
+    sourcePageNumber: existing.sourcePageNumber,
+    positionCode: existing.positionCode,
+    bidPackageId: existing.bidPackageId,
   };
   const deleted = await db.lineItem.delete({ where: { id: lineItemId } });
-  await recordLineItemAudit(existing.section.estimateVersionId, "DELETE", existing.description, actorId ?? null, snapshot, lineItemId);
+  await recordLineItemAudit(
+    existing.section.estimateVersionId,
+    "DELETE",
+    existing.description,
+    actorId ?? null,
+    snapshot as unknown as Prisma.InputJsonValue,
+    lineItemId,
+  );
   return { ...deleted, estimateVersionId: existing.section.estimateVersionId };
+}
+
+// Puts a deleted line item back using its own DELETE audit row's
+// snapshot -- same section, same sortOrder (so it lands back among the
+// same neighbors it had, not at the bottom of the list), same everything
+// else. Restores with its ORIGINAL id (Prisma allows an explicit value
+// for an @default(cuid()) field on create) rather than a fresh one, so
+// any existing citation link pointing at #line-item-<id> (chat mentions,
+// vendor-match history, cost-actual records) resolves again instead of
+// silently pointing at a row that no longer exists.
+//
+// opportunityId ownership check -- see deleteLineItem's own header
+// comment for why this is the boundary, not lineItemId/auditLogId alone.
+export async function restoreLineItem(opportunityId: string, auditLogId: string, actorId?: string | null) {
+  const entry = await db.lineItemAuditLog.findFirstOrThrow({
+    where: { id: auditLogId, action: "DELETE", estimateVersion: { estimate: { opportunityId } } },
+  });
+  if (!entry.lineItemId || !entry.detail || typeof entry.detail !== "object") {
+    throw new Error("This deletion has no restorable snapshot.");
+  }
+  // A pre-restore-feature DELETE row (recorded before this snapshot was
+  // widened to include location) has neither field -- rather than
+  // restore it to a guessed, possibly-wrong section, refuse outright.
+  const snapshot = entry.detail as unknown as Partial<LineItemDeleteSnapshot>;
+  if (!snapshot.sectionId || snapshot.sortOrder === undefined) {
+    throw new Error("This deletion predates the restore feature and can't be restored automatically.");
+  }
+
+  const alreadyRestored = await db.lineItem.findUnique({ where: { id: entry.lineItemId } });
+  if (alreadyRestored) {
+    throw new Error("This line item has already been restored.");
+  }
+
+  await assertUnlocked(entry.estimateVersionId);
+
+  const section = await db.estimateSection.findFirst({
+    where: { id: snapshot.sectionId, estimateVersionId: entry.estimateVersionId },
+  });
+  if (!section) {
+    throw new Error("The section this line item was in no longer exists -- it can't be restored automatically.");
+  }
+
+  const restored = await db.lineItem.create({
+    data: {
+      id: entry.lineItemId,
+      sectionId: snapshot.sectionId,
+      sortOrder: snapshot.sortOrder,
+      lineType: snapshot.lineType!,
+      description: entry.description,
+      department: snapshot.department ?? null,
+      category: snapshot.category ?? null,
+      isClientOwned: snapshot.isClientOwned ?? false,
+      usageTag: snapshot.usageTag ?? null,
+      qty: new Prisma.Decimal(snapshot.qty!),
+      unit: snapshot.unit ?? null,
+      unitCost: new Prisma.Decimal(snapshot.unitCost!),
+      totalCost: new Prisma.Decimal(snapshot.totalCost!),
+      isDraft: snapshot.isDraft ?? false,
+      attachmentId: snapshot.attachmentId ?? null,
+      documentId: snapshot.documentId ?? null,
+      sourceQuote: snapshot.sourceQuote ?? null,
+      sourcePageNumber: snapshot.sourcePageNumber ?? null,
+      positionCode: snapshot.positionCode ?? null,
+      bidPackageId: snapshot.bidPackageId ?? null,
+    },
+  });
+  await recordLineItemAudit(
+    entry.estimateVersionId,
+    "RESTORE",
+    restored.description,
+    actorId ?? null,
+    { restoredFromAuditLogId: entry.id },
+    restored.id,
+  );
+  return { ...restored, estimateVersionId: entry.estimateVersionId };
 }
 
 // Marks a draft line item (Phase 4 design-intake prototype) as

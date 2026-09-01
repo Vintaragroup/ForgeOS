@@ -39,6 +39,7 @@ import {
   lockVersionAction,
   moveLineItemAction,
   recordCostActualAction,
+  restoreLineItemAction,
   setCategoryMarginOverrideAction,
   suggestBoothDescriptionAction,
   suggestSectionDescriptionAction,
@@ -763,7 +764,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                   />
                 ),
                 "cut-list": <CutListTab estimateId={estimate.id} versionId={currentVersion.id} />,
-                history: <HistoryTab log={vendorMatchApplyLog} auditLog={lineItemAuditLog} />,
+                history: (
+                  <HistoryTab
+                    estimateId={estimate.id}
+                    isLocked={currentVersion.isLocked}
+                    log={vendorMatchApplyLog}
+                    auditLog={lineItemAuditLog}
+                  />
+                ),
               }}
             />
           </Suspense>
@@ -4254,9 +4262,13 @@ const APPLY_METHOD_LABELS: Record<string, string> = {
 // references is later deleted -- targetDescription etc. are real
 // stored text, not live joins that could go blank.
 function HistoryTab({
+  estimateId,
+  isLocked,
   log,
   auditLog,
 }: {
+  estimateId: string;
+  isLocked: boolean;
   log: Awaited<ReturnType<typeof getVendorMatchApplyLog>>;
   auditLog: LineItemAuditLogEntry[];
 }) {
@@ -4344,21 +4356,36 @@ function HistoryTab({
         </Card>
       )}
 
-      <LineItemChangeHistoryCard auditLog={auditLog} />
+      <LineItemChangeHistoryCard estimateId={estimateId} isLocked={isLocked} auditLog={auditLog} />
     </div>
   );
 }
 
 type LineItemAuditLogEntry = Prisma.LineItemAuditLogGetPayload<{ include: { actor: { select: { name: true } } } }>;
 
-const AUDIT_ACTION_LABEL: Record<string, string> = { CREATE: "Created", UPDATE: "Updated", DELETE: "Deleted" };
+const AUDIT_ACTION_LABEL: Record<string, string> = { CREATE: "Created", UPDATE: "Updated", DELETE: "Deleted", RESTORE: "Restored" };
 const AUDIT_ACTION_STYLE: Record<string, string> = {
   CREATE: "border-green-200 bg-green-50 text-green-800",
   UPDATE: "border-neutral-200 bg-neutral-50 text-neutral-700",
   DELETE: "border-red-200 bg-red-50 text-red-800",
+  RESTORE: "border-blue-200 bg-blue-50 text-blue-800",
 };
 
-function LineItemChangeHistoryCard({ auditLog }: { auditLog: LineItemAuditLogEntry[] }) {
+// Internal-only snapshot fields (see deleteLineItem's LineItemDeleteSnapshot)
+// that restoreLineItemAction needs but that mean nothing to a person
+// reading this list -- a raw cuid or a bare integer next to real fields
+// like "category: Structure" would just read as noise.
+const AUDIT_DETAIL_HIDDEN_FIELDS = new Set(["sectionId", "sortOrder"]);
+
+function LineItemChangeHistoryCard({
+  estimateId,
+  isLocked,
+  auditLog,
+}: {
+  estimateId: string;
+  isLocked: boolean;
+  auditLog: LineItemAuditLogEntry[];
+}) {
   return (
     <Card className="p-6">
       <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Line item change history</h2>
@@ -4371,38 +4398,68 @@ function LineItemChangeHistoryCard({ auditLog }: { auditLog: LineItemAuditLogEnt
         <p className="text-sm text-neutral-500">No line item changes recorded yet.</p>
       ) : (
         <div className="flex flex-col gap-2">
-          {auditLog.map((entry) => (
-            <div key={entry.id} className="rounded-md border border-neutral-200 px-3 py-2 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={`rounded border px-1.5 py-0.5 text-xs font-medium ${AUDIT_ACTION_STYLE[entry.action]}`}>
-                  {AUDIT_ACTION_LABEL[entry.action] ?? entry.action}
-                </span>
-                <span className="font-medium">{entry.description}</span>
-                <span className="text-neutral-400">·</span>
-                <span className="text-neutral-500">{entry.actor?.name ?? "System/Import"}</span>
-                <span className="text-neutral-400">·</span>
-                <span className="text-neutral-500">
-                  {entry.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
-                </span>
-              </div>
-              {entry.action === "UPDATE" && entry.detail && typeof entry.detail === "object" && (
-                <ul className="mt-1 flex flex-col gap-0.5 text-xs text-neutral-600">
-                  {Object.entries(entry.detail as Record<string, { before: unknown; after: unknown }>).map(([field, change]) => (
-                    <li key={field}>
-                      <span className="font-medium">{field}</span>: {String(change.before ?? "—")} → {String(change.after ?? "—")}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {entry.action === "DELETE" && entry.detail && typeof entry.detail === "object" && (
-                <p className="mt-1 text-xs text-neutral-600">
-                  {Object.entries(entry.detail as Record<string, unknown>)
-                    .map(([field, value]) => `${field}: ${value ?? "—"}`)
-                    .join(" · ")}
-                </p>
-              )}
-            </div>
-          ))}
+          {(() => {
+            // A DELETE whose original lineItemId shows up again on a later
+            // RESTORE (restoreLineItem reuses the original id) has already
+            // been put back -- don't offer Restore on it a second time.
+            const restoredLineItemIds = new Set(
+              auditLog.filter((e) => e.action === "RESTORE" && e.lineItemId).map((e) => e.lineItemId!),
+            );
+
+            return auditLog.map((entry) => {
+              const snapshot =
+                entry.detail && typeof entry.detail === "object" ? (entry.detail as Record<string, unknown>) : null;
+              const canRestore =
+                entry.action === "DELETE" &&
+                !isLocked &&
+                !!entry.lineItemId &&
+                !restoredLineItemIds.has(entry.lineItemId) &&
+                !!snapshot &&
+                "sectionId" in snapshot;
+
+              return (
+                <div key={entry.id} className="rounded-md border border-neutral-200 px-3 py-2 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded border px-1.5 py-0.5 text-xs font-medium ${AUDIT_ACTION_STYLE[entry.action]}`}>
+                      {AUDIT_ACTION_LABEL[entry.action] ?? entry.action}
+                    </span>
+                    <span className="font-medium">{entry.description}</span>
+                    <span className="text-neutral-400">·</span>
+                    <span className="text-neutral-500">{entry.actor?.name ?? "System/Import"}</span>
+                    <span className="text-neutral-400">·</span>
+                    <span className="text-neutral-500">
+                      {entry.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
+                    </span>
+                    {canRestore && (
+                      <form action={restoreLineItemAction.bind(null, estimateId, entry.id)} className="ml-auto">
+                        <Button variant="secondary">Restore</Button>
+                      </form>
+                    )}
+                  </div>
+                  {entry.action === "UPDATE" && entry.detail && typeof entry.detail === "object" && (
+                    <ul className="mt-1 flex flex-col gap-0.5 text-xs text-neutral-600">
+                      {Object.entries(entry.detail as Record<string, { before: unknown; after: unknown }>).map(([field, change]) => (
+                        <li key={field}>
+                          <span className="font-medium">{field}</span>: {String(change.before ?? "—")} → {String(change.after ?? "—")}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {entry.action === "DELETE" && snapshot && (
+                    <p className="mt-1 text-xs text-neutral-600">
+                      {Object.entries(snapshot)
+                        .filter(([field]) => !AUDIT_DETAIL_HIDDEN_FIELDS.has(field))
+                        .map(([field, value]) => `${field}: ${value ?? "—"}`)
+                        .join(" · ")}
+                    </p>
+                  )}
+                  {entry.action === "RESTORE" && (
+                    <p className="mt-1 text-xs text-neutral-600">Restored from the deletion above.</p>
+                  )}
+                </div>
+              );
+            });
+          })()}
         </div>
       )}
     </Card>
