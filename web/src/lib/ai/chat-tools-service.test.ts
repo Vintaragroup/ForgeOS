@@ -7,6 +7,7 @@ afterEach(async () => {
   await db.documentChunk.deleteMany();
   await db.lineItemAuditLog.deleteMany();
   await db.lineItem.deleteMany();
+  await db.category.deleteMany();
   await db.estimateSection.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
@@ -365,6 +366,82 @@ describe("executeChatTool", () => {
 
       const rows = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
       expect(rows).toHaveLength(0);
+    });
+
+    it("asks to disambiguate when the same section name is used across several booths, instead of guessing", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const boothA = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "FS - Reception Counter" });
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "FS - Sign 3ft10 Qty4" });
+
+      const ambiguous = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Labor", description: "Show site management", lineType: "LABOR", qty: 40, unit: "hrs", unitCost: 65 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+      expect(ambiguous).toMatch(/More than one section is named "Labor"/);
+      expect(ambiguous).toContain("FS - Reception Counter");
+      expect(ambiguous).toContain("FS - Sign 3ft10 Qty4");
+      expect(await db.lineItem.count()).toBe(0);
+
+      // groupLabel resolves it -- proves the disambiguation param actually works.
+      const resolved = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({
+          sectionName: "Labor",
+          groupLabel: "Reception Counter",
+          description: "Show site management",
+          lineType: "LABOR",
+          qty: 40,
+          unit: "hrs",
+          unitCost: 65,
+        }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+      expect(resolved).toMatch(/DRAFT/);
+      const created = await db.lineItem.findFirstOrThrow({ where: { description: "Show site management" } });
+      expect(created.sectionId).toBe(boothA.id);
+    });
+
+    it("recognizes a real category name passed as sectionName, and reuses the section an existing item of that category already sits in", async () => {
+      const opportunity = await makeOpportunity();
+      await db.category.create({ data: { name: "Professional Services", key: "professional-services" } });
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const laborSection = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Bid Comparison" });
+      await db.lineItem.create({
+        data: { sectionId: laborSection.id, lineType: "LABOR", description: "Existing PS item", category: "Professional Services", qty: 1, unitCost: 1, totalCost: 1 },
+      });
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Professional Services", description: "Show site management", lineType: "LABOR", qty: 40, unit: "hrs", unitCost: 65 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/DRAFT/);
+      const created = await db.lineItem.findFirstOrThrow({ where: { description: "Show site management" } });
+      expect(created.sectionId).toBe(laborSection.id);
+      expect(created.category).toBe("Professional Services");
+    });
+
+    it("explains the category/section distinction when the category has no established section yet, instead of guessing one", async () => {
+      const opportunity = await makeOpportunity();
+      await db.category.create({ data: { name: "Professional Services", key: "professional-services" } });
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Bid Comparison" });
+
+      const result = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Professional Services", description: "Show site management", lineType: "LABOR", qty: 40, unit: "hrs", unitCost: 65 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/proposal category, not a section/);
+      expect(result).toContain("Bid Comparison");
+      expect(await db.lineItem.count()).toBe(0);
     });
   });
 });

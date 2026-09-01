@@ -78,7 +78,7 @@ export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "propose_line_item",
       description:
-        "Add a new line item to an existing section on this opportunity's estimate. It is ALWAYS created as a draft -- it will not count toward any total, and won't appear as a real line until a person reviews and confirms it on the Line Items tab. Use this when the user asks you to add, create, or price out a new item. Always tell the user afterward that it's a draft awaiting their confirmation.",
+        "Add a new line item to an existing section on this opportunity's estimate. It is ALWAYS created as a draft -- it will not count toward any total, and won't appear as a real line until a person reviews and confirms it on the Line Items tab. Use this when the user asks you to add, create, or price out a new item. sectionName and category are two DIFFERENT things: sectionName is the physical container (tied to a specific booth/component, e.g. \"Labor\" under \"FS - Reception Counter\" -- the same name is commonly reused across many different booths, so pass groupLabel too whenever the user's request implies a specific one, or when a plain sectionName turns out to be ambiguous). category is the separate proposal-facing tag shown on the client PDF (e.g. \"Professional Services\", \"Labor\", \"Structure\") -- a user asking to add something \"under\" or \"in\" a named category (like \"Professional Services\") means category, not sectionName, and there may be no section literally named that at all. Always tell the user afterward that it's a draft awaiting their confirmation.",
       parameters: {
         type: "object",
         properties: {
@@ -86,12 +86,20 @@ export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: "string",
             description: "Name of the estimate to add to, only needed if the opportunity has more than one. Omit otherwise.",
           },
-          sectionName: { type: "string", description: "Name of an existing section to add the item to -- must match a real section." },
+          sectionName: {
+            type: "string",
+            description: "Name of an existing section (the physical container) to add the item to -- must match a real section, not a category.",
+          },
+          groupLabel: {
+            type: "string",
+            description: "Which booth/component's section to use, when sectionName alone is ambiguous (the same section name is often reused across many booths) -- e.g. \"FS - Reception Counter\" or \"Bid Comparison\" for a project-level (non-booth-specific) section.",
+          },
           description: { type: "string", description: "The new line item's description." },
           lineType: { type: "string", enum: ["MATERIAL", "LABOR", "FEE"], description: "The line item's type." },
           category: {
             type: "string",
-            description: "Proposal-facing category, e.g. \"Structure\", \"Labor\", \"Furniture\". Optional -- leave unset to auto-detect.",
+            description:
+              "Proposal-facing category shown on the client PDF, e.g. \"Professional Services\", \"Structure\", \"Labor\", \"Furniture\". This is independent of sectionName -- set this whenever the user names a category, even if no section is literally named that.",
           },
           qty: { type: "number", description: "Quantity." },
           unit: { type: "string", description: "Unit of measure, e.g. \"ea\", \"sqft\", \"hrs\". Optional." },
@@ -218,11 +226,29 @@ async function getDocumentExcerptTool(
 
 const LINE_TYPES = new Set(["MATERIAL", "LABOR", "FEE"]);
 
+// How many (section, groupLabel) pairs to list when a section can't be
+// resolved -- a real estimate can have dozens of booth-scoped sections
+// sharing the same handful of names (see the ambiguous-name case below),
+// so this is capped rather than dumped in full.
+const MAX_SECTION_OPTIONS_SHOWN = 20;
+
+function formatSectionLabel(s: { name: string; groupLabel: string | null }): string {
+  return s.groupLabel ? `${s.name} (${s.groupLabel})` : s.name;
+}
+
+function listSectionOptions(sections: { name: string; groupLabel: string | null }[]): string {
+  if (sections.length === 0) return "(no sections yet)";
+  const labels = sections.map(formatSectionLabel);
+  if (labels.length <= MAX_SECTION_OPTIONS_SHOWN) return labels.join(", ");
+  return `${labels.slice(0, MAX_SECTION_OPTIONS_SHOWN).join(", ")}, and ${labels.length - MAX_SECTION_OPTIONS_SHOWN} more`;
+}
+
 async function proposeLineItemTool(
   opportunityId: string,
   args: {
     estimateName?: string;
     sectionName?: string;
+    groupLabel?: string;
     description?: string;
     lineType?: string;
     category?: string;
@@ -251,7 +277,10 @@ async function proposeLineItemTool(
       versions: {
         where: { isCurrent: true },
         take: 1,
-        select: { id: true, sections: { select: { id: true, name: true } } },
+        select: {
+          id: true,
+          sections: { select: { id: true, name: true, groupLabel: true, lineItems: { select: { category: true } } } },
+        },
       },
     },
   });
@@ -270,13 +299,56 @@ async function proposeLineItemTool(
   if (!version) return `Estimate "${estimate.name ?? "Untitled"}" has no active version to add to yet.`;
 
   const needle = args.sectionName.toLowerCase();
-  const section =
-    version.sections.find((s) => s.name.toLowerCase() === needle) ??
-    version.sections.find((s) => s.name.toLowerCase().includes(needle));
-  if (!section) {
-    const available = version.sections.map((s) => s.name).join(", ") || "(no sections yet)";
-    return `No section named "${args.sectionName}" was found. Available sections: ${available}.`;
+  let candidates =
+    version.sections.filter((s) => s.name.toLowerCase() === needle).length > 0
+      ? version.sections.filter((s) => s.name.toLowerCase() === needle)
+      : version.sections.filter((s) => s.name.toLowerCase().includes(needle));
+
+  if (candidates.length === 0) {
+    // sectionName might actually be a category (a proposal-facing tag,
+    // not a physical section -- see the tool description) -- distinct
+    // concepts that are easy for a request in plain English to conflate.
+    // Rather than silently defaulting to some arbitrary section, check
+    // whether it's a real category and, if there's already a section
+    // holding that category's items, reuse it -- otherwise say so
+    // plainly instead of guessing.
+    const asCategory = await db.category.findFirst({
+      where: { name: { equals: args.sectionName, mode: "insensitive" }, deletedAt: null },
+      select: { name: true },
+    });
+    if (asCategory) {
+      const holder = version.sections.find((s) => s.lineItems.some((li) => li.category === asCategory.name));
+      if (holder) {
+        candidates = [holder];
+        args.category = args.category ?? asCategory.name;
+      } else {
+        return (
+          `"${args.sectionName}" is a proposal category, not a section -- no section is named that, and no existing line item ` +
+          `is tagged with that category yet in this estimate, so there's no established section to add to automatically. ` +
+          `Ask which existing section to place it in (a project-level one, or a specific booth's), then call this again with ` +
+          `that sectionName (and groupLabel if it repeats across booths) plus category: "${asCategory.name}". ` +
+          `Some existing sections: ${listSectionOptions(version.sections)}.`
+        );
+      }
+    } else {
+      return `No section named "${args.sectionName}" was found, and it isn't a real category either. Available sections: ${listSectionOptions(version.sections)}.`;
+    }
   }
+
+  if (args.groupLabel) {
+    const groupNeedle = args.groupLabel.toLowerCase();
+    const narrowed = candidates.filter((s) => s.groupLabel?.toLowerCase().includes(groupNeedle));
+    if (narrowed.length > 0) candidates = narrowed;
+  }
+
+  if (candidates.length > 1) {
+    return (
+      `More than one section is named "${args.sectionName}" -- specify groupLabel to pick which one. ` +
+      `Options: ${listSectionOptions(candidates)}.`
+    );
+  }
+
+  const section = candidates[0];
 
   const created = await addLineItem(
     version.id,
@@ -293,7 +365,7 @@ async function proposeLineItemTool(
     userId,
   );
 
-  return `Added a DRAFT line item to "${section.name}": ${args.description} -- qty ${args.qty}${args.unit ? ` ${args.unit}` : ""} × $${args.unitCost.toFixed(2)} = $${created.totalCost.toFixed(2)}. It won't count toward any total until it's reviewed and confirmed on the Line Items tab.`;
+  return `Added a DRAFT line item to "${formatSectionLabel(section)}"${args.category ? ` (category: ${args.category})` : ""}: ${args.description} -- qty ${args.qty}${args.unit ? ` ${args.unit}` : ""} × $${args.unitCost.toFixed(2)} = $${created.totalCost.toFixed(2)}. It won't count toward any total until it's reviewed and confirmed on the Line Items tab.`;
 }
 
 // Dispatches one model-requested tool call to its real implementation and
