@@ -250,6 +250,102 @@ describe("executeChatTool", () => {
     });
   });
 
+  describe("find_section", () => {
+    it("reports a matching section, including its exact confirmed/draft item counts", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const section = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Bid Comparison" });
+      await db.lineItem.createMany({
+        data: [
+          { sectionId: section.id, lineType: "LABOR", description: "A", qty: 1, unitCost: 1, totalCost: 1, isDraft: false },
+          { sectionId: section.id, lineType: "LABOR", description: "B", qty: 1, unitCost: 1, totalCost: 1, isDraft: true },
+        ],
+      });
+
+      const result = await executeChatTool("find_section", JSON.stringify({ name: "Labor" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+
+      expect(result).toMatch(/"Labor" is a section name -- found, 1 matching section/);
+      expect(result).toContain("Labor (Bid Comparison): 2 line item(s) (1 confirmed, 1 draft)");
+    });
+
+    it("reports multiple matching sections separately when the name repeats across booths", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Reception Counter" });
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Sign 5ft4" });
+
+      const result = await executeChatTool("find_section", JSON.stringify({ name: "Labor" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+
+      expect(result).toMatch(/found, 2 matching section/);
+      expect(result).toContain("Reception Counter");
+      expect(result).toContain("Sign 5ft4");
+    });
+
+    it("reports a real category with zero items as found, not as not-found", async () => {
+      const opportunity = await makeOpportunity();
+      await db.category.create({ data: { name: "Professional Services", key: "professional-services" } });
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      await createEstimateVersion(estimate.id);
+
+      const result = await executeChatTool("find_section", JSON.stringify({ name: "Professional Services" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+
+      expect(result).toMatch(/"Professional Services" is a real proposal category -- found, 0 line item\(s\)/);
+      expect(result).toContain("no section holds any yet");
+    });
+
+    it("reports a real category's item count and which sections hold them, when items exist", async () => {
+      const opportunity = await makeOpportunity();
+      await db.category.create({ data: { name: "Professional Services", key: "professional-services" } });
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const section = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "Bid Comparison" });
+      await db.lineItem.create({
+        data: { sectionId: section.id, lineType: "LABOR", description: "PS item", category: "Professional Services", qty: 1, unitCost: 1, totalCost: 1 },
+      });
+
+      const result = await executeChatTool("find_section", JSON.stringify({ name: "Professional Services" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+
+      expect(result).toMatch(/found, 1 line item\(s\) currently tagged with it, in: Labor \(Bid Comparison\) \(1\)/);
+    });
+
+    it("lists every real category and distinct section name when nothing matches", async () => {
+      const opportunity = await makeOpportunity();
+      await db.category.create({ data: { name: "Structure", key: "structure" } });
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY" });
+
+      const result = await executeChatTool("find_section", JSON.stringify({ name: "Nonexistent" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+
+      expect(result).toMatch(/Not found/);
+      expect(result).toContain("Structure");
+      expect(result).toContain("Labor");
+    });
+
+    it("requires name", async () => {
+      const opportunity = await makeOpportunity();
+      const result = await executeChatTool("find_section", "{}", { opportunityId: opportunity.id, userId: null });
+      expect(result).toMatch(/name is required/);
+    });
+  });
+
   describe("propose_line_item", () => {
     it("creates a draft line item in the named section, and never a confirmed one", async () => {
       const opportunity = await makeOpportunity();

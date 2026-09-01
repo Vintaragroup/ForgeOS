@@ -2,12 +2,14 @@
 // from "everything the model gets is decided upfront" to "the model can
 // ask for more, or act, mid-answer."
 //
-// Phase 4's two read tools -- a third, search_documents, was scoped out
-// deliberately: chat-context-service.ts's retrieveRelevantChunks already
-// runs an opportunity-wide semantic search automatically before every
-// reply (chat roadmap Phase 3), so an explicit search tool would just
-// duplicate that. What's still missing after Phases 1-3 is the ability
-// to go back for MORE once the static context wasn't enough:
+// Phase 4's read tools -- a fourth candidate, search_documents, was
+// scoped out deliberately: chat-context-service.ts's
+// retrieveRelevantChunks already runs an opportunity-wide semantic
+// search automatically before every reply (chat roadmap Phase 3), so an
+// explicit search tool would just duplicate that. What's still missing
+// after Phases 1-3 is the ability to go back for MORE once the static
+// context wasn't enough, or to get a definitive answer instead of an
+// inferred one:
 //
 // - get_line_items: chat-context-service.ts's line-item block is
 //   budget-truncated (see its own MAX_CONTEXT_CHARS accounting) -- this
@@ -16,6 +18,14 @@
 // - get_document_excerpt: Phase 3's automatic retrieval is opportunity-
 //   wide top-K, so a real passage can simply not make the cut for a
 //   broad question. This re-searches one named document specifically.
+// - find_section: added after real usage showed the model had no way to
+//   confirm a section/category actually exists (with zero items) vs.
+//   doesn't exist at all -- it would either guess a name into
+//   propose_line_item's sectionName (silently landing in the wrong one of
+//   several same-named sections) or ask a vague "should I proceed?"
+//   instead of the specific missing fact. This makes "does X exist, and
+//   how many items does it have" a direct, always-available answer
+//   rather than something inferred from a filtered item list.
 //
 // Phase 5's one write tool, deliberately scoped to just this for now:
 //
@@ -70,6 +80,25 @@ export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           query: { type: "string", description: "What to look for in this document." },
         },
         required: ["documentName", "query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "find_section",
+      description:
+        "Look up whether a name is a real section, a real category, both, or neither on this opportunity's estimate -- use this whenever the user asks you to locate, find, or check whether a section/category/tag exists, and BEFORE calling propose_line_item whenever you're not already certain a name is a section vs. a category. Reports the exact line item count for each match (including zero -- a category or section existing with no items yet is a real, reportable answer, not a failure), and every real category/section name when nothing matches.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The section or category name to look up." },
+          estimateName: {
+            type: "string",
+            description: "Name of the estimate to search, only needed if the opportunity has more than one. Omit otherwise.",
+          },
+        },
+        required: ["name"],
       },
     },
   },
@@ -243,6 +272,99 @@ function listSectionOptions(sections: { name: string; groupLabel: string | null 
   return `${labels.slice(0, MAX_SECTION_OPTIONS_SHOWN).join(", ")}, and ${labels.length - MAX_SECTION_OPTIONS_SHOWN} more`;
 }
 
+// Answers "does this exist" definitively -- a section or category with
+// zero items is a real, reportable fact (see the tool's own
+// description), not the same thing as "not found" the way
+// get_line_items' filtered listing would otherwise conflate them. Also
+// the thing that lets propose_line_item's own sectionName/groupLabel be
+// resolved correctly on the first attempt instead of by trial and error.
+async function findSectionTool(
+  opportunityId: string,
+  args: { name?: string; estimateName?: string },
+): Promise<string> {
+  if (!args.name) return "name is required.";
+
+  const estimates = await db.estimate.findMany({
+    where: {
+      opportunityId,
+      deletedAt: null,
+      archivedAt: null,
+      ...(args.estimateName ? { name: { equals: args.estimateName, mode: "insensitive" } } : {}),
+    },
+    select: {
+      name: true,
+      versions: {
+        where: { isCurrent: true },
+        take: 1,
+        select: {
+          sections: {
+            select: { name: true, groupLabel: true, lineItems: { select: { isDraft: true, category: true } } },
+          },
+        },
+      },
+    },
+  });
+
+  if (estimates.length === 0) {
+    return args.estimateName
+      ? `No estimate named "${args.estimateName}" was found on this opportunity.`
+      : "No live estimate found on this opportunity.";
+  }
+  if (estimates.length > 1 && !args.estimateName) {
+    return `This opportunity has more than one estimate -- specify estimateName. Options: ${estimates.map((e) => e.name).filter(Boolean).join(", ")}.`;
+  }
+
+  const estimate = estimates[0];
+  const version = estimate.versions[0];
+  if (!version) return `Estimate "${estimate.name ?? "Untitled"}" has no active version yet.`;
+
+  const needle = args.name.toLowerCase();
+  const lines: string[] = [];
+
+  const sectionMatches = version.sections.filter((s) => s.name.toLowerCase() === needle);
+  if (sectionMatches.length > 0) {
+    lines.push(`"${args.name}" is a section name -- found, ${sectionMatches.length} matching section(s):`);
+    for (const s of sectionMatches) {
+      const confirmed = s.lineItems.filter((li) => !li.isDraft).length;
+      const draft = s.lineItems.length - confirmed;
+      lines.push(`  - ${formatSectionLabel(s)}: ${s.lineItems.length} line item(s) (${confirmed} confirmed, ${draft} draft)`);
+    }
+  }
+
+  const category = await db.category.findFirst({
+    where: { name: { equals: args.name, mode: "insensitive" }, deletedAt: null },
+    select: { name: true },
+  });
+  if (category) {
+    const byLabel = new Map<string, number>();
+    let total = 0;
+    for (const s of version.sections) {
+      const count = s.lineItems.filter((li) => li.category === category.name).length;
+      if (count > 0) {
+        byLabel.set(formatSectionLabel(s), count);
+        total += count;
+      }
+    }
+    const breakdown =
+      total > 0 ? `, in: ${[...byLabel.entries()].map(([label, count]) => `${label} (${count})`).join(", ")}` : " (no section holds any yet)";
+    lines.push(`"${category.name}" is a real proposal category -- found, ${total} line item(s) currently tagged with it${breakdown}.`);
+  }
+
+  if (lines.length === 0) {
+    const [categories] = await Promise.all([
+      db.category.findMany({ where: { deletedAt: null }, select: { name: true }, orderBy: { sortOrder: "asc" } }),
+    ]);
+    const distinctSectionNames = [...new Set(version.sections.map((s) => s.name))];
+    return (
+      `Not found -- no section or category named "${args.name}" exists.\n` +
+      `Real categories: ${categories.map((c) => c.name).join(", ") || "(none)"}.\n` +
+      `Distinct section names on this estimate (${version.sections.length} section(s) total): ${distinctSectionNames.join(", ") || "(none)"}.`
+    );
+  }
+
+  return lines.join("\n");
+}
+
 async function proposeLineItemTool(
   opportunityId: string,
   args: {
@@ -390,6 +512,8 @@ export async function executeChatTool(
         return await getLineItemsTool(context.opportunityId, args);
       case "get_document_excerpt":
         return await getDocumentExcerptTool(context.opportunityId, args, context.userId);
+      case "find_section":
+        return await findSectionTool(context.opportunityId, args);
       case "propose_line_item":
         return await proposeLineItemTool(context.opportunityId, args, context.userId);
       default:
