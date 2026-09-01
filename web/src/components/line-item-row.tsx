@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Button, Field, SelectField } from "@/components/ui";
 import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
+import { QuantityOrAreaFields } from "@/components/quantity-or-area-fields";
 import { useBidPackageSelection } from "@/components/bid-package-selection";
 
 // Seventh client component (see document-upload-form.tsx's header
@@ -119,20 +120,15 @@ export function LineItemRow({
               defaultDepartment={department}
               defaultUnitCost={unitCost}
             />
-            <div className="sm:order-5 sm:w-24">
-              <Field label="Qty" name="qty" type="number" defaultValue={qty} required />
-            </div>
-            <div className="sm:order-6 sm:w-24">
-              <Field label="Unit" name="unit" defaultValue={unit} placeholder="EA, SQFT, LF" />
-            </div>
-            <div className="sm:order-8 sm:w-36">
+            <QuantityOrAreaFields defaultQty={qty} defaultUnit={unit} />
+            <div className="sm:order-9 sm:w-36">
               <SelectField label="Usage" name="usageTag" defaultValue={usageTag} options={usageTagOptions} />
             </div>
-            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-9 sm:col-span-1">
+            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-10 sm:col-span-1">
               <input type="checkbox" name="isClientOwned" defaultChecked={isClientOwned} />
               Client owned (no charge)
             </label>
-            <div className="flex gap-3 sm:order-10">
+            <div className="flex gap-3 sm:order-11">
               <Button variant="secondary">Save</Button>
               <button
                 type="button"

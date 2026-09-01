@@ -75,7 +75,7 @@ export function LaborRateLineItemFields({
       <div className="sm:order-4 sm:w-40">
         <SelectField label="Category" name="category" value={category} onChange={setCategory} options={categoryOptions} />
       </div>
-      <div className="sm:order-7 sm:w-28">
+      <div className="sm:order-8 sm:w-28">
         <Field label="Unit cost ($)" name="unitCost" type="number" value={unitCost} onChange={setUnitCost} required />
       </div>
     </>

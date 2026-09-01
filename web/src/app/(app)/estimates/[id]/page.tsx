@@ -73,6 +73,7 @@ import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-se
 import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { laborRateOptionLabel } from "@/lib/labor-rate";
 import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
+import { QuantityOrAreaFields } from "@/components/quantity-or-area-fields";
 import { LineItemRow } from "@/components/line-item-row";
 import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
@@ -2773,34 +2774,29 @@ function AddLineItemForm({
           <SelectField label="Type" name="lineType" defaultValue="MATERIAL" options={LINE_TYPE_OPTIONS} />
         </div>
         <LaborRateLineItemFields categoryOptions={categoryOptions} laborRates={laborRates} defaultCategory={defaultCategory} />
-        <div className="sm:order-5 sm:w-24">
-          <Field label="Qty" name="qty" type="number" defaultValue="1" required />
-        </div>
-        <div className="sm:order-6 sm:w-24">
-          <Field label="Unit" name="unit" placeholder="EA, SQFT, LF" />
-        </div>
-        <div className="sm:order-8 sm:w-36">
+        <QuantityOrAreaFields defaultQty="1" />
+        <div className="sm:order-9 sm:w-36">
           <SelectField label="Usage" name="usageTag" defaultValue="" options={LINE_ITEM_USAGE_TAG_OPTIONS} />
         </div>
-        <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-9 sm:col-span-1">
+        <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-10 sm:col-span-1">
           <input type="checkbox" name="isClientOwned" />
           Client owned (no charge)
         </label>
         {attachments.length > 0 && (
           <>
-            <div className="col-span-2 sm:order-10 sm:w-40 sm:col-span-1">
+            <div className="col-span-2 sm:order-11 sm:w-40 sm:col-span-1">
               <SelectField
                 label="From attachment"
                 name="attachmentId"
                 options={[{ value: "", label: "— none —" }, ...attachments.map((a) => ({ value: a.id, label: a.fileRef }))]}
               />
             </div>
-            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-11 sm:col-span-1">
+            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-12 sm:col-span-1">
               <input type="checkbox" name="isDraft" /> Draft
             </label>
           </>
         )}
-        <div className="col-span-2 sm:order-12">
+        <div className="col-span-2 sm:order-[13]">
           <Button variant="secondary">Add line item</Button>
         </div>
       </form>
