@@ -27,7 +27,7 @@
 //   how many items does it have" a direct, always-available answer
 //   rather than something inferred from a filtered item list.
 //
-// Phase 5's one write tool, deliberately scoped to just this for now:
+// Phase 5's write tools:
 //
 // - propose_line_item: creates a real LineItem, but ALWAYS with
 //   isDraft: true -- the same safety net imports and AI scope proposals
@@ -41,12 +41,21 @@
 //   into. A new, empty section carries the same "nothing counts until
 //   reviewed" safety as the draft item itself, so this is likewise never
 //   gated behind a confirmation question -- just always disclosed in the
-//   result. Editing an existing item, moving one between sections, or
-//   retagging a booth are deliberately NOT here yet: unlike a brand new
-//   row, those all mutate a real existing row immediately today
-//   (updateLineItem/moveLineItemWithinSection/updateSectionBuildType have
-//   no draft-staging concept at all), so giving chat access to them needs
-//   its own pending-change design first, not a reuse of this one.
+//   result.
+// - update_line_item: real usage showed the model had no way to correct
+//   a line item it had just proposed a moment earlier ("actually make
+//   that $500" after just adding it) other than calling propose_line_item
+//   again, which leaves a duplicate behind instead of a correction.
+//   Scoped to DRAFT items only, deliberately -- editing one carries the
+//   exact same "nothing counts until reviewed" safety as creating it, so
+//   it needs no new safety mechanism of its own. A CONFIRMED item is a
+//   different story: updateLineItem mutates it for real, immediately, no
+//   draft-staging exists for that path today, so this tool refuses (with
+//   an "unsupported" issue, not a silent edit) rather than risk a wrong
+//   AI change to something already counted into a client-facing total.
+//   Moving a line item between sections or retagging a booth are still
+//   NOT here: moveLineItemWithinSection/updateSectionBuildType mutate
+//   immediately with no draft concept either, same as a confirmed edit.
 //
 // Every real gap found in this file so far (combined "Name (GroupLabel)"
 // strings, a category with no section, an ambiguous same-named section)
@@ -62,7 +71,7 @@
 import type OpenAI from "openai";
 import { db } from "@/lib/db";
 import { getIndexedDocumentIds, retrieveRelevantChunks } from "@/lib/ai/document-embedding-service";
-import { addLineItem, addSection } from "@/lib/estimate-service";
+import { addLineItem, addSection, updateLineItem } from "@/lib/estimate-service";
 import type { LineItemType } from "@/generated/prisma/enums";
 
 export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -158,6 +167,34 @@ export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "update_line_item",
+      description:
+        "Correct a DRAFT line item that already exists -- most often one propose_line_item just created a moment ago in this same conversation. Use this instead of calling propose_line_item again whenever the user is correcting or adjusting something you (or someone) already added (\"actually make that 500\", \"change the quantity to 3\", \"call it X instead\") -- calling propose_line_item again would leave a duplicate behind instead of fixing the original. Only works on items that are still drafts (not yet confirmed on the Line Items tab) -- the same safety net as creating one, since nothing counts either way until reviewed. If you already know the item's id (from this conversation's own context, or from a get_line_items or propose_line_item result), pass lineItemId -- that's the most precise way to target it. Otherwise pass description to search for it by its current text, restricted to draft items only; if more than one draft matches, you'll get the list back with each one's id so you can be specific. Only include the fields that should actually change.",
+      parameters: {
+        type: "object",
+        properties: {
+          lineItemId: { type: "string", description: "The exact id of the draft line item to update, if already known." },
+          description: {
+            type: "string",
+            description: "Text to search for among draft line items' current descriptions, if lineItemId isn't known. Must match exactly one draft item.",
+          },
+          sectionName: {
+            type: "string",
+            description: "Narrows the description search to draft items in a section whose name contains this text, if more than one draft would otherwise match. Ignored when lineItemId is given.",
+          },
+          newDescription: { type: "string", description: "New description for the item, if it should change." },
+          lineType: { type: "string", enum: ["MATERIAL", "LABOR", "FEE"], description: "New line type, if it should change." },
+          category: { type: "string", description: "New proposal-facing category, if it should change." },
+          qty: { type: "number", description: "New quantity, if it should change." },
+          unit: { type: "string", description: "New unit of measure, if it should change." },
+          unitCost: { type: "number", description: "New cost per unit in dollars, if it should change." },
+        },
+      },
+    },
+  },
 ];
 
 // A short, stable machine-readable category for why a tool call didn't
@@ -213,7 +250,7 @@ async function getLineItemsTool(
               name: true,
               groupLabel: true,
               lineItems: {
-                select: { description: true, category: true, isDraft: true, qty: true, unit: true, unitCost: true, totalCost: true },
+                select: { id: true, description: true, category: true, isDraft: true, qty: true, unit: true, unitCost: true, totalCost: true },
               },
             },
           },
@@ -249,7 +286,7 @@ async function getLineItemsTool(
           const qty = `${li.qty.toString()}${li.unit ? ` ${li.unit}` : ""}`;
           const cat = li.category ? ` (${li.category})` : "";
           rows.push(
-            `- [${status}] ${estimate.name ?? "Estimate"} / ${sectionLabel}: ${li.description} -- qty ${qty} × $${li.unitCost.toFixed(2)} = $${li.totalCost.toFixed(2)}${cat}`,
+            `- [${status}] ${estimate.name ?? "Estimate"} / ${sectionLabel}: ${li.description} -- qty ${qty} × $${li.unitCost.toFixed(2)} = $${li.totalCost.toFixed(2)}${cat} (id: ${li.id})`,
           );
         }
       }
@@ -617,7 +654,103 @@ async function proposeLineItemTool(
   );
 
   return ok(
-    `Added a DRAFT line item to "${formatSectionLabel(section)}"${createdSectionNote}${args.category ? ` (category: ${args.category})` : ""}: ${args.description} -- qty ${args.qty}${args.unit ? ` ${args.unit}` : ""} × $${args.unitCost.toFixed(2)} = $${created.totalCost.toFixed(2)}. It won't count toward any total until it's reviewed and confirmed on the Line Items tab.`,
+    `Added a DRAFT line item (id: ${created.id}) to "${formatSectionLabel(section)}"${createdSectionNote}${args.category ? ` (category: ${args.category})` : ""}: ${args.description} -- qty ${args.qty}${args.unit ? ` ${args.unit}` : ""} × $${args.unitCost.toFixed(2)} = $${created.totalCost.toFixed(2)}. It won't count toward any total until it's reviewed and confirmed on the Line Items tab. If this needs correcting afterward, use update_line_item with this id rather than adding another.`,
+  );
+}
+
+// Corrects a DRAFT line item in place -- see this file's header comment
+// for why CONFIRMED items are out of scope for now. lineItemId (when the
+// model already has it, from its own recent tool-call history or from
+// this conversation's static context) is the precise, unambiguous path;
+// a description search is the fallback for a draft that predates this
+// conversation, and is itself scoped to isDraft: true so it can never
+// even find a confirmed item to accidentally target.
+async function updateLineItemTool(
+  opportunityId: string,
+  args: {
+    lineItemId?: string;
+    description?: string;
+    sectionName?: string;
+    newDescription?: string;
+    lineType?: string;
+    category?: string;
+    qty?: number;
+    unit?: string;
+    unitCost?: number;
+  },
+  userId: string | null,
+): Promise<ToolResult> {
+  if (!args.lineItemId && !args.description) {
+    return fail("Either lineItemId or description is required to locate the draft line item to update.", "missing_args");
+  }
+  const hasChange =
+    args.newDescription !== undefined ||
+    args.lineType !== undefined ||
+    args.category !== undefined ||
+    args.qty !== undefined ||
+    args.unit !== undefined ||
+    args.unitCost !== undefined;
+  if (!hasChange) {
+    return fail("At least one field to change (newDescription, lineType, category, qty, unit, or unitCost) is required.", "missing_args");
+  }
+  if (args.lineType !== undefined && !LINE_TYPES.has(args.lineType)) {
+    return fail(`lineType must be one of MATERIAL, LABOR, FEE (got "${args.lineType}").`, "invalid_argument");
+  }
+
+  let target: { id: string; description: string; isDraft: boolean; section: { name: string; groupLabel: string | null } };
+
+  if (args.lineItemId) {
+    const found = await db.lineItem.findFirst({
+      where: { id: args.lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
+      select: { id: true, description: true, isDraft: true, section: { select: { name: true, groupLabel: true } } },
+    });
+    if (!found) return fail(`No line item with id "${args.lineItemId}" was found on this opportunity.`, "not_found");
+    target = found;
+  } else {
+    const needle = args.description!.toLowerCase();
+    const sectionNeedle = args.sectionName?.toLowerCase();
+    const candidates = await db.lineItem.findMany({
+      where: {
+        isDraft: true,
+        description: { contains: needle, mode: "insensitive" },
+        section: { estimateVersion: { estimate: { opportunityId }, isCurrent: true } },
+      },
+      select: { id: true, description: true, isDraft: true, section: { select: { name: true, groupLabel: true } } },
+    });
+    const filtered = sectionNeedle ? candidates.filter((c) => c.section.name.toLowerCase().includes(sectionNeedle)) : candidates;
+    const pool = filtered.length > 0 ? filtered : candidates;
+    if (pool.length === 0) return fail(`No draft line item matching "${args.description}" was found.`, "not_found");
+    if (pool.length > 1) {
+      const list = pool.map((c) => `"${c.description}" (id: ${c.id}, in ${formatSectionLabel(c.section)})`).join(", ");
+      return fail(`More than one draft line item matches "${args.description}" -- specify lineItemId. Matches: ${list}.`, "ambiguous");
+    }
+    target = pool[0];
+  }
+
+  if (!target.isDraft) {
+    return fail(
+      `"${target.description}" (in ${formatSectionLabel(target.section)}) is already confirmed, not a draft -- editing a confirmed line item isn't supported yet. Ask a person to update it directly on the Line Items tab.`,
+      "unsupported",
+    );
+  }
+
+  const updated = await updateLineItem(
+    opportunityId,
+    target.id,
+    {
+      description: args.newDescription,
+      lineType: args.lineType as LineItemType | undefined,
+      category: args.category,
+      qty: args.qty,
+      unit: args.unit,
+      unitCost: args.unitCost,
+    },
+    userId,
+  );
+
+  const qty = `${updated.qty.toString()}${updated.unit ? ` ${updated.unit}` : ""}`;
+  return ok(
+    `Updated draft line item (id: ${updated.id}) in "${formatSectionLabel(target.section)}": ${updated.description} -- qty ${qty} × $${updated.unitCost.toFixed(2)} = $${updated.totalCost.toFixed(2)}. Still a draft awaiting confirmation on the Line Items tab.`,
   );
 }
 
@@ -670,6 +803,9 @@ export async function executeChatTool(
         break;
       case "propose_line_item":
         result = await proposeLineItemTool(context.opportunityId, args, context.userId);
+        break;
+      case "update_line_item":
+        result = await updateLineItemTool(context.opportunityId, args, context.userId);
         break;
       default:
         result = fail(`Unknown tool "${name}".`, "invalid_argument");

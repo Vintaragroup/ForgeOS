@@ -667,6 +667,121 @@ describe("executeChatTool", () => {
       expect(await db.estimateSection.count({ where: { estimateVersionId: version.id } })).toBe(1);
     });
   });
+
+  describe("update_line_item", () => {
+    it("corrects a draft item by lineItemId, without creating a duplicate", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: null });
+
+      const created = await executeChatTool(
+        "propose_line_item",
+        JSON.stringify({ sectionName: "Labor", description: "Show Site Lead", lineType: "LABOR", qty: 60, unit: "hrs", unitCost: 185 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+      const id = created.match(/id: ([a-z0-9]+)/i)?.[1];
+      expect(id).toBeTruthy();
+
+      const result = await executeChatTool(
+        "update_line_item",
+        JSON.stringify({ lineItemId: id, unitCost: 325 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/Updated draft line item/);
+      expect(result).toContain("$325.00");
+      expect(await db.lineItem.count()).toBe(1); // corrected in place, not duplicated
+      const updated = await db.lineItem.findFirstOrThrow();
+      expect(updated.unitCost.toNumber()).toBe(325);
+      expect(updated.description).toBe("Show Site Lead"); // unspecified field left untouched
+      expect(updated.isDraft).toBe(true);
+    });
+
+    it("locates a draft item by description when lineItemId isn't known", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const section = await db.estimateSection.create({
+        data: { estimateVersionId: version.id, name: "Labor", sectionType: "CATEGORY" },
+      });
+      await db.lineItem.create({
+        data: { sectionId: section.id, lineType: "LABOR", description: "Show Site Lead", qty: 60, unit: "hrs", unitCost: 185, totalCost: 11100, isDraft: true },
+      });
+
+      const result = await executeChatTool(
+        "update_line_item",
+        JSON.stringify({ description: "Show Site Lead", qty: 40 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/Updated draft line item/);
+      const updated = await db.lineItem.findFirstOrThrow();
+      expect(updated.qty.toNumber()).toBe(40);
+    });
+
+    it("refuses to edit a confirmed (non-draft) item", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const section = await db.estimateSection.create({
+        data: { estimateVersionId: version.id, name: "Labor", sectionType: "CATEGORY" },
+      });
+      const item = await db.lineItem.create({
+        data: { sectionId: section.id, lineType: "LABOR", description: "Install crew", qty: 1, unitCost: 500, totalCost: 500, isDraft: false },
+      });
+
+      const result = await executeChatTool(
+        "update_line_item",
+        JSON.stringify({ lineItemId: item.id, unitCost: 600 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/already confirmed, not a draft/);
+      const unchanged = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+      expect(unchanged.unitCost.toNumber()).toBe(500);
+    });
+
+    it("disambiguates when a description matches more than one draft item", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const boothA = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "FS - Booth A" });
+      const boothB = await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: "FS - Booth B" });
+      await db.lineItem.createMany({
+        data: [
+          { sectionId: boothA.id, lineType: "LABOR", description: "Show Site Lead", qty: 1, unitCost: 1, totalCost: 1, isDraft: true },
+          { sectionId: boothB.id, lineType: "LABOR", description: "Show Site Lead", qty: 1, unitCost: 1, totalCost: 1, isDraft: true },
+        ],
+      });
+
+      const result = await executeChatTool(
+        "update_line_item",
+        JSON.stringify({ description: "Show Site Lead", unitCost: 200 }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/More than one draft line item matches/);
+      expect(result).toContain("FS - Booth A");
+      expect(result).toContain("FS - Booth B");
+    });
+
+    it("requires a locator and at least one field to change", async () => {
+      const opportunity = await makeOpportunity();
+
+      const noLocator = await executeChatTool("update_line_item", JSON.stringify({ unitCost: 200 }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+      expect(noLocator).toMatch(/Either lineItemId or description is required/);
+
+      const noChange = await executeChatTool("update_line_item", JSON.stringify({ description: "Show Site Lead" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+      expect(noChange).toMatch(/At least one field to change/);
+    });
+  });
 });
 
 describe("tool issue logging", () => {
