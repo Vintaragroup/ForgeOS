@@ -32,7 +32,7 @@ export async function sendMessage(opportunityId: string, userId: string, content
   await db.chatMessage.create({ data: { threadId: thread.id, role: "user", content } });
 
   const [{ systemPrompt, documentsDropped, lineItemsOmitted }, history, projectContext] = await Promise.all([
-    buildChatContext(opportunityId),
+    buildChatContext(opportunityId, content, userId),
     getRecentMessages(thread.id),
     getProjectContext(opportunityId),
   ]);

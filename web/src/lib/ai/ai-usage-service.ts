@@ -11,6 +11,12 @@ import type { AiFeature } from "@/generated/prisma/enums";
 const PRICING_PER_MILLION_TOKENS_USD: Record<string, { input: number; output: number }> = {
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
   "gpt-4o": { input: 2.5, output: 10.0 },
+  // No output tokens on an embeddings call -- recordAiUsage's caller
+  // (document-embedding-service.ts) always passes completion_tokens: 0,
+  // so `output` here is never actually multiplied against anything, but
+  // still declared instead of omitted so this entry has the same shape
+  // as every other rate.
+  "text-embedding-3-small": { input: 0.02, output: 0 },
 };
 
 // Falls back to gpt-4o's (higher) rate for an unrecognized model string

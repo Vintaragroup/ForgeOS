@@ -336,6 +336,12 @@ enum AiFeature {
   VENDOR_LINE_MATCH
   SPREADSHEET_LINE_ITEMS
   SECTION_DESCRIPTION
+  // Chat roadmap Phase 3: embedding a document's chunks at analysis time
+  // (document-embedding-service.ts's indexDocument) and embedding each
+  // chat question at retrieval time both record here -- tracked apart
+  // from CHAT since it's a different OpenAI endpoint (embeddings, not
+  // chat completions) with its own per-token rate.
+  DOCUMENT_EMBEDDING
 }
 
 // One row per OpenAI call, for case-based model routing's cost/token
@@ -494,8 +500,42 @@ model Document {
   lineItems            LineItem[]
   aiUsageEvents        AiUsageEvent[]
   vendorMatchApplyLogs VendorMatchApplyLog[]
+  chunks               DocumentChunk[]
 
   @@map("documents")
+}
+
+// Chat roadmap Phase 3: a document's extractedText, split into
+// overlapping chunks and embedded once at analysis time (document-
+// embedding-service.ts), so a chat question retrieves only the handful
+// of chunks actually relevant to it instead of every document's full
+// text competing for one fixed character budget (chat-context-
+// service.ts's previous approach -- still the fallback for a document
+// with no chunks yet, e.g. one analyzed before this existed).
+// opportunityId is denormalized off Document purely so a per-opportunity
+// similarity search doesn't need a join on every chat message.
+model DocumentChunk {
+  id            String   @id @default(cuid())
+  documentId    String
+  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  opportunityId String
+
+  chunkIndex Int
+  content    String @db.Text
+
+  // pgvector's own type -- Prisma has no native vector type, so every
+  // read/write of this column goes through $queryRaw/$executeRaw (see
+  // document-embedding-service.ts), never the generated Client API.
+  // 1536 dims = OpenAI text-embedding-3-small (EMBEDDING_MODEL) at its
+  // default size -- changing that model/size means re-embedding every
+  // existing chunk, not just new ones.
+  embedding Unsupported("vector(1536)")
+
+  createdAt DateTime @default(now())
+
+  @@index([documentId])
+  @@index([opportunityId])
+  @@map("document_chunks")
 }
 
 model StageChangeEvent {

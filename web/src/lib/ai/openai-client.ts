@@ -34,6 +34,13 @@ export class AiNotConfiguredError extends Error {
 
 export const BASIC_MODEL = process.env.OPENAI_MODEL_BASIC || "gpt-4o-mini";
 export const ADVANCED_MODEL = process.env.OPENAI_MODEL_ADVANCED || "gpt-4o";
+// Chat roadmap Phase 3: the one embeddings-endpoint model this app uses,
+// for both indexing a document's chunks and embedding a chat question at
+// retrieval time (document-embedding-service.ts) -- 1536 dimensions at
+// its default size, matching DocumentChunk.embedding's declared
+// vector(1536) column. Changing this means re-embedding every existing
+// chunk, not just new ones.
+export const EMBEDDING_MODEL = process.env.OPENAI_MODEL_EMBEDDING || "text-embedding-3-small";
 
 // Back-compat: an already-configured OPENAI_MODEL still wins for the basic
 // tier, so an existing deployment doesn't silently change model on upgrade.

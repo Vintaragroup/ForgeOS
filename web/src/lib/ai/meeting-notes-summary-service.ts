@@ -35,6 +35,7 @@ import { ADVANCED_MODEL, BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-cl
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { getProjectContext, resolveProjectTag } from "@/lib/ai/scope-document-context";
 import type { DocumentSummary, KeyDateType } from "@/lib/ai/document-summary-service";
+import { indexDocument } from "@/lib/ai/document-embedding-service";
 
 type MeetingNotesFromAI = {
   eventOrProjectName: string | null;
@@ -290,10 +291,15 @@ export async function summarizeMeetingNotes(documentId: string, userId: string |
       candidateGaps: withPageAndEstimate(parsed.candidateGaps),
     };
 
-    return db.document.update({
+    const updated = await db.document.update({
       where: { id: documentId },
       data: { extractionStatus: "COMPLETE", extractedSummary: summary as unknown as Prisma.InputJsonObject },
     });
+
+    // Best-effort, same posture as summarizeDocument's own call site.
+    await indexDocument(documentId, document.opportunityId, extraction.text, userId).catch(() => {});
+
+    return updated;
   } catch {
     // Same retryable-FAILED posture as summarizeDocument's catch-all.
     return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED" } });

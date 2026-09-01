@@ -20,6 +20,7 @@ import {
 import { ADVANCED_MODEL, BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { getProjectContext, resolveProjectTag } from "@/lib/ai/scope-document-context";
+import { indexDocument } from "@/lib/ai/document-embedding-service";
 
 // pageNumber is never asked of the model -- it's computed afterward by
 // searching the PDF's own per-page text for sourceQuote (see
@@ -477,10 +478,18 @@ export async function summarizeDocument(documentId: string, userId: string | nul
       suggestedDocumentType: parsed.suggestedDocumentType,
     };
 
-    return db.document.update({
+    const updated = await db.document.update({
       where: { id: documentId },
       data: { extractionStatus: "COMPLETE", extractedSummary: summary as unknown as Prisma.InputJsonObject },
     });
+
+    // Best-effort: an embedding-call failure here shouldn't undo an
+    // otherwise-successful analysis. A chat question about this document
+    // still works either way -- chat-context-service.ts falls back to
+    // this document's full text until it has chunks to retrieve from.
+    await indexDocument(documentId, document.opportunityId, extraction.text, userId).catch(() => {});
+
+    return updated;
   } catch {
     // A transient/API failure is retryable by clicking Analyze again --
     // record it as FAILED rather than throwing, so the Server Action

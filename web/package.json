@@ -13,7 +13,8 @@
     "seed": "tsx prisma/seed.ts",
     "set-password": "tsx scripts/set-password.ts",
     "create-admin": "tsx scripts/create-admin.ts",
-    "backfill-line-item-categories": "tsx scripts/backfill-line-item-categories.ts"
+    "backfill-line-item-categories": "tsx scripts/backfill-line-item-categories.ts",
+    "backfill-document-embeddings": "tsx scripts/backfill-document-embeddings.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.5",

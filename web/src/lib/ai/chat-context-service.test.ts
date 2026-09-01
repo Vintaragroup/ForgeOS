@@ -2,8 +2,10 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { buildChatContext } from "@/lib/ai/chat-context-service";
 import { createEstimateVersion } from "@/lib/estimate-service";
+import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 
 afterEach(async () => {
+  await db.documentChunk.deleteMany();
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
   await db.estimateVersion.deleteMany();
@@ -28,7 +30,7 @@ describe("buildChatContext", () => {
   it("includes the opportunity's own details even with no documents", async () => {
     const opportunity = await makeOpportunity();
 
-    const context = await buildChatContext(opportunity.id);
+    const context = await buildChatContext(opportunity.id, "What's in this opportunity?");
 
     expect(context.systemPrompt).toContain("Test Show");
     expect(context.systemPrompt).toContain("Acme Co");
@@ -75,7 +77,7 @@ describe("buildChatContext", () => {
       },
     });
 
-    const context = await buildChatContext(opportunity.id);
+    const context = await buildChatContext(opportunity.id, "What's in this opportunity?");
 
     expect(context.documentsIncluded).toEqual(["rfp.pdf", "schedule.pdf"]);
     expect(context.systemPrompt.indexOf("RFP_MARKER")).toBeLessThan(context.systemPrompt.indexOf("SCHEDULE_MARKER"));
@@ -112,7 +114,7 @@ describe("buildChatContext", () => {
       },
     });
 
-    const context = await buildChatContext(opportunity.id);
+    const context = await buildChatContext(opportunity.id, "What's in this opportunity?");
 
     expect(context.documentsIncluded).toEqual(["rfp.pdf"]);
     expect(context.documentsDropped).toEqual(["huge-schedule.pdf"]);
@@ -152,7 +154,7 @@ describe("buildChatContext", () => {
       },
     });
 
-    const context = await buildChatContext(opportunity.id);
+    const context = await buildChatContext(opportunity.id, "What's in this opportunity?");
 
     expect(context.systemPrompt).toContain("[CONFIRMED] Structure: 10x10 aluminum frame");
     expect(context.systemPrompt).toContain("[DRAFT] Structure: Unreviewed graphic panel");
@@ -192,7 +194,7 @@ describe("buildChatContext", () => {
       },
     });
 
-    const context = await buildChatContext(opportunity.id);
+    const context = await buildChatContext(opportunity.id, "What's in this opportunity?");
 
     expect(context.systemPrompt).toContain('↳ from "10\' x 10\' anodized aluminum frame system" -- RFP Final.pdf, p.4');
   });
@@ -230,7 +232,7 @@ describe("buildChatContext", () => {
       },
     });
 
-    const context = await buildChatContext(opportunity.id);
+    const context = await buildChatContext(opportunity.id, "What's in this opportunity?");
 
     expect(context.systemPrompt).toContain(`"${"x".repeat(140)}…"`);
     expect(context.systemPrompt).not.toContain("x".repeat(141));
@@ -257,7 +259,7 @@ describe("buildChatContext", () => {
       data: { sectionId: newerSection.id, lineType: "MATERIAL", description: "Panel for B", qty: 1, unitCost: 1, totalCost: 1 },
     });
 
-    const context = await buildChatContext(opportunity.id);
+    const context = await buildChatContext(opportunity.id, "What's in this opportunity?");
 
     expect(context.systemPrompt).toContain("ESTIMATE: Booth A");
     expect(context.systemPrompt).toContain("ESTIMATE: Booth B");
@@ -286,11 +288,43 @@ describe("buildChatContext", () => {
       })),
     });
 
-    const context = await buildChatContext(opportunity.id);
+    const context = await buildChatContext(opportunity.id, "What's in this opportunity?");
 
     expect(context.lineItemsOmitted).toBeGreaterThan(0);
     expect(context.systemPrompt).toContain("more line item(s) not shown here for length");
     // Truncated, not dropped wholesale -- at least the first item made it in.
     expect(context.systemPrompt).toContain("Item 0 ");
+  });
+
+  it("switches an indexed document to retrieval instead of the full-text fallback, even if that means requiring OpenAI", async () => {
+    // Once a document has real chunks (document-embedding-service.ts),
+    // buildChatContext must attempt retrieveRelevantChunks for it rather
+    // than silently keeping the old full-text dump -- proven here by the
+    // fact that doing so requires OpenAI (unconfigured in this test env,
+    // same posture as every other AI-backed test in this suite), which
+    // wouldn't be reached at all if the document had fallen through to
+    // the plain extractedText path instead.
+    const opportunity = await makeOpportunity();
+    const document = await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "indexed.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storageKey: "x",
+        documentType: "RFP",
+        extractionStatus: "COMPLETE",
+        extractedText: "Full text that the fallback path would otherwise dump in verbatim.",
+      },
+    });
+    const zeroVector = `[${"0,".repeat(1535)}0]`;
+    await db.$executeRaw`
+      INSERT INTO document_chunks (id, "documentId", "opportunityId", "chunkIndex", content, embedding)
+      VALUES (${"chunk1"}, ${document.id}, ${opportunity.id}, ${0}, ${"some indexed text"}, ${zeroVector}::vector)
+    `;
+
+    await expect(buildChatContext(opportunity.id, "What's in this opportunity?")).rejects.toBeInstanceOf(
+      AiNotConfiguredError,
+    );
   });
 });

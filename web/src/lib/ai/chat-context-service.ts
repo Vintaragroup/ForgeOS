@@ -1,13 +1,18 @@
-// Phase 7.3: assembles the system prompt for Opportunity chat. No
-// vector-db/RAG infra exists in this app (see Phase 7 plan's own
-// reasoning) -- so this is context-stuffing within a character budget,
-// not retrieval. Priority order determines what survives if a corpus is
-// larger than the budget; every real document in data/RFP/superbowl fits
-// comfortably within it today.
+// Phase 7.3 (chat roadmap Phase 1-2): assembles the system prompt for
+// Opportunity chat. Chat roadmap Phase 3 replaced document handling with
+// real retrieval (document-embedding-service.ts): an indexed document
+// contributes only the chunks retrieveRelevantChunks finds relevant to
+// THIS question, not its full text -- the priority-ordered, budget-gated
+// full-text dump below now only ever runs for a document that has no
+// chunks yet (not indexed since upload/last edit, or indexing failed;
+// see getIndexedDocumentIds), so nothing regresses for a not-yet-indexed
+// corpus while a fully-indexed one scales past the old fixed-budget
+// ceiling entirely.
 
 import { db } from "@/lib/db";
 import type { DocumentType } from "@/generated/prisma/enums";
 import { truncateForCitation } from "@/lib/citation";
+import { getIndexedDocumentIds, retrieveRelevantChunks, type RetrievedChunk } from "@/lib/ai/document-embedding-service";
 
 // Long enough to be a genuinely identifiable excerpt, short enough that a
 // hundred sourced line items don't quietly crowd out the rest of the
@@ -140,7 +145,39 @@ function buildEstimateBlock(
   return { block, charsUsed: used, omitted };
 }
 
-export async function buildChatContext(opportunityId: string): Promise<ChatContext> {
+// Renders retrieveRelevantChunks' results into one block, budget-gating
+// by truncating the chunk list (dropping the least-relevant ones first --
+// they're already ordered by similarity) rather than an all-or-nothing
+// drop the way a whole unindexed document can be below. These chunks ARE
+// the direct answer to the question just asked; losing all of them would
+// be a worse failure than the old per-document dump ever risked.
+function buildRetrievedChunksBlock(
+  chunks: RetrievedChunk[],
+  remainingBudget: number,
+): { block: string; charsUsed: number; omitted: number; filenamesIncluded: string[] } {
+  if (chunks.length === 0) return { block: "", charsUsed: 0, omitted: 0, filenamesIncluded: [] };
+
+  const header = "\n\nRELEVANT DOCUMENT EXCERPTS (retrieved for this question, not the full document):";
+  let used = header.length;
+  const pieces: string[] = [];
+  const filenames = new Set<string>();
+  let omitted = 0;
+  for (const chunk of chunks) {
+    const piece = `\n\n[${chunk.filename}, excerpt ${chunk.chunkIndex + 1}]\n${chunk.content}`;
+    if (used + piece.length > remainingBudget) {
+      omitted++;
+      continue;
+    }
+    pieces.push(piece);
+    filenames.add(chunk.filename);
+    used += piece.length;
+  }
+  if (pieces.length === 0) return { block: "", charsUsed: 0, omitted: chunks.length, filenamesIncluded: [] };
+
+  return { block: `${header}${pieces.join("")}`, charsUsed: used, omitted, filenamesIncluded: [...filenames] };
+}
+
+export async function buildChatContext(opportunityId: string, question: string, userId: string | null = null): Promise<ChatContext> {
   const opportunity = await db.opportunity.findFirstOrThrow({
     where: { id: opportunityId },
     include: {
@@ -162,7 +199,19 @@ export async function buildChatContext(opportunityId: string): Promise<ChatConte
                 orderBy: { sortOrder: "asc" },
                 include: {
                   lineItems: {
-                    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+                    // id last -- a bulk createMany (a pricing-schedule
+                    // import, or 100 rows in one insert the same way
+                    // chat-context-service.test.ts's own budget test
+                    // does) can give every row in the batch the exact
+                    // same createdAt (Postgres evaluates now() once per
+                    // statement, not per row), so sortOrder+createdAt
+                    // alone don't fully disambiguate order for those
+                    // rows -- confirmed flaky under real concurrent
+                    // insert load without this. cuid ids are
+                    // monotonically increasing by construction, so this
+                    // is still a stable, meaningful order, not an
+                    // arbitrary one.
+                    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
                     include: { document: { select: { filename: true } } },
                   },
                 },
@@ -199,13 +248,32 @@ export async function buildChatContext(opportunityId: string): Promise<ChatConte
     lineItemsOmitted += omitted;
   });
 
-  const orderedDocs = [...opportunity.documents].sort((a, b) => {
-    const rank = (t: DocumentType) => {
-      const i = DOCUMENT_PRIORITY.indexOf(t);
-      return i === -1 ? DOCUMENT_PRIORITY.length : i;
-    };
-    return rank(a.documentType) - rank(b.documentType);
-  });
+  // Split into "retrieval already covers this one" vs. "no chunks yet,
+  // still needs the old full-text fallback" -- see this file's header
+  // comment. Checked once per opportunity, not per document: a single
+  // similarity search across every indexed chunk is what actually
+  // returns the relevant excerpts below.
+  const indexedDocumentIds = await getIndexedDocumentIds(opportunityId);
+
+  if (indexedDocumentIds.size > 0) {
+    const retrieved = await retrieveRelevantChunks(opportunityId, question, userId);
+    const { block, charsUsed, filenamesIncluded } = buildRetrievedChunksBlock(retrieved, remainingBudget);
+    if (block) {
+      sections.push(block);
+      remainingBudget -= charsUsed;
+      documentsIncluded.push(...filenamesIncluded);
+    }
+  }
+
+  const orderedDocs = [...opportunity.documents]
+    .filter((d) => !indexedDocumentIds.has(d.id))
+    .sort((a, b) => {
+      const rank = (t: DocumentType) => {
+        const i = DOCUMENT_PRIORITY.indexOf(t);
+        return i === -1 ? DOCUMENT_PRIORITY.length : i;
+      };
+      return rank(a.documentType) - rank(b.documentType);
+    });
 
   for (const doc of orderedDocs) {
     if (!doc.extractedText) continue; // not analyzed, unsupported, or a pricing schedule -- nothing to include
