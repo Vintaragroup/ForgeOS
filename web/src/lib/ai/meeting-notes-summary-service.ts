@@ -296,8 +296,14 @@ export async function summarizeMeetingNotes(documentId: string, userId: string |
       data: { extractionStatus: "COMPLETE", extractedSummary: summary as unknown as Prisma.InputJsonObject },
     });
 
-    // Best-effort, same posture as summarizeDocument's own call site.
-    await indexDocument(documentId, document.opportunityId, extraction.text, userId).catch(() => {});
+    // Best-effort, same posture as summarizeDocument's own call site --
+    // logged, not silent, so an indexing failure leaves a trace instead
+    // of a document that just sits unindexed with no explanation.
+    await indexDocument(documentId, document.opportunityId, extraction.text, userId).catch((err) => {
+      console.warn(
+        `[document-index-failed] ${JSON.stringify({ documentId, opportunityId: document.opportunityId, message: err instanceof Error ? err.message : String(err) })}`,
+      );
+    });
 
     return updated;
   } catch {

@@ -487,7 +487,14 @@ export async function summarizeDocument(documentId: string, userId: string | nul
     // otherwise-successful analysis. A chat question about this document
     // still works either way -- chat-context-service.ts falls back to
     // this document's full text until it has chunks to retrieve from.
-    await indexDocument(documentId, document.opportunityId, extraction.text, userId).catch(() => {});
+    // Still logged, though -- a silent catch here is exactly how a
+    // document can sit unindexed indefinitely with no trace of why (see
+    // scripts/backfill-document-embeddings.ts's own header comment).
+    await indexDocument(documentId, document.opportunityId, extraction.text, userId).catch((err) => {
+      console.warn(
+        `[document-index-failed] ${JSON.stringify({ documentId, opportunityId: document.opportunityId, message: err instanceof Error ? err.message : String(err) })}`,
+      );
+    });
 
     return updated;
   } catch {

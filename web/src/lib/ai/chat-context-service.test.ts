@@ -38,7 +38,7 @@ describe("buildChatContext", () => {
     expect(context.documentsIncluded).toEqual([]);
   });
 
-  it("orders documents by priority: RFP before SCHEDULE, and skips docs with no extracted text", async () => {
+  it("orders documents by priority: RFP before SCHEDULE, and lists (but doesn't dump the body of) a doc with no extracted text", async () => {
     const opportunity = await makeOpportunity();
     await db.document.create({
       data: {
@@ -64,7 +64,10 @@ describe("buildChatContext", () => {
         extractedText: "RFP_MARKER",
       },
     });
-    // Not analyzed -- no extractedText -- must not appear at all.
+    // Not analyzed -- no extractedText -- its body must not appear, but the
+    // model still needs to know it exists (see chat-context-service.ts's
+    // "DOCUMENTS ON THIS OPPORTUNITY" comment: an invisible-by-name
+    // document is undiscoverable no matter what the user asks).
     await db.document.create({
       data: {
         opportunityId: opportunity.id,
@@ -81,7 +84,8 @@ describe("buildChatContext", () => {
 
     expect(context.documentsIncluded).toEqual(["rfp.pdf", "schedule.pdf"]);
     expect(context.systemPrompt.indexOf("RFP_MARKER")).toBeLessThan(context.systemPrompt.indexOf("SCHEDULE_MARKER"));
-    expect(context.systemPrompt).not.toContain("pending.pdf");
+    expect(context.systemPrompt).toMatch(/DOCUMENTS ON THIS OPPORTUNITY.*pending\.pdf \(CONTRACT, pending\)/);
+    expect(context.systemPrompt).not.toContain("DOCUMENT: pending.pdf"); // no body dumped -- there's none to dump
   });
 
   it("drops the lowest-priority document that doesn't fit the budget, keeping higher-priority ones", async () => {

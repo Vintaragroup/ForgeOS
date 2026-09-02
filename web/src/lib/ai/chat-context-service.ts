@@ -52,6 +52,10 @@ const SYSTEM_PREAMBLE = `You are an assistant helping an event/exhibit contracto
 
 Use the tools rather than giving up or guessing: if line items were noted as left out for length, or you need every item matching some filter, call get_line_items. If a document is mentioned above but the excerpts shown don't cover what's being asked, call get_document_excerpt on it by name before answering.
 
+The DOCUMENTS ON THIS OPPORTUNITY list above names every document that's actually uploaded, whether or not its content made it into this prompt -- check it before concluding a document or quote doesn't exist. If the user names a vendor, a person, or a quote you don't already have excerpts for (e.g. "the Fuse quote" or "the quote from Colin Feeney"), look for a filename on that list that could plausibly be it and call get_document_excerpt on that exact filename -- don't limit yourself to whatever document happened to come up earlier in the conversation. Only tell the user no such document exists after checking that full list, not just the excerpts already shown.
+
+When asked to check a quote or document against the estimate -- e.g. whether its items are already included, or where they'd be -- read the document's real content first (excerpts above, or get_document_excerpt), then look up each item it mentions with get_line_items (searchText is well suited to this) to report whether and where it's actually in the estimate today, rather than answering from the document alone.
+
 When the user asks you to locate, find, or check whether a section, category, or tag exists (e.g. "find the Professional Services section," "does a Labor section exist"), call find_section -- it gives a definitive answer, including when something exists but currently has zero line items in it, which is a real answer to report plainly, not the same as "not found." Also call find_section first whenever you're about to use propose_line_item and aren't already certain the target name is a section (a physical container) vs. a category (a proposal-facing tag) -- guessing wrong here is exactly the kind of mistake to avoid, not something to work around silently.
 
 You can also add a new line item with propose_line_item, when the user asks you to add, create, or price out an item. It ALWAYS lands as a draft that a person still has to review and confirm on the Line Items tab -- it never counts toward any total on its own. Because of that, don't stop to ask permission before calling it -- the draft itself is the safety check, not a yes/no question first. Call it as soon as you have enough information, and only ask the user something first when a real piece of information is genuinely missing or ambiguous (e.g. propose_line_item reports more than one matching section with the same name across different booths) -- and when you do ask, ask the SPECIFIC thing that's missing (which section, which booth) rather than a generic "should I proceed?". A section name and a category are different things (see the tool's own description) -- a request to add something "in" or "under" a named category (like "Professional Services") means category, not sectionName. If that category has no section holding it yet, the tool creates a clean, standalone one automatically rather than asking you to force it into an unrelated booth's section -- when it does this, say so plainly in your reply (e.g. "I created a new Professional Services section since none existed"). Every time you use the tool, also say plainly that it's a draft awaiting their confirmation -- never imply the estimate has already changed for real.
@@ -244,6 +248,25 @@ export async function buildChatContext(opportunityId: string, question: string, 
     opportunity.targetMoveIn ? `Target move-in: ${opportunity.targetMoveIn.toISOString().slice(0, 10)}` : "",
     opportunity.targetMoveOut ? `Target move-out: ${opportunity.targetMoveOut.toISOString().slice(0, 10)}` : "",
   ].filter(Boolean);
+
+  // Unconditional, regardless of budget or indexing status -- without
+  // this, a document that IS indexed never appears anywhere in the
+  // prompt by name unless the automatic top-K retrieval below happens to
+  // surface one of its chunks for this exact question (an indexed
+  // document gets filtered OUT of the plain-text listing further down,
+  // see orderedDocs). A real quote/vendor document can then be
+  // completely invisible to the model -- it has no name to check,
+  // nothing to call get_document_excerpt on, and no way to tell "doesn't
+  // exist" apart from "exists but didn't come up." This is the document
+  // equivalent of find_section's problem for sections: knowing what's
+  // really there has to be independent of whatever fit in a filtered
+  // slice. Small and cheap -- a handful of filenames, not their content.
+  if (opportunity.documents.length > 0) {
+    const list = opportunity.documents
+      .map((d) => `${d.filename} (${d.documentType}${d.extractionStatus !== "COMPLETE" ? `, ${d.extractionStatus.toLowerCase()}` : ""})`)
+      .join(", ");
+    sections.push(`DOCUMENTS ON THIS OPPORTUNITY (${opportunity.documents.length}): ${list}`);
+  }
 
   const documentsIncluded: string[] = [];
   const documentsDropped: string[] = [];
