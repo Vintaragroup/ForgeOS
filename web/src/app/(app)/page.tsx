@@ -1,4 +1,3 @@
-import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getDashboardData, type UpcomingDeadline } from "@/lib/dashboard";
@@ -102,8 +101,8 @@ export default async function DashboardPage() {
   const today = new Date();
 
   return (
-    <div id="forgeos-dashboard" className="dash -my-8">
-      <div className="dash-strip dash-full-bleed">
+    <div id="forgeos-dashboard" className="dash dash-full-bleed -my-8">
+      <div className="dash-strip">
         <div className="dash-strip-inner">
           <div className="dash-strip-stats">
             {Object.entries(STAGE_LABELS).map(([stage, label]) => (
@@ -119,33 +118,14 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      <div className="dash-hero dash-full-bleed">
+      <div className="dash-hero">
+        {/* No logo here -- AppNav's header above already shows it; repeating
+            it in the hero read as two logos stacked on top of each other. */}
         <div className="dash-hero-top">
-          <Link href="/" className="dash-brandmark">
-            <Image
-              className="dash-logo-light"
-              src="/brand/expo-logo-black.png"
-              alt="Expo Convention Contractors"
-              width={112}
-              height={38}
-              priority
-            />
-            <Image
-              className="dash-logo-dark"
-              src="/brand/expo-logo-white.png"
-              alt="Expo Convention Contractors"
-              width={112}
-              height={38}
-              priority
-            />
-            <span className="dash-powered-by">Powered by ForgeOS</span>
-          </Link>
-          <div className="dash-hero-top-right">
-            <span className="dash-clock">
-              {today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-            </span>
-            <ThemeToggle targetId="forgeos-dashboard" />
-          </div>
+          <span className="dash-clock">
+            {today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+          </span>
+          <ThemeToggle targetId="forgeos-dashboard" />
         </div>
 
         <div className="dash-hero-content">
