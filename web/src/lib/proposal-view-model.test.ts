@@ -333,19 +333,37 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
     expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Booth Build", "Platform"]);
   });
 
-  it("keeps a mapped group's fixed build-sequence position regardless of sortOrder", () => {
+  it("falls back to the fixed build-sequence rank only while every group still ties at the default sortOrder", () => {
     const sections = [
-      // Graphics ranks after Wall Structure in ELEMENT_TYPE_ORDER, but a
-      // much lower sortOrder should never override that -- only a
-      // booth's OWN unmapped groups are ever reorderable relative to
-      // each other.
-      editableSection({ id: "s1", name: "Graphic Panels", groupLabel: "SECTION 211", sortOrder: 0 }),
-      editableSection({ id: "s2", name: "BeMatrix", groupLabel: "SECTION 211", sortOrder: 5 }),
+      // Graphics ranks after Wall Structure in ELEMENT_TYPE_ORDER; with
+      // both sections still at the shared 0 default (nobody has
+      // manually reordered this booth yet), that fixed rank is what
+      // decides.
+      editableSection({ id: "s1", name: "Graphic Panels", groupLabel: "SECTION 211" }),
+      editableSection({ id: "s2", name: "BeMatrix", groupLabel: "SECTION 211" }),
     ];
 
     const [booth] = groupBoothLineItemsForEditing(sections);
 
     expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Wall Structure", "Graphics"]);
+  });
+
+  it("lets an explicit sortOrder override a mapped group's fixed build-sequence rank", () => {
+    // Regression: moveElementGroupOrder now reorders every group in a
+    // booth, the 6 fixed ELEMENT_TYPE_MAP labels included -- confirmed
+    // live as a real, wanted case (a manually-built component wanting
+    // its own custom groups ordered above "Shipping," not the generic
+    // frame-then-covering-then-shipping sequence). Once sortOrder
+    // actually discriminates between two groups, it wins over the fixed
+    // rank, not the other way around.
+    const sections = [
+      editableSection({ id: "s1", name: "Graphic Panels", groupLabel: "SECTION 211", sortOrder: 0 }),
+      editableSection({ id: "s2", name: "BeMatrix", groupLabel: "SECTION 211", sortOrder: 1 }),
+    ];
+
+    const [booth] = groupBoothLineItemsForEditing(sections);
+
+    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Graphics", "Wall Structure"]);
   });
 });
 

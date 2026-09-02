@@ -488,10 +488,16 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     .sort(([a], [b]) => (boothSortOrder.get(a) ?? 0) - (boothSortOrder.get(b) ?? 0) || a.localeCompare(b))
     .map(([boothLabel, byElementType]) => {
       const elementGroups = [...byElementType.entries()]
+        // sortOrder first -- an explicit, user-set position (moveElementGroupOrder
+        // now reorders every group in a booth, fixed labels included) --
+        // falling back to the fixed build-sequence rank only while every
+        // group here still ties at the shared 0 default, i.e. a booth
+        // nobody has manually reordered yet. See moveElementGroupOrder's
+        // own comment for why a fixed label no longer has to win here.
         .sort(
           ([a], [b]) =>
-            elementTypeRank(a) - elementTypeRank(b) ||
-            (elementSortOrder.get(`${boothLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${boothLabel}::${b}`) ?? 0),
+            (elementSortOrder.get(`${boothLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${boothLabel}::${b}`) ?? 0) ||
+            elementTypeRank(a) - elementTypeRank(b),
         )
         .map(([elementType, bucket]) => {
           const items = [...bucket.values()].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -690,10 +696,13 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     .sort(([a], [b]) => (boothSortOrder.get(a) ?? 0) - (boothSortOrder.get(b) ?? 0) || a.localeCompare(b))
     .map(([boothLabel, byElementType]) => {
       const elementGroups = [...byElementType.entries()]
+        // sortOrder first -- see groupBoothLineItems' own identical comment
+        // (this is the editing-surface counterpart) for why a fixed
+        // build-sequence label no longer wins over an explicit move.
         .sort(
           ([a], [b]) =>
-            elementTypeRank(a) - elementTypeRank(b) ||
-            (elementSortOrder.get(`${boothLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${boothLabel}::${b}`) ?? 0),
+            (elementSortOrder.get(`${boothLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${boothLabel}::${b}`) ?? 0) ||
+            elementTypeRank(a) - elementTypeRank(b),
         )
         .map(([elementType, bucket]) => {
           const sorted = [...bucket.items].sort((a, b) => a.sortOrder - b.sortOrder);

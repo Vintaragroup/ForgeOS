@@ -2870,14 +2870,16 @@ function CategoryTabContent({
               </div>
               <div className="flex flex-col gap-5 p-4">
                 {(() => {
-                  // Only a booth's own custom-named groups are reorderable
-                  // relative to each other (moveElementGroupOrder's own
-                  // restriction) -- the 6 fixed ELEMENT_TYPE_MAP labels
-                  // always keep their fixed build-sequence position, so
-                  // they're excluded from this index entirely rather than
-                  // rendering disabled ▲▼ buttons that could never do
-                  // anything.
-                  const movableElementTypes = booth.elementGroups.filter((g) => !g.isMapped).map((g) => g.elementType);
+                  // Every group in the booth is reorderable relative to
+                  // its siblings, the 6 fixed ELEMENT_TYPE_MAP labels
+                  // (Wall Structure/Hardware/Wall Covering/Graphics/Labor/
+                  // Shipping) included -- see moveElementGroupOrder's own
+                  // comment for why their "natural build sequence"
+                  // position is only ever a default, not a hard rule.
+                  // isMapped still gates the AI-suggest/edit UI on the
+                  // heading itself (SectionHeadingEditor) -- unrelated to
+                  // whether this group can move.
+                  const movableElementTypes = booth.elementGroups.map((g) => g.elementType);
                   return booth.elementGroups.map((group) => {
                     const movableIndex = movableElementTypes.indexOf(group.elementType);
                     return (

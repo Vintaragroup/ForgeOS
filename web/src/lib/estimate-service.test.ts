@@ -1859,17 +1859,26 @@ describe("moveElementGroupOrder", () => {
     expect(updated.every((s) => s.sortOrder === 0)).toBe(true);
   });
 
-  it("never reorders a mapped group (its fixed build-sequence position isn't part of this swap)", async () => {
+  it("reorders a mapped group too -- its fixed build-sequence position is only a default, not a hard rule", async () => {
     // "BeMatrix" resolves through ELEMENT_TYPE_MAP to the fixed "Wall
-    // Structure" label -- moveElementGroupOrder's own movable list
-    // excludes every mapped group, so asking to move one is a no-op
-    // rather than an error.
+    // Structure" label. Confirmed live as a real, wanted case: a
+    // manually-built component wants its own custom groups ordered
+    // above a fixed-label one like "Shipping," not the generic
+    // frame-then-covering-then-shipping sequence that rank was designed
+    // around for a different (BeMatrix/Wall Panels style) import shape.
+    // Starting order is the fixed rank (Wall Structure before the
+    // unmapped "Platform", both still at the shared 0 default).
     const { version, sections } = await makeBoothWithGroups(["BeMatrix", "Platform"]);
+    const [beMatrix, platform] = sections;
 
     await moveElementGroupOrder(version.id, "Section 231 - Booth", "Wall Structure", "down");
 
-    const updated = await Promise.all(sections.map((s) => db.estimateSection.findUniqueOrThrow({ where: { id: s.id } })));
-    expect(updated.every((s) => s.sortOrder === 0)).toBe(true);
+    const [updatedBeMatrix, updatedPlatform] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: beMatrix.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: platform.id } }),
+    ]);
+    expect(updatedBeMatrix.sortOrder).toBe(1);
+    expect(updatedPlatform.sortOrder).toBe(0);
   });
 
   it("rejects reordering on a locked version", async () => {

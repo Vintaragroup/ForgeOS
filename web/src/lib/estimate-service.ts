@@ -382,10 +382,19 @@ export async function moveSectionProposalOrder(
 // every category tab its own items happen to touch, not a different row
 // per category the way a booth's presence in several tabs can be -- see
 // EstimateSection.sortOrder vs proposalSortOrder's own schema comments.
-// Only ever reorders a booth's own custom-named (unmapped) groups
-// relative to each other; the 6 fixed ELEMENT_TYPE_MAP labels
-// (elementTypeForSection) always keep their fixed build-sequence
-// position and are never part of this swap.
+//
+// Reorders EVERY group in the booth, including the 6 fixed ELEMENT_TYPE_
+// MAP labels (Wall Structure/Hardware/Wall Covering/Graphics/Labor/
+// Shipping) -- their "natural build sequence" position
+// (elementTypeRank in proposal-view-model.ts) is only ever a DEFAULT for
+// a booth nobody has touched yet, not a hard rule. Confirmed live as a
+// real, wanted case: a manually-built component (e.g. "FS - Hitting Bay
+// Wall") wants its own custom groups ("Custom Hitting Bay Wall With
+// Monitors", "Structure") ordered above "Shipping," not the generic
+// frame-then-covering-then-shipping sequence that fixed rank was
+// designed around for a different (BeMatrix/Wall Panels style) import
+// shape. isMapped keeps its own, unrelated meaning here (whether this
+// group's heading gets AI-suggest/manual-edit UI) -- unaffected by this.
 export async function moveElementGroupOrder(
   estimateVersionId: string,
   groupLabel: string,
@@ -412,7 +421,7 @@ export async function moveElementGroupOrder(
   const [boothGroup] = groupBoothLineItemsForEditing(sections);
   if (!boothGroup) return;
 
-  const movable = boothGroup.elementGroups.filter((g) => !g.isMapped);
+  const movable = boothGroup.elementGroups;
   const index = movable.findIndex((g) => g.elementType === elementType);
   if (index === -1) return;
   const swapWith = direction === "up" ? index - 1 : index + 1;
