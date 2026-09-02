@@ -1405,18 +1405,15 @@ function LineItemsTab({
               // between them rather than duplicated inside every tab's
               // own content. Zero-JS disclosure (native <details>/
               // <summary>, same pattern as AddLineItemForm/
-              // CollapsibleSection), collapsed to an icon-only trigger by
-              // default so it doesn't sit open and take up space.
+              // CollapsibleSection), collapsed to a small labeled trigger
+              // by default so it doesn't sit open and take up space.
               !version.isLocked && (
                 <details className="group/add-section mb-6">
-                  <summary
-                    className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-full border border-dashed border-neutral-300 text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 marker:content-none [&::-webkit-details-marker]:hidden"
-                    title="Add section"
-                  >
+                  <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-full border border-dashed border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 marker:content-none [&::-webkit-details-marker]:hidden">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                       <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                     </svg>
-                    <span className="sr-only">Add section</span>
+                    Add section
                   </summary>
                   <form action={addSectionWithIds} className="mt-3 flex items-end gap-3">
                     <div className="flex-1">
