@@ -27,10 +27,16 @@ export function Tabs({
   tabs,
   content,
   paramName = "tab",
+  beforeContent,
 }: {
   tabs: TabDef[];
   content: Record<string, ReactNode>;
   paramName?: string;
+  // Rendered once, between the tab strip and whichever tab's content is
+  // showing -- for a control that applies the same way regardless of
+  // which tab is active (e.g. "add a new section"), so it doesn't need
+  // duplicating into every tab's own content.
+  beforeContent?: ReactNode;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -85,6 +91,7 @@ export function Tabs({
           );
         })}
       </div>
+      {beforeContent}
       {tabs.map((tab) => (
         <div key={tab.id} hidden={tab.id !== activeId}>
           {content[tab.id]}
