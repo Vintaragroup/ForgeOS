@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 
 export interface MethodFilterOption {
@@ -12,54 +11,38 @@ export interface MethodFilterOption {
 
 // Secondary filter row nested inside one primary category tab (see
 // PrimaryCategoryTabContent in the estimate page) -- structurally a sibling
-// of Tabs (same URL-synced active-id pattern via router.replace, same
-// lazy-mount-on-first-visit discipline, required here too since content is
-// form-bearing CategoryTabContent JSX and Tabs' own header comment already
-// explains both halves of why: switching away and back must never silently
-// reset a form the user was mid-way through, but rendering every option's
-// full content up front is a real, confirmed cost on a large estimate.
-// Rendered as rounded pills rather than another bordered tablist so the
-// two tab levels stay visually distinct at a glance, instead of reading as
-// one flat row.
+// of Tabs (same lazy-mount-on-first-visit discipline, required here too
+// since content is form-bearing CategoryTabContent JSX: switching away and
+// back must never silently reset a form the user was mid-way through, but
+// rendering every option's full content up front is a real, confirmed cost
+// on a large estimate. Rendered as rounded pills rather than another
+// bordered tablist so the two tab levels stay visually distinct at a
+// glance, instead of reading as one flat row.
 //
-// URL-driven (not local useState) for the same reason Tabs itself is: this
-// page's other forms (Untag, margin update, ...) all revalidatePath, which
-// would silently reset a useState-backed filter back to "All" on any
-// unrelated submit elsewhere on the page. `paramName` defaults to
-// "categoryMethod" -- deliberately distinct from Tabs' own "tab"/"category"
-// params already in use on this page.
+// Plain useState, deliberately NOT synced to a URL search param (unlike
+// Tabs itself, which stays URL-synced because Server Action redirects
+// depend on it -- see that component's own comment). Nothing deep-links
+// to a specific method filter, and this page's own `page.tsx` reads
+// `searchParams` at all, which makes Next.js treat every query-string
+// change as needing a brand-new full server render -- confirmed live as
+// several real seconds of delay per click on a large estimate, for a
+// value nothing outside this component ever needed in the URL. No
+// external source of truth to reconcile means no render-time adjustment
+// trick is needed either -- selectOption just sets both pieces of state
+// together like a normal event handler.
 export function CategoryMethodFilter({
   options,
   content,
-  paramName = "categoryMethod",
 }: {
   options: MethodFilterOption[];
   content: Record<string, ReactNode>;
-  paramName?: string;
 }) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-
-  const requested = searchParams.get(paramName);
-  const activeId = options.some((o) => o.id === requested) ? requested! : options[0]?.id;
-
-  // Same lazy-mount tracking as Tabs itself, adjusted during render for
-  // the same reason -- see that component's own comment for the full
-  // reasoning.
+  const [activeId, setActiveId] = useState(options[0]?.id);
   const [visitedIds, setVisitedIds] = useState<Set<string>>(() => new Set(activeId ? [activeId] : []));
-  const [trackedActiveId, setTrackedActiveId] = useState(activeId);
-  if (activeId !== trackedActiveId) {
-    setTrackedActiveId(activeId);
-    if (activeId && !visitedIds.has(activeId)) {
-      setVisitedIds((prev) => new Set(prev).add(activeId));
-    }
-  }
 
   function selectOption(id: string) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set(paramName, id);
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    setActiveId(id);
+    setVisitedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
   return (

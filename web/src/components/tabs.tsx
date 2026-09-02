@@ -31,14 +31,28 @@ export interface TabDef {
 // get visited.
 //
 // Active tab syncs to a URL search param (default "tab") via
-// router.replace -- shallow, no server round-trip, no scroll reset --
-// so a tab is always a real bookmarkable/shareable URL, not just
-// in-memory state that a page refresh would forget.
+// router.replace -- shallow, no scroll reset -- so a tab is always a
+// real bookmarkable/shareable URL, not just in-memory state that a page
+// refresh would forget. This is load-bearing, not just a nicety: several
+// Server Actions (import-actions.ts's redirects after building/
+// reconciling/enriching a document, the bid-package "Apply" redirect in
+// this same page) redirect straight to `?tab=documents` /
+// `?tab=review` / `?tab=bid-packages` so a result banner shows up on the
+// right tab. Set urlSync=false for a tab bar nothing ever deep-links
+// to (see the category tabs and CategoryMethodFilter on the estimate
+// page) -- confirmed live that page.tsx reading `searchParams` at all
+// makes EVERY query-string change fully dynamic, so router.replace here
+// was forcing a brand-new full server render (refetch + rebuild every
+// tab's content, not just the one being switched to) on every single
+// tab click, several real seconds on a large estimate. urlSync=false
+// skips useSearchParams/router.replace for that instance entirely, so a
+// click never leaves the browser.
 export function Tabs({
   tabs,
   content,
   paramName = "tab",
   beforeContent,
+  urlSync = true,
 }: {
   tabs: TabDef[];
   content: Record<string, ReactNode>;
@@ -48,13 +62,20 @@ export function Tabs({
   // which tab is active (e.g. "add a new section"), so it doesn't need
   // duplicating into every tab's own content.
   beforeContent?: ReactNode;
+  urlSync?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const requested = searchParams.get(paramName);
-  const activeId = tabs.some((t) => t.id === requested) ? requested! : tabs[0]?.id;
+  const urlActiveId = tabs.some((t) => t.id === requested) ? requested! : tabs[0]?.id;
+
+  // Internal source of truth when urlSync is false; its initial value
+  // still honors a pre-existing valid `?<paramName>=` (an old bookmark,
+  // say) but nothing writes back to the URL afterward.
+  const [localActiveId, setLocalActiveId] = useState(urlActiveId);
+  const activeId = urlSync ? urlActiveId : localActiveId;
 
   // Seeded with whichever tab is active on first render (the lazy
   // initializer runs before the first paint, so that one tab's content
@@ -63,8 +84,9 @@ export function Tabs({
   // pasting a ?tab= link) included, not just a direct click below.
   // "Adjusting state during render" (React's own recommended pattern for
   // this, not a useEffect) -- activeId can change without this component
-  // re-mounting (router.replace), so the update has to converge in the
-  // SAME render that first sees the new activeId, not one render later.
+  // re-mounting (router.replace, or plain setLocalActiveId below), so
+  // the update has to converge in the SAME render that first sees the
+  // new activeId, not one render later.
   const [visitedIds, setVisitedIds] = useState<Set<string>>(() => new Set(activeId ? [activeId] : []));
   const [trackedActiveId, setTrackedActiveId] = useState(activeId);
   if (activeId !== trackedActiveId) {
@@ -75,6 +97,10 @@ export function Tabs({
   }
 
   function selectTab(id: string) {
+    if (!urlSync) {
+      setLocalActiveId(id);
+      return;
+    }
     const params = new URLSearchParams(searchParams.toString());
     params.set(paramName, id);
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });

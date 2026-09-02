@@ -1407,7 +1407,7 @@ function LineItemsTab({
 
         <BidPackageSelectionProvider>
           <Tabs
-            paramName="category"
+            urlSync={false}
             tabs={primaryTabs.map((t) => ({ id: t.id, label: t.label, count: t.totalItems }))}
             beforeContent={
               // Rendered once, below the category tab strip and above
