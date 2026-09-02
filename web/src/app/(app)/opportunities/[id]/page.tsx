@@ -614,7 +614,12 @@ function fmtDate(d: Date | null): string {
 export default async function OpportunityDetailPage(props: PageProps<"/opportunities/[id]">) {
   const { id } = await props.params;
   const searchParams = await props.searchParams;
-  const { editDetails: editDetailsParam, collaboratorsUpdated: collaboratorsUpdatedParam } = searchParams;
+  const { editDetails: editDetailsParam, collaboratorsUpdated: collaboratorsUpdatedParam, ask: askParam } = searchParams;
+  // Set by the dashboard's router (routeDashboardQueryAction) when it
+  // matched your typed text to this exact opportunity -- see ChatWidget's
+  // own autoOpen/initialInput comment for why this only pre-fills the
+  // input rather than sending on your behalf.
+  const ask = Array.isArray(askParam) ? askParam[0] : askParam;
   const { success: statusSuccess, error: statusError } = readStatus(searchParams);
   // Same query-param toggle convention as estimates/[id]/page.tsx's
   // importDocumentId/proposeDocumentId -- a plain server-rendered view
@@ -1392,6 +1397,8 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           role: m.role,
           content: linkifyMentions(m.content, opportunity.id, documents, citableLineItems, citableQuotes),
         }))}
+        autoOpen={!!ask}
+        initialInput={ask ?? ""}
       />
     </div>
   );

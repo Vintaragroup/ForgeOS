@@ -74,15 +74,24 @@ export function ChatWidget({
   opportunityId,
   opportunityName,
   initialMessages,
+  autoOpen = false,
+  initialInput = "",
 }: {
   opportunityId: string;
   opportunityName: string;
   initialMessages: ChatMessageData[];
+  // Set by the dashboard's "what would you like to tackle today" router
+  // (routeDashboardQueryAction) after it matches your text to this
+  // opportunity -- opens the widget and drops your text straight into the
+  // input, still requiring an explicit Send rather than firing the AI
+  // call on your behalf sight-unseen.
+  autoOpen?: boolean;
+  initialInput?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(autoOpen);
   const [maximized, setMaximized] = useState(false);
   const [messages, setMessages] = useState<ChatMessageData[]>(initialMessages);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialInput);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const listRef = useRef<HTMLDivElement>(null);
