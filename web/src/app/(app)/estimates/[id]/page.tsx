@@ -160,6 +160,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     applied: appliedParam,
     stale: staleParam,
     confirmedCount: confirmedCountParam,
+    sectionCreated: sectionCreatedParam,
+    sectionCreatedGroup: sectionCreatedGroupParam,
     recategorized: recategorizedParam,
     recategorizeChecked: recategorizeCheckedParam,
     reconcileDocumentId: reconcileDocumentIdParam,
@@ -193,6 +195,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const confirmedCount = confirmedCountParam
     ? Number(Array.isArray(confirmedCountParam) ? confirmedCountParam[0] : confirmedCountParam) || 0
     : null;
+  const sectionCreated = Array.isArray(sectionCreatedParam) ? sectionCreatedParam[0] : sectionCreatedParam;
+  const sectionCreatedGroup = Array.isArray(sectionCreatedGroupParam) ? sectionCreatedGroupParam[0] : sectionCreatedGroupParam;
   const recategorized = recategorizedParam
     ? Number(Array.isArray(recategorizedParam) ? recategorizedParam[0] : recategorizedParam) || 0
     : null;
@@ -677,6 +681,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     attachments={attachments}
                     users={users}
                     confirmedCount={confirmedCount}
+                    sectionCreated={sectionCreated}
+                    sectionCreatedGroup={sectionCreatedGroup}
                   />
                 ),
                 options: (
@@ -1228,6 +1234,8 @@ function LineItemsTab({
   attachments,
   users,
   confirmedCount,
+  sectionCreated,
+  sectionCreatedGroup,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -1239,6 +1247,8 @@ function LineItemsTab({
   attachments: { id: string; fileRef: string }[];
   users: { id: string; name: string }[];
   confirmedCount: number | null;
+  sectionCreated?: string;
+  sectionCreatedGroup?: string;
 }) {
   const buckets = bucketLineItemsByCategory(version.sections, categories);
   const primaryTabs = groupPrimaryCategoryTabs(buckets, categories);
@@ -1276,6 +1286,15 @@ function LineItemsTab({
         {confirmedCount !== null && (
           <p className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
             Confirmed {confirmedCount} draft line item{confirmedCount === 1 ? "" : "s"} -- now counted in the version total.
+          </p>
+        )}
+
+        {sectionCreated && (
+          <p className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+            Created section &quot;{sectionCreated}&quot;{sectionCreatedGroup ? ` in group "${sectionCreatedGroup}"` : ""}.
+            It&apos;s empty, so it won&apos;t appear under any category tab until it has at least one line item -- use
+            the &quot;Add first item to an empty section&quot; control in any category tab below (or ask chat) to add
+            one.
           </p>
         )}
 
@@ -2502,6 +2521,16 @@ function CategoryTabContent({
 }) {
   const hasBoothGroups = !!boothGroups && boothGroups.length > 0;
   const flatSectionGroups = hasBoothGroups ? bucket.sectionGroups.filter((g) => !g.groupLabel) : bucket.sectionGroups;
+  // A section with genuinely no line items anywhere yet (e.g. one just
+  // created via "Add section," empty by definition) never appears in
+  // bucket.sectionGroups above -- bucketLineItemsByCategory only ever
+  // produces an entry from a real line item, so an empty section is
+  // otherwise unreachable for adding its first item once this category
+  // already has other content (confirmed live: no picker anywhere offered
+  // it). Surfaced here, in every category tab, so a brand-new section
+  // never becomes a permanent dead end regardless of which category it's
+  // eventually meant for.
+  const emptySections = version.sections.filter((s) => s.lineItems.length === 0);
   // No "— auto-detect —" entry here (unlike AddLineItemForm's own
   // categoryOptions) -- moving a whole section only makes sense to a real,
   // explicit category, never back to a guess.
@@ -2718,6 +2747,36 @@ function CategoryTabContent({
           )}
         </div>
       ))}
+      {!version.isLocked && emptySections.length > 0 && (
+        <details className="group/add-to-empty border-t border-neutral-200 pt-4">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-full border border-dashed border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 marker:content-none [&::-webkit-details-marker]:hidden">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            Add first item to an empty section
+          </summary>
+          <div className="mt-3">
+            <SectionScopedForm
+              sections={emptySections.map((s) => ({ id: s.id, name: s.groupLabel ? `${s.name} (${s.groupLabel})` : s.name }))}
+              content={Object.fromEntries(
+                emptySections.map((s) => [
+                  s.id,
+                  <AddLineItemForm
+                    key={s.id}
+                    estimateId={estimateId}
+                    versionId={version.id}
+                    sectionId={s.id}
+                    attachments={attachments}
+                    laborRates={laborRates}
+                    categoryOptions={categoryOptions}
+                    defaultCategory={bucket.category.name}
+                  />,
+                ]),
+              )}
+            />
+          </div>
+        </details>
+      )}
     </div>
   );
 }

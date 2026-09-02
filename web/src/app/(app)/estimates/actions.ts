@@ -96,8 +96,18 @@ export async function addSectionAction(estimateId: string, versionId: string, fo
   // group (a new H1) -- see the form's own comment in page.tsx.
   const groupLabel = String(formData.get("groupLabel") ?? "").trim() || null;
 
-  await addSection(versionId, { name, sectionType, groupLabel });
+  const created = await addSection(versionId, { name, sectionType, groupLabel });
   revalidatePath(`/estimates/${estimateId}`);
+  // A brand-new section has no line items yet, and the category tabs
+  // (bucketLineItemsByCategory) are built entirely from line items -- an
+  // empty section contributes to no bucket and so renders nowhere,
+  // indistinguishable from the click having done nothing at all
+  // (confirmed live: reported as "it did not create a new group").
+  // Flash confirmation here, same pattern as confirmAllDraftLineItemsAction,
+  // since there's otherwise no other sign the create actually happened.
+  const params = new URLSearchParams({ tab: "line-items", sectionCreated: created.name });
+  if (created.groupLabel) params.set("sectionCreatedGroup", created.groupLabel);
+  redirect(`/estimates/${estimateId}?${params.toString()}`);
 }
 
 export async function updateSectionBuildTypeAction(
