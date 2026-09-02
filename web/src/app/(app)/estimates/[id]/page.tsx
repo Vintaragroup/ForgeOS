@@ -44,6 +44,7 @@ import {
   setCategoryMarginOverrideAction,
   suggestBoothDescriptionAction,
   suggestSectionDescriptionAction,
+  toggleLineItemProposalVisibilityAction,
   updateBoothDescriptionAction,
   updateEstimateDetails,
   updateLineItemAction,
@@ -1077,6 +1078,12 @@ function LineItemsTable({
           const updateWithIds = updateLineItemAction.bind(null, estimateId, version.id, li.id);
           const moveUpWithIds = moveLineItemAction.bind(null, estimateId, li.id, "up");
           const moveDownWithIds = moveLineItemAction.bind(null, estimateId, li.id, "down");
+          const toggleProposalVisibilityWithIds = toggleLineItemProposalVisibilityAction.bind(
+            null,
+            estimateId,
+            li.id,
+            !li.includeInProposal,
+          );
           const actualCost = version.isLocked ? computeActualTotal(li.costActuals) : null;
           const variance = actualCost !== null ? actualCost.minus(li.totalCost) : null;
           // The check-and-balance: only real when sourceQuote is present
@@ -1129,6 +1136,7 @@ function LineItemsTable({
               updateAction={updateWithIds}
               moveUpAction={moveUpWithIds}
               moveDownAction={moveDownWithIds}
+              toggleProposalVisibilityAction={toggleProposalVisibilityWithIds}
             />
           );
         })}

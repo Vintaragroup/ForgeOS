@@ -406,6 +406,22 @@ export async function moveLineItemAction(estimateId: string, lineItemId: string,
   revalidatePath(`/estimates/${estimateId}`);
 }
 
+// One-click row toggle -- see LineItemRow's own eye-icon button. Reuses
+// updateLineItem directly (it already accepts a bare includeInProposal
+// patch) rather than a new estimate-service.ts function, since this is
+// nothing more than a single-field update with the same access check and
+// audit trail every other line item edit already goes through.
+export async function toggleLineItemProposalVisibilityAction(
+  estimateId: string,
+  lineItemId: string,
+  includeInProposal: boolean,
+) {
+  const user = await requireEstimateAccess(estimateId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  await updateLineItem(opportunityId, lineItemId, { includeInProposal }, user.id);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
 export async function deleteLineItemAction(estimateId: string, lineItemId: string) {
   const user = await requireEstimateAccess(estimateId);
   const opportunityId = await estimateOpportunityId(estimateId);

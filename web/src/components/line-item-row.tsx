@@ -48,6 +48,7 @@ export function LineItemRow({
   updateAction,
   moveUpAction,
   moveDownAction,
+  toggleProposalVisibilityAction,
 }: {
   id: string;
   description: string;
@@ -98,6 +99,10 @@ export function LineItemRow({
   updateAction: (formData: FormData) => void | Promise<void>;
   moveUpAction: (formData: FormData) => void | Promise<void>;
   moveDownAction: (formData: FormData) => void | Promise<void>;
+  // One-click, no edit-form-required toggle -- see includeInProposal's
+  // own comment above for why this exists as its own row control rather
+  // than only living inside the edit form.
+  toggleProposalVisibilityAction: (formData: FormData) => void | Promise<void>;
 }) {
   const selection = useBidPackageSelection();
   const [isEditing, setIsEditing] = useState(false);
@@ -237,6 +242,37 @@ export function LineItemRow({
                 title="Move down"
               >
                 ▼
+              </button>
+            </form>
+            <form action={toggleProposalVisibilityAction} className="inline">
+              <button
+                className="text-neutral-400 hover:text-neutral-700"
+                title={includeInProposal ? "Hide from Proposal PDF" : "Show on Proposal PDF"}
+                aria-label={includeInProposal ? "Hide line item from Proposal PDF" : "Show line item on Proposal PDF"}
+              >
+                {includeInProposal ? (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" />
+                  </svg>
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61A13.526 13.526 0 0 0 1 12s4 8 11 8a9.26 9.26 0 0 0 5.39-1.61M14.12 14.12a3 3 0 1 1-4.24-4.24"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                )}
               </button>
             </form>
             <button
