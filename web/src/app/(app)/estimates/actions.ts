@@ -84,33 +84,23 @@ export async function clearCategoryMarginOverrideAction(estimateId: string, vers
   revalidatePath(`/estimates/${estimateId}`);
 }
 
-export interface AddSectionResult {
-  name: string;
-  groupLabel: string | null;
-}
-
-// Bound to (estimateId, versionId), then called by useActionState from
-// AddSectionForm as (prevState, formData) -- NOT a plain <form action>
-// like every other action in this file. That's deliberate: this
-// estimate's Line Items tab can hold hundreds of items across every
-// category tab (all pre-rendered and hydrated at once -- see Tabs' own
-// header comment), and confirmAllDraftLineItemsAction's redirect+
-// query-param pattern, tried here first, forced a full client-side
-// remount of that entire tree on submit -- multi-second freeze,
-// confirmed live (Chrome's own "page unresponsive" prompt) on a
-// real ~330-item estimate, and confirmed absent from updateMarginTargetAction
-// just above, which revalidates the same route without redirecting.
-// useActionState's return value gives the client the confirmation text
-// directly, without a navigation -- revalidatePath still refreshes the
-// server-rendered data (so the new section shows up in "Add first item
-// to an empty section" etc.), but as the same cheap in-place refresh
-// updateMarginTargetAction already gets.
-export async function addSectionAction(
-  estimateId: string,
-  versionId: string,
-  _prevState: AddSectionResult | null,
-  formData: FormData,
-): Promise<AddSectionResult> {
+// Plain <form action>, same shape as updateMarginTargetAction just
+// above -- deliberately NOT wrapped in useActionState. That was tried
+// here first (to show a confirmation without confirmAllDraftLineItemsAction's
+// redirect+query-param approach, which froze this page's browser tab on
+// a real ~330-item estimate -- every category tab's content is
+// pre-rendered and hydrated at once, see Tabs' own header comment).
+// useActionState made it categorically worse, not better: the tab never
+// reached document_idle at all on that same real estimate (confirmed
+// live, in a fresh tab, ruling out cold-start or session cruft) even
+// though the server returned 200 with no runtime errors -- something
+// about a bound server action nested that way never settles client-side.
+// Reverted to this plain, unwrapped form (identical posture to
+// updateMarginTargetAction, already proven fast on this same estimate)
+// until useActionState's failure mode here is understood outside
+// production. No success banner for now as a result -- see this
+// project's memory / conversation history before reintroducing one.
+export async function addSectionAction(estimateId: string, versionId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   const name = String(formData.get("name") ?? "").trim();
@@ -119,12 +109,11 @@ export async function addSectionAction(
   // Blank -- the common case -- means project-wide, no group at all.
   // Typing an existing group's exact name reuses it (a new H2 inside
   // that H1); typing anything else creates a brand-new, independent
-  // group (a new H1) -- see AddSectionForm's own comment.
+  // group (a new H1) -- see the form's own comment in page.tsx.
   const groupLabel = String(formData.get("groupLabel") ?? "").trim() || null;
 
-  const created = await addSection(versionId, { name, sectionType, groupLabel });
+  await addSection(versionId, { name, sectionType, groupLabel });
   revalidatePath(`/estimates/${estimateId}`);
-  return { name: created.name, groupLabel: created.groupLabel };
 }
 
 export async function updateSectionBuildTypeAction(
