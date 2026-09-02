@@ -37,6 +37,8 @@ import {
   deleteLineItemAction,
   generateProposalAction,
   lockVersionAction,
+  mergeBoothAction,
+  moveBoothToCategoryAction,
   moveLineItemAction,
   moveSectionProposalOrderAction,
   recordCostActualAction,
@@ -2561,6 +2563,10 @@ function CategoryTabContent({
   // categoryOptions) -- moving a whole section only makes sense to a real,
   // explicit category, never back to a guess.
   const moveCategoryOptions = categoryOptions.filter((o) => o.value !== "");
+  // Every distinct booth (H1 groupLabel) on this version -- the "Merge
+  // into" dropdown's own options, per booth excluding itself (computed at
+  // render time per booth below).
+  const allBoothLabels = [...new Set(version.sections.map((s) => s.groupLabel).filter((l): l is string => !!l))];
 
   // Grosses up at THIS bucket's own resolved category's margin (its
   // override if set, else the document target) -- not one global
@@ -2635,6 +2641,7 @@ function CategoryTabContent({
             // visible for a version predating this field.
             const boothVisible =
               version.sections.find((s) => s.groupLabel === booth.boothLabel)?.includeInProposal ?? true;
+            const otherBoothLabels = allBoothLabels.filter((label) => label !== booth.boothLabel);
             return (
             <div key={booth.boothLabel} className="overflow-hidden rounded-md border border-neutral-200">
               <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
@@ -2695,6 +2702,46 @@ function CategoryTabContent({
                           Untag
                         </button>
                       </form>
+                      {/* Recategorizes every section under this booth at once --
+                          the per-section "Move section" dropdown further down
+                          does the same for just one contributing section, but a
+                          multi-section booth otherwise needs that clicked once
+                          per section. */}
+                      <form
+                        action={moveBoothToCategoryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                        className="flex items-center gap-1"
+                      >
+                        <SelectField label="" name="category" options={moveCategoryOptions} />
+                        <button
+                          type="submit"
+                          className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                          title="Move every item under this booth to a different category"
+                        >
+                          Move booth
+                        </button>
+                      </form>
+                      {/* Only when another booth actually exists to merge
+                          into -- see mergeBoothIntoAnotherBooth's own header
+                          comment for what this does to boothDescription. */}
+                      {otherBoothLabels.length > 0 && (
+                        <form
+                          action={mergeBoothAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                          className="flex items-center gap-1"
+                        >
+                          <SelectField
+                            label=""
+                            name="targetGroupLabel"
+                            options={otherBoothLabels.map((label) => ({ value: label, label }))}
+                          />
+                          <button
+                            type="submit"
+                            className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                            title="Merge this entire booth into a different booth"
+                          >
+                            Merge into
+                          </button>
+                        </form>
+                      )}
                     </>
                   )}
                 </div>

@@ -15,6 +15,7 @@ import {
   createNewVersionFromLocked,
   deleteLineItem,
   lockEstimateVersion,
+  mergeBoothIntoAnotherBooth,
   moveLineItemsToCategory,
   moveLineItemWithinSection,
   moveSectionOrder,
@@ -192,6 +193,36 @@ export async function bulkMoveLineItemsCategoryAction(
   if (!category) throw new Error("Choose a category to move the selected items to.");
   if (data.lineItemIds.length === 0) throw new Error("Select at least one line item to move.");
   await moveLineItemsToCategory(versionId, { lineItemIds: data.lineItemIds }, category);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Booth-header counterpart to updateSectionItemsCategoryAction above -- a
+// booth commonly spans several EstimateSections (see LineItem.category's
+// own comment on why a booth's items can land across multiple category
+// tabs), so recategorizing "the whole booth" previously meant clicking
+// "Move section" once per contributing section. groupLabel-scoped move
+// (moveLineItemsToCategory's own new scope variant) does every one of them
+// in a single write.
+export async function moveBoothToCategoryAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const category = String(formData.get("category") ?? "").trim();
+  if (!category) throw new Error("Category is required");
+  await moveLineItemsToCategory(versionId, { groupLabel }, category);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function mergeBoothAction(estimateId: string, versionId: string, groupLabel: string, formData: FormData) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const targetGroupLabel = String(formData.get("targetGroupLabel") ?? "").trim();
+  if (!targetGroupLabel) throw new Error("Choose a booth to merge into.");
+  await mergeBoothIntoAnotherBooth(versionId, groupLabel, targetGroupLabel);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

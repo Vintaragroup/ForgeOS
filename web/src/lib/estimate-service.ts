@@ -397,31 +397,84 @@ export async function clearBoothPendingDescription(estimateVersionId: string, gr
 // section" dropdown, for a section with no groupLabel so ineligible for the
 // Rental/Custom Build tagging above, e.g. a generic "Platform" section whose
 // items all matched the "platform"/"sleeper floor" description heuristic
-// into Flooring when they're really rental structure) or an arbitrary,
-// hand-picked cross-section set of line items (the sticky bulk-move bar,
-// via the Line Items tab's own selection checkbox, bid-package-
-// selection.tsx -- covers a handful of items on a booth-tagged section
-// that were mis-typed at import and need moving individually, not the
-// section's other items alongside them).
-export type CategoryMoveScope = { sectionId: string } | { lineItemIds: string[] };
+// into Flooring when they're really rental structure), a whole booth (the
+// booth-header "Move booth" dropdown -- every section sharing one
+// groupLabel at once, so a multi-section booth doesn't need "Move section"
+// clicked once per contributing section), or an arbitrary, hand-picked
+// cross-section set of line items (the sticky bulk-move bar, via the Line
+// Items tab's own selection checkbox, bid-package-selection.tsx -- covers a
+// handful of items on a booth-tagged section that were mis-typed at import
+// and need moving individually, not the section's other items alongside
+// them).
+export type CategoryMoveScope = { sectionId: string } | { groupLabel: string } | { lineItemIds: string[] };
 
 // Moves every LineItem in scope to a different category in one step --
 // merges what were previously two near-identical functions
 // (updateSectionItemsCategory, bulkMoveLineItemsCategory), which only ever
 // differed in this where clause, never the write itself. Scoped to
 // estimateVersionId the same defensive way as every other bulk write here:
-// a sectionId is already version-scoped by the caller's own access check,
-// and lineItemIds is caller-suppliable (a client selection Set serialized
-// into a direct server-action call, not a real form field), so a
-// fictitious/foreign id in the list is simply excluded by the where clause
-// rather than trusted.
+// a sectionId/groupLabel is already version-scoped by the caller's own
+// access check, and lineItemIds is caller-suppliable (a client selection
+// Set serialized into a direct server-action call, not a real form field),
+// so a fictitious/foreign id in the list is simply excluded by the where
+// clause rather than trusted.
 export async function moveLineItemsToCategory(estimateVersionId: string, scope: CategoryMoveScope, category: string) {
   await assertUnlocked(estimateVersionId);
   const where =
     "sectionId" in scope
       ? { sectionId: scope.sectionId, section: { estimateVersionId } }
-      : { id: { in: scope.lineItemIds }, section: { estimateVersionId } };
+      : "groupLabel" in scope
+        ? { section: { groupLabel: scope.groupLabel, estimateVersionId } }
+        : { id: { in: scope.lineItemIds }, section: { estimateVersionId } };
   await db.lineItem.updateMany({ where, data: { category } });
+}
+
+// Merges an entire booth into a different existing one -- every
+// EstimateSection sharing sourceGroupLabel takes on targetGroupLabel
+// instead. For the case surfaced live: an import (or a manually
+// "Add section"-ed group label with a typo) ends up with two separate H1
+// groups for what's really one booth -- e.g. "Section 203 - Camera Booth"
+// and "Section 203 - Booth" -- and everything under the first needs to
+// become part of the second. A booth has no model of its own (see
+// EstimateSection.groupLabel's own comment); merging is just changing
+// which shared string every one of the source sections carries.
+//
+// Clears the incoming sections' own boothDescription/boothPendingDescription
+// rather than trying to reconcile them with the target's -- the view layer
+// reads whichever section it finds first for a groupLabel
+// (groupBoothLineItemsForEditing), so the source booth's own description
+// text would otherwise sit orphaned in the DB, winning that pick or not
+// depending on section ordering. Clearing it makes the target booth's own
+// description unambiguously the one that applies after a merge; buildType
+// and proposalSortOrder are left as-is on the incoming sections (a booth
+// already tolerates its own sections carrying different buildTypes when
+// tagged separately, and proposalSortOrder settles the next time someone
+// actually reorders the merged booth).
+export async function mergeBoothIntoAnotherBooth(
+  estimateVersionId: string,
+  sourceGroupLabel: string,
+  targetGroupLabel: string,
+) {
+  await assertUnlocked(estimateVersionId);
+  if (sourceGroupLabel === targetGroupLabel) {
+    throw new Error("Choose a different booth to merge into.");
+  }
+  // Re-verified against the DB rather than trusted from the caller-supplied
+  // string alone -- same ownership discipline as every other
+  // caller-supplied-identifier check in this file (see
+  // opportunity-access.ts's own header comment on the general pattern).
+  // Without this, a typo'd or stale target groupLabel would silently
+  // create a brand-new, phantom booth instead of merging into a real one.
+  const targetExists = await db.estimateSection.findFirst({
+    where: { estimateVersionId, groupLabel: targetGroupLabel },
+    select: { id: true },
+  });
+  if (!targetExists) throw new Error("Target booth not found on this estimate version.");
+
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel: sourceGroupLabel },
+    data: { groupLabel: targetGroupLabel, boothDescription: null, boothPendingDescription: null },
+  });
 }
 
 // Swaps a section with its immediate neighbor (by current display order)

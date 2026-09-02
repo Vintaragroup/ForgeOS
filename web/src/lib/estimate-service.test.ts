@@ -22,6 +22,7 @@ import {
   createNewVersionFromLocked,
   deleteLineItem,
   lockEstimateVersion,
+  mergeBoothIntoAnotherBooth,
   moveLineItemsToCategory,
   moveLineItemToEstimate,
   moveLineItemWithinSection,
@@ -1084,6 +1085,158 @@ describe("moveLineItemsToCategory -- sectionId scope", () => {
     await expect(moveLineItemsToCategory(version.id, { sectionId: section.id }, "Structure")).rejects.toThrow(
       /locked/,
     );
+  });
+});
+
+describe("moveLineItemsToCategory -- groupLabel scope", () => {
+  async function makeMultiSectionBooth() {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const sectionA = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "CATEGORY",
+      groupLabel: "Section 203 - Camera Booth",
+    });
+    const sectionB = await addSection(version.id, {
+      name: "Graphics",
+      sectionType: "CATEGORY",
+      groupLabel: "Section 203 - Camera Booth",
+    });
+    const otherSection = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "CATEGORY",
+      groupLabel: "Section 231 - Booth",
+    });
+    const itemA = await addLineItem(version.id, sectionA.id, {
+      lineType: "MATERIAL",
+      description: "PVC sheet",
+      category: "Other",
+      qty: 1,
+      unitCost: 0,
+    });
+    const itemB = await addLineItem(version.id, sectionB.id, {
+      lineType: "MATERIAL",
+      description: "Vinyl graphic panel",
+      category: "Other",
+      qty: 1,
+      unitCost: 0,
+    });
+    const untouched = await addLineItem(version.id, otherSection.id, {
+      lineType: "MATERIAL",
+      description: "Unrelated booth item",
+      category: "Other",
+      qty: 1,
+      unitCost: 0,
+    });
+    return { version, itemA, itemB, untouched };
+  }
+
+  it("moves every item across every section sharing the booth's groupLabel, leaving other booths untouched", async () => {
+    const { version, itemA, itemB, untouched } = await makeMultiSectionBooth();
+
+    await moveLineItemsToCategory(version.id, { groupLabel: "Section 203 - Camera Booth" }, "Graphics");
+
+    const [movedA, movedB, unaffected] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: itemA.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: itemB.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: untouched.id } }),
+    ]);
+    expect(movedA.category).toBe("Graphics");
+    expect(movedB.category).toBe("Graphics");
+    expect(unaffected.category).toBe("Other");
+  });
+
+  it("rejects moving a booth's items on a locked version", async () => {
+    const { version } = await makeMultiSectionBooth();
+    await lockEstimateVersion(version.id);
+
+    await expect(
+      moveLineItemsToCategory(version.id, { groupLabel: "Section 203 - Camera Booth" }, "Graphics"),
+    ).rejects.toThrow(/locked/);
+  });
+});
+
+describe("mergeBoothIntoAnotherBooth", () => {
+  async function makeTwoBooths() {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const sourceSection = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "CATEGORY",
+      groupLabel: "Section 203 - Camera Booth",
+    });
+    await db.estimateSection.update({
+      where: { id: sourceSection.id },
+      data: { boothDescription: "The camera booth", boothPendingDescription: "AI-suggested text" },
+    });
+    const targetSection = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "CATEGORY",
+      groupLabel: "Section 203 - Booth",
+    });
+    const unrelatedSection = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "CATEGORY",
+      groupLabel: "Section 231 - Booth",
+    });
+    const item = await addLineItem(version.id, sourceSection.id, {
+      lineType: "MATERIAL",
+      description: "PVC sheet",
+      qty: 1,
+      unitCost: 0,
+    });
+    return { version, sourceSection, targetSection, unrelatedSection, item };
+  }
+
+  it("moves every section sharing the source groupLabel onto the target, clearing their booth description", async () => {
+    const { version, sourceSection, targetSection, unrelatedSection } = await makeTwoBooths();
+
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth");
+
+    const [merged, target, unrelated] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: targetSection.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: unrelatedSection.id } }),
+    ]);
+    expect(merged.groupLabel).toBe("Section 203 - Booth");
+    expect(merged.boothDescription).toBeNull();
+    expect(merged.boothPendingDescription).toBeNull();
+    expect(target.groupLabel).toBe("Section 203 - Booth");
+    expect(unrelated.groupLabel).toBe("Section 231 - Booth");
+  });
+
+  it("keeps the moved section's own line items intact", async () => {
+    const { version, item } = await makeTwoBooths();
+
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth");
+
+    const stillThere = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(stillThere.description).toBe("PVC sheet");
+  });
+
+  it("rejects merging a booth into itself", async () => {
+    const { version } = await makeTwoBooths();
+
+    await expect(
+      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Camera Booth"),
+    ).rejects.toThrow(/different booth/);
+  });
+
+  it("rejects merging into a target groupLabel that doesn't exist on this version", async () => {
+    const { version } = await makeTwoBooths();
+
+    await expect(
+      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Nonexistent Booth"),
+    ).rejects.toThrow(/not found/);
+  });
+
+  it("rejects merging on a locked version", async () => {
+    const { version } = await makeTwoBooths();
+    await lockEstimateVersion(version.id);
+
+    await expect(
+      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth"),
+    ).rejects.toThrow(/locked/);
   });
 });
 
