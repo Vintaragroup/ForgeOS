@@ -242,56 +242,72 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   if (!estimate) notFound();
   if (!(await canAccessOpportunity(user, estimate.opportunityId))) notFound();
 
-  const versions = await db.estimateVersion.findMany({
+  // Lightweight first -- just enough to find which version is current and
+  // to render every OTHER version's row in the "Earlier versions" card
+  // (versionNumber/isLocked/grandTotal, nothing more). The full line-item
+  // tree below is fetched for the current version alone: an estimate
+  // revised several times was otherwise refetching (and re-serializing
+  // through the RSC payload) every past revision's entire sections/
+  // options/bid-packages/documents tree on every single page load, for
+  // data nothing on the page ever showed.
+  const versionSummaries = await db.estimateVersion.findMany({
     where: { estimateId: estimate.id },
     orderBy: { versionNumber: "desc" },
-    include: {
-      sections: {
-        where: { optionId: null },
-        orderBy: { sortOrder: "asc" },
-        include: {
-          lineItems: {
-            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-            include: {
-              costActuals: true,
-              document: { select: { id: true, mimeType: true, filename: true } },
-              bidPackage: { select: { id: true, name: true } },
-            },
-          },
-        },
-      },
-      options: {
-        orderBy: { sortOrder: "asc" },
-        include: { sections: { orderBy: { sortOrder: "asc" }, include: { lineItems: true } } },
-      },
-      bidPackages: {
-        where: { deletedAt: null },
-        orderBy: { createdAt: "asc" },
-        include: {
-          lineItems: {
-            select: {
-              id: true,
-              description: true,
-              category: true,
-              qty: true,
-              unit: true,
-              unitCost: true,
-              totalCost: true,
-              documentId: true,
-              section: { select: { name: true, groupLabel: true } },
-            },
-          },
-          documents: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
-        },
-      },
-      approvedBy: true,
-      proposals: { orderBy: { createdAt: "desc" } },
-      changeOrdersAsBase: { orderBy: { createdAt: "desc" } },
-    },
+    select: { id: true, versionNumber: true, isCurrent: true, isLocked: true, grandTotal: true },
   });
 
-  const currentVersion = versions.find((v) => v.isCurrent) ?? versions[0];
-  const olderVersions = versions.filter((v) => v.id !== currentVersion?.id);
+  const currentVersionId = versionSummaries.find((v) => v.isCurrent)?.id ?? versionSummaries[0]?.id;
+
+  const currentVersion = currentVersionId
+    ? ((await db.estimateVersion.findUnique({
+        where: { id: currentVersionId },
+        include: {
+          sections: {
+            where: { optionId: null },
+            orderBy: { sortOrder: "asc" },
+            include: {
+              lineItems: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+                include: {
+                  costActuals: true,
+                  document: { select: { id: true, mimeType: true, filename: true } },
+                  bidPackage: { select: { id: true, name: true } },
+                },
+              },
+            },
+          },
+          options: {
+            orderBy: { sortOrder: "asc" },
+            include: { sections: { orderBy: { sortOrder: "asc" }, include: { lineItems: true } } },
+          },
+          bidPackages: {
+            where: { deletedAt: null },
+            orderBy: { createdAt: "asc" },
+            include: {
+              lineItems: {
+                select: {
+                  id: true,
+                  description: true,
+                  category: true,
+                  qty: true,
+                  unit: true,
+                  unitCost: true,
+                  totalCost: true,
+                  documentId: true,
+                  section: { select: { name: true, groupLabel: true } },
+                },
+              },
+              documents: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
+            },
+          },
+          approvedBy: true,
+          proposals: { orderBy: { createdAt: "desc" } },
+          changeOrdersAsBase: { orderBy: { createdAt: "desc" } },
+        },
+      })) ?? undefined)
+    : undefined;
+
+  const olderVersions: VersionSummary[] = versionSummaries.filter((v) => v.id !== currentVersionId);
 
   const [
     users,
@@ -844,6 +860,17 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
     proposals: true;
     changeOrdersAsBase: true;
   };
+}>;
+
+// Everything the "Earlier versions" card (ProposalApprovalTab) actually
+// renders for a past version -- versionNumber, isLocked, grandTotal. Kept
+// deliberately separate from VersionWithSections: fetching every historical
+// version's full line-item tree (sections, options, bid packages,
+// documents) just to show three numbers per row was real, wasted work that
+// grows with every revision an estimate goes through -- see this file's own
+// versionSummaries query below.
+type VersionSummary = Prisma.EstimateVersionGetPayload<{
+  select: { id: true; versionNumber: true; isCurrent: true; isLocked: true; grandTotal: true };
 }>;
 
 // The always-visible header/summary -- title, lock status, totals -- kept
@@ -4217,7 +4244,7 @@ function ProposalApprovalTab({
   version: VersionWithSections;
   users: { id: string; name: string }[];
   proposalTemplates: { id: string; name: string }[];
-  olderVersions: VersionWithSections[];
+  olderVersions: VersionSummary[];
 }) {
   const approveVersionWithIds = approveVersionAction.bind(null, estimateId, version.id);
   const generateProposalWithIds = generateProposalAction.bind(null, estimateId, version.id);
