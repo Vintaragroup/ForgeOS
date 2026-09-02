@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -15,9 +16,19 @@ export interface TabDef {
 // Generic, content-agnostic tab bar: every tab's content is already
 // server-rendered JSX (a normal Server Component page renders this and
 // hands it fully-formed `tabs[].content`) -- this component only owns
-// which one is visible, via `display:none` on the rest (kept mounted,
-// not unmounted, so a form the user was mid-way through in another tab
-// isn't silently reset by switching away and back).
+// which one is visible, via `display:none` on the rest (kept mounted
+// once visited, not unmounted again, so a form the user was mid-way
+// through in another tab isn't silently reset by switching away and
+// back). A tab NOT yet visited this session isn't rendered at all until
+// its first click -- confirmed live as a real, severe cost on a large
+// real estimate (300+ line items across 9 category tabs): rendering
+// every tab's full content up front, even ones nobody looks at this
+// session, meant the browser held all of that DOM in memory
+// simultaneously, making even a "free" client-side tab switch visibly
+// slow. Lazy-mounting fixes the common case (most sessions never visit
+// every tab) without giving up the state-preservation the original
+// mount-everything approach existed for, for whichever tabs actually
+// get visited.
 //
 // Active tab syncs to a URL search param (default "tab") via
 // router.replace -- shallow, no server round-trip, no scroll reset --
@@ -44,6 +55,24 @@ export function Tabs({
 
   const requested = searchParams.get(paramName);
   const activeId = tabs.some((t) => t.id === requested) ? requested! : tabs[0]?.id;
+
+  // Seeded with whichever tab is active on first render (the lazy
+  // initializer runs before the first paint, so that one tab's content
+  // is never delayed by a frame) -- every other tab joins this set only
+  // once actually selected, client-side navigation (back/forward,
+  // pasting a ?tab= link) included, not just a direct click below.
+  // "Adjusting state during render" (React's own recommended pattern for
+  // this, not a useEffect) -- activeId can change without this component
+  // re-mounting (router.replace), so the update has to converge in the
+  // SAME render that first sees the new activeId, not one render later.
+  const [visitedIds, setVisitedIds] = useState<Set<string>>(() => new Set(activeId ? [activeId] : []));
+  const [trackedActiveId, setTrackedActiveId] = useState(activeId);
+  if (activeId !== trackedActiveId) {
+    setTrackedActiveId(activeId);
+    if (activeId && !visitedIds.has(activeId)) {
+      setVisitedIds((prev) => new Set(prev).add(activeId));
+    }
+  }
 
   function selectTab(id: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -94,7 +123,7 @@ export function Tabs({
       {beforeContent}
       {tabs.map((tab) => (
         <div key={tab.id} hidden={tab.id !== activeId}>
-          {content[tab.id]}
+          {visitedIds.has(tab.id) ? content[tab.id] : null}
         </div>
       ))}
     </div>

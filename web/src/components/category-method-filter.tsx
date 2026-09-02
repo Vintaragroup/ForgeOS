@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -12,12 +13,14 @@ export interface MethodFilterOption {
 // Secondary filter row nested inside one primary category tab (see
 // PrimaryCategoryTabContent in the estimate page) -- structurally a sibling
 // of Tabs (same URL-synced active-id pattern via router.replace, same
-// mount-everything/gate-with-`hidden` discipline, required here too since
-// content is form-bearing CategoryTabContent JSX and Tabs' own header
-// comment already explains why that matters: switching away and back must
-// never silently reset a form the user was mid-way through). Rendered as
-// rounded pills rather than another bordered tablist so the two tab levels
-// stay visually distinct at a glance, instead of reading as one flat row.
+// lazy-mount-on-first-visit discipline, required here too since content is
+// form-bearing CategoryTabContent JSX and Tabs' own header comment already
+// explains both halves of why: switching away and back must never silently
+// reset a form the user was mid-way through, but rendering every option's
+// full content up front is a real, confirmed cost on a large estimate.
+// Rendered as rounded pills rather than another bordered tablist so the
+// two tab levels stay visually distinct at a glance, instead of reading as
+// one flat row.
 //
 // URL-driven (not local useState) for the same reason Tabs itself is: this
 // page's other forms (Untag, margin update, ...) all revalidatePath, which
@@ -40,6 +43,18 @@ export function CategoryMethodFilter({
 
   const requested = searchParams.get(paramName);
   const activeId = options.some((o) => o.id === requested) ? requested! : options[0]?.id;
+
+  // Same lazy-mount tracking as Tabs itself, adjusted during render for
+  // the same reason -- see that component's own comment for the full
+  // reasoning.
+  const [visitedIds, setVisitedIds] = useState<Set<string>>(() => new Set(activeId ? [activeId] : []));
+  const [trackedActiveId, setTrackedActiveId] = useState(activeId);
+  if (activeId !== trackedActiveId) {
+    setTrackedActiveId(activeId);
+    if (activeId && !visitedIds.has(activeId)) {
+      setVisitedIds((prev) => new Set(prev).add(activeId));
+    }
+  }
 
   function selectOption(id: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -82,7 +97,7 @@ export function CategoryMethodFilter({
       </div>
       {options.map((option) => (
         <div key={option.id} hidden={option.id !== activeId}>
-          {content[option.id]}
+          {visitedIds.has(option.id) ? content[option.id] : null}
         </div>
       ))}
     </div>
