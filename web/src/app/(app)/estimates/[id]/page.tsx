@@ -1278,6 +1278,41 @@ function LineItemsTab({
             Confirmed {confirmedCount} draft line item{confirmedCount === 1 ? "" : "s"} -- now counted in the version total.
           </p>
         )}
+
+        {/* Kept at the top, not buried below the whole category board --
+            the one structural control that applies across every
+            category, so it shouldn't need scrolling past everything
+            else to reach. */}
+        {!version.isLocked && (
+          <form action={addSectionWithIds} className="mb-6 flex items-end gap-3 border-b border-neutral-200 pb-6">
+            <div className="flex-1">
+              <Field label="New section name" name="name" placeholder="e.g. COMPONENT 1" required />
+            </div>
+            <div className="flex-1">
+              {/* Free text, not a fixed picker: typing an existing group
+                  reuses it (a new H2 inside that H1); typing anything
+                  else creates a brand-new, independent group (a new H1)
+                  -- the datalist only ever suggests, it never
+                  constrains. Blank means project-wide, no group at all. */}
+              <Field
+                label="Group (optional)"
+                name="groupLabel"
+                placeholder="e.g. FS - Reception Counter -- blank for project-wide"
+                list="existing-group-labels"
+              />
+              <datalist id="existing-group-labels">
+                {[...buildTypeByBoothLabel.keys()].map((label) => (
+                  <option key={label} value={label} />
+                ))}
+              </datalist>
+            </div>
+            <div className="w-48">
+              <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
+            </div>
+            <Button variant="secondary">Add section</Button>
+          </form>
+        )}
+
         {version.isLocked ? (
           <VarianceByDepartment sections={version.sections} />
         ) : (
@@ -1430,36 +1465,6 @@ function LineItemsTab({
             />
           </div>
         </BidPackageSelectionProvider>
-
-        {!version.isLocked && (
-          <form action={addSectionWithIds} className="mt-6 flex items-end gap-3 border-t border-neutral-200 pt-4">
-            <div className="flex-1">
-              <Field label="New section name" name="name" placeholder="e.g. COMPONENT 1" required />
-            </div>
-            <div className="flex-1">
-              {/* Free text, not a fixed picker: typing an existing group
-                  reuses it (a new H2 inside that H1); typing anything
-                  else creates a brand-new, independent group (a new H1)
-                  -- the datalist only ever suggests, it never
-                  constrains. Blank means project-wide, no group at all. */}
-              <Field
-                label="Group (optional)"
-                name="groupLabel"
-                placeholder="e.g. FS - Reception Counter -- blank for project-wide"
-                list="existing-group-labels"
-              />
-              <datalist id="existing-group-labels">
-                {[...buildTypeByBoothLabel.keys()].map((label) => (
-                  <option key={label} value={label} />
-                ))}
-              </datalist>
-            </div>
-            <div className="w-48">
-              <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
-            </div>
-            <Button variant="secondary">Add section</Button>
-          </form>
-        )}
       </Card>
     </div>
   );
