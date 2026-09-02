@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import {
@@ -31,7 +32,16 @@ export async function destroySession(): Promise<void> {
   store.delete(SESSION_COOKIE);
 }
 
-export async function getCurrentUser() {
+// Wrapped in React's cache() so the many call sites that each need "who's
+// logged in" (the (app) layout's nav bar, a page's own auth gate, a Server
+// Action re-checking access, ...) collapse into one DB lookup per request
+// instead of one each -- confirmed the layout and this exact estimate page
+// both call this independently, meaning every page load was already paying
+// for it twice before this. Safe by construction: cache() scopes to the
+// single request/render, so it can never leak a user across requests, and
+// there's nothing here for a mutation to invalidate mid-request (the
+// session cookie itself can't change during one render pass).
+export const getCurrentUser = cache(async () => {
   const store = await cookies();
   const session = parseSessionValue(store.get(SESSION_COOKIE)?.value);
   if (!session) return null;
@@ -49,7 +59,7 @@ export async function getCurrentUser() {
   if (isSessionStale(session, user)) return null;
   const { passwordChangedAt: _passwordChangedAt, ...publicUser } = user;
   return publicUser;
-}
+});
 
 // Server Actions under /admin re-check this themselves rather than trusting
 // the admin layout alone -- Next's own proxy docs warn a route reorganized

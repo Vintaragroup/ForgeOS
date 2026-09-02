@@ -1127,6 +1127,14 @@ model EstimateSection {
 
   lineItems LineItem[]
 
+  // Postgres doesn't auto-index foreign key columns the way MySQL does --
+  // every estimate page load fans out from an EstimateVersion to its
+  // sections via estimateVersionId, and without this it's a sequential
+  // scan of the WHOLE estimate_sections table (every estimate ever
+  // created, not just this one), confirmed via EXPLAIN. optionId gets the
+  // same treatment for the equivalent Option -> sections fan-out.
+  @@index([estimateVersionId])
+  @@index([optionId])
   @@map("estimate_sections")
 }
 
@@ -1254,6 +1262,18 @@ model LineItem {
   cutListParts         CutListPart[]
   vendorMatchApplyLogs VendorMatchApplyLog[]
 
+  // Same reasoning as EstimateSection.estimateVersionId above -- this is
+  // the largest, hottest table in the schema (every line item across
+  // every estimate), and every one of these foreign keys is filtered on
+  // by a real query path: sectionId on every estimate page load,
+  // bidPackageId when rendering a bid package's items, documentId/
+  // attachmentId when resolving a draft's source. None of them had an
+  // index; confirmed via EXPLAIN that a plain sectionId lookup was a
+  // sequential scan of the whole table.
+  @@index([sectionId])
+  @@index([bidPackageId])
+  @@index([documentId])
+  @@index([attachmentId])
   @@map("line_items")
 }
 
