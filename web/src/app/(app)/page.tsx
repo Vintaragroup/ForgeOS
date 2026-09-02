@@ -102,22 +102,6 @@ export default async function DashboardPage() {
 
   return (
     <div id="forgeos-dashboard" className="dash dash-full-bleed -my-8">
-      <div className="dash-strip">
-        <div className="dash-strip-inner">
-          <div className="dash-strip-stats">
-            {Object.entries(STAGE_LABELS).map(([stage, label]) => (
-              <Link key={stage} href={`/opportunities?stage=${stage}`} className="dash-strip-stat">
-                <span className="n">{pipeline.byStage[stage] ?? 0}</span>
-                <span className="l">{label}</span>
-              </Link>
-            ))}
-          </div>
-          <Link href="/opportunities" className="dash-strip-link">
-            All opportunities →
-          </Link>
-        </div>
-      </div>
-
       <div className="dash-hero">
         {/* No logo here -- AppNav's header above already shows it; repeating
             it in the hero read as two logos stacked on top of each other. */}
@@ -178,6 +162,23 @@ export default async function DashboardPage() {
       </div>
 
       <div className="dash-wrap">
+        <div className="dash-section">
+          <div className="dash-section-head">
+            <h2 className="dash-section-title">PIPELINE</h2>
+            <Link href="/opportunities" className="dash-section-link">
+              All opportunities →
+            </Link>
+          </div>
+          <div className="dash-card dash-pipeline-card">
+            {Object.entries(STAGE_LABELS).map(([stage, label]) => (
+              <Link key={stage} href={`/opportunities?stage=${stage}`} className="dash-strip-stat">
+                <span className="n">{pipeline.byStage[stage] ?? 0}</span>
+                <span className="l">{label}</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+
         <div className="dash-section">
           <div className="dash-section-head">
             <h2 className="dash-section-title">UPCOMING DEADLINES</h2>

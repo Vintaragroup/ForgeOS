@@ -210,11 +210,11 @@
    is, so this reaches full viewport width without touching layout.tsx
    the way the black header already does it differently (by keeping
    the <header> itself unconstrained and centering only its inner
-   content). Applied to .dash itself, not just .dash-hero/.dash-strip --
-   putting it only on those two left every section BELOW the hero
-   (deadlines/proposals/admin) sitting inside the still-1152px-constrained
-   .dash box, so <body>'s fixed light background showed through as a
-   gutter down both sides in dark mode. .dash-wrap's own max-width still
+   content). Applied to .dash itself, not just .dash-hero -- putting it
+   only on the hero left every section BELOW it (pipeline/deadlines/
+   proposals/admin) sitting inside the still-1152px-constrained .dash
+   box, so <body>'s fixed light background showed through as a gutter
+   down both sides in dark mode. .dash-wrap's own max-width still
    centers that content at the same 1152px column, just with the correct
    background now filling the full row behind it. */
 .dash-full-bleed {
@@ -223,26 +223,18 @@
   margin-right: calc(50% - 50vw);
 }
 
-/* pipeline strip */
-
-.dash-strip {
-  background: var(--dash-surface);
-  border-bottom: 1px solid var(--dash-border);
-}
-.dash-strip-inner {
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 0.75rem 1.5rem;
+/* pipeline stat pills -- originally a standalone ticker strip between
+   the nav and the hero; moved into a normal .dash-card section
+   alongside Upcoming Deadlines/Recent Proposals/Admin Overview (see
+   page.tsx) since, once the hero became the page's actual landing
+   moment, a stat strip sitting ABOVE it read as a stray ticker rather
+   than part of the page. Still just pill-style links, now wrapped in
+   .dash-pipeline-card instead of a full-bleed strip of their own. */
+.dash-pipeline-card {
   display: flex;
-  align-items: center;
-  gap: 1.5rem;
-  flex-wrap: wrap;
-}
-.dash-strip-stats {
-  display: flex;
-  flex: 1;
   flex-wrap: wrap;
   gap: 0.5rem;
+  padding: 0.75rem;
 }
 .dash-strip-stat {
   display: flex;
@@ -258,8 +250,6 @@
 .dash-strip-stat:hover { border-color: var(--dash-teal); background: var(--dash-teal-pale); }
 .dash-strip-stat .n { font-family: var(--font-display); font-size: 1.3125rem; color: var(--dash-navy); line-height: 1; }
 .dash-strip-stat .l { font-size: 0.78125rem; color: var(--dash-text-soft); }
-.dash-strip-link { font-size: 0.8125rem; font-weight: 600; color: var(--dash-text-soft); text-decoration: none; white-space: nowrap; }
-.dash-strip-link:hover { color: var(--dash-teal); }
 
 /* theme toggle */
 
