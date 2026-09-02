@@ -1103,8 +1103,9 @@ function LineItemsTable({
           const deleteWithIds = deleteLineItemAction.bind(null, estimateId, li.id);
           const confirmWithIds = confirmDraftLineItemAction.bind(null, estimateId, li.id);
           const updateWithIds = updateLineItemAction.bind(null, estimateId, version.id, li.id);
-          const moveUpWithIds = moveLineItemAction.bind(null, estimateId, li.id, "up");
-          const moveDownWithIds = moveLineItemAction.bind(null, estimateId, li.id, "down");
+          const visibleSiblingIds = lineItems.map((x) => x.id);
+          const moveUpWithIds = moveLineItemAction.bind(null, estimateId, li.id, "up", visibleSiblingIds);
+          const moveDownWithIds = moveLineItemAction.bind(null, estimateId, li.id, "down", visibleSiblingIds);
           const toggleProposalVisibilityWithIds = toggleLineItemProposalVisibilityAction.bind(
             null,
             estimateId,

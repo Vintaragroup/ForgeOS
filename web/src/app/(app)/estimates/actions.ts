@@ -399,10 +399,15 @@ export async function updateLineItemAction(
   revalidatePath(`/estimates/${estimateId}`);
 }
 
-export async function moveLineItemAction(estimateId: string, lineItemId: string, direction: "up" | "down") {
+export async function moveLineItemAction(
+  estimateId: string,
+  lineItemId: string,
+  direction: "up" | "down",
+  visibleSiblingIds: string[],
+) {
   await requireEstimateAccess(estimateId);
   const opportunityId = await estimateOpportunityId(estimateId);
-  await moveLineItemWithinSection(opportunityId, lineItemId, direction);
+  await moveLineItemWithinSection(opportunityId, lineItemId, direction, visibleSiblingIds);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

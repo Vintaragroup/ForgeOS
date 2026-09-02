@@ -835,27 +835,61 @@ export async function updateLineItem(
 // `category`, the client-facing proposal grouping, which this never
 // touches.
 // opportunityId ownership check -- see deleteLineItem's header comment.
-export async function moveLineItemWithinSection(opportunityId: string, lineItemId: string, direction: "up" | "down") {
+export async function moveLineItemWithinSection(
+  opportunityId: string,
+  lineItemId: string,
+  direction: "up" | "down",
+  // The exact ordered ids of every row the UI is showing alongside
+  // lineItemId right now -- LineItemsTable's own `lineItems` array
+  // (whatever category/method bucket produced it), NOT re-derived here
+  // from a blind sectionId query. One EstimateSection routinely holds
+  // line items whose resolved category (LineItem.category) differs
+  // per-item -- a booth's items commonly span Structure, Flooring,
+  // Custom Build, etc. all under one section row (see
+  // resolveEffectiveCategory) -- so re-deriving "siblings" from the
+  // whole section meant the two rows a user was actually looking at in
+  // one category tab were very often NOT adjacent in that raw,
+  // cross-category sequence: clicking the button swapped the clicked
+  // row with some entirely different, invisible-in-this-tab item
+  // elsewhere in the section instead, making the button appear to do
+  // nothing. Confirmed live and reproduced exactly: a 2-item Custom
+  // Build/Rental view inside a 32-item mixed section, where index+1 in
+  // the RAW order was a Structure-category door, not the other visible
+  // Custom Build row.
+  visibleSiblingIds: string[],
+) {
   const item = await db.lineItem.findFirstOrThrow({
     where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
     include: { section: true },
   });
   await assertUnlocked(item.section.estimateVersionId);
 
-  const siblings = await db.lineItem.findMany({
-    where: { sectionId: item.sectionId },
-    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  const index = visibleSiblingIds.indexOf(lineItemId);
+  if (index === -1) return;
+  const swapWithIndex = direction === "up" ? index - 1 : index + 1;
+  if (swapWithIndex < 0 || swapWithIndex >= visibleSiblingIds.length) return;
+  const swapWithId = visibleSiblingIds[swapWithIndex];
+
+  // Re-verified against the DB rather than trusted outright from the
+  // caller-supplied list -- both rows must actually belong to this exact
+  // section, the same ownership discipline as every other
+  // caller-supplied-ID check in this file (see opportunity-access.ts's
+  // own header comment on the general pattern).
+  const pair = await db.lineItem.findMany({
+    where: { id: { in: [lineItemId, swapWithId] }, sectionId: item.sectionId },
+    select: { id: true, sortOrder: true },
   });
-  const index = siblings.findIndex((s) => s.id === lineItemId);
-  const swapWith = direction === "up" ? index - 1 : index + 1;
-  if (swapWith < 0 || swapWith >= siblings.length) return;
+  const a = pair.find((p) => p.id === lineItemId);
+  const b = pair.find((p) => p.id === swapWithId);
+  if (!a || !b) return;
 
-  const reordered = [...siblings];
-  [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
-
-  await db.$transaction(
-    reordered.map((li, i) => db.lineItem.update({ where: { id: li.id }, data: { sortOrder: i } })),
-  );
+  // A plain two-value swap -- not a renumber of the whole section --
+  // so every OTHER item's sortOrder (visible in this bucket or not)
+  // stays exactly where it was.
+  await db.$transaction([
+    db.lineItem.update({ where: { id: a.id }, data: { sortOrder: b.sortOrder } }),
+    db.lineItem.update({ where: { id: b.id }, data: { sortOrder: a.sortOrder } }),
+  ]);
 }
 
 // The missing primitive for the line-item-audit-service.ts "move to the

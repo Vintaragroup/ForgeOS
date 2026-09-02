@@ -1146,6 +1146,102 @@ describe("design-intake prototype: draft line items + Attachment", () => {
   });
 });
 
+describe("moveLineItemWithinSection", () => {
+  async function makeMixedCategorySection() {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Booth Build", sectionType: "CATEGORY" });
+    // One EstimateSection holding items from several resolved categories,
+    // matching a real booth section -- the exact shape that reproduced the
+    // bug live: the two Custom Build items a user sees together in that
+    // tab are NOT adjacent in the section's raw sortOrder sequence.
+    const structure1 = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL", description: "Structure item 1", category: "Structure", qty: 1, unitCost: 10,
+    });
+    const customBuild1 = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL", description: "Custom build item 1", category: "Custom Build / Rental", qty: 1, unitCost: 20,
+    });
+    const structure2 = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL", description: "Structure item 2", category: "Structure", qty: 1, unitCost: 30,
+    });
+    const customBuild2 = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL", description: "Custom build item 2", category: "Custom Build / Rental", qty: 1, unitCost: 40,
+    });
+    return { opportunity, section, structure1, customBuild1, structure2, customBuild2 };
+  }
+
+  it("swaps only the two visible sibling ids, leaving an interleaved invisible item's sortOrder untouched", async () => {
+    const { opportunity, structure1, customBuild1, structure2, customBuild2 } = await makeMixedCategorySection();
+    // Same shape as the UI's own category-filtered list -- only the two
+    // Custom Build items, not the Structure items interleaved between them.
+    const visibleSiblingIds = [customBuild1.id, customBuild2.id];
+
+    await moveLineItemWithinSection(opportunity.id, customBuild1.id, "down", visibleSiblingIds);
+
+    const [refreshed1, refreshed2, refreshedStructure1, refreshedStructure2] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: customBuild1.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: customBuild2.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: structure1.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: structure2.id } }),
+    ]);
+    // The two visible items swapped sortOrder with EACH OTHER...
+    expect(refreshed1.sortOrder).toBe(customBuild2.sortOrder);
+    expect(refreshed2.sortOrder).toBe(customBuild1.sortOrder);
+    // ...and the invisible Structure items in between were never touched --
+    // this is exactly what broke before: moving customBuild1 "down" used to
+    // swap it with structure2 (the next item in the raw, cross-category
+    // order), not with the other Custom Build row the user was looking at.
+    expect(refreshedStructure1.sortOrder).toBe(structure1.sortOrder);
+    expect(refreshedStructure2.sortOrder).toBe(structure2.sortOrder);
+  });
+
+  it("is a no-op past either end of the visible sibling list", async () => {
+    const { opportunity, customBuild1, customBuild2 } = await makeMixedCategorySection();
+    const visibleSiblingIds = [customBuild1.id, customBuild2.id];
+
+    await moveLineItemWithinSection(opportunity.id, customBuild1.id, "up", visibleSiblingIds);
+    await moveLineItemWithinSection(opportunity.id, customBuild2.id, "down", visibleSiblingIds);
+
+    const [refreshed1, refreshed2] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: customBuild1.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: customBuild2.id } }),
+    ]);
+    expect(refreshed1.sortOrder).toBe(customBuild1.sortOrder);
+    expect(refreshed2.sortOrder).toBe(customBuild2.sortOrder);
+  });
+
+  it("rejects a visible sibling id that doesn't actually belong to lineItemId's own section", async () => {
+    const { opportunity, customBuild1 } = await makeMixedCategorySection();
+    const company = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Other Show" } });
+    const otherEstimate = await db.estimate.create({ data: { opportunityId: otherOpportunity.id } });
+    const otherVersion = await createEstimateVersion(otherEstimate.id, 0);
+    const otherSection = await addSection(otherVersion.id, { name: "Unrelated", sectionType: "CATEGORY" });
+    const foreignItem = await addLineItem(otherVersion.id, otherSection.id, {
+      lineType: "MATERIAL", description: "Foreign item", qty: 1, unitCost: 999,
+    });
+    const foreignSortOrderBefore = foreignItem.sortOrder;
+
+    // A tampered/stale sibling list naming an item from a completely
+    // different section -- must not let the swap reach across sections.
+    await moveLineItemWithinSection(opportunity.id, customBuild1.id, "down", [customBuild1.id, foreignItem.id]);
+
+    const refreshedForeign = await db.lineItem.findUniqueOrThrow({ where: { id: foreignItem.id } });
+    expect(refreshedForeign.sortOrder).toBe(foreignSortOrderBefore);
+  });
+
+  it("rejects a lineItemId that belongs to a different opportunity", async () => {
+    const { customBuild1 } = await makeMixedCategorySection();
+    const company = await db.company.create({ data: { name: "Other Co" } });
+    const otherOpportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Other Show" } });
+    await expect(
+      moveLineItemWithinSection(otherOpportunity.id, customBuild1.id, "up", [customBuild1.id]),
+    ).rejects.toThrow();
+  });
+});
+
 describe("moveLineItemToEstimate", () => {
   async function makeTwoEstimates() {
     const company = await db.company.create({ data: { name: "Test Co" } });
@@ -1279,11 +1375,6 @@ describe("opportunity-ownership checks (cross-resource ID authorization)", () =>
 
     const stillThere = await db.lineItem.findUnique({ where: { id: itemA.id } });
     expect(stillThere).not.toBeNull();
-  });
-
-  it("moveLineItemWithinSection rejects a lineItemId that belongs to a different opportunity", async () => {
-    const { opportunityB, itemA } = await makeTwoOpportunities();
-    await expect(moveLineItemWithinSection(opportunityB.id, itemA.id, "up")).rejects.toThrow();
   });
 
   it("confirmDraftLineItem rejects a lineItemId that belongs to a different opportunity", async () => {
