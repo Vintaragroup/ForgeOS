@@ -24,7 +24,6 @@ import {
   addLineItemAction,
   addOptionAction,
   addOptionSectionAction,
-  addSectionAction,
   approveVersionAction,
   archiveEstimateAction,
   bulkMoveLineItemsCategoryAction,
@@ -101,6 +100,7 @@ import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
 import { CategoryMethodFilter } from "@/components/category-method-filter";
 import { SectionScopedForm } from "@/components/section-scoped-form";
+import { AddSectionForm } from "@/components/add-section-form";
 import { findClosestCandidateId, type ProposedVendorSection, type VendorLineMatch } from "@/lib/ai/vendor-match-ai-service";
 import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
@@ -160,8 +160,6 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     applied: appliedParam,
     stale: staleParam,
     confirmedCount: confirmedCountParam,
-    sectionCreated: sectionCreatedParam,
-    sectionCreatedGroup: sectionCreatedGroupParam,
     recategorized: recategorizedParam,
     recategorizeChecked: recategorizeCheckedParam,
     reconcileDocumentId: reconcileDocumentIdParam,
@@ -195,8 +193,6 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const confirmedCount = confirmedCountParam
     ? Number(Array.isArray(confirmedCountParam) ? confirmedCountParam[0] : confirmedCountParam) || 0
     : null;
-  const sectionCreated = Array.isArray(sectionCreatedParam) ? sectionCreatedParam[0] : sectionCreatedParam;
-  const sectionCreatedGroup = Array.isArray(sectionCreatedGroupParam) ? sectionCreatedGroupParam[0] : sectionCreatedGroupParam;
   const recategorized = recategorizedParam
     ? Number(Array.isArray(recategorizedParam) ? recategorizedParam[0] : recategorizedParam) || 0
     : null;
@@ -681,8 +677,6 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     attachments={attachments}
                     users={users}
                     confirmedCount={confirmedCount}
-                    sectionCreated={sectionCreated}
-                    sectionCreatedGroup={sectionCreatedGroup}
                   />
                 ),
                 options: (
@@ -1234,8 +1228,6 @@ function LineItemsTab({
   attachments,
   users,
   confirmedCount,
-  sectionCreated,
-  sectionCreatedGroup,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -1247,13 +1239,10 @@ function LineItemsTab({
   attachments: { id: string; fileRef: string }[];
   users: { id: string; name: string }[];
   confirmedCount: number | null;
-  sectionCreated?: string;
-  sectionCreatedGroup?: string;
 }) {
   const buckets = bucketLineItemsByCategory(version.sections, categories);
   const primaryTabs = groupPrimaryCategoryTabs(buckets, categories);
   const marginOverrideByCategoryId = new Map(categoryMarginOverrides.map((o) => [o.categoryId, o.marginPct]));
-  const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
   const draftCount = version.sections.flatMap((s) => s.lineItems).filter((li) => li.isDraft).length;
 
   // Every booth/component-linked section (EstimateSection.groupLabel).
@@ -1286,15 +1275,6 @@ function LineItemsTab({
         {confirmedCount !== null && (
           <p className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
             Confirmed {confirmedCount} draft line item{confirmedCount === 1 ? "" : "s"} -- now counted in the version total.
-          </p>
-        )}
-
-        {sectionCreated && (
-          <p className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
-            Created section &quot;{sectionCreated}&quot;{sectionCreatedGroup ? ` in group "${sectionCreatedGroup}"` : ""}.
-            It&apos;s empty, so it won&apos;t appear under any category tab until it has at least one line item -- use
-            the &quot;Add first item to an empty section&quot; control in any category tab below (or ask chat) to add
-            one.
           </p>
         )}
 
@@ -1422,47 +1402,17 @@ function LineItemsTab({
               // whichever category's groups are showing -- the same
               // control regardless of which tab is active, so it lives
               // between them rather than duplicated inside every tab's
-              // own content. Zero-JS disclosure (native <details>/
-              // <summary>, same pattern as AddLineItemForm/
-              // CollapsibleSection), collapsed to a small labeled trigger
-              // by default so it doesn't sit open and take up space.
+              // own content. A client component (not the zero-JS
+              // <details> used elsewhere) specifically so it can show a
+              // confirmation from useActionState without a redirect --
+              // see addSectionAction's own comment for why a redirect
+              // here froze this page on a large estimate.
               !version.isLocked && (
-                <details className="group/add-section mb-6">
-                  <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-full border border-dashed border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 marker:content-none [&::-webkit-details-marker]:hidden">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    </svg>
-                    Add section
-                  </summary>
-                  <form action={addSectionWithIds} className="mt-3 flex items-end gap-3">
-                    <div className="flex-1">
-                      <Field label="New section name" name="name" placeholder="e.g. COMPONENT 1" required />
-                    </div>
-                    <div className="flex-1">
-                      {/* Free text, not a fixed picker: typing an existing
-                          group reuses it (a new H2 inside that H1);
-                          typing anything else creates a brand-new,
-                          independent group (a new H1) -- the datalist
-                          only ever suggests, it never constrains. Blank
-                          means project-wide, no group at all. */}
-                      <Field
-                        label="Group (optional)"
-                        name="groupLabel"
-                        placeholder="e.g. FS - Reception Counter -- blank for project-wide"
-                        list="existing-group-labels"
-                      />
-                      <datalist id="existing-group-labels">
-                        {[...buildTypeByBoothLabel.keys()].map((label) => (
-                          <option key={label} value={label} />
-                        ))}
-                      </datalist>
-                    </div>
-                    <div className="w-48">
-                      <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
-                    </div>
-                    <Button variant="secondary">Add section</Button>
-                  </form>
-                </details>
+                <AddSectionForm
+                  estimateId={estimateId}
+                  versionId={version.id}
+                  existingGroupLabels={[...buildTypeByBoothLabel.keys()]}
+                />
               )
             }
             content={Object.fromEntries(

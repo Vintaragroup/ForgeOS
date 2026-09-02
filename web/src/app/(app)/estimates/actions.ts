@@ -84,7 +84,33 @@ export async function clearCategoryMarginOverrideAction(estimateId: string, vers
   revalidatePath(`/estimates/${estimateId}`);
 }
 
-export async function addSectionAction(estimateId: string, versionId: string, formData: FormData) {
+export interface AddSectionResult {
+  name: string;
+  groupLabel: string | null;
+}
+
+// Bound to (estimateId, versionId), then called by useActionState from
+// AddSectionForm as (prevState, formData) -- NOT a plain <form action>
+// like every other action in this file. That's deliberate: this
+// estimate's Line Items tab can hold hundreds of items across every
+// category tab (all pre-rendered and hydrated at once -- see Tabs' own
+// header comment), and confirmAllDraftLineItemsAction's redirect+
+// query-param pattern, tried here first, forced a full client-side
+// remount of that entire tree on submit -- multi-second freeze,
+// confirmed live (Chrome's own "page unresponsive" prompt) on a
+// real ~330-item estimate, and confirmed absent from updateMarginTargetAction
+// just above, which revalidates the same route without redirecting.
+// useActionState's return value gives the client the confirmation text
+// directly, without a navigation -- revalidatePath still refreshes the
+// server-rendered data (so the new section shows up in "Add first item
+// to an empty section" etc.), but as the same cheap in-place refresh
+// updateMarginTargetAction already gets.
+export async function addSectionAction(
+  estimateId: string,
+  versionId: string,
+  _prevState: AddSectionResult | null,
+  formData: FormData,
+): Promise<AddSectionResult> {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   const name = String(formData.get("name") ?? "").trim();
@@ -93,21 +119,12 @@ export async function addSectionAction(estimateId: string, versionId: string, fo
   // Blank -- the common case -- means project-wide, no group at all.
   // Typing an existing group's exact name reuses it (a new H2 inside
   // that H1); typing anything else creates a brand-new, independent
-  // group (a new H1) -- see the form's own comment in page.tsx.
+  // group (a new H1) -- see AddSectionForm's own comment.
   const groupLabel = String(formData.get("groupLabel") ?? "").trim() || null;
 
   const created = await addSection(versionId, { name, sectionType, groupLabel });
   revalidatePath(`/estimates/${estimateId}`);
-  // A brand-new section has no line items yet, and the category tabs
-  // (bucketLineItemsByCategory) are built entirely from line items -- an
-  // empty section contributes to no bucket and so renders nowhere,
-  // indistinguishable from the click having done nothing at all
-  // (confirmed live: reported as "it did not create a new group").
-  // Flash confirmation here, same pattern as confirmAllDraftLineItemsAction,
-  // since there's otherwise no other sign the create actually happened.
-  const params = new URLSearchParams({ tab: "line-items", sectionCreated: created.name });
-  if (created.groupLabel) params.set("sectionCreatedGroup", created.groupLabel);
-  redirect(`/estimates/${estimateId}?${params.toString()}`);
+  return { name: created.name, groupLabel: created.groupLabel };
 }
 
 export async function updateSectionBuildTypeAction(
