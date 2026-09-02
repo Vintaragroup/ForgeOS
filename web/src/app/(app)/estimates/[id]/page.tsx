@@ -110,6 +110,7 @@ import { findClosestCandidateId, type ProposedVendorSection, type VendorLineMatc
 import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { MoveSelectedItemsBar } from "@/components/move-selected-items-bar";
+import { BoothActionsMenu } from "@/components/booth-actions-menu";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
   applyAllHighConfidenceMatchesAction,
@@ -2702,46 +2703,24 @@ function CategoryTabContent({
                           Untag
                         </button>
                       </form>
-                      {/* Recategorizes every section under this booth at once --
-                          the per-section "Move section" dropdown further down
-                          does the same for just one contributing section, but a
-                          multi-section booth otherwise needs that clicked once
-                          per section. */}
-                      <form
-                        action={moveBoothToCategoryAction.bind(null, estimateId, version.id, booth.boothLabel)}
-                        className="flex items-center gap-1"
-                      >
-                        <SelectField label="" name="category" options={moveCategoryOptions} />
-                        <button
-                          type="submit"
-                          className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                          title="Move every item under this booth to a different category"
-                        >
-                          Move booth
-                        </button>
-                      </form>
-                      {/* Only when another booth actually exists to merge
-                          into -- see mergeBoothIntoAnotherBooth's own header
-                          comment for what this does to boothDescription. */}
-                      {otherBoothLabels.length > 0 && (
-                        <form
-                          action={mergeBoothAction.bind(null, estimateId, version.id, booth.boothLabel)}
-                          className="flex items-center gap-1"
-                        >
-                          <SelectField
-                            label=""
-                            name="targetGroupLabel"
-                            options={otherBoothLabels.map((label) => ({ value: label, label }))}
-                          />
-                          <button
-                            type="submit"
-                            className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                            title="Merge this entire booth into a different booth"
-                          >
-                            Merge into
-                          </button>
-                        </form>
-                      )}
+                      {/* Recategorizes every section under this booth at once
+                          (per-section "Move section" dropdown further down
+                          does just one contributing section), or merges this
+                          whole booth into another one -- see
+                          mergeBoothIntoAnotherBooth's own header comment for
+                          what that does to boothDescription. Tucked behind a
+                          kebab menu since both are used rarely relative to
+                          the buttons alongside them. */}
+                      <BoothActionsMenu
+                        moveAction={moveBoothToCategoryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                        categoryOptions={moveCategoryOptions}
+                        mergeAction={
+                          otherBoothLabels.length > 0
+                            ? mergeBoothAction.bind(null, estimateId, version.id, booth.boothLabel)
+                            : null
+                        }
+                        targetBoothOptions={otherBoothLabels.map((label) => ({ value: label, label }))}
+                      />
                     </>
                   )}
                 </div>
