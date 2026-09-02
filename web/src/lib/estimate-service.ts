@@ -319,11 +319,27 @@ export async function moveSectionProposalOrder(
   const reordered = [...siblings];
   [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
 
-  await db.$transaction(
-    reordered.flatMap((sibling, i) =>
-      sibling.sectionIds.map((id) => db.estimateSection.update({ where: { id }, data: { proposalSortOrder: i } })),
-    ),
-  );
+  const updates = reordered.flatMap((sibling, i) => sibling.sectionIds.map((id) => ({ id, sortOrder: i })));
+  if (updates.length === 0) return;
+
+  // A single batched UPDATE, not one db.estimateSection.update() per
+  // sectionId -- a category with many booths (each often spanning
+  // several sections) meant every up/down click was previously paying
+  // one full network round-trip to Postgres PER section being
+  // renumbered, not just the two booths that actually swapped. Confirmed
+  // live as the one remaining slow action after the tab/index/query
+  // fixes elsewhere in this file: moveLineItemWithinSection's own
+  // transaction stays small (bounded to one section's own line items),
+  // but this one renumbers every sibling booth in the whole category on
+  // every call, so its round-trip count scales with category size
+  // instead. Same end state as the row-by-row version -- this is a
+  // batching change only, not a semantics change.
+  await db.$executeRaw`
+    UPDATE "estimate_sections" AS es
+    SET "proposalSortOrder" = v.sort_order
+    FROM (VALUES ${Prisma.join(updates.map((u) => Prisma.sql`(${u.id}::text, ${u.sortOrder}::int)`))}) AS v(id, sort_order)
+    WHERE es.id = v.id
+  `;
 }
 
 // Approve-with-text (green check on an AI suggestion) or a manual save --
