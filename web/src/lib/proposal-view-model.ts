@@ -60,6 +60,10 @@ export interface ProposalViewSection {
   // fixture never has to be updated just because these fields exist.
   includeInProposal?: boolean;
   proposalSortOrder?: number;
+  // A booth's own H2 group order -- see EstimateSection.sortOrder's own
+  // schema comment and moveElementGroupOrder. Optional/undefined means
+  // "not yet reordered," same 0 default as proposalSortOrder above.
+  sortOrder?: number;
   lineItems: ProposalViewLineItem[];
 }
 
@@ -412,6 +416,12 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // own "moves as one unit" convention for a booth backed by more than
   // one EstimateSection row (estimate-service.ts's own comment).
   const boothSortOrder = new Map<string, number>();
+  // Same convention one level down, mirroring groupBoothLineItemsForEditing's
+  // own elementSortOrder -- moveElementGroupOrder's up/down otherwise had
+  // no effect at all on the client-facing PDF/web proposal (confirmed live:
+  // a moved group kept rendering in its old position there even though the
+  // editing view already reflected the move correctly).
+  const elementSortOrder = new Map<string, number>();
 
   for (const section of sections) {
     if (!section.groupLabel || section.includeInProposal === false) continue;
@@ -421,6 +431,8 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
       boothLabel,
       Math.min(boothSortOrder.get(boothLabel) ?? Infinity, section.proposalSortOrder ?? 0),
     );
+    const elementKey = `${boothLabel}::${elementType}`;
+    elementSortOrder.set(elementKey, Math.min(elementSortOrder.get(elementKey) ?? Infinity, section.sortOrder ?? 0));
 
     let byElementType = byBooth.get(boothLabel);
     if (!byElementType) {
@@ -476,7 +488,11 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     .sort(([a], [b]) => (boothSortOrder.get(a) ?? 0) - (boothSortOrder.get(b) ?? 0) || a.localeCompare(b))
     .map(([boothLabel, byElementType]) => {
       const elementGroups = [...byElementType.entries()]
-        .sort(([a], [b]) => elementTypeRank(a) - elementTypeRank(b))
+        .sort(
+          ([a], [b]) =>
+            elementTypeRank(a) - elementTypeRank(b) ||
+            (elementSortOrder.get(`${boothLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${boothLabel}::${b}`) ?? 0),
+        )
         .map(([elementType, bucket]) => {
           const items = [...bucket.values()].sort((a, b) => a.sortOrder - b.sortOrder);
           return { elementType, items, subtotal: bucketSubtotal(items) };
@@ -542,18 +558,30 @@ export interface RawElementTypeGroup<T> {
   subtotal: number;
   // The section(s) this bucket's items came from -- almost always exactly
   // one (a bucket is keyed by (boothLabel, elementType), and normally only
-  // one section per booth resolves to a given elementType). description/
-  // pendingDescription/editability below only ever apply when this is
-  // length 1 -- see isMapped's own comment for the >1 case.
+  // one section per booth resolves to a given elementType), but a second
+  // section sharing the same name can start contributing here the moment
+  // one of its own items gets recategorized into whatever category tab
+  // this bucket belongs to (confirmed live: recategorizing a "Shipping"-
+  // tab item into a booth's existing "Custom Build" component merges it
+  // into that component's own bucket the instant both share a category).
+  // description/pendingDescription/editability below still apply in that
+  // case -- see isMapped's own comment -- scoped to the FIRST contributing
+  // section (the one bucket.description was set from); a second section's
+  // own separate description is simply not surfaced through this bucket,
+  // same simplification as the single-section case picking one value.
   sectionIds: string[];
   description: string | null;
   pendingDescription: string | null;
-  // True when elementType came from a real ELEMENT_TYPE_MAP entry, OR
-  // when sectionIds.length > 1 (two distinct sections merged into one
-  // bucket -- documented edge case, not solved further in v1: shown with
-  // its fixed elementType label and no edit UI, same as a real mapped
-  // section, rather than picking one of the merged sections' descriptions
-  // arbitrarily).
+  // True only when elementType came from a real ELEMENT_TYPE_MAP entry --
+  // deliberately NOT also true just because sectionIds.length > 1.
+  // Merging used to force this true (no edit UI, no move-group-order
+  // eligibility, same treatment as a real mapped section) -- confirmed
+  // live as a real regression once moveElementGroupOrder shipped: an
+  // estimator recategorizing one item into an existing custom-named
+  // component silently stripped that component's own AI-suggest icon
+  // AND its up/down reorder buttons, with no indication why. A merge is
+  // just two sections sharing a name, not a special fixed category, so it
+  // no longer changes this at all.
   isMapped: boolean;
 }
 
@@ -670,20 +698,19 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
         .map(([elementType, bucket]) => {
           const sorted = [...bucket.items].sort((a, b) => a.sortOrder - b.sortOrder);
           const subtotal = sorted.reduce((sum, li) => sum + li.totalCost.toNumber(), 0);
-          const merged = bucket.sectionIds.length > 1;
           return {
             elementType,
             items: sorted,
             subtotal,
             sectionIds: bucket.sectionIds,
-            description: merged ? null : bucket.description,
-            pendingDescription: merged ? null : bucket.pendingDescription,
+            description: bucket.description,
+            pendingDescription: bucket.pendingDescription,
             // elementType here is already resolved -- a mapped section's
             // elementType is always one of ELEMENT_TYPE_ORDER's 6 fixed
             // target names (elementTypeForSection's own mapping), so
             // checking membership there is equivalent to (and simpler
             // than) re-deriving it from the raw section name.
-            isMapped: merged || ELEMENT_TYPE_ORDER.includes(elementType),
+            isMapped: ELEMENT_TYPE_ORDER.includes(elementType),
           };
         })
         // Same reasoning as groupBoothLineItems' own filter above -- an

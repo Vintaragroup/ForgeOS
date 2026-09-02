@@ -1878,4 +1878,53 @@ describe("moveElementGroupOrder", () => {
 
     await expect(moveElementGroupOrder(version.id, "Section 231 - Booth", "Platform", "up")).rejects.toThrow(/locked/);
   });
+
+  it("still moves a merged (two-same-named-sections) unmapped group -- merging isn't a mapped category", async () => {
+    // Regression companion to proposal-view-model.test.ts's own -- two
+    // sections sharing the name "Custom Build" merge into one elementType
+    // bucket the moment they both carry items, and that used to force
+    // isMapped true, silently excluding the whole component from
+    // moveElementGroupOrder's own movable list with no indication why.
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const customA = await addSection(version.id, {
+      name: "Custom Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+    const customB = await addSection(version.id, {
+      name: "Custom Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+    const platform = await addSection(version.id, {
+      name: "Platform",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+    for (const section of [customA, customB, platform]) {
+      await addLineItem(version.id, section.id, {
+        lineType: "MATERIAL",
+        description: `${section.name} item`,
+        qty: 1,
+        unitCost: 10,
+      });
+    }
+
+    await moveElementGroupOrder(version.id, "Section 231 - Booth", "Custom Build", "down");
+
+    const [updatedA, updatedB, updatedPlatform] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: customA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: customB.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: platform.id } }),
+    ]);
+    // The merged group moves as one unit -- both of its own sections land
+    // on the SAME new sortOrder, swapped with Platform's.
+    expect(updatedA.sortOrder).toBe(1);
+    expect(updatedB.sortOrder).toBe(1);
+    expect(updatedPlatform.sortOrder).toBe(0);
+  });
 });

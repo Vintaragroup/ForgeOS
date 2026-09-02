@@ -158,6 +158,24 @@ describe("groupBoothLineItems", () => {
     expect(groups.map((g) => g.boothLabel)).toEqual(["SECTION 428", "SECTION 211"]);
   });
 
+  it("orders a booth's own custom-named groups by sortOrder -- moveElementGroupOrder must actually reach the client-facing PDF/web proposal", () => {
+    // Regression: moveElementGroupOrder (estimate-service.ts) already
+    // persisted this correctly, and the editing view already reflected
+    // it, but this function -- the one the real Proposal PDF and web
+    // view are built from -- never read the field at all, so a moved
+    // group kept rendering in its original position there. Confirmed
+    // live: reordering a booth's groups had no visible effect on Preview
+    // PDF whatsoever.
+    const sections: ProposalViewSection[] = [
+      { name: "Platform", groupLabel: "SECTION 231", sortOrder: 1, lineItems: [li({ id: "a", totalCost: 100 })] },
+      { name: "Booth Build", groupLabel: "SECTION 231", sortOrder: 0, lineItems: [li({ id: "b", totalCost: 200 })] },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+
+    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Booth Build", "Platform"]);
+  });
+
   it("excludes a section whose includeInProposal is false, and a line item whose own flag is false", () => {
     const sections: ProposalViewSection[] = [
       { name: "BeMatrix", groupLabel: "SECTION 211", includeInProposal: false, lineItems: [li({ id: "a", totalCost: 100 })] },
@@ -255,7 +273,16 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
     expect(booth.elementGroups[0].isMapped).toBe(true);
   });
 
-  it("treats two distinct sections merging into one (boothLabel, elementType) bucket as isMapped with no single description", () => {
+  it("keeps a merged (two-same-named-sections) unmapped bucket editable -- merging isn't a mapped category", () => {
+    // Regression: an estimator recategorizing one item into an existing
+    // custom-named component (e.g. a Shipping-tab item joining a booth's
+    // "Custom Build") used to force isMapped true and null out the
+    // description the instant a second section started contributing to
+    // the same bucket -- silently stripping that component's own AI-
+    // suggest icon and (once moveElementGroupOrder shipped) its up/down
+    // reorder buttons too, with no indication why. Merging two sections
+    // sharing a name is not a fixed ELEMENT_TYPE_MAP category, so it must
+    // never flip isMapped on its own.
     const sections = [
       editableSection({ id: "s1", name: "Custom Build", groupLabel: "FS - Reception Counter", description: "Reception counter" }),
       editableSection({ id: "s2", name: "Custom Build", groupLabel: "FS - Reception Counter", description: "A different component" }),
@@ -264,8 +291,12 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
     const [booth] = groupBoothLineItemsForEditing(sections);
 
     expect(booth.elementGroups[0].sectionIds).toEqual(["s1", "s2"]);
-    expect(booth.elementGroups[0].isMapped).toBe(true);
-    expect(booth.elementGroups[0].description).toBeNull();
+    expect(booth.elementGroups[0].isMapped).toBe(false);
+    // The bucket's own description is whichever section it was first
+    // set from (s1, encountered first) -- s2's separate description is
+    // simply not surfaced through this bucket, same simplification the
+    // single-section case already makes.
+    expect(booth.elementGroups[0].description).toBe("Reception counter");
   });
 
   it("carries the booth-level (H1) description/pendingDescription from the first section seen for that booth", () => {
