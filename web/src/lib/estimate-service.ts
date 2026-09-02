@@ -195,7 +195,14 @@ export async function createEstimateVersion(estimateId: string, marginTargetPct:
 
 export async function addSection(
   estimateVersionId: string,
-  data: { name: string; sectionType: SectionType; sortOrder?: number; optionId?: string | null; groupLabel?: string | null },
+  data: {
+    name: string;
+    sectionType: SectionType;
+    sortOrder?: number;
+    optionId?: string | null;
+    groupLabel?: string | null;
+    buildType?: SectionBuildType | null;
+  },
 ) {
   await assertUnlocked(estimateVersionId);
   return db.estimateSection.create({
@@ -206,8 +213,28 @@ export async function addSection(
       sortOrder: data.sortOrder ?? 0,
       optionId: data.optionId,
       groupLabel: data.groupLabel,
+      buildType: data.buildType ?? null,
     },
   });
+}
+
+// A booth's buildType is shared across every section carrying its
+// groupLabel (updateSectionBuildType always sets them together) -- this is
+// the read-side half of that invariant, used by the actions layer so a new
+// section joining an EXISTING booth always inherits its real buildType
+// rather than trusting whatever a submitted form field happened to say.
+// Returns null for a genuinely new groupLabel (nothing to inherit yet --
+// the caller decides what to do with that, e.g. require an explicit
+// buildType to create a brand-new booth).
+export async function resolveBoothBuildType(
+  estimateVersionId: string,
+  groupLabel: string,
+): Promise<SectionBuildType | null> {
+  const existing = await db.estimateSection.findFirst({
+    where: { estimateVersionId, groupLabel },
+    select: { buildType: true },
+  });
+  return existing?.buildType ?? null;
 }
 
 // Tags every EstimateSection sharing this groupLabel (usually one row per

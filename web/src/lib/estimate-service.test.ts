@@ -31,6 +31,7 @@ import {
   recategorizeLineItems,
   recomputeVersionTotals,
   removeLineItemFromBidPackage,
+  resolveBoothBuildType,
   restoreLineItem,
   setBidPackageStatus,
   setCategoryMarginOverride,
@@ -1237,6 +1238,68 @@ describe("mergeBoothIntoAnotherBooth", () => {
     await expect(
       mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth"),
     ).rejects.toThrow(/locked/);
+  });
+});
+
+describe("addSection -- buildType / resolveBoothBuildType", () => {
+  it("persists buildType when creating a section with a new groupLabel", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const section = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 500 - New Booth",
+      buildType: "RENTAL",
+    });
+
+    const stored = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    expect(stored.groupLabel).toBe("Section 500 - New Booth");
+    expect(stored.buildType).toBe("RENTAL");
+  });
+
+  it("defaults buildType to null when omitted, same as before this field existed", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const section = await addSection(version.id, { name: "Plain section", sectionType: "FEE" });
+
+    const stored = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    expect(stored.buildType).toBeNull();
+  });
+
+  it("resolveBoothBuildType returns null for a groupLabel nothing carries yet", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    expect(await resolveBoothBuildType(version.id, "Never Created")).toBeNull();
+  });
+
+  it("resolveBoothBuildType returns the existing booth's real buildType, for inheriting into a new sibling section", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 500 - New Booth",
+      buildType: "CUSTOM_BUILD",
+    });
+
+    expect(await resolveBoothBuildType(version.id, "Section 500 - New Booth")).toBe("CUSTOM_BUILD");
+  });
+
+  it("resolveBoothBuildType is scoped to its own estimate version", async () => {
+    const estimate = await makeEstimate();
+    const v1 = await createEstimateVersion(estimate.id, 0);
+    const v2 = await createEstimateVersion(estimate.id, 0);
+    await addSection(v1.id, {
+      name: "Booth Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 500 - New Booth",
+      buildType: "PURCHASE",
+    });
+
+    expect(await resolveBoothBuildType(v2.id, "Section 500 - New Booth")).toBeNull();
   });
 });
 

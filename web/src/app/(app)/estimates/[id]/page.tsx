@@ -25,6 +25,7 @@ import {
   addOptionAction,
   addOptionSectionAction,
   addSectionAction,
+  addSectionToBoothAction,
   approveVersionAction,
   archiveEstimateAction,
   bulkMoveLineItemsCategoryAction,
@@ -134,6 +135,17 @@ const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
   { value: "CATEGORY", label: "Category" },
   { value: "FEE", label: "Fee" },
+];
+
+// Shared with the "Tag" form in the untagged-components banner -- both
+// set the same EstimateSection.buildType field, just at different moments
+// (tagging an existing booth after the fact vs. choosing it up front while
+// creating a brand-new one).
+const BUILD_TYPE_OPTIONS = [
+  { value: "", label: "— new booth? choose one —" },
+  { value: "RENTAL", label: "Rental" },
+  { value: "PURCHASE", label: "Purchase" },
+  { value: "CUSTOM_BUILD", label: "Custom Fabricated" },
 ];
 
 const LINE_TYPE_OPTIONS = [
@@ -1312,6 +1324,22 @@ function LineItemsTab({
     .filter((label) => !buildTypeByBoothLabel.get(label));
   const boothGroupsByCategoryName = boothGroupsByCategoryForEditing(version.sections, categories);
 
+  // A booth with genuinely zero line items anywhere -- either just
+  // created via "Add section" (a brand-new H1) or one whose only sections
+  // are all still empty -- can't appear in allBoothGroups above
+  // (groupBoothLineItemsForEditing drops any booth with no items to
+  // group) or in any category tab (every category view is built by
+  // walking line items). Surfaced here instead, its own always-visible
+  // panel, so creating a new booth has somewhere real to show up before
+  // its first item exists.
+  const emptyBooths = [...buildTypeByBoothLabel.keys()]
+    .map((groupLabel) => ({
+      groupLabel,
+      buildType: buildTypeByBoothLabel.get(groupLabel) ?? null,
+      sections: version.sections.filter((s) => s.groupLabel === groupLabel),
+    }))
+    .filter((b) => b.sections.every((s) => s.lineItems.length === 0));
+
   return (
     <div className="flex flex-col gap-6">
       <Card className="p-6">
@@ -1417,15 +1445,7 @@ function LineItemsTab({
                     className="flex items-center gap-2"
                   >
                     <span className="text-sm font-medium text-amber-900">{boothLabel}</span>
-                    <SelectField
-                      label=""
-                      name="buildType"
-                      options={[
-                        { value: "RENTAL", label: "Rental" },
-                        { value: "PURCHASE", label: "Purchase" },
-                        { value: "CUSTOM_BUILD", label: "Custom Fabricated" },
-                      ]}
-                    />
+                    <SelectField label="" name="buildType" options={BUILD_TYPE_OPTIONS.slice(1)} />
                     <Button variant="secondary" type="submit">
                       Tag
                     </Button>
@@ -1433,6 +1453,81 @@ function LineItemsTab({
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {emptyBooths.length > 0 && (
+          <div className="mb-6 flex flex-col gap-4">
+            {emptyBooths.map((booth) => (
+              <div key={booth.groupLabel} className="overflow-hidden rounded-md border border-neutral-200">
+                {booth.buildType ? (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
+                      <h4 className="text-sm font-semibold uppercase tracking-wide">{booth.groupLabel}</h4>
+                      {!version.isLocked && (
+                        <form
+                          action={addSectionToBoothAction.bind(null, estimateId, version.id, booth.groupLabel)}
+                          className="flex items-center gap-1"
+                        >
+                          <input
+                            type="text"
+                            name="name"
+                            placeholder="New group name"
+                            required
+                            className="w-32 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
+                          />
+                          <button
+                            type="submit"
+                            className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                            title="Add a new group (H2) to this booth"
+                          >
+                            + Group
+                          </button>
+                        </form>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-3 p-4">
+                      {booth.sections.map((section) => (
+                        <EmptyGroupCard
+                          key={section.id}
+                          estimateId={estimateId}
+                          versionId={version.id}
+                          sectionId={section.id}
+                          sectionName={section.name}
+                          attachments={attachments}
+                          laborRates={laborRates}
+                          categoryOptions={categoryOptions}
+                        />
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  // Legacy edge case -- a booth that exists (a section
+                  // carries its groupLabel) but was never tagged and has
+                  // no items either, so it never qualified for the
+                  // untagged-components banner above (that one only lists
+                  // booths allBoothGroups already knows about, which
+                  // requires at least one item). Same Tag control as that
+                  // banner; once tagged it re-renders with the dark H1
+                  // treatment above on the next load.
+                  <div className="flex flex-wrap items-center gap-2 bg-neutral-50 p-4">
+                    <span className="text-sm font-medium text-neutral-700">{booth.groupLabel}</span>
+                    <span className="text-xs text-neutral-500">— no build type yet</span>
+                    {!version.isLocked && (
+                      <form
+                        action={updateSectionBuildTypeAction.bind(null, estimateId, version.id, booth.groupLabel)}
+                        className="flex items-center gap-2"
+                      >
+                        <SelectField label="" name="buildType" options={BUILD_TYPE_OPTIONS.slice(1)} />
+                        <Button variant="secondary" type="submit">
+                          Tag
+                        </Button>
+                      </form>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
 
@@ -1486,6 +1581,15 @@ function LineItemsTab({
                     </div>
                     <div className="w-48">
                       <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
+                    </div>
+                    <div className="w-56">
+                      {/* Only matters when Group above is a brand-new name
+                          -- addSectionAction ignores this and inherits the
+                          real value instead when Group matches an existing
+                          booth, so re-tagging an existing one here is a
+                          no-op, not a mistake. Required server-side only
+                          for the genuinely-new-booth case. */}
+                      <SelectField label="Build type (new booth only)" name="buildType" options={BUILD_TYPE_OPTIONS} />
                     </div>
                     <SubmitButton variant="secondary" pendingText="Adding...">
                       Add section
@@ -2558,8 +2662,12 @@ function CategoryTabContent({
   // already has other content (confirmed live: no picker anywhere offered
   // it). Surfaced here, in every category tab, so a brand-new section
   // never becomes a permanent dead end regardless of which category it's
-  // eventually meant for.
-  const emptySections = version.sections.filter((s) => s.lineItems.length === 0);
+  // eventually meant for. Scoped to ungrouped sections only (no
+  // groupLabel) -- a booth-linked empty section has its own, more useful
+  // home now: LineItemsTab's pending-booths panel for one whose whole
+  // booth is still empty, or emptyChildSections above for one joining a
+  // booth that already has other real content.
+  const emptySections = version.sections.filter((s) => s.lineItems.length === 0 && !s.groupLabel);
   // No "— auto-detect —" entry here (unlike AddLineItemForm's own
   // categoryOptions) -- moving a whole section only makes sense to a real,
   // explicit category, never back to a guess.
@@ -2643,6 +2751,14 @@ function CategoryTabContent({
             const boothVisible =
               version.sections.find((s) => s.groupLabel === booth.boothLabel)?.includeInProposal ?? true;
             const otherBoothLabels = allBoothLabels.filter((label) => label !== booth.boothLabel);
+            // A section just added to this booth via the "+ Group" tool
+            // below (or one imported with no items yet) never appears in
+            // booth.elementGroups -- that's built entirely from existing
+            // line items. Surfaced here instead so it isn't invisible
+            // until its first item exists somewhere else in the estimate.
+            const emptyChildSections = version.sections.filter(
+              (s) => s.groupLabel === booth.boothLabel && s.lineItems.length === 0,
+            );
             return (
             <div key={booth.boothLabel} className="overflow-hidden rounded-md border border-neutral-200">
               <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
@@ -2721,6 +2837,32 @@ function CategoryTabContent({
                         }
                         targetBoothOptions={otherBoothLabels.map((label) => ({ value: label, label }))}
                       />
+                      {/* Adds a new H2 child section under this same booth
+                          -- groupLabel/buildType are both already fixed by
+                          which booth this button lives in, so the user
+                          only ever names it. It won't appear in
+                          elementGroups above until it has its own first
+                          line item; emptyChildSections surfaces it here in
+                          the meantime (see that variable's own comment). */}
+                      <form
+                        action={addSectionToBoothAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                        className="flex items-center gap-1"
+                      >
+                        <input
+                          type="text"
+                          name="name"
+                          placeholder="New group name"
+                          required
+                          className="w-32 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
+                        />
+                        <button
+                          type="submit"
+                          className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                          title="Add a new group (H2) to this booth"
+                        >
+                          + Group
+                        </button>
+                      </form>
                     </>
                   )}
                 </div>
@@ -2774,6 +2916,20 @@ function CategoryTabContent({
                     )}
                   </div>
                 ))}
+                {!version.isLocked &&
+                  emptyChildSections.map((section) => (
+                    <EmptyGroupCard
+                      key={section.id}
+                      estimateId={estimateId}
+                      versionId={version.id}
+                      sectionId={section.id}
+                      sectionName={section.name}
+                      attachments={attachments}
+                      laborRates={laborRates}
+                      categoryOptions={categoryOptions}
+                      defaultCategory={bucket.category.name}
+                    />
+                  ))}
               </div>
             </div>
             );
@@ -2867,6 +3023,46 @@ function CategoryTabContent({
           </div>
         </details>
       )}
+    </div>
+  );
+}
+
+// A section with no line items yet, rendered wherever it's actually
+// discoverable -- inside its own booth's H1 card (LineItemsTab's
+// pending-booths panel for a fully-empty booth, or CategoryTabContent's
+// emptyChildSections for a new group joining a booth that already has
+// other content elsewhere). Shared so both spots render this identically.
+function EmptyGroupCard({
+  estimateId,
+  versionId,
+  sectionId,
+  sectionName,
+  attachments,
+  laborRates,
+  categoryOptions,
+  defaultCategory,
+}: {
+  estimateId: string;
+  versionId: string;
+  sectionId: string;
+  sectionName: string;
+  attachments: { id: string; fileRef: string }[];
+  laborRates: LaborRateOption[];
+  categoryOptions: { value: string; label: string }[];
+  defaultCategory?: string;
+}) {
+  return (
+    <div className="rounded border border-dashed border-neutral-300 p-3">
+      <p className="mb-2 text-xs font-medium text-neutral-500">{sectionName} — no items yet</p>
+      <AddLineItemForm
+        estimateId={estimateId}
+        versionId={versionId}
+        sectionId={sectionId}
+        attachments={attachments}
+        laborRates={laborRates}
+        categoryOptions={categoryOptions}
+        defaultCategory={defaultCategory}
+      />
     </div>
   );
 }

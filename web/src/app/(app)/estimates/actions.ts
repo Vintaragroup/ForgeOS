@@ -21,6 +21,7 @@ import {
   moveSectionOrder,
   moveSectionProposalOrder,
   recomputeVersionTotals,
+  resolveBoothBuildType,
   restoreLineItem,
   setCategoryMarginOverride,
   unarchiveEstimate,
@@ -115,7 +116,51 @@ export async function addSectionAction(estimateId: string, versionId: string, fo
   // group (a new H1) -- see the form's own comment in page.tsx.
   const groupLabel = String(formData.get("groupLabel") ?? "").trim() || null;
 
-  await addSection(versionId, { name, sectionType, groupLabel });
+  // A booth's buildType is what actually turns groupLabel into a real H1
+  // (see boothGroupsByCategoryForEditing) -- resolveBoothBuildType always
+  // wins for a groupLabel that already exists (protects the "every section
+  // sharing one groupLabel shares one buildType" invariant even if the
+  // submitted field somehow disagreed); a genuinely new groupLabel has
+  // nothing to inherit, so it requires an explicit choice here or the new
+  // booth would silently stay untagged (a plain heading, not an H1) until
+  // someone finds the separate Tag banner later.
+  let buildType = null as SectionBuildType | null;
+  if (groupLabel) {
+    buildType = await resolveBoothBuildType(versionId, groupLabel);
+    if (!buildType) {
+      const submitted = String(formData.get("buildType") ?? "").trim();
+      if (!submitted) throw new Error("Choose a build type to create a new booth.");
+      buildType = submitted as SectionBuildType;
+    }
+  }
+
+  await addSection(versionId, { name, sectionType, groupLabel, buildType });
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// The "+ Add group" tool living inside an existing booth's own H1 header
+// (and inside the pending-booths panel for one that has no items yet) --
+// booth-scoped the same way moveBoothToCategoryAction/mergeBoothAction
+// are, so the user never re-types or re-picks the groupLabel/buildType a
+// second time; both are already fixed by which booth this button lives
+// in. Always inherits the parent booth's real buildType via
+// resolveBoothBuildType rather than trusting a hidden field, for the same
+// invariant-safety reason as addSectionAction above.
+export async function addSectionToBoothAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) throw new Error("Group name is required");
+  const sectionType = (String(formData.get("sectionType") ?? "") || "COMPONENT") as SectionType;
+  const buildType = await resolveBoothBuildType(versionId, groupLabel);
+  if (!buildType) throw new Error("This booth has no build type yet -- tag it before adding a group to it.");
+
+  await addSection(versionId, { name, sectionType, groupLabel, buildType });
   revalidatePath(`/estimates/${estimateId}`);
 }
 
