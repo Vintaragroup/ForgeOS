@@ -133,6 +133,7 @@ export function Field({
   onChange,
   required,
   placeholder,
+  list,
 }: {
   label: string;
   name: string;
@@ -146,6 +147,11 @@ export function Field({
   onChange?: (value: string) => void;
   required?: boolean;
   placeholder?: string;
+  // id of a sibling <datalist> -- suggests existing values (e.g. a
+  // booth/group label already used elsewhere) while still accepting any
+  // typed value, unlike SelectField which can only ever submit one of
+  // its fixed options.
+  list?: string;
 }) {
   const valueProps = onChange
     ? { value: value ?? "", onChange: (e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value) }
@@ -163,6 +169,7 @@ export function Field({
         {...valueProps}
         required={required}
         placeholder={placeholder}
+        list={list}
         step={type === "number" ? "any" : undefined}
         className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none focus:border-neutral-500"
       />

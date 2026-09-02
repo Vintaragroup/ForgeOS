@@ -1436,6 +1436,24 @@ function LineItemsTab({
             <div className="flex-1">
               <Field label="New section name" name="name" placeholder="e.g. COMPONENT 1" required />
             </div>
+            <div className="flex-1">
+              {/* Free text, not a fixed picker: typing an existing group
+                  reuses it (a new H2 inside that H1); typing anything
+                  else creates a brand-new, independent group (a new H1)
+                  -- the datalist only ever suggests, it never
+                  constrains. Blank means project-wide, no group at all. */}
+              <Field
+                label="Group (optional)"
+                name="groupLabel"
+                placeholder="e.g. FS - Reception Counter -- blank for project-wide"
+                list="existing-group-labels"
+              />
+              <datalist id="existing-group-labels">
+                {[...buildTypeByBoothLabel.keys()].map((label) => (
+                  <option key={label} value={label} />
+                ))}
+              </datalist>
+            </div>
             <div className="w-48">
               <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
             </div>

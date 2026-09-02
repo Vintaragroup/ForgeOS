@@ -90,8 +90,13 @@ export async function addSectionAction(estimateId: string, versionId: string, fo
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Section name is required");
   const sectionType = String(formData.get("sectionType")) as SectionType;
+  // Blank -- the common case -- means project-wide, no group at all.
+  // Typing an existing group's exact name reuses it (a new H2 inside
+  // that H1); typing anything else creates a brand-new, independent
+  // group (a new H1) -- see the form's own comment in page.tsx.
+  const groupLabel = String(formData.get("groupLabel") ?? "").trim() || null;
 
-  await addSection(versionId, { name, sectionType });
+  await addSection(versionId, { name, sectionType, groupLabel });
   revalidatePath(`/estimates/${estimateId}`);
 }
 
