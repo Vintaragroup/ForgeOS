@@ -29,6 +29,7 @@ export function LineItemRow({
   unitCost,
   totalCostDisplay,
   isClientOwned,
+  includeInProposal,
   usageTag,
   isLocked,
   actualCostDisplay,
@@ -60,6 +61,11 @@ export function LineItemRow({
   unitCost: string;
   totalCostDisplay: string;
   isClientOwned: boolean;
+  // Proposal PDF visibility -- see LineItem.includeInProposal's own
+  // schema comment. A hidden EstimateSection hides this item regardless
+  // of this value (not reflected here; that's a whole-group state shown
+  // on the booth header, not per-item).
+  includeInProposal: boolean;
   // Manual disambiguation for a genuinely ambiguous material (PVC, for
   // one) -- "" means unset, same convention as category/department above.
   usageTag: string;
@@ -128,6 +134,10 @@ export function LineItemRow({
               <input type="checkbox" name="isClientOwned" defaultChecked={isClientOwned} />
               Client owned (no charge)
             </label>
+            <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-10 sm:col-span-1">
+              <input type="checkbox" name="includeInProposal" defaultChecked={includeInProposal} />
+              Show on Proposal PDF
+            </label>
             <div className="flex gap-3 sm:order-11">
               <Button variant="secondary">Save</Button>
               <button
@@ -162,6 +172,14 @@ export function LineItemRow({
         {description}
         {isDraft && (
           <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">draft</span>
+        )}
+        {!includeInProposal && (
+          <span
+            className="ml-2 rounded-full bg-neutral-200 px-2 py-0.5 text-xs text-neutral-600"
+            title="Won't appear on the client-facing Proposal PDF"
+          >
+            hidden from proposal
+          </span>
         )}
         {usageTag && (
           <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">

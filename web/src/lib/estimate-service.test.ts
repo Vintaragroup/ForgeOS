@@ -26,6 +26,7 @@ import {
   moveLineItemToEstimate,
   moveLineItemWithinSection,
   moveSectionOrder,
+  moveSectionProposalOrder,
   recategorizeLineItems,
   recomputeVersionTotals,
   removeLineItemFromBidPackage,
@@ -37,6 +38,7 @@ import {
   updateLineItem,
   updateMarginTarget,
   updateSectionDescription,
+  updateSectionProposalVisibility,
 } from "@/lib/estimate-service";
 
 afterEach(async () => {
@@ -1391,5 +1393,110 @@ describe("updateBoothDescription / clearBoothPendingDescription", () => {
 
     await expect(updateBoothDescription(version.id, groupLabel, "Acme Corp booth")).rejects.toThrow();
     await expect(clearBoothPendingDescription(version.id, groupLabel)).rejects.toThrow();
+  });
+});
+
+describe("updateSectionProposalVisibility", () => {
+  it("sets includeInProposal across every section sharing the groupLabel, both directions", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "SECTION 211";
+    const sectionA = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+    const sectionB = await addSection(version.id, { name: "Wall Panels", sectionType: "COMPONENT", groupLabel });
+
+    await updateSectionProposalVisibility(version.id, groupLabel, false);
+    const [hiddenA, hiddenB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(hiddenA.includeInProposal).toBe(false);
+    expect(hiddenB.includeInProposal).toBe(false);
+
+    await updateSectionProposalVisibility(version.id, groupLabel, true);
+    const [shownA, shownB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(shownA.includeInProposal).toBe(true);
+    expect(shownB.includeInProposal).toBe(true);
+  });
+
+  it("rejects on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "SECTION 211";
+    const section = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    await expect(updateSectionProposalVisibility(version.id, groupLabel, false)).rejects.toThrow();
+  });
+});
+
+describe("moveSectionProposalOrder", () => {
+  async function makeTaggedBooth(versionId: string, groupLabel: string, categoryName: string) {
+    const section = await addSection(versionId, { name: "Labor", sectionType: "COMPONENT", groupLabel });
+    await db.estimateSection.update({ where: { id: section.id }, data: { buildType: "RENTAL" } });
+    await addLineItem(versionId, section.id, {
+      lineType: "LABOR",
+      description: `${groupLabel} labor`,
+      category: categoryName,
+      qty: 1,
+      unitCost: 100,
+    });
+    return section;
+  }
+
+  it("moves a booth up/down among only the booths visible in one category, leaving proposalSortOrder untouched for the rest", async () => {
+    await makeCategory("Labor", "labor");
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const boothA = await makeTaggedBooth(version.id, "Booth A", "Labor");
+    const boothB = await makeTaggedBooth(version.id, "Booth B", "Labor");
+    const boothC = await makeTaggedBooth(version.id, "Booth C", "Labor");
+
+    // Starting order is alphabetical (every proposalSortOrder defaults to
+    // 0, so the tiebreak applies): A, B, C.
+    await moveSectionProposalOrder(version.id, "Booth C", "Labor", "up");
+
+    const [updatedA, updatedB, updatedC] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: boothA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: boothB.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: boothC.id } }),
+    ]);
+    // C swapped with B (its immediate neighbor); A, first in line, is
+    // untouched by a swap between the other two.
+    expect(updatedA.proposalSortOrder).toBe(0);
+    expect(updatedB.proposalSortOrder).toBe(2);
+    expect(updatedC.proposalSortOrder).toBe(1);
+  });
+
+  it("does nothing when asked to move the first booth up or the last booth down", async () => {
+    await makeCategory("Labor", "labor");
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const boothA = await makeTaggedBooth(version.id, "Booth A", "Labor");
+    const boothB = await makeTaggedBooth(version.id, "Booth B", "Labor");
+
+    await moveSectionProposalOrder(version.id, "Booth A", "Labor", "up");
+    await moveSectionProposalOrder(version.id, "Booth B", "Labor", "down");
+
+    const [updatedA, updatedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: boothA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: boothB.id } }),
+    ]);
+    expect(updatedA.proposalSortOrder).toBe(0);
+    expect(updatedB.proposalSortOrder).toBe(0);
+  });
+
+  it("rejects on a locked version", async () => {
+    await makeCategory("Labor", "labor");
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    await makeTaggedBooth(version.id, "Booth A", "Labor");
+    await makeTaggedBooth(version.id, "Booth B", "Labor");
+    await lockEstimateVersion(version.id);
+
+    await expect(moveSectionProposalOrder(version.id, "Booth A", "Labor", "down")).rejects.toThrow();
   });
 });

@@ -1091,6 +1091,37 @@ model EstimateSection {
   boothDescription        String?
   boothPendingDescription String?
 
+  // Whole-group PDF visibility -- hides this section and every one of its
+  // line items from the Proposal PDF regardless of each item's own
+  // includeInProposal. Kept in sync across every section sharing this
+  // booth's groupLabel via the same updateMany-by-groupLabel pattern as
+  // buildType/boothDescription above, so toggling one booth's visibility
+  // hides it everywhere it appears, not just in whichever category tab
+  // the toggle was clicked from. Default true: unchanged behavior for
+  // every existing section and every new one.
+  includeInProposal Boolean @default(true)
+
+  // This section's position among the other booths visible within ONE
+  // category, for Proposal PDF ordering -- deliberately NOT the same
+  // field as sortOrder above (which orders sections generally / production
+  // tracking) and deliberately NOT synced across every section sharing a
+  // groupLabel the way includeInProposal/buildType are. A booth's items
+  // can spread across several category tabs (LineItemsTab's own header
+  // comment), each backed by a different EstimateSection row -- a single
+  // shared value would let reordering booths within one category tab
+  // silently reorder that same booth relative to unrelated booths in a
+  // DIFFERENT category the user never saw, which is exactly the ambiguity
+  // that got the Line Items tab's own old up/down section-reorder arrows
+  // removed (see LineItemsTab's "Section reordering" comment). Scoping
+  // this per-section keeps "move this booth within this category" a
+  // well-defined, category-local operation, matching how
+  // boothGroupsByCategory already builds one independent ordering per
+  // category. Default 0 for every existing row (no ordering was ever
+  // tracked before this field existed) -- proposal-view-model.ts falls
+  // back to a stable secondary sort so a tie never reorders anything
+  // visibly until someone explicitly moves a booth.
+  proposalSortOrder Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1207,6 +1238,14 @@ model LineItem {
   // isn't) and keeps un-assigning a single `bidPackageId: null` write.
   bidPackageId String?
   bidPackage   BidPackage? @relation(fields: [bidPackageId], references: [id])
+
+  // Per-item PDF visibility, independent of category/isClientOwned/isDraft
+  // -- an estimator can carry a line internally (cost tracking, a note to
+  // self) without it ever reaching the client-facing Proposal PDF. Default
+  // true: every existing row, and every new one, appears in the proposal
+  // unless someone explicitly hides it. A hidden EstimateSection hides all
+  // its items regardless of this flag -- see EstimateSection.includeInProposal.
+  includeInProposal Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

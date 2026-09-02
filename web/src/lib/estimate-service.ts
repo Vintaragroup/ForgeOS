@@ -17,7 +17,7 @@ import type {
   SectionType,
 } from "@/generated/prisma/enums";
 import { inferCategoryFromDescription, mapDesignCostCategoryToCanonical } from "@/lib/line-item-category";
-import { resolveEffectiveCategory, resolveTypeKeyForCategoryKey } from "@/lib/proposal-view-model";
+import { boothGroupsByCategoryForEditing, resolveEffectiveCategory, resolveTypeKeyForCategoryKey } from "@/lib/proposal-view-model";
 
 type Decimal = Prisma.Decimal;
 type DecimalInput = Decimal | number | string;
@@ -235,6 +235,95 @@ export async function updateSectionBuildType(
     where: { estimateVersionId, groupLabel },
     data: { buildType },
   });
+}
+
+// Whole-booth Proposal PDF visibility -- same updateMany-by-groupLabel
+// pattern as updateSectionBuildType above, so hiding a booth hides it
+// everywhere it appears (every category tab its items touch), not just
+// wherever the toggle was clicked. See EstimateSection.includeInProposal's
+// own schema comment for why this is booth-wide while proposalSortOrder
+// below deliberately isn't.
+export async function updateSectionProposalVisibility(
+  estimateVersionId: string,
+  groupLabel: string,
+  includeInProposal: boolean,
+) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { includeInProposal },
+  });
+}
+
+// Reorders one booth (identified by groupLabel) among only the OTHER
+// booths actually visible within one specific category -- deliberately
+// scoped per-category, not a global reorder, to avoid the exact ambiguity
+// that got the Line Items tab's own old per-section up/down arrows
+// removed (see EstimateSection.proposalSortOrder's own schema comment).
+// Reuses boothGroupsByCategoryForEditing -- the same grouping the editor
+// itself already renders -- so "the next booth up" here is always the
+// same booth a user would see immediately above this one in that
+// category's tab, never one that happens to share a sortOrder value in
+// some other, unrelated category. A booth backed by more than one
+// EstimateSection row within this one category (the documented
+// sectionIds.length > 1 edge case, RawElementTypeGroup's own comment)
+// moves as a single unit -- its header renders once, not once per
+// underlying row, so its position has to be one real number, not several
+// independently-movable ones.
+export async function moveSectionProposalOrder(
+  estimateVersionId: string,
+  groupLabel: string,
+  categoryName: string,
+  direction: "up" | "down",
+) {
+  await assertUnlocked(estimateVersionId);
+
+  const [sections, categories] = await Promise.all([
+    db.estimateSection.findMany({
+      where: { estimateVersionId },
+      select: {
+        id: true,
+        name: true,
+        groupLabel: true,
+        buildType: true,
+        proposalSortOrder: true,
+        description: true,
+        pendingDescription: true,
+        boothDescription: true,
+        boothPendingDescription: true,
+        lineItems: { select: { id: true, totalCost: true, sortOrder: true, category: true } },
+      },
+    }),
+    db.category.findMany({ where: { deletedAt: null }, select: { id: true, name: true, key: true, parentId: true } }),
+  ]);
+
+  const boothGroups = boothGroupsByCategoryForEditing(sections, categories).get(categoryName) ?? [];
+  const sectionsById = new Map(sections.map((s) => [s.id, s]));
+
+  const siblings = boothGroups.map((group) => {
+    const sectionIds = [...new Set(group.elementGroups.flatMap((eg) => eg.sectionIds))];
+    const sortKey = Math.min(...sectionIds.map((id) => sectionsById.get(id)?.proposalSortOrder ?? 0));
+    return { boothLabel: group.boothLabel, sectionIds, sortKey };
+  });
+  // Stable, deterministic tiebreak (alphabetical) -- every existing row
+  // starts at the same default 0, so without this every booth in a
+  // never-yet-reordered category would compare equal and sort in
+  // whatever arbitrary order the query happened to return them.
+  siblings.sort((a, b) => a.sortKey - b.sortKey || a.boothLabel.localeCompare(b.boothLabel));
+
+  const index = siblings.findIndex((s) => s.boothLabel === groupLabel);
+  if (index === -1) return;
+  const swapWith = direction === "up" ? index - 1 : index + 1;
+  if (swapWith < 0 || swapWith >= siblings.length) return;
+
+  const reordered = [...siblings];
+  [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
+
+  await db.$transaction(
+    reordered.flatMap((sibling, i) =>
+      sibling.sectionIds.map((id) => db.estimateSection.update({ where: { id }, data: { proposalSortOrder: i } })),
+    ),
+  );
 }
 
 // Approve-with-text (green check on an AI suggestion) or a manual save --
@@ -660,6 +749,10 @@ export async function updateLineItem(
     // added to this bid package (see its own header comment) -- applying
     // a match is what adds it.
     bidPackageId?: string | null;
+    // Per-item Proposal PDF visibility -- see LineItem.includeInProposal's
+    // own schema comment. A hidden EstimateSection hides this regardless
+    // of the value here.
+    includeInProposal?: boolean;
   },
   actorId?: string | null,
 ) {
@@ -687,6 +780,7 @@ export async function updateLineItem(
     sourceQuote: data.sourceQuote !== undefined ? data.sourceQuote : existing.sourceQuote,
     isDraft: data.isDraft ?? existing.isDraft,
     bidPackageId: data.bidPackageId !== undefined ? data.bidPackageId : existing.bidPackageId,
+    includeInProposal: data.includeInProposal ?? existing.includeInProposal,
   };
 
   // Only the fields that actually changed -- a re-save with identical

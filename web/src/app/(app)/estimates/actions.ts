@@ -18,6 +18,7 @@ import {
   moveLineItemsToCategory,
   moveLineItemWithinSection,
   moveSectionOrder,
+  moveSectionProposalOrder,
   recomputeVersionTotals,
   restoreLineItem,
   setCategoryMarginOverride,
@@ -27,6 +28,7 @@ import {
   updateMarginTarget,
   updateSectionBuildType,
   updateSectionDescription,
+  updateSectionProposalVisibility,
 } from "@/lib/estimate-service";
 import { suggestBoothDescription, suggestSectionDescription } from "@/lib/ai/section-description-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
@@ -133,6 +135,31 @@ export async function untagSectionBuildTypeAction(estimateId: string, versionId:
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await updateSectionBuildType(versionId, groupLabel, null);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateSectionProposalVisibilityAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  includeInProposal: boolean,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await updateSectionProposalVisibility(versionId, groupLabel, includeInProposal);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function moveSectionProposalOrderAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  categoryName: string,
+  direction: "up" | "down",
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await moveSectionProposalOrder(versionId, groupLabel, categoryName, direction);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
@@ -347,6 +374,9 @@ export async function updateLineItemAction(
   if (!Number.isFinite(qty) || !Number.isFinite(unitCost)) {
     throw new Error("Qty and unit cost must be numbers");
   }
+  // Same "on" convention as isClientOwned above -- an unchecked checkbox
+  // simply isn't present in FormData at all.
+  const includeInProposal = formData.get("includeInProposal") === "on";
 
   await updateLineItem(
     opportunityId,
@@ -361,6 +391,7 @@ export async function updateLineItemAction(
       qty,
       unit,
       unitCost,
+      includeInProposal,
     },
     user.id,
   );

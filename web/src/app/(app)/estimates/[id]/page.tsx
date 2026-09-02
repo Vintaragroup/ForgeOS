@@ -38,6 +38,7 @@ import {
   generateProposalAction,
   lockVersionAction,
   moveLineItemAction,
+  moveSectionProposalOrderAction,
   recordCostActualAction,
   restoreLineItemAction,
   setCategoryMarginOverrideAction,
@@ -52,6 +53,7 @@ import {
   updateSectionBuildTypeAction,
   updateSectionDescriptionAction,
   updateSectionItemsCategoryAction,
+  updateSectionProposalVisibilityAction,
 } from "../actions";
 import { SectionHeadingEditor } from "@/components/section-heading-editor";
 import {
@@ -1109,6 +1111,7 @@ function LineItemsTable({
               unitCost={li.unitCost.toString()}
               totalCostDisplay={money(li.totalCost)}
               isClientOwned={li.isClientOwned}
+              includeInProposal={li.includeInProposal}
               usageTag={li.usageTag ?? ""}
               isLocked={version.isLocked}
               actualCostDisplay={actualCost !== null ? money(actualCost) : null}
@@ -2588,7 +2591,15 @@ function CategoryTabContent({
     <div className="flex flex-col gap-6 pt-2">
       {hasBoothGroups && (
         <div className="flex flex-col gap-8">
-          {boothGroups!.map((booth) => (
+          {boothGroups!.map((booth, boothIndex) => {
+            // A booth has no model of its own -- its visibility is
+            // whatever every section sharing this groupLabel currently
+            // has (updateSectionProposalVisibility keeps them in sync),
+            // so any one of them is correct to read here. Defaults to
+            // visible for a version predating this field.
+            const boothVisible =
+              version.sections.find((s) => s.groupLabel === booth.boothLabel)?.includeInProposal ?? true;
+            return (
             <div key={booth.boothLabel} className="overflow-hidden rounded-md border border-neutral-200">
               <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
                 <h4 className="text-sm font-semibold uppercase tracking-wide">
@@ -2611,15 +2622,44 @@ function CategoryTabContent({
                     <span className="font-semibold">{money(sell(booth.subtotal))}</span>
                   </div>
                   {!version.isLocked && (
-                    <form action={untagSectionBuildTypeAction.bind(null, estimateId, version.id, booth.boothLabel)}>
-                      <button
-                        type="submit"
-                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                        title="Move this component's items back to their own raw categories"
-                      >
-                        Untag
-                      </button>
-                    </form>
+                    <>
+                      <form action={moveSectionProposalOrderAction.bind(null, estimateId, version.id, booth.boothLabel, bucket.category.name, "up")}>
+                        <button
+                          disabled={boothIndex === 0}
+                          className="text-xs text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400"
+                          title="Move up in the Proposal PDF (within this category)"
+                        >
+                          ▲
+                        </button>
+                      </form>
+                      <form action={moveSectionProposalOrderAction.bind(null, estimateId, version.id, booth.boothLabel, bucket.category.name, "down")}>
+                        <button
+                          disabled={boothIndex === boothGroups!.length - 1}
+                          className="text-xs text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400"
+                          title="Move down in the Proposal PDF (within this category)"
+                        >
+                          ▼
+                        </button>
+                      </form>
+                      <form action={updateSectionProposalVisibilityAction.bind(null, estimateId, version.id, booth.boothLabel, !boothVisible)}>
+                        <button
+                          type="submit"
+                          className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                          title={boothVisible ? "Hide this booth from the Proposal PDF" : "Show this booth on the Proposal PDF"}
+                        >
+                          {boothVisible ? "Hide from proposal" : "Show on proposal"}
+                        </button>
+                      </form>
+                      <form action={untagSectionBuildTypeAction.bind(null, estimateId, version.id, booth.boothLabel)}>
+                        <button
+                          type="submit"
+                          className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                          title="Move this component's items back to their own raw categories"
+                        >
+                          Untag
+                        </button>
+                      </form>
+                    </>
                   )}
                 </div>
               </div>
@@ -2674,7 +2714,8 @@ function CategoryTabContent({
                 ))}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
       {flatSectionGroups.map((group) => (

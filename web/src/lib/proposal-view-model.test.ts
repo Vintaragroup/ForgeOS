@@ -95,6 +95,26 @@ describe("aggregateByCategory -- booth-scoped grouping", () => {
     expect(bucket.items).toHaveLength(2);
     expect(bucket.items.map((i) => i.totalCost).sort()).toEqual([5000, 6000]);
   });
+
+  it("excludes a hidden section entirely, and a hidden line item within an otherwise-visible section", () => {
+    const sections: ProposalViewSection[] = [
+      { name: "Booth", groupLabel: "SECTION 203", includeInProposal: false, lineItems: [li({ id: "a", totalCost: 5000 })] },
+      {
+        name: "Add-Ons",
+        groupLabel: null,
+        lineItems: [
+          li({ id: "b", description: "Visible", totalCost: 150 }),
+          { ...li({ id: "c", description: "Hidden", totalCost: 9999 }), includeInProposal: false },
+        ],
+      },
+    ];
+
+    const [bucket] = aggregateByCategory(sections, categories);
+
+    expect(bucket.items).toHaveLength(1);
+    expect(bucket.items[0].description).toBe("Visible");
+    expect(bucket.items[0].totalCost).toBe(150);
+  });
 });
 
 describe("groupBoothLineItems", () => {
@@ -125,6 +145,36 @@ describe("groupBoothLineItems", () => {
     expect(groups.map((g) => g.boothLabel)).toEqual(["SECTION 211", "SECTION 428"]);
     const total = groups.reduce((sum, g) => sum + g.subtotal, 0);
     expect(total).toBe(300); // the $9999 Add-Ons item never contributes -- no groupLabel
+  });
+
+  it("orders booths by proposalSortOrder when set, overriding the alphabetical default", () => {
+    const sections: ProposalViewSection[] = [
+      { name: "BeMatrix", groupLabel: "SECTION 211", proposalSortOrder: 1, lineItems: [li({ id: "a", totalCost: 100 })] },
+      { name: "BeMatrix", groupLabel: "SECTION 428", proposalSortOrder: 0, lineItems: [li({ id: "b", totalCost: 200 })] },
+    ];
+
+    const groups = groupBoothLineItems(sections);
+
+    expect(groups.map((g) => g.boothLabel)).toEqual(["SECTION 428", "SECTION 211"]);
+  });
+
+  it("excludes a section whose includeInProposal is false, and a line item whose own flag is false", () => {
+    const sections: ProposalViewSection[] = [
+      { name: "BeMatrix", groupLabel: "SECTION 211", includeInProposal: false, lineItems: [li({ id: "a", totalCost: 100 })] },
+      {
+        name: "Wall Panels",
+        groupLabel: "SECTION 428",
+        lineItems: [
+          li({ id: "b", description: "Visible item", totalCost: 200 }),
+          { ...li({ id: "c", description: "Hidden item", totalCost: 9999 }), includeInProposal: false },
+        ],
+      },
+    ];
+
+    const groups = groupBoothLineItems(sections);
+
+    expect(groups.map((g) => g.boothLabel)).toEqual(["SECTION 428"]);
+    expect(groups[0].subtotal).toBe(200);
   });
 
   it("falls back to the raw section name for an unmapped element-type category instead of dropping it", () => {

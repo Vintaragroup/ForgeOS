@@ -30,6 +30,11 @@ export interface ProposalViewLineItem {
   unit: string | null;
   totalCost: Prisma.Decimal;
   sortOrder: number;
+  // Per-item Proposal PDF visibility -- see LineItem.includeInProposal's
+  // own schema comment. Optional, same reasoning as buildType below:
+  // undefined means visible (true), so every existing caller/test
+  // fixture that predates this field keeps rendering exactly as before.
+  includeInProposal?: boolean;
 }
 
 export interface ProposalViewSection {
@@ -49,6 +54,12 @@ export interface ProposalViewSection {
   // simply omit it -- resolveEffectiveCategory treats missing the same
   // as null.
   buildType?: SectionBuildType | null;
+  // Whole-group PDF visibility/order -- see EstimateSection's own schema
+  // comments. Both optional, same reasoning as buildType above: undefined
+  // means visible / default position (0), so an existing caller/test
+  // fixture never has to be updated just because these fields exist.
+  includeInProposal?: boolean;
+  proposalSortOrder?: number;
   lineItems: ProposalViewLineItem[];
 }
 
@@ -196,7 +207,9 @@ export function aggregateByCategory(sections: ProposalViewSection[], categories:
   const byCategory = new Map<string, Map<string, AggregatedLineItem>>();
 
   for (const section of sections) {
+    if (section.includeInProposal === false) continue;
     for (const li of section.lineItems) {
+      if (li.includeInProposal === false) continue;
       const category = resolveEffectiveCategory(li, section, categories);
       let bucket = byCategory.get(category);
       if (!bucket) {
@@ -394,11 +407,20 @@ export interface BoothGroup {
 // separately, unchanged, via aggregateByCategory as before.
 export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup[] {
   const byBooth = new Map<string, Map<string, Map<string, AggregatedLineItem>>>();
+  // A booth's PDF position -- the min proposalSortOrder among every
+  // section contributing to it here, matching moveSectionProposalOrder's
+  // own "moves as one unit" convention for a booth backed by more than
+  // one EstimateSection row (estimate-service.ts's own comment).
+  const boothSortOrder = new Map<string, number>();
 
   for (const section of sections) {
-    if (!section.groupLabel) continue;
+    if (!section.groupLabel || section.includeInProposal === false) continue;
     const boothLabel = section.groupLabel;
     const elementType = elementTypeForSection(section.name);
+    boothSortOrder.set(
+      boothLabel,
+      Math.min(boothSortOrder.get(boothLabel) ?? Infinity, section.proposalSortOrder ?? 0),
+    );
 
     let byElementType = byBooth.get(boothLabel);
     if (!byElementType) {
@@ -412,6 +434,7 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     }
 
     for (const li of section.lineItems) {
+      if (li.includeInProposal === false) continue;
       // Same reasoning as aggregateByCategory's own key: a compound
       // assembly is a unique physical structure, keyed by its own id so
       // two assemblies with identical spec text never silently merge.
@@ -444,7 +467,13 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   };
 
   return [...byBooth.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+    // proposalSortOrder first (an explicit, user-set position), falling
+    // back to alphabetical only when two booths are still tied -- every
+    // section starts at the same default 0, so this is what keeps a
+    // never-yet-reordered category's booths in the same stable order
+    // they always rendered in, rather than shuffling once this field
+    // existed.
+    .sort(([a], [b]) => (boothSortOrder.get(a) ?? 0) - (boothSortOrder.get(b) ?? 0) || a.localeCompare(b))
     .map(([boothLabel, byElementType]) => {
       const elementGroups = [...byElementType.entries()]
         .sort(([a], [b]) => elementTypeRank(a) - elementTypeRank(b))
@@ -568,16 +597,27 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     pendingDescription: string | null;
     boothDescription: string | null;
     boothPendingDescription: string | null;
+    proposalSortOrder?: number;
     lineItems: T[];
   }[],
 ): RawBoothGroup<T>[] {
   const byBooth = new Map<string, Map<string, EditableSectionBucket<T>>>();
   const boothDescriptions = new Map<string, { description: string | null; pendingDescription: string | null }>();
+  // Same "min across every section contributing to this booth" convention
+  // as groupBoothLineItems' own boothSortOrder -- so the editor renders
+  // booths in the exact order moveSectionProposalOrder's up/down actually
+  // move them in, not a separate alphabetical order that would make
+  // reordering invisible where a user actually clicks it.
+  const boothSortOrder = new Map<string, number>();
 
   for (const section of sections) {
     if (!section.groupLabel) continue;
     const boothLabel = section.groupLabel;
     const elementType = elementTypeForSection(section.name);
+    boothSortOrder.set(
+      boothLabel,
+      Math.min(boothSortOrder.get(boothLabel) ?? Infinity, section.proposalSortOrder ?? 0),
+    );
 
     if (!boothDescriptions.has(boothLabel)) {
       boothDescriptions.set(boothLabel, {
@@ -606,7 +646,7 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
   };
 
   return [...byBooth.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => (boothSortOrder.get(a) ?? 0) - (boothSortOrder.get(b) ?? 0) || a.localeCompare(b))
     .map(([boothLabel, byElementType]) => {
       const elementGroups = [...byElementType.entries()]
         .sort(([a], [b]) => elementTypeRank(a) - elementTypeRank(b))
@@ -666,6 +706,7 @@ export function boothGroupsByCategoryForEditing<
     pendingDescription: string | null;
     boothDescription: string | null;
     boothPendingDescription: string | null;
+    proposalSortOrder?: number;
     lineItems: T[];
   }[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
@@ -680,6 +721,7 @@ export function boothGroupsByCategoryForEditing<
       pendingDescription: string | null;
       boothDescription: string | null;
       boothPendingDescription: string | null;
+      proposalSortOrder?: number;
       lineItems: T[];
     }[]
   >();
@@ -701,6 +743,7 @@ export function boothGroupsByCategoryForEditing<
         pendingDescription: section.pendingDescription,
         boothDescription: section.boothDescription,
         boothPendingDescription: section.boothPendingDescription,
+        proposalSortOrder: section.proposalSortOrder,
         lineItems: items,
       };
       const arr = sectionsByCategoryName.get(categoryName);
