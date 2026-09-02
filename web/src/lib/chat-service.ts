@@ -102,7 +102,18 @@ export async function sendMessage(opportunityId: string, userId: string, content
     }
 
     if (round === MAX_TOOL_ROUNDS - 1) {
-      reply = "I wasn't able to finish looking that up in time -- try narrowing your question.";
+      // The tool calls on this final round already executed above --
+      // including, potentially, a real write like propose_line_item.
+      // Silently discarding their results here and returning a generic
+      // "ran out of time" reply would leave the user thinking nothing
+      // happened when something actually did. One more completion,
+      // forced to text (no tools offered), lets the model report what it
+      // actually did with everything gathered so far instead.
+      const final = await client.chat.completions.create({ model, messages });
+      await recordAiUsage({ userId, feature: "CHAT", model, usage: final.usage, opportunityId });
+      reply =
+        final.choices[0]?.message?.content?.trim() ||
+        "I wasn't able to finish looking that up in time -- try narrowing your question.";
     }
   }
 

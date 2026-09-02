@@ -56,6 +56,15 @@
 //   Moving a line item between sections or retagging a booth are still
 //   NOT here: moveLineItemWithinSection/updateSectionBuildType mutate
 //   immediately with no draft concept either, same as a confirmed edit.
+// - create_section: real usage showed a bare "create a new section
+//   called X" request had no matching tool -- propose_line_item's
+//   auto-create is only a SIDE EFFECT of adding a line item, so the only
+//   way to satisfy the request with the tools available was to force X
+//   into becoming a line item's description instead of a section's name.
+//   This creates just the empty section and hands back a result that
+//   tells the model to ask what line items belong in it next, rather
+//   than inventing one. Same zero-risk posture as everywhere else here:
+//   an empty section changes no total and is trivial to remove.
 //
 // Every real gap found in this file so far (combined "Name (GroupLabel)"
 // strings, a category with no section, an ambiguous same-named section)
@@ -80,7 +89,7 @@ export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "get_line_items",
       description:
-        "Look up line items on this opportunity's estimate(s), filtered precisely -- use this when the line items shown above were truncated for length, or when you need every item matching a specific filter rather than whatever happened to fit in the initial context.",
+        "Look up line items on this opportunity's estimate(s), filtered precisely -- use this when the line items shown above were truncated for length, or when you need every item matching a specific filter rather than whatever happened to fit in the initial context. A line item's own description rarely names the vendor or quote it came from (e.g. an item imported from a vendor's bid comparison won't mention that vendor's name in its text) -- to find items sourced from a specific document/vendor quote, use documentName rather than searchText.",
       parameters: {
         type: "object",
         properties: {
@@ -92,6 +101,11 @@ export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           sectionName: { type: "string", description: "Filter to items in a section whose name contains this text." },
           isDraft: { type: "boolean", description: "true for draft (unreviewed) items only, false for confirmed items only. Omit for both." },
           searchText: { type: "string", description: "Filter to items whose description contains this text." },
+          documentName: {
+            type: "string",
+            description:
+              "Filter to items imported from or sourced from a document whose filename contains this text (e.g. a vendor's quote or bid comparison) -- use this to answer \"which items came from vendor X's quote,\" since the vendor's name is usually only in the source document's filename, not in each item's own description.",
+          },
         },
       },
     },
@@ -195,6 +209,29 @@ export const CHAT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "create_section",
+      description:
+        "Create a brand-new, empty section on the estimate -- no line items yet. Use this when the user asks to create a new section/group/tab and hasn't also given you its line items in the same request -- create the section first, then ask what line items belong in it, rather than inventing a line item yourself to stand in for the section. Sections aren't nested inside each other -- if the user describes the new section as being \"within\" or \"under\" some other name (e.g. \"a new section within Labor\"), that name is almost never an existing thing to nest under; call find_section on it first, and if it doesn't resolve to a real, unambiguous group (booth/component) or you're not sure, ask the user directly whether the new section should belong to a specific booth/component (pass as groupLabel) or be project-wide (omit groupLabel) -- don't guess a groupLabel from a name that didn't check out. If a section with the exact same name and group already exists, this reports that back rather than creating a duplicate.",
+      parameters: {
+        type: "object",
+        properties: {
+          estimateName: {
+            type: "string",
+            description: "Name of the estimate to add to, only needed if the opportunity has more than one. Omit otherwise.",
+          },
+          name: { type: "string", description: "The new section's title." },
+          groupLabel: {
+            type: "string",
+            description: "Which booth/component this section belongs to, e.g. \"FS - Reception Counter\". Omit for a project-wide section not tied to any specific booth.",
+          },
+        },
+        required: ["name"],
+      },
+    },
+  },
 ];
 
 // A short, stable machine-readable category for why a tool call didn't
@@ -230,7 +267,14 @@ const DOCUMENT_EXCERPT_TOP_K = 6;
 
 async function getLineItemsTool(
   opportunityId: string,
-  args: { estimateName?: string; category?: string; sectionName?: string; isDraft?: boolean; searchText?: string },
+  args: {
+    estimateName?: string;
+    category?: string;
+    sectionName?: string;
+    isDraft?: boolean;
+    searchText?: string;
+    documentName?: string;
+  },
 ): Promise<ToolResult> {
   const estimates = await db.estimate.findMany({
     where: {
@@ -250,7 +294,22 @@ async function getLineItemsTool(
               name: true,
               groupLabel: true,
               lineItems: {
-                select: { id: true, description: true, category: true, isDraft: true, qty: true, unit: true, unitCost: true, totalCost: true },
+                select: {
+                  id: true,
+                  description: true,
+                  category: true,
+                  isDraft: true,
+                  qty: true,
+                  unit: true,
+                  unitCost: true,
+                  totalCost: true,
+                  // A line item's own text rarely names the vendor/source
+                  // it came from (a quote's line "Video Package" says
+                  // nothing about which vendor quoted it) -- without this,
+                  // "which items came from the Fuse quote" is unanswerable
+                  // even though the data already records it.
+                  document: { select: { filename: true } },
+                },
               },
             },
           },
@@ -271,6 +330,7 @@ async function getLineItemsTool(
   const category = args.category?.toLowerCase();
   const sectionName = args.sectionName?.toLowerCase();
   const searchText = args.searchText?.toLowerCase();
+  const documentName = args.documentName?.toLowerCase();
 
   const rows: string[] = [];
   for (const estimate of estimates) {
@@ -282,11 +342,13 @@ async function getLineItemsTool(
           if (category && li.category?.toLowerCase() !== category) continue;
           if (args.isDraft !== undefined && li.isDraft !== args.isDraft) continue;
           if (searchText && !li.description.toLowerCase().includes(searchText)) continue;
+          if (documentName && !li.document?.filename.toLowerCase().includes(documentName)) continue;
           const status = li.isDraft ? "DRAFT" : "CONFIRMED";
           const qty = `${li.qty.toString()}${li.unit ? ` ${li.unit}` : ""}`;
           const cat = li.category ? ` (${li.category})` : "";
+          const source = li.document ? ` [from: ${li.document.filename}]` : "";
           rows.push(
-            `- [${status}] ${estimate.name ?? "Estimate"} / ${sectionLabel}: ${li.description} -- qty ${qty} × $${li.unitCost.toFixed(2)} = $${li.totalCost.toFixed(2)}${cat} (id: ${li.id})`,
+            `- [${status}] ${estimate.name ?? "Estimate"} / ${sectionLabel}: ${li.description} -- qty ${qty} × $${li.unitCost.toFixed(2)} = $${li.totalCost.toFixed(2)}${cat}${source} (id: ${li.id})`,
           );
         }
       }
@@ -754,6 +816,82 @@ async function updateLineItemTool(
   );
 }
 
+// Creates just an empty section -- no line items. Real usage showed the
+// model had no tool for this at all: asked for a bare new section, its
+// only write tool (propose_line_item) forced the requested section name
+// into becoming a line item's DESCRIPTION instead, inside whatever
+// existing section it could resolve. groupLabel absent means project-
+// wide, matching propose_line_item's own auto-create-section posture --
+// COMPONENT (a real, physical booth/component) vs. CATEGORY (a
+// standalone container with no specific booth) is picked the same way
+// the manual "Add Section" form on the estimate page distinguishes them.
+// Zero-risk the same way an empty section already is everywhere else in
+// this file: nothing counts toward any total until real line items are
+// added and confirmed.
+async function createSectionTool(
+  opportunityId: string,
+  args: { estimateName?: string; name?: string; groupLabel?: string },
+): Promise<ToolResult> {
+  if (!args.name) return fail("name is required.", "missing_args");
+
+  const estimates = await db.estimate.findMany({
+    where: {
+      opportunityId,
+      deletedAt: null,
+      archivedAt: null,
+      ...(args.estimateName ? { name: { equals: args.estimateName, mode: "insensitive" } } : {}),
+    },
+    select: {
+      name: true,
+      versions: {
+        where: { isCurrent: true },
+        take: 1,
+        select: { id: true, sections: { select: { name: true, groupLabel: true } } },
+      },
+    },
+  });
+
+  if (estimates.length === 0) {
+    return fail(
+      args.estimateName
+        ? `No estimate named "${args.estimateName}" was found on this opportunity.`
+        : "No live estimate found on this opportunity.",
+      "not_found",
+    );
+  }
+  if (estimates.length > 1 && !args.estimateName) {
+    return fail(
+      `This opportunity has more than one estimate -- specify estimateName. Options: ${estimates.map((e) => e.name).filter(Boolean).join(", ")}.`,
+      "ambiguous",
+    );
+  }
+
+  const estimate = estimates[0];
+  const version = estimate.versions[0];
+  if (!version) return fail(`Estimate "${estimate.name ?? "Untitled"}" has no active version to add to yet.`, "not_found");
+
+  const nameNeedle = args.name.toLowerCase();
+  const groupNeedle = args.groupLabel?.toLowerCase();
+  const existing = version.sections.find(
+    (s) => s.name.toLowerCase() === nameNeedle && (groupNeedle ? s.groupLabel?.toLowerCase() === groupNeedle : !s.groupLabel),
+  );
+  if (existing) {
+    return ok(
+      `"${formatSectionLabel(existing)}" already exists -- no new section created to avoid a duplicate. If line items still need adding, ask the user what they should be.`,
+    );
+  }
+
+  const created = await addSection(version.id, {
+    name: args.name,
+    sectionType: args.groupLabel ? "COMPONENT" : "CATEGORY",
+    groupLabel: args.groupLabel ?? null,
+  });
+
+  return ok(
+    `Created a new, empty section "${formatSectionLabel(created)}" on "${estimate.name ?? "the estimate"}" -- no line items in it yet. Ask the user what line items should go in it, unless they already told you in the same request.`,
+  );
+}
+
 // Cheap, no new infra: a single structured console line per issue, which
 // Vercel already captures and aggregates in its runtime logs. The point
 // isn't a dashboard (yet) -- it's that a user who gets stuck and just
@@ -806,6 +944,9 @@ export async function executeChatTool(
         break;
       case "update_line_item":
         result = await updateLineItemTool(context.opportunityId, args, context.userId);
+        break;
+      case "create_section":
+        result = await createSectionTool(context.opportunityId, args);
         break;
       default:
         result = fail(`Unknown tool "${name}".`, "invalid_argument");

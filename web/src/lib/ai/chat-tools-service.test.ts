@@ -67,6 +67,46 @@ describe("executeChatTool", () => {
       expect(result).not.toContain("Install crew"); // wrong category
     });
 
+    it("finds items by their source document's filename, even though the vendor's name isn't in the item's own description", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      const av = await db.estimateSection.create({
+        data: { estimateVersionId: version.id, name: "Audio/Visual", sectionType: "CATEGORY", groupLabel: "Bid Comparison" },
+      });
+      const document = await db.document.create({
+        data: {
+          opportunityId: opportunity.id,
+          filename: "Fuse_AV_Bid_Comparison_369711.xlsx",
+          mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          sizeBytes: 10,
+          storageKey: "x",
+          documentType: "PRICING_SCHEDULE",
+          extractionStatus: "PENDING",
+        },
+      });
+      await db.lineItem.createMany({
+        data: [
+          { sectionId: av.id, documentId: document.id, lineType: "MATERIAL", description: "Video Package", category: "Audio/Visual", qty: 1, unitCost: 16460, totalCost: 16460, isDraft: false },
+          { sectionId: av.id, lineType: "MATERIAL", description: "Unrelated item from elsewhere", category: "Audio/Visual", qty: 1, unitCost: 1, totalCost: 1, isDraft: false },
+        ],
+      });
+
+      const bySearchText = await executeChatTool("get_line_items", JSON.stringify({ searchText: "fuse" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+      expect(bySearchText).toMatch(/No line items matched/); // the vendor name isn't in any description
+
+      const byDocumentName = await executeChatTool("get_line_items", JSON.stringify({ documentName: "Fuse" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+      expect(byDocumentName).toContain("Video Package");
+      expect(byDocumentName).toContain("[from: Fuse_AV_Bid_Comparison_369711.xlsx]");
+      expect(byDocumentName).not.toContain("Unrelated item from elsewhere");
+    });
+
     it("reports when nothing matches, and when no estimate is found by name", async () => {
       const opportunity = await makeOpportunity();
       const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
@@ -780,6 +820,62 @@ describe("executeChatTool", () => {
         userId: null,
       });
       expect(noChange).toMatch(/At least one field to change/);
+    });
+  });
+
+  describe("create_section", () => {
+    it("creates a project-wide empty section when no groupLabel is given", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+
+      const result = await executeChatTool(
+        "create_section",
+        JSON.stringify({ name: "Showsite Management Services" }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      expect(result).toMatch(/Created a new, empty section/);
+      expect(result).toMatch(/ask the user what line items/i);
+      const created = await db.estimateSection.findFirstOrThrow({ where: { estimateVersionId: version.id } });
+      expect(created).toMatchObject({ name: "Showsite Management Services", groupLabel: null, sectionType: "CATEGORY" });
+      expect(await db.lineItem.count()).toBe(0); // no line item invented to stand in for it
+    });
+
+    it("creates a booth-scoped section as COMPONENT when groupLabel is given", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+
+      await executeChatTool(
+        "create_section",
+        JSON.stringify({ name: "Custom Millwork", groupLabel: "FS - Reception Counter" }),
+        { opportunityId: opportunity.id, userId: null },
+      );
+
+      const created = await db.estimateSection.findFirstOrThrow({ where: { estimateVersionId: version.id } });
+      expect(created).toMatchObject({ name: "Custom Millwork", groupLabel: "FS - Reception Counter", sectionType: "COMPONENT" });
+    });
+
+    it("reports an already-existing section instead of creating a duplicate", async () => {
+      const opportunity = await makeOpportunity();
+      const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+      const version = await createEstimateVersion(estimate.id);
+      await addSection(version.id, { name: "Labor", sectionType: "CATEGORY", groupLabel: null });
+
+      const result = await executeChatTool("create_section", JSON.stringify({ name: "Labor" }), {
+        opportunityId: opportunity.id,
+        userId: null,
+      });
+
+      expect(result).toMatch(/already exists/);
+      expect(await db.estimateSection.count({ where: { estimateVersionId: version.id } })).toBe(1);
+    });
+
+    it("requires a name", async () => {
+      const opportunity = await makeOpportunity();
+      const result = await executeChatTool("create_section", "{}", { opportunityId: opportunity.id, userId: null });
+      expect(result).toMatch(/name is required/);
     });
   });
 });
