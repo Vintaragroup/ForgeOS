@@ -1033,8 +1033,20 @@ model EstimateSection {
   estimateVersionId String
   estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
 
-  name        String
-  sortOrder   Int         @default(0)
+  name String
+
+  // General section ordering -- for a section that's part of a booth
+  // (groupLabel set below), this is specifically its H2 position among
+  // its own booth's other sections (moveElementGroupOrder,
+  // groupBoothLineItemsForEditing's own elementSortOrder). Deliberately
+  // NOT the same field as proposalSortOrder below: an H2 group is one
+  // real section row that surfaces identically in every category tab its
+  // items happen to touch, not a different row per category the way a
+  // booth's own presence across tabs can be, so one plain,
+  // category-agnostic value is the correct model here -- see
+  // proposalSortOrder's own comment for why that one has to be scoped
+  // differently.
+  sortOrder Int @default(0)
   sectionType SectionType
 
   // Groups several sections under one shared main heading (a booth /

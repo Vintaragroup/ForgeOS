@@ -40,6 +40,7 @@ import {
   lockVersionAction,
   mergeBoothAction,
   moveBoothToCategoryAction,
+  moveElementGroupOrderAction,
   moveLineItemAction,
   moveSectionProposalOrderAction,
   recordCostActualAction,
@@ -2868,7 +2869,18 @@ function CategoryTabContent({
                 </div>
               </div>
               <div className="flex flex-col gap-5 p-4">
-                {booth.elementGroups.map((group) => (
+                {(() => {
+                  // Only a booth's own custom-named groups are reorderable
+                  // relative to each other (moveElementGroupOrder's own
+                  // restriction) -- the 6 fixed ELEMENT_TYPE_MAP labels
+                  // always keep their fixed build-sequence position, so
+                  // they're excluded from this index entirely rather than
+                  // rendering disabled ▲▼ buttons that could never do
+                  // anything.
+                  const movableElementTypes = booth.elementGroups.filter((g) => !g.isMapped).map((g) => g.elementType);
+                  return booth.elementGroups.map((group) => {
+                    const movableIndex = movableElementTypes.indexOf(group.elementType);
+                    return (
                   <div key={group.elementType}>
                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded bg-neutral-100 px-3 py-1.5">
                       <h5 className="text-xs font-semibold uppercase tracking-wide text-neutral-600">
@@ -2883,10 +2895,34 @@ function CategoryTabContent({
                           rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionIds[0])}
                         />
                       </h5>
-                      <div className="text-xs text-neutral-600">
-                        <span className="text-neutral-400">Cost {money(group.subtotal)}</span>
-                        <span className="mx-1.5">&rarr;</span>
-                        <span className="font-medium">{money(sell(group.subtotal))}</span>
+                      <div className="flex items-center gap-3">
+                        {!version.isLocked && movableIndex !== -1 && (
+                          <div className="flex items-center gap-1">
+                            <form action={moveElementGroupOrderAction.bind(null, estimateId, version.id, booth.boothLabel, group.elementType, "up")}>
+                              <button
+                                disabled={movableIndex === 0}
+                                className="text-xs text-neutral-500 hover:text-neutral-900 disabled:opacity-30 disabled:hover:text-neutral-500"
+                                title="Move this group up within its booth"
+                              >
+                                ▲
+                              </button>
+                            </form>
+                            <form action={moveElementGroupOrderAction.bind(null, estimateId, version.id, booth.boothLabel, group.elementType, "down")}>
+                              <button
+                                disabled={movableIndex === movableElementTypes.length - 1}
+                                className="text-xs text-neutral-500 hover:text-neutral-900 disabled:opacity-30 disabled:hover:text-neutral-500"
+                                title="Move this group down within its booth"
+                              >
+                                ▼
+                              </button>
+                            </form>
+                          </div>
+                        )}
+                        <div className="text-xs text-neutral-600">
+                          <span className="text-neutral-400">Cost {money(group.subtotal)}</span>
+                          <span className="mx-1.5">&rarr;</span>
+                          <span className="font-medium">{money(sell(group.subtotal))}</span>
+                        </div>
                       </div>
                     </div>
                     <div className="overflow-x-auto rounded-md border border-neutral-200">
@@ -2915,7 +2951,9 @@ function CategoryTabContent({
                       </div>
                     )}
                   </div>
-                ))}
+                    );
+                  });
+                })()}
                 {!version.isLocked &&
                   emptyChildSections.map((section) => (
                     <EmptyGroupCard

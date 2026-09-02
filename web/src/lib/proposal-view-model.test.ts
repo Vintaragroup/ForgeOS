@@ -218,6 +218,7 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
     pendingDescription?: string | null;
     boothDescription?: string | null;
     boothPendingDescription?: string | null;
+    sortOrder?: number;
   }) {
     return {
       id: overrides.id,
@@ -227,6 +228,7 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
       pendingDescription: overrides.pendingDescription ?? null,
       boothDescription: overrides.boothDescription ?? null,
       boothPendingDescription: overrides.boothPendingDescription ?? null,
+      sortOrder: overrides.sortOrder ?? 0,
       lineItems: [li({ id: `${overrides.id}-item`, totalCost: 100 })],
     };
   }
@@ -287,6 +289,32 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
     expect(booth.boothLabel).toBe("SECTION 211");
     expect(booth.boothDescription).toBe("Acme Corp booth");
     expect(booth.boothPendingDescription).toBeNull();
+  });
+
+  it("orders a booth's own custom-named groups by sortOrder (moveElementGroupOrder's own field)", () => {
+    const sections = [
+      editableSection({ id: "s1", name: "Platform", groupLabel: "SECTION 231", sortOrder: 1 }),
+      editableSection({ id: "s2", name: "Booth Build", groupLabel: "SECTION 231", sortOrder: 0 }),
+    ];
+
+    const [booth] = groupBoothLineItemsForEditing(sections);
+
+    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Booth Build", "Platform"]);
+  });
+
+  it("keeps a mapped group's fixed build-sequence position regardless of sortOrder", () => {
+    const sections = [
+      // Graphics ranks after Wall Structure in ELEMENT_TYPE_ORDER, but a
+      // much lower sortOrder should never override that -- only a
+      // booth's OWN unmapped groups are ever reorderable relative to
+      // each other.
+      editableSection({ id: "s1", name: "Graphic Panels", groupLabel: "SECTION 211", sortOrder: 0 }),
+      editableSection({ id: "s2", name: "BeMatrix", groupLabel: "SECTION 211", sortOrder: 5 }),
+    ];
+
+    const [booth] = groupBoothLineItemsForEditing(sections);
+
+    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Wall Structure", "Graphics"]);
   });
 });
 

@@ -17,7 +17,12 @@ import type {
   SectionType,
 } from "@/generated/prisma/enums";
 import { inferCategoryFromDescription, mapDesignCostCategoryToCanonical } from "@/lib/line-item-category";
-import { boothGroupsByCategoryForEditing, resolveEffectiveCategory, resolveTypeKeyForCategoryKey } from "@/lib/proposal-view-model";
+import {
+  boothGroupsByCategoryForEditing,
+  groupBoothLineItemsForEditing,
+  resolveEffectiveCategory,
+  resolveTypeKeyForCategoryKey,
+} from "@/lib/proposal-view-model";
 
 type Decimal = Prisma.Decimal;
 type DecimalInput = Decimal | number | string;
@@ -364,6 +369,64 @@ export async function moveSectionProposalOrder(
   await db.$executeRaw`
     UPDATE "estimate_sections" AS es
     SET "proposalSortOrder" = v.sort_order
+    FROM (VALUES ${Prisma.join(updates.map((u) => Prisma.sql`(${u.id}::text, ${u.sortOrder}::int)`))}) AS v(id, sort_order)
+    WHERE es.id = v.id
+  `;
+}
+
+// Moves an H2 group (an elementType within one booth, groupBoothLineItems
+// ForEditing's own unit) up/down relative to its sibling groups in the
+// SAME booth -- unlike moveSectionProposalOrder above, this is
+// deliberately category-agnostic: an H2 group is one real physical
+// section (or, rarely, a merged handful) that surfaces identically in
+// every category tab its own items happen to touch, not a different row
+// per category the way a booth's presence in several tabs can be -- see
+// EstimateSection.sortOrder vs proposalSortOrder's own schema comments.
+// Only ever reorders a booth's own custom-named (unmapped) groups
+// relative to each other; the 6 fixed ELEMENT_TYPE_MAP labels
+// (elementTypeForSection) always keep their fixed build-sequence
+// position and are never part of this swap.
+export async function moveElementGroupOrder(
+  estimateVersionId: string,
+  groupLabel: string,
+  elementType: string,
+  direction: "up" | "down",
+) {
+  await assertUnlocked(estimateVersionId);
+
+  const sections = await db.estimateSection.findMany({
+    where: { estimateVersionId, groupLabel },
+    select: {
+      id: true,
+      name: true,
+      groupLabel: true,
+      description: true,
+      pendingDescription: true,
+      boothDescription: true,
+      boothPendingDescription: true,
+      sortOrder: true,
+      lineItems: { select: { id: true, totalCost: true, sortOrder: true } },
+    },
+  });
+
+  const [boothGroup] = groupBoothLineItemsForEditing(sections);
+  if (!boothGroup) return;
+
+  const movable = boothGroup.elementGroups.filter((g) => !g.isMapped);
+  const index = movable.findIndex((g) => g.elementType === elementType);
+  if (index === -1) return;
+  const swapWith = direction === "up" ? index - 1 : index + 1;
+  if (swapWith < 0 || swapWith >= movable.length) return;
+
+  const reordered = [...movable];
+  [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
+
+  const updates = reordered.flatMap((group, i) => group.sectionIds.map((id) => ({ id, sortOrder: i })));
+  if (updates.length === 0) return;
+
+  await db.$executeRaw`
+    UPDATE "estimate_sections" AS es
+    SET "sortOrder" = v.sort_order
     FROM (VALUES ${Prisma.join(updates.map((u) => Prisma.sql`(${u.id}::text, ${u.sortOrder}::int)`))}) AS v(id, sort_order)
     WHERE es.id = v.id
   `;

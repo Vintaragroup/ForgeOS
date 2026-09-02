@@ -19,6 +19,7 @@ import {
   moveLineItemsToCategory,
   moveLineItemWithinSection,
   moveSectionOrder,
+  moveElementGroupOrder,
   moveSectionProposalOrder,
   recomputeVersionTotals,
   resolveBoothBuildType,
@@ -206,6 +207,19 @@ export async function moveSectionProposalOrderAction(
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await moveSectionProposalOrder(versionId, groupLabel, categoryName, direction);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function moveElementGroupOrderAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  elementType: string,
+  direction: "up" | "down",
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await moveElementGroupOrder(versionId, groupLabel, elementType, direction);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

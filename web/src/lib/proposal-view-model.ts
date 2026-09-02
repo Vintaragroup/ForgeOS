@@ -598,6 +598,7 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     boothDescription: string | null;
     boothPendingDescription: string | null;
     proposalSortOrder?: number;
+    sortOrder?: number;
     lineItems: T[];
   }[],
 ): RawBoothGroup<T>[] {
@@ -609,6 +610,16 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
   // move them in, not a separate alphabetical order that would make
   // reordering invisible where a user actually clicks it.
   const boothSortOrder = new Map<string, number>();
+  // Same convention one level down: a group's (boothLabel, elementType)
+  // key maps to the min sortOrder across every section contributing to
+  // it, so moveElementGroupOrder's up/down swaps land exactly where this
+  // sort puts them. Unlike proposalSortOrder (deliberately per-category,
+  // see EstimateSection.proposalSortOrder's own schema comment), a
+  // group's relative order is the same everywhere it appears -- it's the
+  // same physical section row surfacing in every category tab that
+  // section happens to have items in, not a different row per category --
+  // so one plain, category-agnostic sortOrder is the correct model here.
+  const elementSortOrder = new Map<string, number>();
 
   for (const section of sections) {
     if (!section.groupLabel) continue;
@@ -618,6 +629,8 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
       boothLabel,
       Math.min(boothSortOrder.get(boothLabel) ?? Infinity, section.proposalSortOrder ?? 0),
     );
+    const elementKey = `${boothLabel}::${elementType}`;
+    elementSortOrder.set(elementKey, Math.min(elementSortOrder.get(elementKey) ?? Infinity, section.sortOrder ?? 0));
 
     if (!boothDescriptions.has(boothLabel)) {
       boothDescriptions.set(boothLabel, {
@@ -649,7 +662,11 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     .sort(([a], [b]) => (boothSortOrder.get(a) ?? 0) - (boothSortOrder.get(b) ?? 0) || a.localeCompare(b))
     .map(([boothLabel, byElementType]) => {
       const elementGroups = [...byElementType.entries()]
-        .sort(([a], [b]) => elementTypeRank(a) - elementTypeRank(b))
+        .sort(
+          ([a], [b]) =>
+            elementTypeRank(a) - elementTypeRank(b) ||
+            (elementSortOrder.get(`${boothLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${boothLabel}::${b}`) ?? 0),
+        )
         .map(([elementType, bucket]) => {
           const sorted = [...bucket.items].sort((a, b) => a.sortOrder - b.sortOrder);
           const subtotal = sorted.reduce((sum, li) => sum + li.totalCost.toNumber(), 0);
@@ -707,6 +724,7 @@ export function boothGroupsByCategoryForEditing<
     boothDescription: string | null;
     boothPendingDescription: string | null;
     proposalSortOrder?: number;
+    sortOrder?: number;
     lineItems: T[];
   }[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
@@ -722,6 +740,7 @@ export function boothGroupsByCategoryForEditing<
       boothDescription: string | null;
       boothPendingDescription: string | null;
       proposalSortOrder?: number;
+      sortOrder?: number;
       lineItems: T[];
     }[]
   >();
@@ -744,6 +763,7 @@ export function boothGroupsByCategoryForEditing<
         boothDescription: section.boothDescription,
         boothPendingDescription: section.boothPendingDescription,
         proposalSortOrder: section.proposalSortOrder,
+        sortOrder: section.sortOrder,
         lineItems: items,
       };
       const arr = sectionsByCategoryName.get(categoryName);

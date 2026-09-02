@@ -23,6 +23,7 @@ import {
   deleteLineItem,
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
+  moveElementGroupOrder,
   moveLineItemsToCategory,
   moveLineItemToEstimate,
   moveLineItemWithinSection,
@@ -1805,5 +1806,76 @@ describe("moveSectionProposalOrder", () => {
     await lockEstimateVersion(version.id);
 
     await expect(moveSectionProposalOrder(version.id, "Booth A", "Labor", "down")).rejects.toThrow();
+  });
+});
+
+describe("moveElementGroupOrder", () => {
+  async function makeBoothWithGroups(groupNames: string[]) {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const sections = [];
+    for (const name of groupNames) {
+      const section = await addSection(version.id, {
+        name,
+        sectionType: "COMPONENT",
+        groupLabel: "Section 231 - Booth",
+        buildType: "RENTAL",
+      });
+      await addLineItem(version.id, section.id, {
+        lineType: "MATERIAL",
+        description: `${name} item`,
+        qty: 1,
+        unitCost: 10,
+      });
+      sections.push(section);
+    }
+    return { version, sections };
+  }
+
+  it("moves a booth's own custom-named group up/down among its siblings, leaving the booth's identity untouched", async () => {
+    const { version, sections } = await makeBoothWithGroups(["Booth Build", "Platform", "Extra"]);
+
+    // Starting order is creation order (every sortOrder defaults to 0, so
+    // there's no explicit ordering yet to override it): Booth Build,
+    // Platform, Extra.
+    await moveElementGroupOrder(version.id, "Section 231 - Booth", "Platform", "up");
+
+    const updated = await Promise.all(sections.map((s) => db.estimateSection.findUniqueOrThrow({ where: { id: s.id } })));
+    const byName = new Map(updated.map((s) => [s.name, s.sortOrder]));
+    // Platform swapped with its immediate neighbor (Booth Build); Extra,
+    // last in line, is untouched by a swap between the other two.
+    expect(byName.get("Platform")).toBe(0);
+    expect(byName.get("Booth Build")).toBe(1);
+    expect(byName.get("Extra")).toBe(2);
+  });
+
+  it("does nothing when asked to move the first group up or the last group down", async () => {
+    const { version, sections } = await makeBoothWithGroups(["Booth Build", "Platform"]);
+
+    await moveElementGroupOrder(version.id, "Section 231 - Booth", "Booth Build", "up");
+    await moveElementGroupOrder(version.id, "Section 231 - Booth", "Platform", "down");
+
+    const updated = await Promise.all(sections.map((s) => db.estimateSection.findUniqueOrThrow({ where: { id: s.id } })));
+    expect(updated.every((s) => s.sortOrder === 0)).toBe(true);
+  });
+
+  it("never reorders a mapped group (its fixed build-sequence position isn't part of this swap)", async () => {
+    // "BeMatrix" resolves through ELEMENT_TYPE_MAP to the fixed "Wall
+    // Structure" label -- moveElementGroupOrder's own movable list
+    // excludes every mapped group, so asking to move one is a no-op
+    // rather than an error.
+    const { version, sections } = await makeBoothWithGroups(["BeMatrix", "Platform"]);
+
+    await moveElementGroupOrder(version.id, "Section 231 - Booth", "Wall Structure", "down");
+
+    const updated = await Promise.all(sections.map((s) => db.estimateSection.findUniqueOrThrow({ where: { id: s.id } })));
+    expect(updated.every((s) => s.sortOrder === 0)).toBe(true);
+  });
+
+  it("rejects reordering on a locked version", async () => {
+    const { version } = await makeBoothWithGroups(["Booth Build", "Platform"]);
+    await lockEstimateVersion(version.id);
+
+    await expect(moveElementGroupOrder(version.id, "Section 231 - Booth", "Platform", "up")).rejects.toThrow(/locked/);
   });
 });
