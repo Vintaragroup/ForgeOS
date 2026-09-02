@@ -1113,6 +1113,22 @@ model EstimateSection {
   // every existing section and every new one.
   includeInProposal Boolean @default(true)
 
+  // Whole-booth "hide the detail, keep the price" -- unlike
+  // includeInProposal above, this never removes the booth's cost from any
+  // total (the Proposal PDF's own Grand Total, the estimate's own
+  // grandTotal, everything computed from the real line items stays
+  // exactly the same). It only changes what the CLIENT-FACING Proposal
+  // PDF actually itemizes for this booth: just its name + total, no
+  // element-type sub-headers, no line items underneath. The Line Items
+  // tab (this app's own editing view) always shows full detail regardless
+  // -- this flag only ever reaches proposal-pdf.tsx's rendering, never
+  // the editor. Same booth-wide updateMany-by-groupLabel sync as
+  // includeInProposal/buildType/boothDescription above. Added after a
+  // real estimator confusion: they'd been using includeInProposal to hide
+  // a booth's detail from the client, not realizing it also silently
+  // dropped that booth's dollar amount from the PDF's own Grand Total.
+  summarizeOnProposal Boolean @default(false)
+
   // This section's position among the other booths visible within ONE
   // category, for Proposal PDF ordering -- deliberately NOT the same
   // field as sortOrder above (which orders sections generally / production

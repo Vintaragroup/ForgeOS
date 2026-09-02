@@ -176,6 +176,47 @@ describe("groupBoothLineItems", () => {
     expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Booth Build", "Platform"]);
   });
 
+  it("carries summarizeOnProposal through to the BoothGroup, defaulting false when unset", () => {
+    const summarized: ProposalViewSection[] = [
+      { name: "Platform", groupLabel: "SECTION 231", summarizeOnProposal: true, lineItems: [li({ id: "a", totalCost: 100 })] },
+    ];
+    const plain: ProposalViewSection[] = [
+      { name: "Platform", groupLabel: "SECTION 428", lineItems: [li({ id: "b", totalCost: 100 })] },
+    ];
+
+    const [summarizedBooth] = groupBoothLineItems(summarized);
+    const [plainBooth] = groupBoothLineItems(plain);
+
+    expect(summarizedBooth.summarizeOnProposal).toBe(true);
+    expect(plainBooth.summarizeOnProposal).toBe(false);
+  });
+
+  it("never removes a summarized booth's items from its own subtotal -- only proposal-pdf.tsx's rendering skips them", () => {
+    // The whole point of summarizeOnProposal (see its own schema comment):
+    // hide the itemized detail on the client PDF without changing any
+    // total. groupBoothLineItems itself must keep computing the real
+    // subtotal regardless -- it's proposal-pdf.tsx's job to skip
+    // rendering elementGroups, never this function's job to drop them
+    // from the math.
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Platform",
+        groupLabel: "SECTION 231",
+        summarizeOnProposal: true,
+        lineItems: [
+          li({ id: "a", description: "Sleeper floor", totalCost: 100 }),
+          li({ id: "b", description: "Platform for booth", totalCost: 200 }),
+        ],
+      },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+
+    expect(booth.summarizeOnProposal).toBe(true);
+    expect(booth.subtotal).toBe(300);
+    expect(booth.elementGroups[0].items).toHaveLength(2);
+  });
+
   it("excludes a section whose includeInProposal is false, and a line item whose own flag is false", () => {
     const sections: ProposalViewSection[] = [
       { name: "BeMatrix", groupLabel: "SECTION 211", includeInProposal: false, lineItems: [li({ id: "a", totalCost: 100 })] },

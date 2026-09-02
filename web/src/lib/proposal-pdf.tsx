@@ -757,7 +757,13 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                         {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
                       </Text>
                     </View>
-                    {booth.elementGroups.map((group) => (
+                    {/* summarizeOnProposal renders only the header row
+                        above -- booth.subtotal already includes every
+                        item regardless, so the total stays correct with
+                        nothing itemized underneath. See
+                        EstimateSection.summarizeOnProposal's own schema
+                        comment. */}
+                    {!booth.summarizeOnProposal && booth.elementGroups.map((group) => (
                       <View key={group.elementType} style={styles.elementTypeSection}>
                         <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
                           <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>

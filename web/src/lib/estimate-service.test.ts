@@ -41,6 +41,7 @@ import {
   updateLineItem,
   updateMarginTarget,
   updateSectionDescription,
+  updateSectionProposalSummary,
   updateSectionProposalVisibility,
 } from "@/lib/estimate-service";
 
@@ -1738,6 +1739,56 @@ describe("updateSectionProposalVisibility", () => {
     await lockEstimateVersion(version.id);
 
     await expect(updateSectionProposalVisibility(version.id, groupLabel, false)).rejects.toThrow();
+  });
+});
+
+describe("updateSectionProposalSummary", () => {
+  it("sets summarizeOnProposal across every section sharing the groupLabel, both directions", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "SECTION 211";
+    const sectionA = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+    const sectionB = await addSection(version.id, { name: "Wall Panels", sectionType: "COMPONENT", groupLabel });
+
+    await updateSectionProposalSummary(version.id, groupLabel, true);
+    const [summarizedA, summarizedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(summarizedA.summarizeOnProposal).toBe(true);
+    expect(summarizedB.summarizeOnProposal).toBe(true);
+
+    await updateSectionProposalSummary(version.id, groupLabel, false);
+    const [fullA, fullB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(fullA.summarizeOnProposal).toBe(false);
+    expect(fullB.summarizeOnProposal).toBe(false);
+  });
+
+  it("never touches includeInProposal -- summarizing is independent of hiding", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "SECTION 211";
+    const section = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+
+    await updateSectionProposalSummary(version.id, groupLabel, true);
+
+    const updated = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    expect(updated.summarizeOnProposal).toBe(true);
+    expect(updated.includeInProposal).toBe(true);
+  });
+
+  it("rejects on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "SECTION 211";
+    const section = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    await expect(updateSectionProposalSummary(version.id, groupLabel, true)).rejects.toThrow();
   });
 });
 

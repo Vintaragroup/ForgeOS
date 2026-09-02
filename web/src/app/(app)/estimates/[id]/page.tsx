@@ -58,6 +58,7 @@ import {
   updateSectionBuildTypeAction,
   updateSectionDescriptionAction,
   updateSectionItemsCategoryAction,
+  updateSectionProposalSummaryAction,
   updateSectionProposalVisibilityAction,
 } from "../actions";
 import { SectionHeadingEditor } from "@/components/section-heading-editor";
@@ -2751,6 +2752,11 @@ function CategoryTabContent({
             // visible for a version predating this field.
             const boothVisible =
               version.sections.find((s) => s.groupLabel === booth.boothLabel)?.includeInProposal ?? true;
+            // Same "any one section is correct to read" reasoning as
+            // boothVisible above -- updateSectionProposalSummary keeps
+            // every section sharing this groupLabel in sync.
+            const boothSummarized =
+              version.sections.find((s) => s.groupLabel === booth.boothLabel)?.summarizeOnProposal ?? false;
             const otherBoothLabels = allBoothLabels.filter((label) => label !== booth.boothLabel);
             // A section just added to this booth via the "+ Group" tool
             // below (or one imported with no items yet) never appears in
@@ -2775,6 +2781,15 @@ function CategoryTabContent({
                     updateAction={updateBoothDescriptionAction.bind(null, estimateId, version.id, booth.boothLabel)}
                     rejectAction={clearBoothPendingDescriptionAction.bind(null, estimateId, version.id, booth.boothLabel)}
                   />
+                  {/* Otherwise-silent state -- exactly the kind of thing
+                      that caused a real production estimate's Proposal
+                      PDF total to look broken when it was actually just
+                      this booth (and 7 others) quietly hidden. */}
+                  {boothSummarized && (
+                    <span className="ml-2 rounded bg-amber-900 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-amber-200">
+                      Summarized on proposal
+                    </span>
+                  )}
                 </h4>
                 <div className="flex items-center gap-3">
                   <div className="text-xs">
@@ -2809,6 +2824,26 @@ function CategoryTabContent({
                           title={boothVisible ? "Hide this booth from the Proposal PDF" : "Show this booth on the Proposal PDF"}
                         >
                           {boothVisible ? "Hide from proposal" : "Show on proposal"}
+                        </button>
+                      </form>
+                      {/* Distinct from Hide/Show above -- that one removes
+                          this booth's cost from every total on the client
+                          PDF too; this one only collapses its itemized
+                          detail to a single name+total row, the price
+                          stays counted. See
+                          EstimateSection.summarizeOnProposal's own schema
+                          comment. */}
+                      <form action={updateSectionProposalSummaryAction.bind(null, estimateId, version.id, booth.boothLabel, !boothSummarized)}>
+                        <button
+                          type="submit"
+                          className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                          title={
+                            boothSummarized
+                              ? "Show this booth's full line-item detail on the Proposal PDF"
+                              : "Hide this booth's line-item detail on the Proposal PDF, but keep its cost in the total"
+                          }
+                        >
+                          {boothSummarized ? "Show full detail" : "Summarize on proposal"}
                         </button>
                       </form>
                       <form action={untagSectionBuildTypeAction.bind(null, estimateId, version.id, booth.boothLabel)}>

@@ -287,6 +287,23 @@ export async function updateSectionProposalVisibility(
   });
 }
 
+// Same booth-wide updateMany-by-groupLabel pattern as
+// updateSectionProposalVisibility above -- see
+// EstimateSection.summarizeOnProposal's own schema comment for how this
+// differs from that one (this never removes the booth's cost from any
+// total, only its itemized detail on the client-facing PDF).
+export async function updateSectionProposalSummary(
+  estimateVersionId: string,
+  groupLabel: string,
+  summarizeOnProposal: boolean,
+) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { summarizeOnProposal },
+  });
+}
+
 // Reorders one booth (identified by groupLabel) among only the OTHER
 // booths actually visible within one specific category -- deliberately
 // scoped per-category, not a global reorder, to avoid the exact ambiguity

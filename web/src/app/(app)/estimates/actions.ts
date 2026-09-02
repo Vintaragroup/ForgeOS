@@ -31,6 +31,7 @@ import {
   updateMarginTarget,
   updateSectionBuildType,
   updateSectionDescription,
+  updateSectionProposalSummary,
   updateSectionProposalVisibility,
 } from "@/lib/estimate-service";
 import { suggestBoothDescription, suggestSectionDescription } from "@/lib/ai/section-description-service";
@@ -194,6 +195,18 @@ export async function updateSectionProposalVisibilityAction(
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await updateSectionProposalVisibility(versionId, groupLabel, includeInProposal);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateSectionProposalSummaryAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  summarizeOnProposal: boolean,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await updateSectionProposalSummary(versionId, groupLabel, summarizeOnProposal);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

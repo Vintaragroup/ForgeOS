@@ -64,6 +64,12 @@ export interface ProposalViewSection {
   // schema comment and moveElementGroupOrder. Optional/undefined means
   // "not yet reordered," same 0 default as proposalSortOrder above.
   sortOrder?: number;
+  // Whole-booth "hide the detail, keep the price" on the client-facing
+  // PDF -- see EstimateSection.summarizeOnProposal's own schema comment.
+  // Optional, same reasoning as includeInProposal above: undefined means
+  // full detail (unaffected), so no existing caller/test fixture needs
+  // updating just because this field exists.
+  summarizeOnProposal?: boolean;
   lineItems: ProposalViewLineItem[];
 }
 
@@ -397,6 +403,11 @@ export interface BoothGroup {
   boothLabel: string;
   elementGroups: ElementTypeGroup[];
   subtotal: number;
+  // See EstimateSection.summarizeOnProposal's own schema comment --
+  // proposal-pdf.tsx renders just this booth's header + subtotal (already
+  // in `subtotal` above, unaffected) and skips elementGroups entirely
+  // when this is true.
+  summarizeOnProposal: boolean;
 }
 
 // Companion to aggregateByCategory, not a replacement -- reads sections
@@ -422,6 +433,14 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // a moved group kept rendering in its old position there even though the
   // editing view already reflected the move correctly).
   const elementSortOrder = new Map<string, number>();
+  // Whole-booth "hide detail, keep the price" -- read off the first
+  // section encountered for this booth, same convention as
+  // boothDescription elsewhere (updateSectionProposalSummary always
+  // keeps every section sharing a groupLabel in sync, so any one is
+  // correct). Deliberately never affects boothSortOrder/elementSortOrder
+  // above or the subtotal math below -- only proposal-pdf.tsx's own
+  // rendering decision skips elementGroups for a summarized booth.
+  const boothSummarize = new Map<string, boolean>();
 
   for (const section of sections) {
     if (!section.groupLabel || section.includeInProposal === false) continue;
@@ -433,6 +452,9 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     );
     const elementKey = `${boothLabel}::${elementType}`;
     elementSortOrder.set(elementKey, Math.min(elementSortOrder.get(elementKey) ?? Infinity, section.sortOrder ?? 0));
+    if (!boothSummarize.has(boothLabel)) {
+      boothSummarize.set(boothLabel, section.summarizeOnProposal ?? false);
+    }
 
     let byElementType = byBooth.get(boothLabel);
     if (!byElementType) {
@@ -513,7 +535,7 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
         .filter((g) => g.items.length > 0);
       if (elementGroups.length === 0) return null;
       const subtotal = elementGroups.reduce((sum, g) => sum + g.subtotal, 0);
-      return { boothLabel, elementGroups, subtotal };
+      return { boothLabel, elementGroups, subtotal, summarizeOnProposal: boothSummarize.get(boothLabel) ?? false };
     })
     .filter((g): g is BoothGroup => g !== null);
 }
