@@ -27,11 +27,11 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
           include: {
             estimate: { include: { opportunity: { include: { company: true, primaryContact: true } }, taxRate: true } },
             // isDraft: false -- see preview-pdf/route.ts's identical filter
-            // for why: without it this PDF's itemized rows/subtotals
-            // included unreviewed drafts while its Grand Total (from
-            // version.grandTotal) didn't, producing an internally
-            // inconsistent document -- this is the REAL, client-facing
-            // download for an already-sent Proposal, so the same fix
+            // for why: without it this PDF's itemized rows/subtotals would
+            // include unreviewed drafts while its own Grand Total
+            // (proposal-pdf.tsx's documentGrandTotal) is supposed to match
+            // exactly what's confirmed -- this is the REAL, client-facing
+            // download for an already-sent Proposal, so getting this right
             // matters even more here.
             sections: { where: { optionId: null }, include: { lineItems: { where: { isDraft: false } } } },
             categoryMarginOverrides: true,
@@ -79,7 +79,6 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
         termsAndConditions,
         paymentMethodNote,
         taxRate,
-        grandTotal: version.grandTotal,
         marginTargetPct: version.marginTargetPct,
         categoryMarginOverrides: version.categoryMarginOverrides,
         sentAt: proposal.sentAt,

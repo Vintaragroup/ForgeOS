@@ -336,10 +336,6 @@ const styles = StyleSheet.create({
 const CURRENCY_FORMATTER = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const QTY_FORMATTER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
-function money(d: Prisma.Decimal): string {
-  return CURRENCY_FORMATTER.format(d.toNumber());
-}
-
 function moneyFromNumber(n: number): string {
   return CURRENCY_FORMATTER.format(n);
 }
@@ -375,10 +371,10 @@ export interface ProposalPdfTimelineEntry {
 // Descriptive scope-of-services copy only -- no price of its own. The
 // dollar amount comes from real line items tagged with the "Professional
 // Services" category (same mechanism as Labor/Shipping: actual line
-// items, so the total already flows into data.grandTotal correctly). This
-// is boilerplate text injected above that category's items when any
-// exist; if none do, there's nothing to attach the copy to, so it's
-// simply not rendered.
+// items, so the total already flows into this document's own Grand Total
+// correctly). This is boilerplate text injected above that category's
+// items when any exist; if none do, there's nothing to attach the copy
+// to, so it's simply not rendered.
 export interface ProposalPdfProfessionalServices {
   items: string[];
 }
@@ -433,17 +429,13 @@ export interface ProposalPdfData {
   // computed rentalTotal (Total Taxable) to get the estimated dollar
   // amount. No real tax-rate API involved -- see catalog/tax-rates.
   taxRate: { label: string; rate: number } | null;
-  grandTotal: Prisma.Decimal;
-  // The document's own margin target (the fallback rate for any category
-  // with no override of its own) and this version's live category margin
-  // overrides -- together with `categories`, these are exactly what
-  // estimate-service.ts's computeVersionTotals used server-side to arrive
-  // at `grandTotal`. Grossing up per line item here with the same
-  // resolveLineItemMarginPct/computeMarginGrossUp (not a re-derived
-  // formula, and not the old single grandTotal/totalCost ratio, which
-  // could only ever represent one uniform rate) keeps this document
-  // self-consistent with grandTotal by construction, the same guarantee
-  // the ratio approach used to provide.
+  // Deliberately NOT EstimateVersion.grandTotal -- this document computes
+  // its own Grand Total (documentGrandTotal below) from the exact same
+  // buckets its itemized rows come from, so hiding a line item or booth
+  // from just this document can never desync the two. The estimate's own
+  // stored grandTotal (shown everywhere else in the app) stays exactly
+  // what it would be with nothing hidden -- see includeInProposal's own
+  // schema comment for why that's a real requirement, not an oversight.
   marginTargetPct: Prisma.Decimal;
   categoryMarginOverrides: { categoryId: string; marginPct: Prisma.Decimal }[];
   sentAt: Date | null;
@@ -469,10 +461,12 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // resolveLineItemMarginPct/computeMarginGrossUp functions. Since every
   // AggregatedLineItem in one bucket already shares that bucket's own
   // resolved category name, summing sellForCategory(item.totalCost,
-  // bucket.name) over every item still reproduces data.grandTotal exactly
-  // -- the same self-consistency guarantee the old ratio approach gave,
-  // just correct once margins vary per category instead of only when they
-  // don't.
+  // bucket.name) over every item reproduces exactly what
+  // EstimateVersion.grandTotal would be if nothing were hidden from this
+  // document -- documentGrandTotal below sums the same way over whatever
+  // buckets actually survive filtering, so this document's own total is
+  // always internally consistent with its own itemized rows, hidden
+  // items or not.
   const marginOverridesByCategoryId = new Map(data.categoryMarginOverrides.map((o) => [o.categoryId, o.marginPct]));
   // Total raw cost across every bucket -- only used for the "Total cost"
   // figure on the internal (showCost) preview, unrelated to sellForCategory
@@ -598,6 +592,19 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   const sellServicesTotal = buckets
     .filter((b) => showServiceCategoryNames.has(b.name))
     .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
+  // NOT data.grandTotal (EstimateVersion.grandTotal, computed server-side
+  // over every real line item) -- that figure is deliberately never
+  // affected by a line item or booth being hidden from just this
+  // document (the estimate's own internal totals/margins have to stay
+  // exactly what they'd be if nothing were hidden, confirmed live as a
+  // real requirement, not an incidental side effect to accept). This
+  // document's OWN Grand Total has the opposite job: it has to equal
+  // whatever is actually itemized on the page above it, hidden or not,
+  // or the PDF is internally inconsistent -- a real bug the moment
+  // includeInProposal could actually remove something from buckets,
+  // unlike hidePricingCategoryNames/summaryCategoryNames above, which
+  // only ever blank a display, never remove an item from these sums.
+  const documentGrandTotal = sellRentalTotal + sellServicesTotal;
 
   return (
     <Document title={`Proposal — ${data.showName}`}>
@@ -793,7 +800,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           );
         })}
 
-        {data.grandTotal.toNumber() > 0 && (
+        {documentGrandTotal > 0 && (
           <View style={styles.subtotalsBlock}>
             {hasServiceSplit && (
               <>
@@ -859,7 +866,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           )}
           <View style={styles.totalBlock}>
             <Text style={styles.totalLabel}>Grand total</Text>
-            <Text style={styles.totalValue}>{money(data.grandTotal)}</Text>
+            <Text style={styles.totalValue}>{moneyFromNumber(documentGrandTotal)}</Text>
           </View>
         </View>
 

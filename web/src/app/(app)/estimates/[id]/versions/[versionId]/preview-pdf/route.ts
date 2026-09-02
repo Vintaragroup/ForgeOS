@@ -53,14 +53,12 @@ export async function GET(
         estimate: { include: { opportunity: { include: { company: true, primaryContact: true } }, taxRate: true } },
         // isDraft: false -- a draft line item is deliberately excluded from
         // version.grandTotal (estimate-service.ts's computeSectionTotal)
-        // until a human confirms it. Without this filter here, the PDF's
-        // own itemized rows/category subtotals included every draft too
-        // (often still $0, never reviewed), while its bottom-line Grand
-        // Total -- pulled straight from version.grandTotal below --
-        // excluded them: a real job's preview showed thousands of dollars
-        // of itemized subtotals against a $0.00 Grand Total. Matching the
-        // same isDraft rule here keeps the whole document internally
-        // consistent.
+        // until a human confirms it, and this document's own Grand Total
+        // (proposal-pdf.tsx's documentGrandTotal, computed from these same
+        // sections) needs to agree with that same rule. Without this
+        // filter here, a real job's preview once showed thousands of
+        // dollars of itemized draft subtotals with nothing confirmed yet
+        // to back them.
         sections: { where: { optionId: null }, include: { lineItems: { where: { isDraft: false } } } },
         categoryMarginOverrides: true,
       },
@@ -129,7 +127,6 @@ export async function GET(
         termsAndConditions,
         paymentMethodNote,
         taxRate,
-        grandTotal: version.grandTotal,
         marginTargetPct: version.marginTargetPct,
         categoryMarginOverrides: version.categoryMarginOverrides,
         sentAt: null,
