@@ -1414,6 +1414,22 @@ function LineItemsTab({
     }))
     .filter((b) => b.sections.every((s) => s.lineItems.length === 0));
 
+  // For MoveToGroupBar below -- every line item's current booth, and
+  // every booth's own H2 group names, so "move to a different group"
+  // stays scoped to whatever H1 parent the checked items already share
+  // (never a free-text jump to an unrelated booth). "" is the
+  // project-wide bucket's key, the only way a plain object key can stand
+  // in for groupLabel: null.
+  const lineItemGroupLabels: Record<string, string | null> = {};
+  const sectionNamesByGroupLabel: Record<string, string[]> = {};
+  for (const section of version.sections) {
+    const key = section.groupLabel ?? "";
+    (sectionNamesByGroupLabel[key] ??= []).push(section.name);
+    for (const li of section.lineItems) {
+      lineItemGroupLabels[li.id] = section.groupLabel;
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <Card className="p-6">
@@ -1683,7 +1699,8 @@ function LineItemsTab({
             />
             <MoveToGroupBar
               moveSelected={bulkMoveLineItemsToGroupAction.bind(null, estimateId, version.id)}
-              boothLabels={[...buildTypeByBoothLabel.keys()]}
+              lineItemGroupLabels={lineItemGroupLabels}
+              sectionNamesByGroupLabel={sectionNamesByGroupLabel}
             />
           </div>
         </BidPackageSelectionProvider>
