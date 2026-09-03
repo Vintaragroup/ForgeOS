@@ -19,6 +19,7 @@ import {
 import { ProposalPreviewModal } from "@/components/proposal-preview-modal";
 import {
   addAttachmentAction,
+  addInternalCostAction,
   addLineItemAction,
   addOptionAction,
   addOptionSectionAction,
@@ -36,6 +37,7 @@ import {
   confirmDraftLineItemAction,
   createFirstVersion,
   createNewVersionAction,
+  deleteInternalCostAction,
   deleteLineItemAction,
   generateProposalAction,
   lockVersionAction,
@@ -58,6 +60,7 @@ import {
   updateCategorySummaryAction,
   updateElementSummaryAction,
   updateEstimateDetails,
+  updateInternalCostAction,
   updateLineItemAction,
   updateMarginTargetAction,
   unarchiveEstimateAction,
@@ -69,8 +72,11 @@ import {
   updateSectionProposalSummaryAction,
   updateSectionProposalVisibilityAction,
 } from "../actions";
+import { updateOpportunityProfitabilityAction } from "@/app/(app)/opportunities/actions";
+import { computeTrueProfitability } from "@/lib/profitability-service";
 import { SectionHeadingEditor } from "@/components/section-heading-editor";
 import { SummaryEditor } from "@/components/summary-editor";
+import { InternalCostRow } from "@/components/internal-cost-row";
 import {
   buildFullEstimateFromDocumentsAction,
   commitImportAction,
@@ -114,7 +120,7 @@ import { getVendorMatchApplyLog } from "@/lib/vendor-match-apply-log-service";
 import { buildTypeTotals, type MethodTotal } from "@/lib/type-totals";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
-import { Button, Card, Field, Notice, PageHeader, SelectField } from "@/components/ui";
+import { Button, Card, Field, Notice, PageHeader, ReadOnlyField, SelectField } from "@/components/ui";
 import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
 import { CategoryMethodFilter } from "@/components/category-method-filter";
@@ -158,6 +164,12 @@ const BUILD_TYPE_OPTIONS = [
   { value: "RENTAL", label: "Rental" },
   { value: "PURCHASE", label: "Purchase" },
   { value: "CUSTOM_BUILD", label: "Custom Fabricated" },
+];
+
+const INTERNAL_COST_CATEGORY_OPTIONS = [
+  { value: "OVERHEAD", label: "Overhead" },
+  { value: "PROJECT_RELATED", label: "Project-related" },
+  { value: "OTHER", label: "Other" },
 ];
 
 const LINE_TYPE_OPTIONS = [
@@ -261,6 +273,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  // Profitability tab: admin-only edit, everyone else with access to the
+  // opportunity gets read-only -- this is only a UI nicety (the real gate
+  // is requireAdmin() in the actions themselves, same split requireAdmin's
+  // own comment in auth.ts describes).
+  const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
 
   const estimate = await db.estimate.findFirst({
     where: { id, deletedAt: null },
@@ -330,6 +347,13 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           approvedBy: true,
           proposals: { orderBy: { createdAt: "desc" } },
           changeOrdersAsBase: { orderBy: { createdAt: "desc" } },
+          // True-company-profitability tab -- see InternalCost's own
+          // schema comment. section is only for display (which booth a
+          // cost is tied to, if any); never affects sections' own totals.
+          internalCosts: {
+            orderBy: { createdAt: "asc" },
+            include: { section: { select: { id: true, name: true, groupLabel: true } } },
+          },
         },
       })) ?? undefined)
     : undefined;
@@ -726,6 +750,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                 { id: "documents", label: "Documents" },
                 { id: "type-totals", label: "Type Totals" },
                 { id: "review", label: "Review", count: reviewIssueCount },
+                { id: "profitability", label: "Profitability" },
                 { id: "proposal", label: "Proposal & Approval" },
                 { id: "cut-list", label: "Cut List" },
                 { id: "history", label: "History", count: vendorMatchApplyLog.length },
@@ -823,6 +848,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     excludedFromTotalsIssues={excludedFromTotalsIssues}
                   />
                 ),
+                profitability: (
+                  <ProfitabilityTab
+                    estimateId={estimate.id}
+                    opportunityId={estimate.opportunityId}
+                    version={currentVersion}
+                    opportunity={estimate.opportunity}
+                    users={users}
+                    isAdmin={isAdmin}
+                  />
+                ),
                 proposal: (
                   <ProposalApprovalTab
                     estimateId={estimate.id}
@@ -909,6 +944,9 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
     approvedBy: true;
     proposals: true;
     changeOrdersAsBase: true;
+    internalCosts: {
+      include: { section: { select: { id: true; name: true; groupLabel: true } } };
+    };
   };
 }>;
 
@@ -4773,6 +4811,202 @@ function ReviewTab({
           )}
         </Card>
       )}
+    </div>
+  );
+}
+
+// True-company-profitability tab -- entirely separate from every sell-side
+// margin figure elsewhere on this page (computeVersionTotals's totalCost/
+// grandTotal/grossMarginPct). See InternalCost's own schema comment and
+// profitability-service.ts's computeTrueProfitability. Admin-only edit,
+// everyone else with access to this estimate gets the exact same tab and
+// numbers, just without any form controls -- real read-only, not hidden.
+function ProfitabilityTab({
+  estimateId,
+  opportunityId,
+  version,
+  opportunity,
+  users,
+  isAdmin,
+}: {
+  estimateId: string;
+  opportunityId: string;
+  version: VersionWithSections;
+  opportunity: { salesRepId: string | null; anticipatedFeePct: Prisma.Decimal | null; contractedFeePct: Prisma.Decimal | null };
+  users: { id: string; name: string }[];
+  isAdmin: boolean;
+}) {
+  const profitability = computeTrueProfitability(
+    version,
+    version.internalCosts,
+    { anticipatedFeePct: opportunity.anticipatedFeePct, contractedFeePct: opportunity.contractedFeePct },
+  );
+  const salesRep = users.find((u) => u.id === opportunity.salesRepId);
+  const sectionLabel = (s: { name: string; groupLabel: string | null } | null) =>
+    s ? (s.groupLabel ? `${s.groupLabel} — ${s.name}` : s.name) : "General (no booth)";
+  const sectionOptions = [
+    { value: "", label: "General (no booth)" },
+    ...version.sections.map((s) => ({
+      value: s.id,
+      label: s.groupLabel ? `${s.groupLabel} — ${s.name}` : s.name,
+    })),
+  ];
+
+  return (
+    <div className="flex flex-col gap-6 pt-2">
+      <Card className="p-6">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Sales rep &amp; fee</h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Assigned by an admin once a rep is attached to this deal -- distinct from the opportunity&apos;s own owner.
+          Both fees are a % of true net profit below, not of the contract&apos;s sell price.
+        </p>
+        {isAdmin ? (
+          <form action={updateOpportunityProfitabilityAction.bind(null, estimateId, opportunityId)} className="flex flex-col gap-4">
+            <div className="grid grid-cols-3 gap-4">
+              <SelectField
+                label="Sales rep"
+                name="salesRepId"
+                defaultValue={opportunity.salesRepId ?? ""}
+                options={[{ value: "", label: "— unassigned —" }, ...users.map((u) => ({ value: u.id, label: u.name }))]}
+              />
+              <Field
+                label="Anticipated fee (%)"
+                name="anticipatedFeePct"
+                type="number"
+                defaultValue={opportunity.anticipatedFeePct?.toString() ?? ""}
+              />
+              <Field
+                label="Contracted fee (%)"
+                name="contractedFeePct"
+                type="number"
+                defaultValue={opportunity.contractedFeePct?.toString() ?? ""}
+              />
+            </div>
+            <div>
+              <Button variant="secondary">Save</Button>
+            </div>
+          </form>
+        ) : (
+          <div className="grid grid-cols-3 gap-4">
+            <ReadOnlyField label="Sales rep" value={salesRep?.name} />
+            <ReadOnlyField label="Anticipated fee (%)" value={opportunity.anticipatedFeePct?.toString()} />
+            <ReadOnlyField label="Contracted fee (%)" value={opportunity.contractedFeePct?.toString()} />
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-6">
+        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          True profitability
+        </h2>
+        <div className="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <div className="text-neutral-500">Direct cost</div>
+            <div className="text-lg font-semibold">{money(version.totalCost)}</div>
+          </div>
+          <div>
+            <div className="text-neutral-500">Sell price</div>
+            <div className="text-lg font-semibold">{money(version.grandTotal)}</div>
+          </div>
+          <div>
+            <div className="text-neutral-500">Internal costs</div>
+            <div className="text-lg font-semibold">{money(profitability.totalInternalCosts)}</div>
+          </div>
+          <div>
+            <div className="text-neutral-500">Net profit</div>
+            <div className="text-lg font-semibold text-brand-navy">{money(profitability.netProfit)}</div>
+          </div>
+          <div>
+            <div className="text-neutral-500">Net margin</div>
+            <div className="text-lg font-semibold">{profitability.netMarginPct.toFixed(1)}%</div>
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-4 rounded-md bg-neutral-50 p-4 text-sm">
+          <div>
+            <div className="text-neutral-500">Anticipated commission</div>
+            <div className="text-lg font-semibold">
+              {profitability.anticipatedCommission === null ? "—" : money(profitability.anticipatedCommission)}
+            </div>
+          </div>
+          <div>
+            <div className="text-neutral-500">Contracted commission</div>
+            <div className="text-lg font-semibold">
+              {profitability.contractedCommission === null ? "—" : money(profitability.contractedCommission)}
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-6">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Internal costs</h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Business overhead and project-related costs the client never sees -- never counted in the client-facing
+          Proposal PDF or this version&apos;s own Total cost/Grand total, only in the true profitability above.
+        </p>
+        {version.internalCosts.length === 0 ? (
+          <p className="text-sm text-neutral-400">No internal costs recorded yet.</p>
+        ) : (
+          <table className="mb-4 w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-neutral-200 text-xs uppercase tracking-wide text-neutral-500">
+                <th className="py-1.5 pr-2 font-normal">Category</th>
+                <th className="py-1.5 pr-2 font-normal">Description</th>
+                <th className="py-1.5 pr-2 font-normal">Booth</th>
+                <th className="py-1.5 pr-2 text-right font-normal">Amount</th>
+                {isAdmin && <th className="py-1.5 pl-2" />}
+              </tr>
+            </thead>
+            <tbody>
+              {version.internalCosts.map((cost) =>
+                isAdmin ? (
+                  <InternalCostRow
+                    key={cost.id}
+                    categoryLabel={INTERNAL_COST_CATEGORY_OPTIONS.find((o) => o.value === cost.category)?.label ?? cost.category}
+                    description={cost.description}
+                    displayAmount={money(cost.amount)}
+                    rawAmount={cost.amount.toString()}
+                    sectionLabel={sectionLabel(cost.section)}
+                    categoryOptions={INTERNAL_COST_CATEGORY_OPTIONS}
+                    defaultCategory={cost.category}
+                    defaultSectionId={cost.sectionId ?? ""}
+                    updateAction={updateInternalCostAction.bind(null, estimateId, cost.id)}
+                    deleteAction={deleteInternalCostAction.bind(null, estimateId, cost.id)}
+                  />
+                ) : (
+                  <tr key={cost.id} className="border-b border-neutral-100">
+                    <td className="py-1.5 pr-2">
+                      {INTERNAL_COST_CATEGORY_OPTIONS.find((o) => o.value === cost.category)?.label ?? cost.category}
+                    </td>
+                    <td className="py-1.5 pr-2">{cost.description}</td>
+                    <td className="py-1.5 pr-2 text-neutral-500">{sectionLabel(cost.section)}</td>
+                    <td className="py-1.5 pr-2 text-right">{money(cost.amount)}</td>
+                  </tr>
+                ),
+              )}
+            </tbody>
+          </table>
+        )}
+        {isAdmin && (
+          <form
+            action={addInternalCostAction.bind(null, estimateId, version.id)}
+            className="flex flex-wrap items-end gap-3 border-t border-neutral-200 pt-4"
+          >
+            <div className="w-40">
+              <SelectField label="Category" name="category" options={INTERNAL_COST_CATEGORY_OPTIONS} />
+            </div>
+            <div className="w-56">
+              <SelectField label="Booth (optional)" name="sectionId" options={sectionOptions} />
+            </div>
+            <div className="w-56">
+              <Field label="Description" name="description" required />
+            </div>
+            <div className="w-32">
+              <Field label="Amount ($)" name="amount" type="number" required />
+            </div>
+            <Button variant="secondary">Add cost</Button>
+          </form>
+        )}
+      </Card>
     </div>
   );
 }

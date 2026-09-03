@@ -104,6 +104,7 @@ model User {
 
   contactLinks    Contact[]                 @relation("UserContact")
   opportunities   Opportunity[]             @relation("OpportunityOwner")
+  salesRepOn      Opportunity[]             @relation("OpportunitySalesRep")
   collaboratingOn OpportunityCollaborator[] @relation("OpportunityCollaborator")
 
   approvedEstimateVersions EstimateVersion[]     @relation("EstimateVersionApprover")
@@ -211,6 +212,27 @@ model Opportunity {
 
   ownerId String?
   owner   User?   @relation("OpportunityOwner", fields: [ownerId], references: [id])
+
+  // Distinct from ownerId above (the estimator/owner) -- assigned by an
+  // admin once a rep is actually attached to this deal, not automatically
+  // the same person. Drives the commission math in profitability-
+  // service.ts; never used for access control (opportunityAccessWhere
+  // stays scoped to ownerId/collaborators only).
+  salesRepId String?
+  salesRep   User?   @relation("OpportunitySalesRep", fields: [salesRepId], references: [id])
+
+  // Both admin-only-edit (see the Estimate page's Profitability tab) --
+  // percentages of TRUE NET PROFIT (profitability-service.ts's
+  // computeTrueProfitability), not gross contract value, so the rep's
+  // number tracks real profitability, not just deal size.
+  // anticipatedFeePct previews commission off whatever the current,
+  // still-changing estimate version says right now; contractedFeePct is
+  // the real, finalized figure once the deal is actually won. Both are
+  // plain editable fields with no stage-based write lock -- an admin
+  // fixing a typo after the fact shouldn't be blocked by whatever stage
+  // the deal happens to be in today.
+  anticipatedFeePct Decimal? @db.Decimal(5, 2)
+  contractedFeePct  Decimal? @db.Decimal(5, 2)
 
   showName      String
   boothNumber   String?
@@ -1005,6 +1027,7 @@ model EstimateVersion {
   categoryMarginOverrides   CategoryMarginOverride[]
   categoryProposalSummaries EstimateCategorySummary[]
   lineItemAuditLogs         LineItemAuditLog[]
+  internalCosts             InternalCost[]
 
   @@map("estimate_versions")
 }
@@ -1243,7 +1266,8 @@ model EstimateSection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lineItems LineItem[]
+  lineItems     LineItem[]
+  internalCosts InternalCost[]
 
   // Postgres doesn't auto-index foreign key columns the way MySQL does --
   // every estimate page load fans out from an EstimateVersion to its
@@ -1393,6 +1417,46 @@ model LineItem {
   @@index([documentId])
   @@index([attachmentId])
   @@map("line_items")
+}
+
+enum InternalCostCategory {
+  OVERHEAD // business/G&A cost, not tied to any one project
+  PROJECT_RELATED // real cost of running this specific job (extra travel, absorbed rush freight, rework)
+  OTHER
+}
+
+// True-company-profitability tracking, entirely separate from every
+// LineItem/margin figure above -- those are sell-side (cost to build vs.
+// price quoted to the client) and drive the client's own price, so they
+// can never move because of something the client will never see. This is
+// the opposite: real dollars that reduce what the company actually nets
+// on a job, never itemized as a LineItem, never rendered on the Proposal
+// PDF or any client-facing surface, never gated by EstimateVersion.isLocked
+// (an admin may need to true-up actual costs after a version is locked
+// for the client). See profitability-service.ts's own computeTrueProfitability
+// for how this feeds the actual net-profit/commission math, and
+// Opportunity.salesRepId/anticipatedFeePct/contractedFeePct for the
+// sales-rep side of the same feature.
+model InternalCost {
+  id                String           @id @default(cuid())
+  estimateVersionId String
+  estimateVersion   EstimateVersion  @relation(fields: [estimateVersionId], references: [id])
+  // Optional -- ties a cost to a specific booth/component when it's not
+  // general to the whole project (a general PM-overhead cost has no
+  // section at all).
+  sectionId         String?
+  section           EstimateSection? @relation(fields: [sectionId], references: [id])
+
+  category    InternalCostCategory
+  description String
+  amount      Decimal              @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([estimateVersionId])
+  @@index([sectionId])
+  @@map("internal_costs")
 }
 
 // Cut-list phase 0 (see docs/... cut-list-service.ts) -- one row per

@@ -51,8 +51,10 @@ import {
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
 import { recordCostActual } from "@/lib/cost-actual-service";
+import { addInternalCost, deleteInternalCost, updateInternalCost } from "@/lib/profitability-service";
 import { assertVersionBelongsToEstimate, estimateOpportunityId, requireEstimateAccess } from "@/lib/opportunity-access";
-import type { LineItemType, LineItemUsageTag, SectionBuildType, SectionType } from "@/generated/prisma/enums";
+import { requireAdmin } from "@/lib/auth";
+import type { InternalCostCategory, LineItemType, LineItemUsageTag, SectionBuildType, SectionType } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -764,6 +766,40 @@ export async function unarchiveEstimateAction(estimateId: string, opportunityId:
 function emptyToNull(value: FormDataEntryValue | null): string | null {
   const str = String(value ?? "").trim();
   return str === "" ? null : str;
+}
+
+// True-company-profitability tab -- see InternalCost's own schema comment
+// and profitability-service.ts's computeTrueProfitability. Deliberately
+// requireAdmin(), not requireEstimateAccess: this data is locked down
+// tighter than everything else on this page (admin-only edit, everyone
+// else with access to the opportunity gets read-only -- enforced here,
+// not just in the UI, same "the action is the real gate" reasoning
+// requireAdmin's own comment in auth.ts describes).
+export async function addInternalCostAction(estimateId: string, versionId: string, formData: FormData) {
+  await requireAdmin();
+  const sectionId = emptyToNull(formData.get("sectionId"));
+  const category = String(formData.get("category") ?? "") as InternalCostCategory;
+  const description = String(formData.get("description") ?? "").trim();
+  const amount = String(formData.get("amount") ?? "").trim();
+  if (!description || !amount) throw new Error("Description and amount are required");
+  await addInternalCost(versionId, { sectionId, category, description, amount });
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateInternalCostAction(estimateId: string, internalCostId: string, formData: FormData) {
+  await requireAdmin();
+  const category = String(formData.get("category") ?? "") as InternalCostCategory;
+  const description = String(formData.get("description") ?? "").trim();
+  const amount = String(formData.get("amount") ?? "").trim();
+  if (!description || !amount) throw new Error("Description and amount are required");
+  await updateInternalCost(internalCostId, { category, description, amount });
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function deleteInternalCostAction(estimateId: string, internalCostId: string) {
+  await requireAdmin();
+  await deleteInternalCost(internalCostId);
+  revalidatePath(`/estimates/${estimateId}`);
 }
 
 // The categorization heuristics resolve a category by its live name via a

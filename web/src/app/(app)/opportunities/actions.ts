@@ -3,7 +3,9 @@
 import { db } from "@/lib/db";
 import { OpportunityStage, ProjectType, BoothType, BoothSpace, type CloseReason } from "@/generated/prisma/enums";
 import { changeOpportunityStage } from "@/lib/opportunity-service";
+import { updateOpportunityProfitability } from "@/lib/profitability-service";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
+import { requireAdmin } from "@/lib/auth";
 import { EXTRACTABLE_OPPORTUNITY_FIELDS, type ExtractableOpportunityField } from "@/lib/ai/document-summary-service";
 import { parseFreeTextDate } from "@/lib/citation";
 import { statusRedirectPath } from "@/lib/action-status";
@@ -217,4 +219,23 @@ function emptyToNull(value: FormDataEntryValue | null): string | null {
 function emptyToDate(value: FormDataEntryValue | null): Date | null {
   const str = String(value ?? "").trim();
   return str === "" ? null : new Date(str);
+}
+
+// True-company-profitability tab (Estimate page) -- see InternalCost's own
+// schema comment and profitability-service.ts's computeTrueProfitability.
+// requireAdmin(), not requireOpportunityAccess: this data is admin-only
+// edit, everyone else with access to the opportunity gets read-only,
+// enforced here rather than just in the UI.
+export async function updateOpportunityProfitabilityAction(
+  estimateId: string,
+  opportunityId: string,
+  formData: FormData,
+) {
+  await requireAdmin();
+  const salesRepId = emptyToNull(formData.get("salesRepId"));
+  const anticipatedFeePct = emptyToNull(formData.get("anticipatedFeePct"));
+  const contractedFeePct = emptyToNull(formData.get("contractedFeePct"));
+  await updateOpportunityProfitability(opportunityId, { salesRepId, anticipatedFeePct, contractedFeePct });
+  revalidatePath(`/opportunities/${opportunityId}`);
+  revalidatePath(`/estimates/${estimateId}`);
 }
