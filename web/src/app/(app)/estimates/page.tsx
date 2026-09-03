@@ -18,7 +18,11 @@ export default async function EstimatesPage() {
   if (!user) redirect("/login");
 
   const estimates = await db.estimate.findMany({
-    where: { deletedAt: null, archivedAt: null, opportunity: opportunityAccessWhere(user) },
+    // deletedAt: null on the Estimate itself isn't enough -- deleteOpportunity
+    // only soft-deletes the Opportunity row, it never cascades to its
+    // Estimates, so without this an estimate whose parent opportunity was
+    // deleted kept showing up here indefinitely (confirmed live).
+    where: { deletedAt: null, archivedAt: null, opportunity: { deletedAt: null, ...opportunityAccessWhere(user) } },
     orderBy: { createdAt: "desc" },
     include: {
       opportunity: { include: { company: true } },
