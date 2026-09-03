@@ -4601,19 +4601,37 @@ function CategorySummaryTab({
               <h3 className="text-sm font-semibold text-neutral-900">{bucket.category.name}</h3>
               <span className="text-sm font-medium text-neutral-700">{money(categoryTotal)}</span>
             </div>
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3">
               {[...byBooth.entries()].map(([boothLabel, groups]) => {
                 const boothTotal = groups.reduce(
                   (sum, g) => sum + g.lineItems.reduce((s, li) => s + li.totalCost.toNumber(), 0),
                   0,
                 );
                 return (
-                  <div key={boothLabel} className="rounded-md border border-neutral-200 p-3">
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{boothLabel}</span>
+                  // Collapsed by default (no `open` attribute) -- landing on
+                  // this tab should read as a scannable list of totals
+                  // first, not a wall of every line item. Zero-JS <details>
+                  // disclosure, same convention as the rest of this file's
+                  // collapsible controls; clicking a booth expands just that
+                  // one to check its detail against the source documents.
+                  <details key={boothLabel} className="group rounded-md border border-neutral-200">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-3 marker:content-none [&::-webkit-details-marker]:hidden">
+                      <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          className="shrink-0 text-neutral-400 transition-transform group-open:rotate-90"
+                          aria-hidden="true"
+                        >
+                          <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {boothLabel}
+                      </span>
                       <span className="text-xs font-medium text-neutral-500">{money(boothTotal)}</span>
-                    </div>
-                    <ul className="flex flex-col gap-1.5 text-sm">
+                    </summary>
+                    <ul className="flex flex-col gap-1.5 border-t border-neutral-200 p-3 text-sm">
                       {groups
                         .flatMap((g) => g.lineItems)
                         .map((item) => {
@@ -4642,7 +4660,7 @@ function CategorySummaryTab({
                           );
                         })}
                     </ul>
-                  </div>
+                  </details>
                 );
               })}
             </div>
@@ -4677,16 +4695,33 @@ function TypeTotalsTab({ version, categories }: { version: VersionWithSections; 
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {typeTotals.map((group) => (
-        <Card key={group.categoryName} className="p-6">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-neutral-900">{group.categoryName}</h3>
+        // Collapsed by default, same reasoning as Category Summary's own
+        // per-booth accordion -- a fast scan of every Type's total first,
+        // expand only the one that needs a closer look at its actual parts.
+        <details key={group.categoryName} className="group rounded-lg border border-neutral-200 bg-white">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-6 marker:content-none [&::-webkit-details-marker]:hidden">
+            <span className="flex items-center gap-1.5 text-sm font-semibold text-neutral-900">
+              <svg
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                className="shrink-0 text-neutral-400 transition-transform group-open:rotate-90"
+                aria-hidden="true"
+              >
+                <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {group.categoryName}
+            </span>
             <span className="text-sm font-medium text-neutral-700">{money(group.totalCost)}</span>
+          </summary>
+          <div className="border-t border-neutral-200 p-6 pt-4">
+            <TypeTotalsMethodTable label="Rental" methodTotal={group.rental} />
+            <TypeTotalsMethodTable label="Purchase" methodTotal={group.purchase} />
           </div>
-          <TypeTotalsMethodTable label="Rental" methodTotal={group.rental} />
-          <TypeTotalsMethodTable label="Purchase" methodTotal={group.purchase} />
-        </Card>
+        </details>
       ))}
     </div>
   );
