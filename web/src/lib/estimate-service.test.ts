@@ -23,6 +23,7 @@ import {
   createBidPackage,
   createEstimateVersion,
   createNewVersionFromLocked,
+  deleteElementGroup,
   deleteLineItem,
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
@@ -2567,5 +2568,106 @@ describe("moveElementGroupOrder", () => {
     expect(updatedA.sortOrder).toBe(1);
     expect(updatedB.sortOrder).toBe(1);
     expect(updatedPlatform.sortOrder).toBe(0);
+  });
+});
+
+describe("deleteElementGroup", () => {
+  it("deletes every line item and the section itself, leaving sibling groups in the same booth untouched", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const target = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+    const itemA = await addLineItem(version.id, target.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 10 });
+    const itemB = await addLineItem(version.id, target.id, { lineType: "MATERIAL", description: "Panel", qty: 1, unitCost: 10 });
+    const sibling = await addSection(version.id, {
+      name: "Platform",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+    const siblingItem = await addLineItem(version.id, sibling.id, {
+      lineType: "MATERIAL",
+      description: "Platform deck",
+      qty: 1,
+      unitCost: 10,
+    });
+    const user = await db.user.create({ data: { name: "Estimator", email: `e-${Date.now()}@example.com` } });
+
+    await deleteElementGroup(estimate.opportunityId, version.id, "Section 231 - Booth", "Booth Build", user.id);
+
+    expect(await db.estimateSection.findUnique({ where: { id: target.id } })).toBeNull();
+    expect(await db.lineItem.findUnique({ where: { id: itemA.id } })).toBeNull();
+    expect(await db.lineItem.findUnique({ where: { id: itemB.id } })).toBeNull();
+    // Sibling group in the same booth is untouched.
+    expect(await db.estimateSection.findUnique({ where: { id: sibling.id } })).not.toBeNull();
+    expect(await db.lineItem.findUnique({ where: { id: siblingItem.id } })).not.toBeNull();
+
+    const deleteLogs = await db.lineItemAuditLog.findMany({ where: { estimateVersionId: version.id, action: "DELETE" } });
+    expect(deleteLogs.map((l) => l.lineItemId).sort()).toEqual([itemA.id, itemB.id].sort());
+    expect(deleteLogs.every((l) => l.actorId === user.id)).toBe(true);
+  });
+
+  it("deletes every raw section backing a merged (two-same-named-sections) group, not just the first one", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const customA = await addSection(version.id, {
+      name: "Custom Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+    const customB = await addSection(version.id, {
+      name: "Custom Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+    const itemA = await addLineItem(version.id, customA.id, { lineType: "MATERIAL", description: "A item", qty: 1, unitCost: 10 });
+    const itemB = await addLineItem(version.id, customB.id, { lineType: "MATERIAL", description: "B item", qty: 1, unitCost: 10 });
+
+    await deleteElementGroup(estimate.opportunityId, version.id, "Section 231 - Booth", "Custom Build");
+
+    expect(await db.estimateSection.findUnique({ where: { id: customA.id } })).toBeNull();
+    expect(await db.estimateSection.findUnique({ where: { id: customB.id } })).toBeNull();
+    expect(await db.lineItem.findUnique({ where: { id: itemA.id } })).toBeNull();
+    expect(await db.lineItem.findUnique({ where: { id: itemB.id } })).toBeNull();
+  });
+
+  it("does nothing when the named group doesn't exist under that booth", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+    const item = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 10 });
+
+    await deleteElementGroup(estimate.opportunityId, version.id, "Section 231 - Booth", "Nonexistent Group");
+
+    expect(await db.estimateSection.findUnique({ where: { id: section.id } })).not.toBeNull();
+    expect(await db.lineItem.findUnique({ where: { id: item.id } })).not.toBeNull();
+  });
+
+  it("rejects on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 10 });
+    await lockEstimateVersion(version.id);
+
+    await expect(deleteElementGroup(estimate.opportunityId, version.id, "Section 231 - Booth", "Booth Build")).rejects.toThrow(
+      /locked/,
+    );
   });
 });

@@ -592,6 +592,53 @@ export async function moveElementGroupOrder(
   `;
 }
 
+// Deletes an entire H2 group -- every line item across every raw
+// EstimateSection backing this one rendered elementType block under this
+// booth (a booth's H2 group can span more than one section row, same
+// "merged for display" case moveElementGroupOrder above already has to
+// account for), plus those now-empty section rows themselves. Re-derives
+// exactly which sections/items belong to this group server-side the same
+// way moveElementGroupOrder does, rather than trusting a client-supplied
+// sectionId list.
+//
+// Reuses deleteLineItem item-by-item rather than a raw deleteMany, so
+// every item still gets its own DELETE audit-log row and stays
+// individually restorable from the History tab -- deleting a whole group
+// in one click is a convenience, not a different, less-recoverable kind
+// of delete than removing its items one at a time.
+export async function deleteElementGroup(
+  opportunityId: string,
+  estimateVersionId: string,
+  groupLabel: string,
+  elementType: string,
+  actorId?: string | null,
+) {
+  await assertUnlocked(estimateVersionId);
+
+  const sections = await db.estimateSection.findMany({
+    where: { estimateVersionId, groupLabel },
+    select: {
+      id: true,
+      name: true,
+      groupLabel: true,
+      description: true,
+      pendingDescription: true,
+      boothDescription: true,
+      boothPendingDescription: true,
+      sortOrder: true,
+      lineItems: { select: { id: true, totalCost: true, sortOrder: true } },
+    },
+  });
+  const [boothGroup] = groupBoothLineItemsForEditing(sections);
+  const target = boothGroup?.elementGroups.find((g) => g.elementType === elementType);
+  if (!target) return;
+
+  for (const item of target.items) {
+    await deleteLineItem(opportunityId, item.id, actorId);
+  }
+  await db.estimateSection.deleteMany({ where: { id: { in: target.sectionIds } } });
+}
+
 // Approve-with-text (green check on an AI suggestion) or a manual save --
 // either way the result lands in `description` and any pending suggestion
 // is cleared, since it's now superseded either by the user's own approval

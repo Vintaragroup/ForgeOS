@@ -16,6 +16,7 @@ import {
   confirmDraftLineItem,
   createEstimateVersion,
   createNewVersionFromLocked,
+  deleteElementGroup,
   deleteLineItem,
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
@@ -331,6 +332,19 @@ export async function moveElementGroupOrderAction(
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await moveElementGroupOrder(versionId, groupLabel, elementType, direction);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Deletes an entire H2 group and every line item in it -- see
+// deleteElementGroup's own comment in estimate-service.ts for why every
+// item still gets its own restorable DELETE audit-log row, same as
+// deleting one at a time.
+export async function deleteElementGroupAction(estimateId: string, versionId: string, groupLabel: string, elementType: string) {
+  const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  await deleteElementGroup(opportunityId, versionId, groupLabel, elementType, user.id);
+  await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

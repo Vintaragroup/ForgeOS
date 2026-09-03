@@ -38,6 +38,7 @@ import {
   confirmDraftLineItemAction,
   createFirstVersion,
   createNewVersionAction,
+  deleteElementGroupAction,
   deleteInternalCostAction,
   deleteLineItemAction,
   generateProposalAction,
@@ -3249,6 +3250,17 @@ function CategoryTabContent({
                           <span className="mx-1.5">&rarr;</span>
                           <span className="font-medium">{money(sell(group.subtotal))}</span>
                         </div>
+                        {!version.isLocked && (
+                          <form action={deleteElementGroupAction.bind(null, estimateId, version.id, booth.boothLabel, group.elementType)}>
+                            <button
+                              className="text-sm text-neutral-400 hover:text-red-600"
+                              title="Delete this group and every line item in it"
+                              aria-label="Delete group"
+                            >
+                              ✕
+                            </button>
+                          </form>
+                        )}
                       </div>
                     </div>
                     {group.sectionIds[0] && (
