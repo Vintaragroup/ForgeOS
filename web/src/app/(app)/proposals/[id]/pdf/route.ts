@@ -45,6 +45,17 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
   if (!(await canAccessOpportunity(user, proposal.estimateVersion.estimate.opportunityId))) notFound();
 
   const version = proposal.estimateVersion;
+  // Top tier of the three-level Proposal PDF copy system -- see
+  // EstimateCategorySummary's own schema comment. Sequential, not part of
+  // the Promise.all above, since version.id is only known once `proposal`
+  // resolves -- not a hot path, so the extra round trip doesn't matter.
+  const categorySummaryRows = await db.estimateCategorySummary.findMany({
+    where: { estimateVersionId: version.id },
+    include: { category: { select: { name: true } } },
+  });
+  const categorySummaries = new Map(
+    categorySummaryRows.filter((r) => r.summary).map((r) => [r.category.name, r.summary!]),
+  );
   const opportunity = version.estimate.opportunity;
   const { brandColor, logoUrl } = extractBranding(proposal.templateConfigSnapshot);
   const professionalServices = extractProfessionalServices(proposal.templateConfigSnapshot);
@@ -72,6 +83,7 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
         scopeSummary,
         sections: version.sections,
         categories,
+        categorySummaries,
         // Real, client-facing document -- cost never reaches the client,
         // only the marked-up price. See ProposalPdfData's own comment.
         showCost: false,

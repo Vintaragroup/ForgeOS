@@ -10,6 +10,8 @@ import {
   clearBoothPendingDescription,
   clearBoothPendingSummary,
   clearCategoryMarginOverride,
+  clearCategoryPendingSummary,
+  clearElementPendingSummary,
   clearSectionPendingDescription,
   confirmDraftLineItem,
   createEstimateVersion,
@@ -29,6 +31,8 @@ import {
   unarchiveEstimate,
   updateBoothDescription,
   updateBoothSummary,
+  updateCategorySummary,
+  updateElementSummary,
   updateLineItem,
   updateMarginTarget,
   updateSectionBuildType,
@@ -37,7 +41,13 @@ import {
   updateSectionProposalSummary,
   updateSectionProposalVisibility,
 } from "@/lib/estimate-service";
-import { suggestBoothDescription, suggestBoothSummary, suggestSectionDescription } from "@/lib/ai/section-description-service";
+import {
+  suggestBoothDescription,
+  suggestBoothSummary,
+  suggestCategorySummary,
+  suggestElementSummary,
+  suggestSectionDescription,
+} from "@/lib/ai/section-description-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
 import { recordCostActual } from "@/lib/cost-actual-service";
@@ -407,6 +417,67 @@ export async function clearBoothPendingSummaryAction(estimateId: string, version
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await clearBoothPendingSummary(versionId, groupLabel);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Same three actions as the booth summary trio above, for the H2/element
+// tier (EstimateSection.elementSummary) -- keyed by sectionId directly
+// (one element group IS one section, no groupLabel fan-out).
+export async function suggestElementSummaryAction(estimateId: string, versionId: string, sectionId: string) {
+  const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await suggestElementSummary(sectionId, user.id);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateElementSummaryAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const summary = String(formData.get("summary") ?? "").trim();
+  if (!summary) throw new Error("Summary is required");
+  await updateElementSummary(sectionId, summary);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function clearElementPendingSummaryAction(estimateId: string, versionId: string, sectionId: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await clearElementPendingSummary(sectionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Same three actions again, for the Category tier (EstimateCategorySummary)
+// -- keyed by categoryId, spanning every booth/section in this version.
+export async function suggestCategorySummaryAction(estimateId: string, versionId: string, categoryId: string) {
+  const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await suggestCategorySummary(versionId, categoryId, user.id);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateCategorySummaryAction(
+  estimateId: string,
+  versionId: string,
+  categoryId: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const summary = String(formData.get("summary") ?? "").trim();
+  if (!summary) throw new Error("Summary is required");
+  await updateCategorySummary(versionId, categoryId, summary);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function clearCategoryPendingSummaryAction(estimateId: string, versionId: string, categoryId: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await clearCategoryPendingSummary(versionId, categoryId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

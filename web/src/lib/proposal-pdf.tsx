@@ -161,10 +161,12 @@ const styles = StyleSheet.create({
     color: BRAND.white,
   },
   boothHeaderTotal: { fontSize: 8, fontWeight: 700, color: BRAND.white },
-  // Body text for a summarized booth (EstimateSection.boothSummary) --
-  // same font size/line-height as professionalServicesItem below, the
-  // other place this document already sets prose rather than a table row.
-  boothSummaryText: { fontSize: 8.5, lineHeight: 1.6, marginBottom: 10, color: "#333" },
+  // Body text for all three copy tiers (Category/Booth/Element -- see
+  // EstimateCategorySummary and EstimateSection.boothSummary/elementSummary's
+  // own schema comments) -- same font size/line-height as
+  // professionalServicesItem below, the other place this document already
+  // sets prose rather than a table row.
+  proposalSummaryText: { fontSize: 8.5, lineHeight: 1.6, marginBottom: 10, color: "#333" },
   elementTypeSection: { marginLeft: 10, marginBottom: 8 },
   elementTypeHeaderRow: {
     flexDirection: "row",
@@ -417,6 +419,11 @@ export interface ProposalPdfData {
   // breakdown never changes the bottom-line number.
   hidePricingCategoryNames?: ReadonlySet<string>;
   summaryCategoryNames?: ReadonlySet<string>;
+  // Top tier of the three-level Proposal PDF copy system -- see
+  // EstimateCategorySummary's own schema comment. Keyed by category NAME,
+  // same convention as the two Sets above; only categories with an
+  // approved (non-null) summary appear here.
+  categorySummaries?: ReadonlyMap<string, string>;
   // true on the internal Preview PDF (preview-pdf/route.ts): every dollar
   // figure renders as Cost alongside the marked-up Price, so an estimator
   // can sanity-check margin math before a version is locked. false on the
@@ -739,6 +746,14 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   {hidePrice ? "" : amountContent(sectionTotal, sellForCategory(sectionTotal, categoryName), data.showCost)}
                 </Text>
               </View>
+              {/* Top tier of the three-level Proposal PDF copy system --
+                  see EstimateCategorySummary's own schema comment. Always
+                  shown when written, spanning every booth in this
+                  category, independent of any booth's own
+                  summarizeOnProposal/detail state below. */}
+              {data.categorySummaries?.get(categoryName) && (
+                <Text style={styles.proposalSummaryText}>{data.categorySummaries.get(categoryName)}</Text>
+              )}
               {categoryName === "Professional Services" &&
                 data.professionalServices &&
                 data.professionalServices.items.length > 0 && (
@@ -761,18 +776,15 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                         {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
                       </Text>
                     </View>
-                    {/* summarizeOnProposal skips itemized detail below --
-                        booth.subtotal already includes every item
-                        regardless, so the total stays correct either way.
-                        A written boothSummary (a few sentences, see that
-                        field's own schema comment) fills the gap a bare
-                        name+total row would otherwise leave; with neither
-                        set yet, the booth renders as just its header,
-                        same as before this existed. */}
-                    {booth.summarizeOnProposal && booth.boothSummary && (
-                      <Text style={styles.boothSummaryText}>{booth.boothSummary}</Text>
-                    )}
-                    {!booth.summarizeOnProposal && booth.elementGroups.map((group) => (
+                    {/* Middle tier -- see EstimateSection.boothSummary's
+                        own schema comment. Always shown when written,
+                        independent of summarizeOnProposal: booth.subtotal
+                        already includes every item regardless, so the
+                        total stays correct whichever way that flag is
+                        set, and this copy is additive context, not a
+                        replacement for anything. */}
+                    {booth.boothSummary && <Text style={styles.proposalSummaryText}>{booth.boothSummary}</Text>}
+                    {booth.elementGroups.map((group) => (
                       <View key={group.elementType} style={styles.elementTypeSection}>
                         <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
                           <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
@@ -780,11 +792,19 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                             {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
                           </Text>
                         </View>
-                        {isSummary
-                          ? renderSummaryBody(group.items)
-                          : isServiceStyle
-                            ? renderServiceBody(group.items, categoryName, hidePrice)
-                            : renderBody(group.items, categoryName, hidePrice)}
+                        {/* Bottom tier -- same "always shown" reasoning as
+                            boothSummary above. */}
+                        {group.elementSummary && <Text style={styles.proposalSummaryText}>{group.elementSummary}</Text>}
+                        {/* summarizeOnProposal's only remaining job: skip
+                            just the itemized rows below. See
+                            EstimateSection.summarizeOnProposal's own
+                            schema comment. */}
+                        {!booth.summarizeOnProposal &&
+                          (isSummary
+                            ? renderSummaryBody(group.items)
+                            : isServiceStyle
+                              ? renderServiceBody(group.items, categoryName, hidePrice)
+                              : renderBody(group.items, categoryName, hidePrice))}
                       </View>
                     ))}
                   </View>

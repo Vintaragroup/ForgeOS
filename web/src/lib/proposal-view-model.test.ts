@@ -255,6 +255,25 @@ describe("groupBoothLineItems", () => {
     expect(boothWithoutSummary.boothSummary).toBeNull();
   });
 
+  it("carries elementSummary through to the ElementTypeGroup, defaulting null when unset", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Structure",
+        groupLabel: "SECTION 231",
+        elementSummary: "Aluminum extrusion frame with printed fabric panels.",
+        lineItems: [li({ id: "a", totalCost: 100 })],
+      },
+      { name: "Graphics", groupLabel: "SECTION 231", lineItems: [li({ id: "b", totalCost: 50 })] },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+    const structureGroup = booth.elementGroups.find((g) => g.elementType === "Structure");
+    const graphicsGroup = booth.elementGroups.find((g) => g.elementType === "Graphics");
+
+    expect(structureGroup?.elementSummary).toBe("Aluminum extrusion frame with printed fabric panels.");
+    expect(graphicsGroup?.elementSummary).toBeNull();
+  });
+
   it("excludes a section whose includeInProposal is false, and a line item whose own flag is false", () => {
     const sections: ProposalViewSection[] = [
       { name: "BeMatrix", groupLabel: "SECTION 211", includeInProposal: false, lineItems: [li({ id: "a", totalCost: 100 })] },

@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { assertUnlocked } from "@/lib/estimate-service";
+import { resolveEffectiveCategory } from "@/lib/proposal-view-model";
 
 const MAX_ITEM_DESCRIPTIONS = 40;
 
@@ -247,6 +248,142 @@ export async function suggestBoothSummary(
   await db.estimateSection.updateMany({
     where: { estimateVersionId, groupLabel },
     data: { boothPendingSummary: parsed.summary },
+  });
+
+  return parsed.summary;
+}
+
+// H2/element tier -- same propose-then-commit shape as suggestBoothSummary
+// above, but scoped to one EstimateSection's own materials only (an
+// element group IS one section, no groupLabel fan-out needed). See
+// EstimateSection.elementSummary's own schema comment.
+export async function suggestElementSummary(sectionId: string, userId: string | null): Promise<string> {
+  const section = await db.estimateSection.findUniqueOrThrow({
+    where: { id: sectionId },
+    include: {
+      lineItems: { select: { description: true }, take: MAX_ITEM_DESCRIPTIONS },
+      estimateVersion: { select: { id: true, estimate: { select: { opportunityId: true } } } },
+    },
+  });
+  await assertUnlocked(section.estimateVersionId);
+
+  const client = getOpenAiClient();
+  const itemList = section.lineItems.map((li) => `- ${li.description}`).join("\n");
+
+  const completion = await client.chat.completions.create({
+    model: BASIC_MODEL,
+    temperature: 0.2,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You write short, client-facing scope summaries for one element group (a component within a larger " +
+          "trade-show booth, e.g. Structure, Graphics, Custom Build) given its section name, the booth it " +
+          "belongs to, and the list of materials/line items that make it up. The client may read this instead " +
+          "of an itemized breakdown, so describe the physical thing being built in plain language a non-expert " +
+          "can picture -- never prices, quantities, vendor/acquisition details, or internal category names.",
+      },
+      {
+        role: "user",
+        content:
+          `Section name: ${section.name}\n` +
+          `Booth: ${section.groupLabel ?? "(none)"}\n` +
+          `Materials:\n${itemList || "(no line items yet)"}`,
+      },
+    ],
+    response_format: { type: "json_schema", json_schema: buildSummarySchema() },
+  });
+
+  await recordAiUsage({
+    userId,
+    feature: "ELEMENT_PROPOSAL_SUMMARY",
+    model: BASIC_MODEL,
+    usage: completion.usage,
+    opportunityId: section.estimateVersion.estimate.opportunityId,
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned an empty response.");
+  const parsed = JSON.parse(content) as { summary: string };
+
+  await db.estimateSection.update({
+    where: { id: sectionId },
+    data: { elementPendingSummary: parsed.summary },
+  });
+
+  return parsed.summary;
+}
+
+// Top tier -- same propose-then-commit shape, but scoped to EVERY line
+// item across every booth/section in this version that resolves into
+// this one Category (resolveEffectiveCategory, the same composition
+// logic aggregateByCategory/computeVersionTotals already use), not a
+// single EstimateSection. See EstimateCategorySummary's own schema
+// comment.
+export async function suggestCategorySummary(
+  estimateVersionId: string,
+  categoryId: string,
+  userId: string | null,
+): Promise<string> {
+  await assertUnlocked(estimateVersionId);
+
+  const [version, categories] = await Promise.all([
+    db.estimateVersion.findUniqueOrThrow({
+      where: { id: estimateVersionId },
+      include: {
+        sections: { include: { lineItems: { select: { description: true, category: true }, take: MAX_ITEM_DESCRIPTIONS } } },
+        estimate: { select: { opportunityId: true } },
+      },
+    }),
+    db.category.findMany({ where: { deletedAt: null } }),
+  ]);
+  const category = categories.find((c) => c.id === categoryId);
+  if (!category) throw new Error(`Category ${categoryId} not found.`);
+
+  const itemList = version.sections
+    .flatMap((s) => s.lineItems.filter((li) => resolveEffectiveCategory(li, s, categories) === category.name))
+    .slice(0, MAX_ITEM_DESCRIPTIONS)
+    .map((li) => `- ${li.description}`)
+    .join("\n");
+
+  const client = getOpenAiClient();
+  const completion = await client.chat.completions.create({
+    model: BASIC_MODEL,
+    temperature: 0.2,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You write short, client-facing scope overviews for one whole category of work across a trade-show " +
+          "exhibit program (e.g. Custom Build, spanning several different booths), given the category name and " +
+          "the list of materials/line items filed under it. Describe the physical scope of work in plain " +
+          "language a non-expert can picture -- never prices, quantities, vendor/acquisition details, or " +
+          "internal category/booth names.",
+      },
+      {
+        role: "user",
+        content: `Category: ${category.name}\nMaterials:\n${itemList || "(no line items yet)"}`,
+      },
+    ],
+    response_format: { type: "json_schema", json_schema: buildSummarySchema() },
+  });
+
+  await recordAiUsage({
+    userId,
+    feature: "CATEGORY_PROPOSAL_SUMMARY",
+    model: BASIC_MODEL,
+    usage: completion.usage,
+    opportunityId: version.estimate.opportunityId,
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned an empty response.");
+  const parsed = JSON.parse(content) as { summary: string };
+
+  await db.estimateCategorySummary.upsert({
+    where: { estimateVersionId_categoryId: { estimateVersionId, categoryId } },
+    create: { estimateVersionId, categoryId, pendingSummary: parsed.summary },
+    update: { pendingSummary: parsed.summary },
   });
 
   return parsed.summary;

@@ -336,12 +336,17 @@ enum AiFeature {
   VENDOR_LINE_MATCH
   SPREADSHEET_LINE_ITEMS
   SECTION_DESCRIPTION
-  // Booth-level, several sentences describing physical scope for the
-  // Proposal PDF's "Summarize on proposal" body text -- distinct from
-  // SECTION_DESCRIPTION (a 2-8 word heading) since it's a materially
-  // longer generation task with its own token-cost profile worth
-  // tracking separately.
+  // Three tiers of the same idea -- several client-readable sentences
+  // describing physical scope for the Proposal PDF, at the Element
+  // (EstimateSection.elementSummary), Booth (EstimateSection.boothSummary),
+  // and Category (EstimateCategorySummary) levels respectively. Distinct
+  // from SECTION_DESCRIPTION (a 2-8 word heading) since these are a
+  // materially longer generation task with their own token-cost profile,
+  // and kept as three separate values (not one shared one) so each
+  // tier's own cost is visible independently.
+  ELEMENT_PROPOSAL_SUMMARY
   BOOTH_PROPOSAL_SUMMARY
+  CATEGORY_PROPOSAL_SUMMARY
   // Chat roadmap Phase 3: embedding a document's chunks at analysis time
   // (document-embedding-service.ts's indexDocument) and embedding each
   // chat question at retrieval time both record here -- tracked apart
@@ -676,7 +681,8 @@ model Category {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  marginOverrides CategoryMarginOverride[]
+  marginOverrides   CategoryMarginOverride[]
+  proposalSummaries EstimateCategorySummary[]
 
   @@map("categories")
 }
@@ -705,6 +711,33 @@ model CategoryMarginOverride {
 
   @@unique([estimateVersionId, categoryId])
   @@map("category_margin_overrides")
+}
+
+// Top tier of the three-level Proposal PDF copy system (see
+// EstimateSection.boothSummary's own comment for the other two, Booth and
+// Element) -- a few client-readable sentences covering EVERY line item
+// across every booth/section in this version that resolves into this one
+// Category (e.g. "Custom Build" spanning several different booths), not
+// scoped to any single EstimateSection the way boothSummary/elementSummary
+// are. Same shape as CategoryMarginOverride right above (upsert on this
+// same compound key, since a row doesn't exist until the first summary is
+// written for a given version+category pair) rather than the
+// updateMany-by-groupLabel pattern those two use.
+model EstimateCategorySummary {
+  id                String          @id @default(cuid())
+  estimateVersionId String
+  estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
+  categoryId        String
+  category          Category        @relation(fields: [categoryId], references: [id])
+
+  summary        String?
+  pendingSummary String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([estimateVersionId, categoryId])
+  @@map("estimate_category_summaries")
 }
 
 // Only meaningful for CITY_MARKET rows -- DEPARTMENT (shop) rates are a
@@ -960,17 +993,18 @@ model EstimateVersion {
   // shows generatedAt/lineItemCount so staleness is visible, not hidden).
   coverageAnalysis Json?
 
-  sections                EstimateSection[]
-  options                 Option[]
-  bidPackages             BidPackage[]
-  proposals               Proposal[]
-  changeOrdersAsBase      ChangeOrder[]            @relation("ChangeOrderBaseVersion")
-  changeOrderAsResult     ChangeOrder?             @relation("ChangeOrderResultVersion")
-  cutListParts            CutListPart[]
-  cutSheets               CutSheet[]
-  vendorMatchApplyLogs    VendorMatchApplyLog[]
-  categoryMarginOverrides CategoryMarginOverride[]
-  lineItemAuditLogs       LineItemAuditLog[]
+  sections                  EstimateSection[]
+  options                   Option[]
+  bidPackages               BidPackage[]
+  proposals                 Proposal[]
+  changeOrdersAsBase        ChangeOrder[]             @relation("ChangeOrderBaseVersion")
+  changeOrderAsResult       ChangeOrder?              @relation("ChangeOrderResultVersion")
+  cutListParts              CutListPart[]
+  cutSheets                 CutSheet[]
+  vendorMatchApplyLogs      VendorMatchApplyLog[]
+  categoryMarginOverrides   CategoryMarginOverride[]
+  categoryProposalSummaries EstimateCategorySummary[]
+  lineItemAuditLogs         LineItemAuditLog[]
 
   @@map("estimate_versions")
 }
@@ -1001,7 +1035,7 @@ model LineItemAuditLog {
   // Deliberately NOT a live foreign key to LineItem -- this row must
   // survive deleteLineItem's own real hard delete untouched. A deleted
   // row's only remaining record is whatever `detail` below captured.
-  lineItemId String?
+  lineItemId  String?
   // The line item's own description at the moment of this action, so a
   // deleted or since-renamed row still reads sensibly here without a
   // live FK to resolve.
@@ -1052,7 +1086,7 @@ model EstimateSection {
   // category-agnostic value is the correct model here -- see
   // proposalSortOrder's own comment for why that one has to be scoped
   // differently.
-  sortOrder Int @default(0)
+  sortOrder   Int         @default(0)
   sectionType SectionType
 
   // Groups several sections under one shared main heading (a booth /
@@ -1110,18 +1144,33 @@ model EstimateSection {
   boothPendingDescription String?
 
   // A few client-readable sentences describing this booth's physical
-  // components and scope -- shown on the Proposal PDF in place of the
-  // itemized detail when summarizeOnProposal above is true (a bare
-  // name+total row alone read as "hidden," not "summarized," to a real
-  // estimator -- confirmed live). Unlike boothDescription above (a short
-  // heading replacement, always shown, drives no PDF content itself),
-  // this is body text that only ever reaches proposal-pdf.tsx's
-  // summarized-booth branch; the Line Items tab (editing view) never
-  // renders it. Same propose (AI, boothPendingSummary) -> approve
-  // (boothSummary) shape, and the same booth-wide updateMany-by-groupLabel
-  // sync, as boothDescription/boothPendingDescription.
+  // components and scope -- shown on the Proposal PDF's booth header,
+  // ALWAYS (regardless of summarizeOnProposal or any line item's own
+  // includeInProposal -- a real estimator switching back to full detail,
+  // or hiding/showing individual items, must never lose this text just
+  // because those are unrelated toggles). Unlike boothDescription above
+  // (a short heading replacement, always shown in the Line Items tab
+  // too), this is body text that only ever reaches proposal-pdf.tsx's
+  // rendering, never the editor's own heading. Same propose (AI,
+  // boothPendingSummary) -> approve (boothSummary) shape, and the same
+  // booth-wide updateMany-by-groupLabel sync, as boothDescription/
+  // boothPendingDescription. See elementSummary below for the same idea
+  // one level down (one element group, not the whole booth), and
+  // EstimateCategorySummary further down for the level above (one whole
+  // Proposal PDF category, spanning every booth in it).
   boothSummary        String?
   boothPendingSummary String?
+
+  // Same idea as boothSummary above, one level down -- a few client-
+  // readable sentences for THIS element group alone (Structure, Graphics,
+  // Custom Build, ...), not booth-wide. No groupLabel sync: one
+  // EstimateSection row IS one element group, so this is single-section
+  // scoped, same as description/pendingDescription above (and unlike
+  // boothDescription/boothSummary, which are booth-wide because a booth
+  // has no model of its own). Also always shown on the Proposal PDF
+  // regardless of summarizeOnProposal -- see boothSummary's own comment.
+  elementSummary        String?
+  elementPendingSummary String?
 
   // Whole-group PDF visibility -- hides this section and every one of its
   // line items from the Proposal PDF regardless of each item's own

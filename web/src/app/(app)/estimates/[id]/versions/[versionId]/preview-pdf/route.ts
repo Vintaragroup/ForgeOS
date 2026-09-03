@@ -46,7 +46,7 @@ export async function GET(
   const user = await getCurrentUser();
   if (!user) notFound();
 
-  const [version, categories] = await Promise.all([
+  const [version, categories, categorySummaryRows] = await Promise.all([
     db.estimateVersion.findFirst({
       where: { id: versionId, estimateId: id },
       include: {
@@ -64,6 +64,14 @@ export async function GET(
       },
     }),
     db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } }),
+    // Top tier of the three-level Proposal PDF copy system -- see
+    // EstimateCategorySummary's own schema comment. versionId is already
+    // known from params, so this doesn't need to wait on the version
+    // query above.
+    db.estimateCategorySummary.findMany({
+      where: { estimateVersionId: versionId },
+      include: { category: { select: { name: true } } },
+    }),
   ]);
   if (!version) notFound();
   if (!(await canAccessOpportunity(user, version.estimate.opportunityId))) notFound();
@@ -89,6 +97,9 @@ export async function GET(
     orderedCategories.filter((c) => hidePricingIds.has(c.id)).map((c) => c.name),
   );
   const summaryCategoryNames = new Set(orderedCategories.filter((c) => summaryIds.has(c.id)).map((c) => c.name));
+  const categorySummaries = new Map(
+    categorySummaryRows.filter((r) => r.summary).map((r) => [r.category.name, r.summary!]),
+  );
 
   const opportunity = version.estimate.opportunity;
   const { brandColor, logoUrl } = extractBranding({ brandingConfig: template.brandingConfig });
@@ -119,6 +130,7 @@ export async function GET(
         categories: orderedCategories,
         hidePricingCategoryNames,
         summaryCategoryNames,
+        categorySummaries,
         // Internal, still-editing document -- an estimator sanity-checking
         // margin math needs to see cost next to the marked-up price, never
         // just the price alone. See ProposalPdfData's own comment.

@@ -517,6 +517,35 @@ export async function clearSectionPendingDescription(sectionId: string) {
   });
 }
 
+// Same propose/approve/reject shape as updateSectionDescription/
+// clearSectionPendingDescription above, for the H2/element tier of the
+// Proposal PDF copy system -- see EstimateSection.elementSummary's own
+// schema comment. Single-section scope, same as description above (an
+// element group IS one EstimateSection row, no groupLabel sync needed).
+export async function updateElementSummary(sectionId: string, summary: string) {
+  const section = await db.estimateSection.findUniqueOrThrow({
+    where: { id: sectionId },
+    select: { estimateVersionId: true },
+  });
+  await assertUnlocked(section.estimateVersionId);
+  await db.estimateSection.update({
+    where: { id: sectionId },
+    data: { elementSummary: summary, elementPendingSummary: null },
+  });
+}
+
+export async function clearElementPendingSummary(sectionId: string) {
+  const section = await db.estimateSection.findUniqueOrThrow({
+    where: { id: sectionId },
+    select: { estimateVersionId: true },
+  });
+  await assertUnlocked(section.estimateVersionId);
+  await db.estimateSection.update({
+    where: { id: sectionId },
+    data: { elementPendingSummary: null },
+  });
+}
+
 // Booth-level counterparts to the two mutations above, for the H1
 // heading -- same updateMany-by-groupLabel pattern as
 // updateSectionBuildType, since a booth is every section sharing one
@@ -1497,6 +1526,28 @@ export async function clearCategoryMarginOverride(estimateVersionId: string, cat
   await assertUnlocked(estimateVersionId);
   await db.categoryMarginOverride.deleteMany({ where: { estimateVersionId, categoryId } });
   await recomputeVersionTotals(estimateVersionId);
+}
+
+// Top tier of the three-level Proposal PDF copy system -- see
+// EstimateCategorySummary's own schema comment. Same upsert-on-compound-
+// key shape as setCategoryMarginOverride above (a row doesn't exist until
+// the first summary is written for this version+category pair), but
+// never touches totals, unlike that one.
+export async function updateCategorySummary(estimateVersionId: string, categoryId: string, summary: string) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateCategorySummary.upsert({
+    where: { estimateVersionId_categoryId: { estimateVersionId, categoryId } },
+    create: { estimateVersionId, categoryId, summary },
+    update: { summary, pendingSummary: null },
+  });
+}
+
+export async function clearCategoryPendingSummary(estimateVersionId: string, categoryId: string) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateCategorySummary.updateMany({
+    where: { estimateVersionId, categoryId },
+    data: { pendingSummary: null },
+  });
 }
 
 function lineItemCreateData(li: {

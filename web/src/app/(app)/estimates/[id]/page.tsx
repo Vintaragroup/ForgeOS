@@ -30,6 +30,8 @@ import {
   clearBoothPendingDescriptionAction,
   clearBoothPendingSummaryAction,
   clearCategoryMarginOverrideAction,
+  clearCategoryPendingSummaryAction,
+  clearElementPendingSummaryAction,
   clearSectionPendingDescriptionAction,
   confirmDraftLineItemAction,
   createFirstVersion,
@@ -47,10 +49,14 @@ import {
   setCategoryMarginOverrideAction,
   suggestBoothDescriptionAction,
   suggestBoothSummaryAction,
+  suggestCategorySummaryAction,
+  suggestElementSummaryAction,
   suggestSectionDescriptionAction,
   toggleLineItemProposalVisibilityAction,
   updateBoothDescriptionAction,
   updateBoothSummaryAction,
+  updateCategorySummaryAction,
+  updateElementSummaryAction,
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
@@ -64,7 +70,7 @@ import {
   updateSectionProposalVisibilityAction,
 } from "../actions";
 import { SectionHeadingEditor } from "@/components/section-heading-editor";
-import { BoothSummaryEditor } from "@/components/booth-summary-editor";
+import { SummaryEditor } from "@/components/summary-editor";
 import {
   buildFullEstimateFromDocumentsAction,
   commitImportAction,
@@ -336,6 +342,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     laborRates,
     categories,
     categoryMarginOverrides,
+    categoryProposalSummaries,
     attachments,
     pricingScheduleDocuments,
     scopeDocuments,
@@ -358,6 +365,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     db.category.findMany({ where: { deletedAt: null }, orderBy: { sortOrder: "asc" } }),
     currentVersion
       ? db.categoryMarginOverride.findMany({ where: { estimateVersionId: currentVersion.id } })
+      : Promise.resolve([]),
+    // Top tier of the three-level Proposal PDF copy system -- see
+    // EstimateCategorySummary's own schema comment.
+    currentVersion
+      ? db.estimateCategorySummary.findMany({ where: { estimateVersionId: currentVersion.id } })
       : Promise.resolve([]),
     db.attachment.findMany({
       where: { estimateId: estimate.id, deletedAt: null },
@@ -716,6 +728,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     users={users}
                     confirmedCount={confirmedCount}
                     auditLog={lineItemAuditLog}
+                    categoryProposalSummaries={categoryProposalSummaries}
                   />
                 ),
                 options: (
@@ -1259,6 +1272,7 @@ function LineItemsTab({
   users,
   confirmedCount,
   auditLog,
+  categoryProposalSummaries,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -1271,10 +1285,16 @@ function LineItemsTab({
   users: { id: string; name: string }[];
   confirmedCount: number | null;
   auditLog: LineItemAuditLogEntry[];
+  categoryProposalSummaries: { categoryId: string; summary: string | null; pendingSummary: string | null }[];
 }) {
   const buckets = bucketLineItemsByCategory(version.sections, categories);
   const primaryTabs = groupPrimaryCategoryTabs(buckets, categories);
   const marginOverrideByCategoryId = new Map(categoryMarginOverrides.map((o) => [o.categoryId, o.marginPct]));
+  // Top tier of the three-level Proposal PDF copy system -- see
+  // EstimateCategorySummary's own schema comment.
+  const categorySummaryByCategoryId = new Map(
+    categoryProposalSummaries.map((s) => [s.categoryId, { summary: s.summary, pendingSummary: s.pendingSummary }]),
+  );
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
   const draftCount = version.sections.flatMap((s) => s.lineItems).filter((li) => li.isDraft).length;
 
@@ -1660,6 +1680,7 @@ function LineItemsTab({
                   boothGroupsByCategoryName={boothGroupsByCategoryName}
                   categories={categories}
                   marginOverrideByCategoryId={marginOverrideByCategoryId}
+                  categorySummaryByCategoryId={categorySummaryByCategoryId}
                 />,
               ]),
             )}
@@ -2630,6 +2651,7 @@ function PrimaryCategoryTabContent({
   users: { id: string; name: string }[];
   categories: { id: string; name: string; key: string; parentId: string | null }[];
   marginOverrideByCategoryId: Map<string, Prisma.Decimal>;
+  categorySummaryByCategoryId: Map<string, { summary: string | null; pendingSummary: string | null }>;
 }) {
   if (!tab.hasMethodSplit) {
     return (
@@ -2680,6 +2702,7 @@ function CategoryTabContent({
   boothGroups,
   categories,
   marginOverrideByCategoryId,
+  categorySummaryByCategoryId,
 }: {
   bucket: RawCategoryBucket<SectionLineItem>;
   version: VersionWithSections;
@@ -2697,6 +2720,9 @@ function CategoryTabContent({
   boothGroups?: RawBoothGroup<SectionLineItem>[];
   categories: { id: string; name: string; key: string; parentId: string | null }[];
   marginOverrideByCategoryId: Map<string, Prisma.Decimal>;
+  // Top tier of the three-level Proposal PDF copy system -- see
+  // EstimateCategorySummary's own schema comment.
+  categorySummaryByCategoryId: Map<string, { summary: string | null; pendingSummary: string | null }>;
 }) {
   const hasBoothGroups = !!boothGroups && boothGroups.length > 0;
   const flatSectionGroups = hasBoothGroups ? bucket.sectionGroups.filter((g) => !g.groupLabel) : bucket.sectionGroups;
@@ -2784,8 +2810,23 @@ function CategoryTabContent({
     );
   }
 
+  const categorySummaryEntry = categorySummaryByCategoryId.get(bucket.category.id);
+
   return (
     <div className="flex flex-col gap-6 pt-2">
+      {/* Top tier of the three-level Proposal PDF copy system -- see
+          EstimateCategorySummary's own schema comment. Always shown,
+          spanning every booth in this whole category, independent of any
+          booth's own detail/summarize state below. */}
+      <SummaryEditor
+        summary={categorySummaryEntry?.summary ?? null}
+        pendingSummary={categorySummaryEntry?.pendingSummary ?? null}
+        isLocked={version.isLocked}
+        emptyHint={`No proposal summary yet for ${bucket.category.name} -- optional, and never affects what's itemized below.`}
+        suggestAction={suggestCategorySummaryAction.bind(null, estimateId, version.id, bucket.category.id)}
+        updateAction={updateCategorySummaryAction.bind(null, estimateId, version.id, bucket.category.id)}
+        rejectAction={clearCategoryPendingSummaryAction.bind(null, estimateId, version.id, bucket.category.id)}
+      />
       {hasBoothGroups && (
         <div className="flex flex-col gap-8">
           {boothGroups!.map((booth, boothIndex) => {
@@ -2994,20 +3035,20 @@ function CategoryTabContent({
                 </div>
               </div>
               <div className="flex flex-col gap-5 p-4">
-                {/* Only surfaced while summarized -- this text only ever
-                    reaches the Proposal PDF's summarized-booth branch
-                    (proposal-pdf.tsx), so it'd be pure clutter here for
-                    the vast majority of booths that stay full-detail. */}
-                {boothSummarized && (
-                  <BoothSummaryEditor
-                    summary={boothSummary}
-                    pendingSummary={boothPendingSummary}
-                    isLocked={version.isLocked}
-                    suggestAction={suggestBoothSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
-                    updateAction={updateBoothSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
-                    rejectAction={clearBoothPendingSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
-                  />
-                )}
+                {/* Always shown, regardless of summarizeOnProposal or any
+                    line item's own visibility -- this text renders on the
+                    Proposal PDF's booth header unconditionally (see
+                    proposal-pdf.tsx), so it must stay reachable here no
+                    matter which detail level is currently showing. */}
+                <SummaryEditor
+                  summary={boothSummary}
+                  pendingSummary={boothPendingSummary}
+                  isLocked={version.isLocked}
+                  emptyHint="No proposal summary yet for this booth -- optional, and never affects what's itemized below."
+                  suggestAction={suggestBoothSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                  updateAction={updateBoothSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                  rejectAction={clearBoothPendingSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                />
                 {(() => {
                   // Every group in the booth is reorderable relative to
                   // its siblings, the 6 fixed ELEMENT_TYPE_MAP labels
@@ -3021,6 +3062,16 @@ function CategoryTabContent({
                   const movableElementTypes = booth.elementGroups.map((g) => g.elementType);
                   return booth.elementGroups.map((group) => {
                     const movableIndex = movableElementTypes.indexOf(group.elementType);
+                    // Bottom tier of the Proposal PDF copy system -- see
+                    // EstimateSection.elementSummary's own schema comment.
+                    // group.sectionIds[0] is the same underlying section
+                    // already used for this group's heading description
+                    // just below (RawElementTypeGroup's own comment on why
+                    // the first contributing section is the right one to
+                    // read/write here).
+                    const elementSection = version.sections.find((s) => s.id === group.sectionIds[0]);
+                    const elementSummary = elementSection?.elementSummary ?? null;
+                    const elementPendingSummary = elementSection?.elementPendingSummary ?? null;
                     return (
                   <div key={group.elementType}>
                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded bg-neutral-100 px-3 py-1.5">
@@ -3066,6 +3117,17 @@ function CategoryTabContent({
                         </div>
                       </div>
                     </div>
+                    {group.sectionIds[0] && (
+                      <SummaryEditor
+                        summary={elementSummary}
+                        pendingSummary={elementPendingSummary}
+                        isLocked={version.isLocked}
+                        emptyHint="No proposal summary yet for this element -- optional, and never affects what's itemized below."
+                        suggestAction={suggestElementSummaryAction.bind(null, estimateId, version.id, group.sectionIds[0])}
+                        updateAction={updateElementSummaryAction.bind(null, estimateId, version.id, group.sectionIds[0])}
+                        rejectAction={clearElementPendingSummaryAction.bind(null, estimateId, version.id, group.sectionIds[0])}
+                      />
+                    )}
                     <div className="overflow-x-auto rounded-md border border-neutral-200">
                       <LineItemsTable
                         lineItems={group.items}

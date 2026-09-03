@@ -6,16 +6,22 @@ import { SubmitButton } from "@/components/submit-button";
 
 // Block-level counterpart to SectionHeadingEditor's inline Empty ->
 // Pending -> Approved state machine -- same three actions/shape, but for
-// EstimateSection.boothSummary's few-sentence paragraph body text (shown
-// on the Proposal PDF in place of itemized detail when a booth is
-// summarized) rather than a short heading replacement. Kept as its own
-// component instead of a "multiline" prop on SectionHeadingEditor since
-// the two render in very different contexts (inline in an H1 vs. a full
-// paragraph block under it) and share no layout.
-export function BoothSummaryEditor({
+// the three-tier Proposal PDF copy system's few-sentence paragraph body
+// text (EstimateCategorySummary, EstimateSection.boothSummary/
+// elementSummary) rather than a short heading replacement. One shared
+// component across all three tiers (Category/Booth/Element) -- they're
+// identical state machines, just bound to different actions/copy by the
+// caller. Kept separate from SectionHeadingEditor since the two render in
+// very different contexts (inline in an H1 vs. a full paragraph block
+// under it) and share no layout. Always rendered regardless of
+// summarizeOnProposal or any item-level visibility toggle -- see
+// EstimateSection.boothSummary's own schema comment on why this must
+// never depend on those.
+export function SummaryEditor({
   summary,
   pendingSummary,
   isLocked,
+  emptyHint,
   suggestAction,
   updateAction,
   rejectAction,
@@ -23,6 +29,10 @@ export function BoothSummaryEditor({
   summary: string | null;
   pendingSummary: string | null;
   isLocked: boolean;
+  // Tier-specific placeholder copy for the Empty state, e.g. "...until
+  // one is written for this booth" vs. "...for this element" vs. "...for
+  // this category."
+  emptyHint: string;
   suggestAction: (formData: FormData) => void | Promise<void>;
   updateAction: (formData: FormData) => void | Promise<void>;
   rejectAction: (formData: FormData) => void | Promise<void>;
@@ -109,9 +119,7 @@ export function BoothSummaryEditor({
 
   return (
     <div className="mb-4 flex items-center gap-1.5 rounded border border-dashed border-neutral-300 p-2">
-      <p className="text-xs text-neutral-400">
-        No proposal summary yet -- the client sees just this booth&apos;s name and total until one is written.
-      </p>
+      <p className="text-xs text-neutral-400">{emptyHint}</p>
       <form action={suggestAction} className="shrink-0">
         <SubmitButton
           pendingText=""

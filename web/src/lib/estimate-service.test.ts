@@ -10,6 +10,8 @@ import {
   archiveEstimate,
   clearBoothPendingDescription,
   clearCategoryMarginOverride,
+  clearCategoryPendingSummary,
+  clearElementPendingSummary,
   clearSectionPendingDescription,
   computeLineItemTotal,
   computeMarginGrossUp,
@@ -42,6 +44,8 @@ import {
   updateMarginTarget,
   updateBoothSummary,
   clearBoothPendingSummary,
+  updateCategorySummary,
+  updateElementSummary,
   updateSectionDescription,
   updateSectionExcludedFromTotals,
   updateSectionProposalSummary,
@@ -50,6 +54,7 @@ import {
 
 afterEach(async () => {
   await db.categoryMarginOverride.deleteMany();
+  await db.estimateCategorySummary.deleteMany();
   await db.lineItem.deleteMany();
   await db.attachment.deleteMany();
   await db.document.deleteMany();
@@ -1933,6 +1938,107 @@ describe("updateBoothSummary / clearBoothPendingSummary", () => {
     await lockEstimateVersion(version.id);
 
     await expect(updateBoothSummary(version.id, groupLabel, "Summary")).rejects.toThrow();
+  });
+});
+
+describe("updateElementSummary / clearElementPendingSummary", () => {
+  it("sets elementSummary and clears any pending suggestion, single-section scope", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "FS - Hitting Bay Wall";
+    const structureSection = await addSection(version.id, { name: "Structure", sectionType: "COMPONENT", groupLabel });
+    const graphicsSection = await addSection(version.id, { name: "Graphics", sectionType: "COMPONENT", groupLabel });
+    await db.estimateSection.update({ where: { id: structureSection.id }, data: { elementPendingSummary: "AI draft" } });
+
+    await updateElementSummary(structureSection.id, "Aluminum extrusion frame with printed fabric panels.");
+
+    const [updatedStructure, untouchedGraphics] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: structureSection.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: graphicsSection.id } }),
+    ]);
+    expect(updatedStructure.elementSummary).toBe("Aluminum extrusion frame with printed fabric panels.");
+    expect(updatedStructure.elementPendingSummary).toBeNull();
+    // Unlike boothSummary, this never touches a sibling section sharing
+    // the same groupLabel -- one element group IS one section.
+    expect(untouchedGraphics.elementSummary).toBeNull();
+  });
+
+  it("clearElementPendingSummary only clears the pending suggestion, leaving an approved elementSummary untouched", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall" });
+    await updateElementSummary(section.id, "Approved summary.");
+    await db.estimateSection.update({ where: { id: section.id }, data: { elementPendingSummary: "New AI draft" } });
+
+    await clearElementPendingSummary(section.id);
+
+    const updated = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    expect(updated.elementSummary).toBe("Approved summary.");
+    expect(updated.elementPendingSummary).toBeNull();
+  });
+
+  it("rejects on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall" });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    await expect(updateElementSummary(section.id, "Summary")).rejects.toThrow();
+  });
+});
+
+describe("updateCategorySummary / clearCategoryPendingSummary", () => {
+  it("upserts a summary for a version+category pair that has no row yet", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const category = await makeCategory("Custom Build", "custom_build");
+
+    await updateCategorySummary(version.id, category.id, "Everything in this category is custom-fabricated.");
+
+    const row = await db.estimateCategorySummary.findUniqueOrThrow({
+      where: { estimateVersionId_categoryId: { estimateVersionId: version.id, categoryId: category.id } },
+    });
+    expect(row.summary).toBe("Everything in this category is custom-fabricated.");
+    expect(row.pendingSummary).toBeNull();
+  });
+
+  it("updates an existing row and clears its pending suggestion", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const category = await makeCategory("Custom Build", "custom_build");
+    await updateCategorySummary(version.id, category.id, "First version.");
+    await db.estimateCategorySummary.update({
+      where: { estimateVersionId_categoryId: { estimateVersionId: version.id, categoryId: category.id } },
+      data: { pendingSummary: "AI draft" },
+    });
+
+    await updateCategorySummary(version.id, category.id, "Second version.");
+
+    const row = await db.estimateCategorySummary.findUniqueOrThrow({
+      where: { estimateVersionId_categoryId: { estimateVersionId: version.id, categoryId: category.id } },
+    });
+    expect(row.summary).toBe("Second version.");
+    expect(row.pendingSummary).toBeNull();
+  });
+
+  it("clearCategoryPendingSummary is a no-op when no row exists yet", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const category = await makeCategory("Custom Build", "custom_build");
+
+    await expect(clearCategoryPendingSummary(version.id, category.id)).resolves.not.toThrow();
+  });
+
+  it("rejects on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const category = await makeCategory("Custom Build", "custom_build");
+    const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    await expect(updateCategorySummary(version.id, category.id, "Summary")).rejects.toThrow();
   });
 });
 

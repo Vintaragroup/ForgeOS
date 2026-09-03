@@ -76,10 +76,13 @@ export interface ProposalViewSection {
   // same reasoning as includeInProposal above: undefined means "real
   // scope, counted as normal."
   excludedFromTotals?: boolean;
-  // A few client-readable sentences shown on the Proposal PDF in place of
-  // itemized detail when summarizeOnProposal above is true -- see
-  // EstimateSection.boothSummary's own schema comment.
+  // A few client-readable sentences shown on the Proposal PDF's booth
+  // header, always -- see EstimateSection.boothSummary's own schema
+  // comment.
   boothSummary?: string | null;
+  // Same idea, one level down (this element group alone) -- see
+  // EstimateSection.elementSummary's own schema comment.
+  elementSummary?: string | null;
   lineItems: ProposalViewLineItem[];
 }
 
@@ -408,6 +411,10 @@ export interface ElementTypeGroup {
   elementType: string;
   items: AggregatedLineItem[];
   subtotal: number;
+  // Always-shown body text for this one element group -- see
+  // EstimateSection.elementSummary's own schema comment. Null until an
+  // estimator writes or approves one.
+  elementSummary: string | null;
 }
 
 export interface BoothGroup {
@@ -415,12 +422,10 @@ export interface BoothGroup {
   elementGroups: ElementTypeGroup[];
   subtotal: number;
   // See EstimateSection.summarizeOnProposal's own schema comment --
-  // proposal-pdf.tsx renders just this booth's header + subtotal (already
-  // in `subtotal` above, unaffected) and skips elementGroups entirely
-  // when this is true.
+  // proposal-pdf.tsx skips elementGroups' itemized rows entirely (never
+  // the header or any of the summary text below) when this is true.
   summarizeOnProposal: boolean;
-  // Body text proposal-pdf.tsx renders in place of the skipped
-  // elementGroups above when summarizeOnProposal is true -- see
+  // Always-shown body text for this booth's header -- see
   // EstimateSection.boothSummary's own schema comment. Null until an
   // estimator writes or approves one.
   boothSummary: string | null;
@@ -460,6 +465,12 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // Same "first section wins" convention as boothSummarize above -- see
   // EstimateSection.boothSummary's own schema comment.
   const boothSummaryText = new Map<string, string | null>();
+  // Same convention, one level down, keyed the same way as
+  // elementSortOrder above -- an element group is exactly one
+  // EstimateSection (no fan-out to worry about), but the map still uses
+  // "first section wins" for consistency with every other per-key map
+  // here. See EstimateSection.elementSummary's own schema comment.
+  const elementSummaryText = new Map<string, string | null>();
 
   for (const section of sections) {
     if (!section.groupLabel || section.includeInProposal === false) continue;
@@ -471,6 +482,9 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     );
     const elementKey = `${boothLabel}::${elementType}`;
     elementSortOrder.set(elementKey, Math.min(elementSortOrder.get(elementKey) ?? Infinity, section.sortOrder ?? 0));
+    if (!elementSummaryText.has(elementKey)) {
+      elementSummaryText.set(elementKey, section.elementSummary ?? null);
+    }
     if (!boothSummarize.has(boothLabel)) {
       boothSummarize.set(boothLabel, section.summarizeOnProposal ?? false);
     }
@@ -545,7 +559,12 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
         )
         .map(([elementType, bucket]) => {
           const items = [...bucket.values()].sort((a, b) => a.sortOrder - b.sortOrder);
-          return { elementType, items, subtotal: bucketSubtotal(items) };
+          return {
+            elementType,
+            items,
+            subtotal: bucketSubtotal(items),
+            elementSummary: elementSummaryText.get(`${boothLabel}::${elementType}`) ?? null,
+          };
         })
         // A section contributes an (elementType, bucket) entry the
         // moment it's seen, before any of its line items are known to
