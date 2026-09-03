@@ -121,8 +121,22 @@ export async function clearCategoryMarginOverrideAction(estimateId: string, vers
 // until useActionState's failure mode here is understood outside
 // production. No success banner for now as a result -- see this
 // project's memory / conversation history before reintroducing one.
-export async function addSectionAction(estimateId: string, versionId: string, formData: FormData) {
-  await requireEstimateAccess(estimateId);
+// Bound per-category-tab (category.bind(null, estimateId, version.id,
+// bucket.category.name) in CategoryTabContent) -- a brand-new section has
+// no category of its own to resolve (EstimateSection carries none; see
+// resolveEffectiveCategory), so without this a freshly-created section
+// was invisible everywhere until it happened to get its first real line
+// item (confirmed live as a real "added a section, can't find it
+// anywhere" report). addSection's own placeholderCategory seeds one $0
+// item tagged to whichever tab this control lives in, so the new
+// section/booth shows up as a real H1/H2 right there, immediately.
+export async function addSectionAction(
+  estimateId: string,
+  versionId: string,
+  category: string,
+  formData: FormData,
+) {
+  const user = await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Section name is required");
@@ -151,7 +165,7 @@ export async function addSectionAction(estimateId: string, versionId: string, fo
     }
   }
 
-  await addSection(versionId, { name, sectionType, groupLabel, buildType });
+  await addSection(versionId, { name, sectionType, groupLabel, buildType, placeholderCategory: category }, user.id);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

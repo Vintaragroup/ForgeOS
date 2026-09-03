@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
+import { bucketLineItemsByCategory } from "@/lib/proposal-view-model";
 import {
   addAttachment,
   addLineItem,
@@ -85,6 +86,73 @@ async function makeEstimate() {
   });
   return db.estimate.create({ data: { opportunityId: opportunity.id } });
 }
+
+describe("addSection", () => {
+  it("creates a plain section with no line items when placeholderCategory isn't given (unchanged existing behavior)", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
+
+    const lineItems = await db.lineItem.findMany({ where: { sectionId: section.id } });
+    expect(lineItems).toHaveLength(0);
+  });
+
+  it("seeds a $0 placeholder line item tagged to placeholderCategory, so the new section has a real category immediately", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const section = await addSection(version.id, {
+      name: "Professional Services",
+      sectionType: "COMPONENT",
+      placeholderCategory: "Professional Services",
+    });
+
+    const lineItems = await db.lineItem.findMany({ where: { sectionId: section.id } });
+    expect(lineItems).toHaveLength(1);
+    expect(lineItems[0]).toMatchObject({ category: "Professional Services", isDraft: false });
+    expect(lineItems[0].totalCost.toNumber()).toBe(0);
+  });
+
+  it("a placeholder-seeded booth (groupLabel + buildType) resolves into that category via resolveEffectiveCategory, same as a real item would", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const category = await makeCategory("Structure", "structure_x");
+
+    const section = await addSection(version.id, {
+      name: "Structure",
+      sectionType: "COMPONENT",
+      groupLabel: "FS - New Booth",
+      buildType: "RENTAL",
+      placeholderCategory: category.name,
+    });
+
+    const buckets = bucketLineItemsByCategory(
+      [{ ...section, lineItems: await db.lineItem.findMany({ where: { sectionId: section.id } }) }],
+      [category],
+    );
+    const bucket = buckets.find((b) => b.category.name === "Structure");
+    expect(bucket?.sectionGroups.some((g) => g.groupLabel === "FS - New Booth")).toBe(true);
+  });
+
+  it("records the placeholder item's creation in the line item audit log under the given actorId", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const user = await db.user.create({ data: { email: "estimator@test.com", name: "Estimator" } });
+
+    const section = await addSection(
+      version.id,
+      { name: "Labor", sectionType: "COMPONENT", placeholderCategory: "Labor" },
+      user.id,
+    );
+
+    const log = await db.lineItemAuditLog.findFirst({ where: { estimateVersionId: version.id } });
+    expect(log?.action).toBe("CREATE");
+    expect(log?.actorId).toBe(user.id);
+    const lineItem = await db.lineItem.findFirstOrThrow({ where: { sectionId: section.id } });
+    expect(log?.lineItemId).toBe(lineItem.id);
+  });
+});
 
 describe("computeLineItemTotal", () => {
   it("multiplies qty by unit cost", () => {

@@ -215,10 +215,21 @@ export async function addSection(
     optionId?: string | null;
     groupLabel?: string | null;
     buildType?: SectionBuildType | null;
+    // A brand-new section has no category of its own -- EstimateSection
+    // carries no category field at all; membership in a category tab is
+    // resolved entirely from its line items' own category (see
+    // resolveEffectiveCategory). Without at least one item, a new section
+    // has nothing to resolve one from and never appears in any category
+    // tab's grouped view -- confirmed live as a real "I added a section
+    // and now can't find it anywhere" report. Passing this seeds one $0
+    // placeholder item tagged to it, so the section is visible, as a real
+    // H1/H2, in the exact category tab it was created from, immediately.
+    placeholderCategory?: string | null;
   },
+  actorId?: string | null,
 ) {
   await assertUnlocked(estimateVersionId);
-  return db.estimateSection.create({
+  const section = await db.estimateSection.create({
     data: {
       estimateVersionId,
       name: data.name,
@@ -229,6 +240,21 @@ export async function addSection(
       buildType: data.buildType ?? null,
     },
   });
+  if (data.placeholderCategory) {
+    await addLineItem(
+      estimateVersionId,
+      section.id,
+      {
+        lineType: "MATERIAL",
+        description: "New item -- edit me",
+        category: data.placeholderCategory,
+        qty: 1,
+        unitCost: 0,
+      },
+      actorId,
+    );
+  }
+  return section;
 }
 
 // A booth's buildType is shared across every section carrying its

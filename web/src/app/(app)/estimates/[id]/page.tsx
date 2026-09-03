@@ -1350,7 +1350,6 @@ function LineItemsTab({
   const categorySummaryByCategoryId = new Map(
     categoryProposalSummaries.map((s) => [s.categoryId, { summary: s.summary, pendingSummary: s.pendingSummary }]),
   );
-  const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
   const draftCount = version.sections.flatMap((s) => s.lineItems).filter((li) => li.isDraft).length;
 
   // Real, useful estimating work (a vendor rate comparison, a
@@ -1639,69 +1638,6 @@ function LineItemsTab({
           <Tabs
             urlSync={false}
             tabs={primaryTabs.map((t) => ({ id: t.id, label: t.label, count: t.totalItems }))}
-            beforeContent={
-              // Rendered once, below the category tab strip and above
-              // whichever category's groups are showing -- the same
-              // control regardless of which tab is active, so it lives
-              // between them rather than duplicated inside every tab's
-              // own content. Zero-JS disclosure (native <details>/
-              // <summary>, same pattern as AddLineItemForm/
-              // CollapsibleSection), collapsed to a small labeled trigger
-              // by default so it doesn't sit open and take up space. No
-              // success confirmation here (see addSectionAction's own
-              // comment) -- a useActionState-based version was tried and
-              // reverted after it hung a real, large estimate's page
-              // indefinitely in the browser.
-              !version.isLocked && (
-                <details className="group/add-section mb-6">
-                  <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-full border border-dashed border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 marker:content-none [&::-webkit-details-marker]:hidden">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    </svg>
-                    Add section
-                  </summary>
-                  <form action={addSectionWithIds} className="mt-3 flex items-end gap-3">
-                    <div className="flex-1">
-                      <Field label="New section name" name="name" placeholder="e.g. COMPONENT 1" required />
-                    </div>
-                    <div className="flex-1">
-                      {/* Free text, not a fixed picker: typing an existing
-                          group reuses it (a new H2 inside that H1);
-                          typing anything else creates a brand-new,
-                          independent group (a new H1) -- the datalist
-                          only ever suggests, it never constrains. Blank
-                          means project-wide, no group at all. */}
-                      <Field
-                        label="Group (optional)"
-                        name="groupLabel"
-                        placeholder="e.g. FS - Reception Counter -- blank for project-wide"
-                        list="existing-group-labels"
-                      />
-                      <datalist id="existing-group-labels">
-                        {[...buildTypeByBoothLabel.keys()].map((label) => (
-                          <option key={label} value={label} />
-                        ))}
-                      </datalist>
-                    </div>
-                    <div className="w-48">
-                      <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
-                    </div>
-                    <div className="w-56">
-                      {/* Only matters when Group above is a brand-new name
-                          -- addSectionAction ignores this and inherits the
-                          real value instead when Group matches an existing
-                          booth, so re-tagging an existing one here is a
-                          no-op, not a mistake. Required server-side only
-                          for the genuinely-new-booth case. */}
-                      <SelectField label="Build type (new booth only)" name="buildType" options={BUILD_TYPE_OPTIONS} />
-                    </div>
-                    <SubmitButton variant="secondary" pendingText="Adding...">
-                      Add section
-                    </SubmitButton>
-                  </form>
-                </details>
-              )
-            }
             content={Object.fromEntries(
               primaryTabs.map((tab) => [
                 tab.id,
@@ -2810,7 +2746,7 @@ function CategoryTabContent({
         <p className="mb-4 text-sm text-neutral-500">No {bucket.category.name} line items yet.</p>
         {!version.isLocked &&
           (!firstSection ? (
-            <p className="text-sm text-neutral-400">Add a section below before adding line items.</p>
+            <p className="mb-4 text-sm text-neutral-400">Add a section below before adding line items.</p>
           ) : version.sections.length > 1 ? (
             // More than one section exists -- don't silently attach the
             // first item in an empty category to whichever section
@@ -2844,6 +2780,48 @@ function CategoryTabContent({
               defaultCategory={bucket.category.name}
             />
           ))}
+        {/* Same "Add section" control as the non-empty render path below --
+            without it, a category tab with zero line items anywhere (e.g.
+            a brand-new estimate, or Professional Services before its first
+            item) had no way to create its first section at all (confirmed
+            live: no control rendered here previously). */}
+        {!version.isLocked && (
+          <details className="group/add-section">
+            <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-full border border-dashed border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 marker:content-none [&::-webkit-details-marker]:hidden">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              Add section
+            </summary>
+            <form action={addSectionAction.bind(null, estimateId, version.id, bucket.category.name)} className="mt-3 flex items-end gap-3">
+              <div className="flex-1">
+                <Field label="New section name" name="name" placeholder="e.g. COMPONENT 1" required />
+              </div>
+              <div className="flex-1">
+                <Field
+                  label="Group (optional)"
+                  name="groupLabel"
+                  placeholder="e.g. FS - Reception Counter -- blank for project-wide"
+                  list={`existing-group-labels-${bucket.category.id}`}
+                />
+                <datalist id={`existing-group-labels-${bucket.category.id}`}>
+                  {allBoothLabels.map((label) => (
+                    <option key={label} value={label} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="w-48">
+                <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
+              </div>
+              <div className="w-56">
+                <SelectField label="Build type (new booth only)" name="buildType" options={BUILD_TYPE_OPTIONS} />
+              </div>
+              <SubmitButton variant="secondary" pendingText="Adding...">
+                Add section
+              </SubmitButton>
+            </form>
+          </details>
+        )}
       </div>
     );
   }
@@ -2865,6 +2843,63 @@ function CategoryTabContent({
         updateAction={updateCategorySummaryAction.bind(null, estimateId, version.id, bucket.category.id)}
         rejectAction={clearCategoryPendingSummaryAction.bind(null, estimateId, version.id, bucket.category.id)}
       />
+      {/* Bound to THIS category tab (bucket.category.name) -- addSection's
+          own placeholderCategory seeds a $0 line item tagged to it, so a
+          brand-new section/booth shows up as a real H1/H2 right here,
+          immediately, instead of being invisible until it happens to get
+          a real item later (confirmed live as a real "added a section,
+          can't find it anywhere" report -- a section has no category of
+          its own; see resolveEffectiveCategory). Zero-JS disclosure, same
+          pattern as AddLineItemForm/CollapsibleSection, collapsed by
+          default so it doesn't sit open and take up space. */}
+      {!version.isLocked && (
+        <details className="group/add-section">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-full border border-dashed border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 marker:content-none [&::-webkit-details-marker]:hidden">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            Add section
+          </summary>
+          <form action={addSectionAction.bind(null, estimateId, version.id, bucket.category.name)} className="mt-3 flex items-end gap-3">
+            <div className="flex-1">
+              <Field label="New section name" name="name" placeholder="e.g. COMPONENT 1" required />
+            </div>
+            <div className="flex-1">
+              {/* Free text, not a fixed picker: typing an existing group
+                  reuses it (a new H2 inside that H1); typing anything else
+                  creates a brand-new, independent group (a new H1) -- the
+                  datalist only ever suggests, it never constrains. Blank
+                  means project-wide, no group at all. */}
+              <Field
+                label="Group (optional)"
+                name="groupLabel"
+                placeholder="e.g. FS - Reception Counter -- blank for project-wide"
+                list={`existing-group-labels-${bucket.category.id}`}
+              />
+              <datalist id={`existing-group-labels-${bucket.category.id}`}>
+                {allBoothLabels.map((label) => (
+                  <option key={label} value={label} />
+                ))}
+              </datalist>
+            </div>
+            <div className="w-48">
+              <SelectField label="Type" name="sectionType" defaultValue="COMPONENT" options={SECTION_TYPE_OPTIONS} />
+            </div>
+            <div className="w-56">
+              {/* Only matters when Group above is a brand-new name --
+                  addSectionAction ignores this and inherits the real value
+                  instead when Group matches an existing booth, so
+                  re-tagging an existing one here is a no-op, not a
+                  mistake. Required server-side only for the
+                  genuinely-new-booth case. */}
+              <SelectField label="Build type (new booth only)" name="buildType" options={BUILD_TYPE_OPTIONS} />
+            </div>
+            <SubmitButton variant="secondary" pendingText="Adding...">
+              Add section
+            </SubmitButton>
+          </form>
+        </details>
+      )}
       {hasBoothGroups && (
         <div className="flex flex-col gap-8">
           {boothGroups!.map((booth, boothIndex) => {
