@@ -21,12 +21,14 @@ import {
   mergeBoothIntoAnotherBooth,
   moveFlatSectionProposalOrder,
   moveLineItemsToCategory,
+  moveLineItemsToSection,
   moveLineItemWithinSection,
   moveSectionOrder,
   moveElementGroupOrder,
   moveSectionProposalOrder,
   recomputeVersionTotals,
   resolveBoothBuildType,
+  resolveOrCreateTargetSection,
   restoreLineItem,
   setCategoryMarginOverride,
   unarchiveEstimate,
@@ -361,6 +363,30 @@ export async function bulkMoveLineItemsCategoryAction(
   if (!category) throw new Error("Choose a category to move the selected items to.");
   if (data.lineItemIds.length === 0) throw new Error("Select at least one line item to move.");
   await moveLineItemsToCategory(versionId, { lineItemIds: data.lineItemIds }, category);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Counterpart to bulkMoveLineItemsCategoryAction above, for relocating
+// selected items to a different H2 group (EstimateSection) instead of a
+// different category tab -- e.g. an item filed under "Custom Display Wall
+// with Oak Slatpanel" that's really "BeMatrix Rental." groupLabel is the
+// target booth (H1) -- blank/omitted for a project-wide group with no
+// booth -- and sectionName is the target H2, reused if one by that name
+// already exists under that booth or created fresh otherwise (see
+// resolveOrCreateTargetSection's own comment).
+export async function bulkMoveLineItemsToGroupAction(
+  estimateId: string,
+  versionId: string,
+  data: { groupLabel: string; sectionName: string; lineItemIds: string[] },
+) {
+  const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const sectionName = data.sectionName.trim();
+  if (!sectionName) throw new Error("Name the group to move the selected items to.");
+  if (data.lineItemIds.length === 0) throw new Error("Select at least one line item to move.");
+  const groupLabel = data.groupLabel.trim() || null;
+  const targetSection = await resolveOrCreateTargetSection(versionId, groupLabel, sectionName, user.id);
+  await moveLineItemsToSection(versionId, data.lineItemIds, targetSection.id);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

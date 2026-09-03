@@ -28,6 +28,7 @@ import {
   approveVersionAction,
   archiveEstimateAction,
   bulkMoveLineItemsCategoryAction,
+  bulkMoveLineItemsToGroupAction,
   clearBoothPendingDescriptionAction,
   clearBoothPendingSummaryAction,
   clearCategoryMarginOverrideAction,
@@ -133,6 +134,7 @@ import { findClosestCandidateId, type ProposedVendorSection, type VendorLineMatc
 import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { MoveSelectedItemsBar } from "@/components/move-selected-items-bar";
+import { MoveToGroupBar } from "@/components/move-to-group-bar";
 import { BoothActionsMenu } from "@/components/booth-actions-menu";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
@@ -1678,6 +1680,10 @@ function LineItemsTab({
             <MoveSelectedItemsBar
               moveSelected={bulkMoveLineItemsCategoryAction.bind(null, estimateId, version.id)}
               categoryOptions={categoryOptions.filter((o) => o.value !== "")}
+            />
+            <MoveToGroupBar
+              moveSelected={bulkMoveLineItemsToGroupAction.bind(null, estimateId, version.id)}
+              boothLabels={[...buildTypeByBoothLabel.keys()]}
             />
           </div>
         </BidPackageSelectionProvider>

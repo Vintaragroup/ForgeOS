@@ -728,6 +728,65 @@ export async function moveLineItemsToCategory(estimateVersionId: string, scope: 
   await db.lineItem.updateMany({ where, data: { category } });
 }
 
+// The missing primitive for moving a line item to a different H2 group
+// (EstimateSection) within the SAME estimate -- moveLineItemToEstimate
+// above moves one to a different estimate entirely, and nothing else in
+// this file ever changes a LineItem's sectionId. Confirmed live as a real
+// gap: an item filed under the wrong H2 (e.g. "Custom Display Wall with
+// Oak Slatpanel" when it's really "BeMatrix Rental") had no way to move
+// without deleting and re-adding it. Re-verifies both the items AND the
+// target section belong to this exact version -- same ownership
+// discipline as moveLineItemsToCategory above -- and appends the moved
+// items after whatever's already in the target section (never
+// interleaved into the middle of its existing order) rather than
+// resetting every item's sortOrder there.
+export async function moveLineItemsToSection(estimateVersionId: string, lineItemIds: string[], targetSectionId: string) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.findFirstOrThrow({ where: { id: targetSectionId, estimateVersionId } });
+
+  const [items, maxSortOrder] = await Promise.all([
+    db.lineItem.findMany({
+      where: { id: { in: lineItemIds }, section: { estimateVersionId } },
+      select: { id: true },
+    }),
+    db.lineItem.aggregate({ where: { sectionId: targetSectionId }, _max: { sortOrder: true } }),
+  ]);
+  if (items.length === 0) return;
+
+  const startingSortOrder = (maxSortOrder._max.sortOrder ?? -1) + 1;
+  await db.$transaction(
+    items.map((item, i) =>
+      db.lineItem.update({ where: { id: item.id }, data: { sectionId: targetSectionId, sortOrder: startingSortOrder + i } }),
+    ),
+  );
+}
+
+// Resolves the (booth, group name) an estimator typed in the "Move to
+// group" bar into a real target sectionId -- reuses an existing H2 under
+// that booth (or project-wide, when groupLabel is null) if the name
+// already matches one, case-insensitively, same loose-matching leniency
+// "Add section"'s own Group field already relies on; otherwise creates a
+// brand-new one via addSection. Deliberately does NOT throw when the
+// target booth has no buildType yet (unlike addSectionToBoothAction's own
+// stricter "+Group" tool) -- this is a general relocate-my-items tool,
+// not the Method-tagging flow that check exists for, so it just carries
+// through whatever buildType (including none) the booth's other sections
+// already have via resolveBoothBuildType.
+export async function resolveOrCreateTargetSection(
+  estimateVersionId: string,
+  groupLabel: string | null,
+  sectionName: string,
+  actorId?: string | null,
+) {
+  const existing = await db.estimateSection.findFirst({
+    where: { estimateVersionId, groupLabel, name: { equals: sectionName, mode: "insensitive" } },
+  });
+  if (existing) return existing;
+
+  const buildType = groupLabel ? await resolveBoothBuildType(estimateVersionId, groupLabel) : null;
+  return addSection(estimateVersionId, { name: sectionName, sectionType: "COMPONENT", groupLabel, buildType }, actorId);
+}
+
 // Merges an entire booth into a different existing one -- every
 // EstimateSection sharing sourceGroupLabel takes on targetGroupLabel
 // instead. For the case surfaced live: an import (or a manually

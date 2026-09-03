@@ -29,6 +29,7 @@ import {
   moveElementGroupOrder,
   moveFlatSectionProposalOrder,
   moveLineItemsToCategory,
+  moveLineItemsToSection,
   moveLineItemToEstimate,
   moveLineItemWithinSection,
   moveSectionOrder,
@@ -37,6 +38,7 @@ import {
   recomputeVersionTotals,
   removeLineItemFromBidPackage,
   resolveBoothBuildType,
+  resolveOrCreateTargetSection,
   restoreLineItem,
   setBidPackageStatus,
   setCategoryMarginOverride,
@@ -1251,6 +1253,125 @@ describe("moveLineItemsToCategory -- groupLabel scope", () => {
     await expect(
       moveLineItemsToCategory(version.id, { groupLabel: "Section 203 - Camera Booth" }, "Graphics"),
     ).rejects.toThrow(/locked/);
+  });
+});
+
+describe("moveLineItemsToSection", () => {
+  it("reassigns sectionId for every listed item, appending after whatever's already in the target section", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "Custom Display Wall with Oak Slatpanel", sectionType: "COMPONENT" });
+    const target = await addSection(version.id, { name: "BeMatrix Rental", sectionType: "COMPONENT" });
+    const existingInTarget = await addLineItem(version.id, target.id, {
+      lineType: "MATERIAL",
+      description: "Frame",
+      qty: 1,
+      unitCost: 20,
+    });
+    const itemA = await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Panel A", qty: 1, unitCost: 10 });
+    const itemB = await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Panel B", qty: 1, unitCost: 10 });
+
+    await moveLineItemsToSection(version.id, [itemA.id, itemB.id], target.id);
+
+    const [movedA, movedB, untouchedExisting] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: itemA.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: itemB.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: existingInTarget.id } }),
+    ]);
+    expect(movedA.sectionId).toBe(target.id);
+    expect(movedB.sectionId).toBe(target.id);
+    // Appended after the existing item, not interleaved before it.
+    expect(movedA.sortOrder).toBeGreaterThan(untouchedExisting.sortOrder);
+    expect(movedB.sortOrder).toBeGreaterThan(movedA.sortOrder);
+  });
+
+  it("ignores an id that doesn't belong to this version, without throwing", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const target = await addSection(version.id, { name: "BeMatrix Rental", sectionType: "COMPONENT" });
+
+    const otherEstimate = await makeEstimate();
+    const otherVersion = await createEstimateVersion(otherEstimate.id, 0);
+    const otherSection = await addSection(otherVersion.id, { name: "Somewhere else", sectionType: "COMPONENT" });
+    const foreignItem = await addLineItem(otherVersion.id, otherSection.id, {
+      lineType: "MATERIAL",
+      description: "Not part of this version",
+      qty: 1,
+      unitCost: 5,
+    });
+
+    await moveLineItemsToSection(version.id, [foreignItem.id], target.id);
+
+    const unchanged = await db.lineItem.findUniqueOrThrow({ where: { id: foreignItem.id } });
+    expect(unchanged.sectionId).toBe(otherSection.id);
+  });
+
+  it("rejects on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "Source", sectionType: "COMPONENT" });
+    const target = await addSection(version.id, { name: "Target", sectionType: "COMPONENT" });
+    const item = await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Panel", qty: 1, unitCost: 10 });
+    await lockEstimateVersion(version.id);
+
+    await expect(moveLineItemsToSection(version.id, [item.id], target.id)).rejects.toThrow(/locked/);
+  });
+});
+
+describe("resolveOrCreateTargetSection", () => {
+  it("reuses an existing section under the same booth when the name matches, case-insensitively", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const existing = await addSection(version.id, {
+      name: "BeMatrix Rental",
+      sectionType: "COMPONENT",
+      groupLabel: "FS - Hitting Bay Wall",
+    });
+
+    const resolved = await resolveOrCreateTargetSection(version.id, "FS - Hitting Bay Wall", "bematrix rental");
+
+    expect(resolved.id).toBe(existing.id);
+    const count = await db.estimateSection.count({ where: { estimateVersionId: version.id } });
+    expect(count).toBe(1);
+  });
+
+  it("creates a new section when no match exists, carrying through the booth's existing buildType", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const tagged = await addSection(version.id, { name: "Booth Build", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall" });
+    await db.estimateSection.update({ where: { id: tagged.id }, data: { buildType: "RENTAL" } });
+
+    const created = await resolveOrCreateTargetSection(version.id, "FS - Hitting Bay Wall", "BeMatrix Rental");
+
+    expect(created.id).not.toBe(tagged.id);
+    expect(created.name).toBe("BeMatrix Rental");
+    expect(created.groupLabel).toBe("FS - Hitting Bay Wall");
+    expect(created.buildType).toBe("RENTAL");
+  });
+
+  it("creates a project-wide section (no booth) when groupLabel is null and no match exists", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const created = await resolveOrCreateTargetSection(version.id, null, "Show Site Lead");
+
+    expect(created.groupLabel).toBeNull();
+    expect(created.buildType).toBeNull();
+  });
+
+  it("does not confuse a same-named section under a different booth", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const otherBoothsSection = await addSection(version.id, {
+      name: "BeMatrix Rental",
+      sectionType: "COMPONENT",
+      groupLabel: "Some Other Booth",
+    });
+
+    const created = await resolveOrCreateTargetSection(version.id, "FS - Hitting Bay Wall", "BeMatrix Rental");
+
+    expect(created.id).not.toBe(otherBoothsSection.id);
+    expect(created.groupLabel).toBe("FS - Hitting Bay Wall");
   });
 });
 
