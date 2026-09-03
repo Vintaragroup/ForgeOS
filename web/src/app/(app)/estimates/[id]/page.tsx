@@ -3070,6 +3070,7 @@ function CategoryTabContent({
                       <BoothActionsMenu
                         moveAction={moveBoothToCategoryAction.bind(null, estimateId, version.id, booth.boothLabel)}
                         categoryOptions={moveCategoryOptions}
+                        currentCategory={bucket.category.name}
                         mergeAction={
                           otherBoothLabels.length > 0
                             ? mergeBoothAction.bind(null, estimateId, version.id, booth.boothLabel)

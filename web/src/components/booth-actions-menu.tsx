@@ -12,11 +12,23 @@ import { useEffect, useRef, useState } from "react";
 export function BoothActionsMenu({
   moveAction,
   categoryOptions,
+  currentCategory,
   mergeAction,
   targetBoothOptions,
 }: {
   moveAction: (formData: FormData) => void;
   categoryOptions: { value: string; label: string }[];
+  // This booth's category in the tab this menu instance is rendered from
+  // -- excluded from the "move to" list below (moving a booth "to" the
+  // category it's already showing in is meaningless), and named in the
+  // label instead, so the select never opens pre-showing an unrelated
+  // category as if it meant something (confirmed live: with no current-
+  // category exclusion, the select just defaults to the browser's own
+  // first <option>, i.e. whichever category sorts first -- misleading
+  // regardless of what that happens to be, and a real reported bug when
+  // it happened to coincide with the category the user was about to pick
+  // anyway, reading as "already selected" and "doesn't move").
+  currentCategory: string;
   mergeAction: ((formData: FormData) => void) | null;
   targetBoothOptions: { value: string; label: string }[];
 }) {
@@ -67,18 +79,20 @@ export function BoothActionsMenu({
             className="flex flex-col gap-1"
           >
             <label htmlFor="booth-move-category" className="text-xs font-medium text-neutral-400">
-              Move every item to a different category
+              Move every item out of {currentCategory} to
             </label>
             <select
               id="booth-move-category"
               name="category"
               className="rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none focus:border-neutral-400"
             >
-              {categoryOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
+              {categoryOptions
+                .filter((opt) => opt.value !== currentCategory)
+                .map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
             </select>
             <button
               type="submit"
