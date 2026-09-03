@@ -107,6 +107,7 @@ import { citationHref, linkifyMentions } from "@/lib/citation";
 import { getCitableLineItems, getCitableQuotes, getThreadMessages } from "@/lib/chat-service";
 import { ChatWidget } from "@/components/chat-widget";
 import { auditLineItemCategories } from "@/lib/category-audit";
+import { auditExcludedFromTotals, slugifyGroupLabel, type ExcludedGroupIssue } from "@/lib/excluded-from-totals-audit";
 import type { SectionBuildType } from "@/generated/prisma/enums";
 import { computeActualTotal, computeDepartmentVariance, computeLineItemVariance } from "@/lib/cost-actual-service";
 import { getVendorMatchApplyLog } from "@/lib/vendor-match-apply-log-service";
@@ -584,6 +585,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     ? auditLineItemCategories(currentVersion.sections, categories)
     : { issues: [], methodUnresolvedIssues: [], isClean: true };
 
+  // Real, useful estimating work that isn't real client scope -- see
+  // EstimateSection.excludedFromTotals's own schema comment and
+  // excluded-from-totals-audit.ts's own header comment. Shared with the
+  // Line Items tab's own quick banner (LineItemsTab computes the same
+  // thing independently, off the same data) so both agree exactly on
+  // what's flagged.
+  const excludedFromTotalsIssues: ExcludedGroupIssue[] = currentVersion
+    ? auditExcludedFromTotals(currentVersion.sections, lineItemAuditLog)
+    : [];
+
   // Read-only advisory check of this version's line items against its
   // scope documents (scope-coverage-service.ts) -- persisted on the
   // version, not recomputed live, since it's an explicitly-triggered,
@@ -617,7 +628,12 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     ? currentVersion.bidPackages.filter((p) => p.status === "QUOTE_RECEIVED").length
     : 0;
 
-  const reviewIssueCount = riskFlags.length + categoryAudit.issues.length + coverageGapsWithDocs.length + bidPackagesAwaitingReview;
+  const reviewIssueCount =
+    riskFlags.length +
+    categoryAudit.issues.length +
+    coverageGapsWithDocs.length +
+    bidPackagesAwaitingReview +
+    excludedFromTotalsIssues.length;
 
   return (
     <div className="flex flex-col gap-8">
@@ -804,6 +820,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     reconciliationDocuments={pricingScheduleDocuments.map((d) => ({ id: d.id, filename: d.filename }))}
                     runReconciliationAction={currentVersion ? runClientTemplateReconciliationAction.bind(null, estimate.id) : null}
                     reconciliation={reconciliation}
+                    excludedFromTotalsIssues={excludedFromTotalsIssues}
                   />
                 ),
                 proposal: (
@@ -1303,32 +1320,11 @@ function LineItemsTab({
   // EstimateSection.excludedFromTotals's own schema comment. Surfaced as
   // its own review banner below rather than silently vanishing from the
   // totals, so nobody has to rediscover by accident (again) that a chunk
-  // of "the estimate" was quietly excluded. auditLog's CREATE entry (if
-  // any -- most jobs' data predates line-item audit logging entirely)
-  // answers "where did this come from," same actor/timestamp the History
-  // tab already shows for anyone who wants the full trail.
-  const excludedGroupLabels = [
-    ...new Set(version.sections.filter((s) => s.excludedFromTotals && s.groupLabel).map((s) => s.groupLabel!)),
-  ];
-  const excludedGroups = excludedGroupLabels.map((groupLabel) => {
-    const sections = version.sections.filter((s) => s.groupLabel === groupLabel && s.excludedFromTotals);
-    const items = sections.flatMap((s) => s.lineItems).filter((li) => !li.isDraft);
-    const lineItemIds = new Set(items.map((li) => li.id));
-    const createEntry = auditLog.find(
-      (log) => log.action === "CREATE" && log.lineItemId && lineItemIds.has(log.lineItemId),
-    );
-    const earliestCreatedAt = sections.reduce(
-      (min, s) => (s.createdAt < min ? s.createdAt : min),
-      sections[0].createdAt,
-    );
-    return {
-      groupLabel,
-      cost: items.reduce((sum, li) => sum + Number(li.totalCost), 0),
-      itemCount: items.length,
-      createdAt: earliestCreatedAt,
-      actorName: createEntry?.actor?.name ?? null,
-    };
-  });
+  // of "the estimate" was quietly excluded. Shared with the Review tab's
+  // own, more detailed card (excludedFromTotalsAudit.ts) and the
+  // Dashboard's cross-opportunity list, so all three agree on exactly
+  // what counts as flagged.
+  const excludedGroups = auditExcludedFromTotals(version.sections, auditLog);
 
   // Every booth/component-linked section (EstimateSection.groupLabel).
   // Most jobs have none of these. A booth's tag (EstimateSection.
@@ -1396,19 +1392,23 @@ function LineItemsTab({
                   </div>
                   <p className="mt-1 text-amber-700">
                     {g.itemCount} item{g.itemCount === 1 ? "" : "s"}, added {g.createdAt.toLocaleDateString()}
-                    {g.actorName ? ` by ${g.actorName}` : " -- no creation record (likely a bulk import or predates change tracking)"}
-                    . See the History tab for the full detail.
+                    {g.actorName ? ` by ${g.actorName}` : " -- no creation record (likely a bulk import or predates change tracking)"}.
                   </p>
-                  {!version.isLocked && (
-                    <form
-                      action={updateSectionExcludedFromTotalsAction.bind(null, estimateId, version.id, g.groupLabel, false)}
-                      className="mt-2"
+                  <div className="mt-2 flex items-center gap-3">
+                    <Link
+                      href={`/estimates/${estimateId}?tab=review#excluded-${slugifyGroupLabel(g.groupLabel)}`}
+                      className="text-xs font-medium text-brand-navy hover:underline"
                     >
-                      <button type="submit" className="text-xs font-medium text-amber-900 underline hover:no-underline">
-                        Include in totals again
-                      </button>
-                    </form>
-                  )}
+                      Review in detail →
+                    </Link>
+                    {!version.isLocked && (
+                      <form action={updateSectionExcludedFromTotalsAction.bind(null, estimateId, version.id, g.groupLabel, false)}>
+                        <button type="submit" className="text-xs font-medium text-amber-900 underline hover:no-underline">
+                          Include in totals again
+                        </button>
+                      </form>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -4376,6 +4376,7 @@ function ReviewTab({
   reconciliationDocuments,
   runReconciliationAction,
   reconciliation,
+  excludedFromTotalsIssues,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -4391,6 +4392,7 @@ function ReviewTab({
   reconciliationDocuments: { id: string; filename: string }[];
   runReconciliationAction: ((formData: FormData) => void | Promise<void>) | null;
   reconciliation: ClientTemplateReconciliation | Error | null;
+  excludedFromTotalsIssues: ExcludedGroupIssue[];
 }) {
   const bidPackagesAwaitingReview = currentVersion.bidPackages.filter((p) => p.status === "QUOTE_RECEIVED");
   const hasAnyReview =
@@ -4398,7 +4400,8 @@ function ReviewTab({
     categoryAudit.issues.length > 0 ||
     bidPackagesAwaitingReview.length > 0 ||
     (scopeDocuments.length > 0 && runCoverageAnalysisAction) ||
-    (reconciliationDocuments.length > 0 && runReconciliationAction);
+    (reconciliationDocuments.length > 0 && runReconciliationAction) ||
+    excludedFromTotalsIssues.length > 0;
 
   if (!hasAnyReview) {
     return (
@@ -4411,6 +4414,87 @@ function ReviewTab({
 
   return (
     <div className="flex flex-col gap-6">
+      {excludedFromTotalsIssues.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Excluded from totals
+          </h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Something got flagged as not real client scope -- its cost is removed from both this version&apos;s Total
+            cost/Grand total and the client-facing Proposal PDF, but it&apos;s never deleted. This usually means an
+            estimator entered internal reference data (a vendor rate comparison, a competitor-bid snapshot) that
+            ended up filed inside the real client estimate instead of somewhere separate.
+          </p>
+          <div className="flex flex-col gap-4">
+            {excludedFromTotalsIssues.map((issue) => (
+              <div
+                key={issue.groupLabel}
+                id={`excluded-${slugifyGroupLabel(issue.groupLabel)}`}
+                className="rounded-md border border-amber-200 bg-amber-50 p-4"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-amber-900">{issue.groupLabel}</span>
+                  <span className="text-sm font-semibold text-amber-900">{money(issue.cost)}</span>
+                </div>
+                <p className="mt-1 text-xs text-amber-800">
+                  {issue.itemCount} item{issue.itemCount === 1 ? "" : "s"}, added {issue.createdAt.toLocaleDateString()}
+                  {issue.actorName
+                    ? ` by ${issue.actorName}`
+                    : " -- no creation record (likely a bulk import or predates change tracking)"}
+                  . See the History tab for the full detail.
+                </p>
+
+                <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-amber-900">Ways to resolve</p>
+                <ul className="mt-1 list-disc pl-4 text-xs text-amber-800">
+                  <li>If this turns out to be real client scope, click &quot;Include in totals again&quot; below.</li>
+                  <li>If it&apos;s stale and no longer needed, delete its line items from the Line Items tab.</li>
+                  <li>Otherwise, leave it excluded -- it stays here, flagged, for future reference.</li>
+                </ul>
+
+                <ul className="mt-3 flex flex-col gap-1.5 border-t border-amber-200 pt-3 text-xs">
+                  {issue.items.map((item) => {
+                    const sourceHref = item.document
+                      ? citationHref(
+                          opportunityId,
+                          item.document,
+                          { sourceQuote: item.sourceQuote ?? "", pageNumber: item.sourcePageNumber },
+                          `/estimates/${estimateId}?tab=review#excluded-${slugifyGroupLabel(issue.groupLabel)}`,
+                        )
+                      : null;
+                    return (
+                      <li key={item.id} className="flex items-center justify-between gap-3 text-amber-900">
+                        <span>
+                          {item.description}{" "}
+                          {sourceHref ? (
+                            <Link href={sourceHref} className="text-brand-navy hover:underline">
+                              source →
+                            </Link>
+                          ) : (
+                            <span className="text-amber-600">-- no source document, entered directly</span>
+                          )}
+                        </span>
+                        <span className="shrink-0 font-medium">{money(item.totalCost)}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+
+                {!currentVersion.isLocked && (
+                  <form
+                    action={updateSectionExcludedFromTotalsAction.bind(null, estimateId, currentVersion.id, issue.groupLabel, false)}
+                    className="mt-3"
+                  >
+                    <button type="submit" className="text-xs font-medium text-amber-900 underline hover:no-underline">
+                      Include in totals again
+                    </button>
+                  </form>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {riskFlags.length > 0 && (
         <Card className="p-6">
           <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">

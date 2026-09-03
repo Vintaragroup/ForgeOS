@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { citationHref, parseFreeTextDate } from "@/lib/citation";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
+import { slugifyGroupLabel } from "@/lib/excluded-from-totals-audit";
 
 const DEADLINE_WINDOW_DAYS = 30;
 // Symmetric with the forward window -- without a lower bound, a deadline
@@ -17,6 +18,7 @@ const DEADLINE_WINDOW_DAYS = 30;
 const PAST_DEADLINE_GRACE_DAYS = 30;
 const UPCOMING_LIMIT = 8;
 const RECENT_PROPOSALS_LIMIT = 5;
+const FLAGGED_FOR_REVIEW_LIMIT = 8;
 
 type DeadlineKind =
   | "Deposit due"
@@ -60,6 +62,27 @@ export interface UpcomingDeadline {
   action: { label: string; status: DeadlineActionStatus } | null;
 }
 
+// One row per booth/section flagged EstimateSection.excludedFromTotals
+// (see that field's own schema comment) across every opportunity this
+// user can see -- "tell me when this happens in future opportunities
+// created by users," not something you'd only discover by opening the
+// one estimate it happened on. Same grouping (one booth's sections
+// collapsed into one row, summed) as excluded-from-totals-audit.ts's own
+// auditExcludedFromTotals, but computed directly here rather than reusing
+// that function -- this only ever needs the aggregate cost/count across
+// every accessible opportunity, not the per-line-item citation detail
+// that function's Review-tab card needs (which would mean loading every
+// flagged line item's full row, org-wide, for a Dashboard card that only
+// ever shows a count and a link).
+export interface FlaggedForReviewItem {
+  key: string;
+  estimateId: string;
+  opportunityName: string;
+  groupLabel: string;
+  cost: number;
+  href: string;
+}
+
 export async function getDashboardData(user: { id: string; systemRole: SystemRole }) {
   const accessWhere = opportunityAccessWhere(user);
 
@@ -67,7 +90,7 @@ export async function getDashboardData(user: { id: string; systemRole: SystemRol
   const windowEnd = new Date(now.getTime() + DEADLINE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const windowStart = new Date(now.getTime() - PAST_DEADLINE_GRACE_DAYS * 24 * 60 * 60 * 1000);
 
-  const [stageGroups, workOrders, rfpDocuments, recentProposals, deadlineActions] = await Promise.all([
+  const [stageGroups, workOrders, rfpDocuments, recentProposals, deadlineActions, excludedSections] = await Promise.all([
     db.opportunity.groupBy({ by: ["stage"], where: { deletedAt: null, ...accessWhere }, _count: { _all: true } }),
     db.workOrder.findMany({
       where: {
@@ -109,6 +132,22 @@ export async function getDashboardData(user: { id: string; systemRole: SystemRol
     db.deadlineAction.findMany({
       where: { opportunity: accessWhere },
       select: { opportunityId: true, dedupeKey: true },
+    }),
+    // isCurrent -- an older, superseded version's own flagged items are
+    // no longer what anyone would act on; only the version someone could
+    // actually still edit matters here.
+    db.estimateSection.findMany({
+      where: {
+        excludedFromTotals: true,
+        groupLabel: { not: null },
+        estimateVersion: { isCurrent: true, estimate: { opportunity: accessWhere } },
+      },
+      select: {
+        groupLabel: true,
+        estimateVersionId: true,
+        lineItems: { where: { isDraft: false }, select: { totalCost: true } },
+        estimateVersion: { select: { estimate: { select: { id: true, opportunity: { select: { showName: true } } } } } },
+      },
     }),
   ]);
 
@@ -206,9 +245,36 @@ export async function getDashboardData(user: { id: string; systemRole: SystemRol
 
   upcoming.sort((a, b) => a.date.getTime() - b.date.getTime());
 
+  // One row per (estimateVersion, groupLabel) -- a flagged booth's cost
+  // can span several EstimateSection rows (Custom Build, Structure,
+  // Labor, ...), same "collapse to one booth" convention as
+  // excluded-from-totals-audit.ts's own auditExcludedFromTotals.
+  const flaggedByKey = new Map<string, FlaggedForReviewItem>();
+  for (const section of excludedSections) {
+    const groupLabel = section.groupLabel!;
+    const key = `${section.estimateVersionId}::${groupLabel}`;
+    const cost = section.lineItems.reduce((sum, li) => sum + Number(li.totalCost), 0);
+    const existing = flaggedByKey.get(key);
+    if (existing) {
+      existing.cost += cost;
+      continue;
+    }
+    const estimateId = section.estimateVersion.estimate.id;
+    flaggedByKey.set(key, {
+      key,
+      estimateId,
+      opportunityName: section.estimateVersion.estimate.opportunity.showName,
+      groupLabel,
+      cost,
+      href: `/estimates/${estimateId}?tab=review#excluded-${slugifyGroupLabel(groupLabel)}`,
+    });
+  }
+  const flaggedForReview = [...flaggedByKey.values()].sort((a, b) => b.cost - a.cost);
+
   return {
     pipeline: { byStage: stageCounts },
     upcomingDeadlines: upcoming.slice(0, UPCOMING_LIMIT),
     recentProposals,
+    flaggedForReview: flaggedForReview.slice(0, FLAGGED_FOR_REVIEW_LIMIT),
   };
 }

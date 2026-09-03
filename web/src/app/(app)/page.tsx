@@ -93,7 +93,7 @@ export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const { pipeline, upcomingDeadlines, recentProposals } = await getDashboardData(user);
+  const { pipeline, upcomingDeadlines, recentProposals, flaggedForReview } = await getDashboardData(user);
   const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
   const adminStats = isAdmin ? await getAdminAnalytics() : null;
 
@@ -276,6 +276,27 @@ export default async function DashboardPage() {
             </div>
           )}
         </div>
+
+        {flaggedForReview.length > 0 && (
+          <div className="dash-section">
+            <div className="dash-section-head">
+              <h2 className="dash-section-title">FLAGGED FOR REVIEW</h2>
+            </div>
+            <div className="dash-card">
+              {flaggedForReview.map((item) => (
+                <Link key={item.key} href={item.href} className="dash-row">
+                  <div>
+                    <div className="dash-row-title">{item.groupLabel}</div>
+                    <div className="dash-row-sub">
+                      {item.opportunityName} — excluded from totals, needs review
+                    </div>
+                  </div>
+                  <span className="dash-chip dash-neutral">{fmtUsd(item.cost)}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
 
         {adminStats && (
           <div className="dash-admin">
