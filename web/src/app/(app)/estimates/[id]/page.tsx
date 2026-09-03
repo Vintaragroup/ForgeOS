@@ -752,11 +752,10 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                 { id: "options", label: "Options (alternates)", count: currentVersion.options.length },
                 { id: "bid-packages", label: "Bid Packages", count: currentVersion.bidPackages.length },
                 { id: "documents", label: "Documents" },
-                { id: "type-totals", label: "Type Totals" },
+                { id: "estimator-tools", label: "Estimator Tools" },
                 { id: "review", label: "Review", count: reviewIssueCount },
                 { id: "profitability", label: "Profitability" },
                 { id: "proposal", label: "Proposal & Approval" },
-                { id: "cut-list", label: "Cut List" },
                 { id: "history", label: "History", count: vendorMatchApplyLog.length },
               ]}
               content={{
@@ -832,7 +831,14 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     enrichApplied={enrichApplied}
                   />
                 ),
-                "type-totals": <TypeTotalsTab version={currentVersion} categories={categories} />,
+                "estimator-tools": (
+                  <EstimatorToolsTab
+                    estimateId={estimate.id}
+                    opportunityId={estimate.opportunityId}
+                    version={currentVersion}
+                    categories={categories}
+                  />
+                ),
                 review: (
                   <ReviewTab
                     estimateId={estimate.id}
@@ -871,7 +877,6 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     olderVersions={olderVersions}
                   />
                 ),
-                "cut-list": <CutListTab estimateId={estimate.id} versionId={currentVersion.id} />,
                 history: (
                   <HistoryTab
                     estimateId={estimate.id}
@@ -4492,6 +4497,162 @@ function ReconciliationResultTable({ rows }: { rows: ReconciliationRow[] }) {
 }
 
 // "Type Totals" tab: a production/inventory pull-quantity rollup, not a
+// Umbrella for the estimate's read-only report/reference tools -- Category
+// Summary (the estimate-vs-document audit view below), Type Totals, and Cut
+// List. These three used to be separate top-level tabs; consolidated here
+// so new snapshot/audit tools have a home that doesn't keep growing the
+// main tab strip (10 top-level tabs was already a lot). Own nested tab
+// strip, urlSync={false} same as the Line Items category tabs -- the
+// active sub-tab is local UI state, not something worth a shareable URL.
+function EstimatorToolsTab({
+  estimateId,
+  opportunityId,
+  version,
+  categories,
+}: {
+  estimateId: string;
+  opportunityId: string;
+  version: VersionWithSections;
+  categories: Category[];
+}) {
+  return (
+    <Tabs
+      urlSync={false}
+      tabs={[
+        { id: "category-summary", label: "Category Summary" },
+        { id: "type-totals", label: "Type Totals" },
+        { id: "cut-list", label: "Cut List" },
+      ]}
+      content={{
+        "category-summary": (
+          <CategorySummaryTab estimateId={estimateId} opportunityId={opportunityId} version={version} categories={categories} />
+        ),
+        "type-totals": <TypeTotalsTab version={version} categories={categories} />,
+        "cut-list": <CutListTab estimateId={estimateId} versionId={version.id} />,
+      }}
+    />
+  );
+}
+
+// The estimate-vs-document audit view: every line item currently in the
+// estimate, grouped by its real Category then by booth, each with a link
+// back to its source document/page/quote where one exists -- lets a
+// reviewer work straight down this list against the actual documents
+// package and confirm nothing was mistyped, mis-costed, or misplaced.
+//
+// Deliberately built on bucketLineItemsByCategory (the same function Line
+// Items' own category tabs use) rather than aggregateByCategory (the
+// client-facing PDF's rollup) -- aggregateByCategory merges identical
+// (description, unit) line items together to produce one clean summed row,
+// which would silently discard per-item source citations whenever more
+// than one raw item merges into it. This view needs every raw LineItem
+// individually addressable, with its own citation intact, or the citation
+// link is meaningless.
+//
+// Excludes Option/alternate sections, same convention as TypeTotalsTab
+// below -- an alternate hasn't been awarded, so it isn't part of "the
+// estimate" this view is meant to double-check against the documents.
+function CategorySummaryTab({
+  estimateId,
+  opportunityId,
+  version,
+  categories,
+}: {
+  estimateId: string;
+  opportunityId: string;
+  version: VersionWithSections;
+  categories: Category[];
+}) {
+  const baseSections = version.sections.filter((s) => s.optionId === null);
+  const buckets = bucketLineItemsByCategory(baseSections, categories).filter((b) => b.totalItems > 0);
+
+  if (buckets.length === 0) {
+    return (
+      <Card className="p-6">
+        <p className="text-sm text-neutral-500">No line items to summarize yet.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <p className="text-sm text-neutral-500">
+        Every line item in this estimate, grouped by category then booth, with a link back to its source document
+        where one exists -- for double-checking this estimate against the documents it was built from.
+      </p>
+      {buckets.map((bucket) => {
+        // Same "Project-wide" fallback label used elsewhere for a null
+        // groupLabel (a booth-independent line, e.g. Add-Ons or a general
+        // project cost) -- never blank, always a real heading.
+        const byBooth = new Map<string, typeof bucket.sectionGroups>();
+        for (const group of bucket.sectionGroups) {
+          const key = group.groupLabel ?? "Project-wide";
+          const arr = byBooth.get(key);
+          if (arr) arr.push(group);
+          else byBooth.set(key, [group]);
+        }
+        const categoryTotal = bucket.sectionGroups.reduce(
+          (sum, g) => sum + g.lineItems.reduce((s, li) => s + li.totalCost.toNumber(), 0),
+          0,
+        );
+        return (
+          <Card key={bucket.category.id} className="p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-neutral-900">{bucket.category.name}</h3>
+              <span className="text-sm font-medium text-neutral-700">{money(categoryTotal)}</span>
+            </div>
+            <div className="flex flex-col gap-4">
+              {[...byBooth.entries()].map(([boothLabel, groups]) => {
+                const boothTotal = groups.reduce(
+                  (sum, g) => sum + g.lineItems.reduce((s, li) => s + li.totalCost.toNumber(), 0),
+                  0,
+                );
+                return (
+                  <div key={boothLabel} className="rounded-md border border-neutral-200 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{boothLabel}</span>
+                      <span className="text-xs font-medium text-neutral-500">{money(boothTotal)}</span>
+                    </div>
+                    <ul className="flex flex-col gap-1.5 text-sm">
+                      {groups
+                        .flatMap((g) => g.lineItems)
+                        .map((item) => {
+                          const sourceHref = item.document
+                            ? citationHref(
+                                opportunityId,
+                                item.document,
+                                { sourceQuote: item.sourceQuote ?? "", pageNumber: item.sourcePageNumber },
+                                `/estimates/${estimateId}`,
+                              )
+                            : null;
+                          return (
+                            <li key={item.id} className="flex items-center justify-between gap-3">
+                              <span>
+                                {item.description}{" "}
+                                {sourceHref ? (
+                                  <Link href={sourceHref} className="text-xs text-brand-navy hover:underline">
+                                    source →
+                                  </Link>
+                                ) : (
+                                  <span className="text-xs text-neutral-400">-- no source document, entered directly</span>
+                                )}
+                              </span>
+                              <span className="shrink-0 font-medium text-neutral-700">{money(item.totalCost.toNumber())}</span>
+                            </li>
+                          );
+                        })}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
 // client-facing view -- how many of each exact physical part are needed
 // across the WHOLE estimate, merged across every booth/section, so the
 // shop knows how much to pull from stock once the job is awarded (a part
