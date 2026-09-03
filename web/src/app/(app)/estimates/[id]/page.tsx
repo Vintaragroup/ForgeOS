@@ -44,6 +44,7 @@ import {
   mergeBoothAction,
   moveBoothToCategoryAction,
   moveElementGroupOrderAction,
+  moveFlatSectionProposalOrderAction,
   moveLineItemAction,
   moveSectionProposalOrderAction,
   recordCostActualAction,
@@ -69,8 +70,11 @@ import {
   updateSectionDescriptionAction,
   updateSectionItemsCategoryAction,
   updateSectionExcludedFromTotalsAction,
+  updateSectionExcludedFromTotalsForSectionAction,
   updateSectionProposalSummaryAction,
+  updateSectionProposalSummaryForSectionAction,
   updateSectionProposalVisibilityAction,
+  updateSectionProposalVisibilityForSectionAction,
 } from "../actions";
 import { updateOpportunityProfitabilityAction } from "@/app/(app)/opportunities/actions";
 import { computeTrueProfitability } from "@/lib/profitability-service";
@@ -2700,6 +2704,34 @@ function CategoryTabContent({
 }) {
   const hasBoothGroups = !!boothGroups && boothGroups.length > 0;
   const flatSectionGroups = hasBoothGroups ? bucket.sectionGroups.filter((g) => !g.groupLabel) : bucket.sectionGroups;
+  // The genuinely standalone subset of flatSectionGroups (groupLabel:
+  // null) -- flatSectionGroups can also carry an untagged booth (real
+  // groupLabel, just not yet buildType-tagged into boothGroups above)
+  // when hasBoothGroups is false for this category, and that one still
+  // belongs to a real, eventually-taggable booth, not a one-off section.
+  // Used both to gate the Hide/Summarize/Exclude/reorder controls below
+  // to true standalone sections only, and to compute each one's up/down
+  // position among just its real siblings (moveFlatSectionProposalOrder's
+  // own sibling set), not the mixed list. Sorted by proposalSortOrder
+  // (same alphabetical tiebreak as moveFlatSectionProposalOrder's own
+  // sibling sort) -- bucketLineItemsByCategory's own sectionGroups carries
+  // no order of its own (plain Map insertion order), so without this a
+  // reorder click would persist correctly but never visibly move
+  // anything (confirmed live: the write succeeded, the render didn't).
+  const sectionById = new Map(version.sections.map((s) => [s.id, s]));
+  const standaloneSectionGroups = flatSectionGroups
+    .filter((g) => !g.groupLabel)
+    .sort(
+      (a, b) =>
+        (sectionById.get(a.sectionId)?.proposalSortOrder ?? 0) - (sectionById.get(b.sectionId)?.proposalSortOrder ?? 0) ||
+        a.sectionName.localeCompare(b.sectionName),
+    );
+  // Non-standalone entries (an untagged booth showing here only because
+  // it has no buildType yet -- see the comment above) keep their
+  // original, unsorted relative order; standalone ones render after them
+  // in the proposalSortOrder above. Used in place of flatSectionGroups
+  // for the actual render below.
+  const orderedFlatSectionGroups = [...flatSectionGroups.filter((g) => g.groupLabel), ...standaloneSectionGroups];
   // A section with genuinely no line items anywhere yet (e.g. one just
   // created via "Add section," empty by definition) never appears in
   // bucket.sectionGroups above -- bucketLineItemsByCategory only ever
@@ -3251,7 +3283,7 @@ function CategoryTabContent({
           })}
         </div>
       )}
-      {flatSectionGroups.map((group) => (
+      {orderedFlatSectionGroups.map((group) => {
         // Same dark header treatment as a tagged booth's H1 above --
         // otherwise this renders lighter (a plain neutral-700 heading,
         // no dark bar) purely because it has no groupLabel/buildType yet,
@@ -3259,10 +3291,17 @@ function CategoryTabContent({
         // it's the exact same kind of top-level section (confirmed live:
         // a section added via "Add section" with Group left blank looked
         // visually demoted next to every AI-imported or booth-tagged
-        // section). Still genuinely different underneath -- no Hide/
-        // Summarize/Exclude-from-totals/Untag/merge controls, since those
-        // are booth-specific concepts that don't apply to a project-wide
-        // section -- just restyled to match.
+        // section). A genuinely standalone one (no groupLabel at all, the
+        // isStandalone case below) also gets the same Hide/Summarize/
+        // Exclude-from-totals/reorder tools a booth's H1 has, scoped to
+        // its own single sectionId instead of a groupLabel it doesn't
+        // have (see SectionScope's own comment in estimate-service.ts).
+        // Untag and Merge-into-another-booth stay booth-only -- there's
+        // no build-type tag or multi-section booth here to act on.
+        const isStandalone = !group.groupLabel;
+        const section = isStandalone ? version.sections.find((s) => s.id === group.sectionId) : undefined;
+        const standaloneIndex = isStandalone ? standaloneSectionGroups.findIndex((g) => g.sectionId === group.sectionId) : -1;
+        return (
         <div key={group.sectionId} className="overflow-hidden rounded-md border border-neutral-200">
           <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
             <h4 className="flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wide">
@@ -3278,17 +3317,114 @@ function CategoryTabContent({
                 rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionId)}
               />
               {group.groupLabel && <span className="font-normal normal-case text-neutral-400">— {group.groupLabel}</span>}
+              {isStandalone && section?.summarizeOnProposal && (
+                <span className="ml-2 rounded bg-amber-900 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-amber-200">
+                  Summarized on proposal
+                </span>
+              )}
+              {isStandalone && section?.excludedFromTotals && (
+                <span className="ml-2 rounded bg-red-900 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-red-200">
+                  Excluded from totals -- flagged for review
+                </span>
+              )}
             </h4>
             {!version.isLocked && (
-              <form
-                action={updateSectionItemsCategoryAction.bind(null, estimateId, version.id, group.sectionId)}
-                className="flex items-center gap-1.5 text-neutral-900"
-              >
-                <SelectField label="" name="category" defaultValue={group.categoryName} options={moveCategoryOptions} />
-                <Button variant="secondary" type="submit">
-                  Move section
-                </Button>
-              </form>
+              <div className="flex items-center gap-1.5">
+                {isStandalone && (
+                  <>
+                    <form action={moveFlatSectionProposalOrderAction.bind(null, estimateId, version.id, group.sectionId, bucket.category.name, "up")}>
+                      <button
+                        disabled={standaloneIndex === 0}
+                        className="text-xs text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400"
+                        title="Move up in the Proposal PDF (within this category)"
+                      >
+                        ▲
+                      </button>
+                    </form>
+                    <form action={moveFlatSectionProposalOrderAction.bind(null, estimateId, version.id, group.sectionId, bucket.category.name, "down")}>
+                      <button
+                        disabled={standaloneIndex === standaloneSectionGroups.length - 1}
+                        className="text-xs text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400"
+                        title="Move down in the Proposal PDF (within this category)"
+                      >
+                        ▼
+                      </button>
+                    </form>
+                    <form
+                      action={updateSectionProposalVisibilityForSectionAction.bind(
+                        null,
+                        estimateId,
+                        version.id,
+                        group.sectionId,
+                        !(section?.includeInProposal ?? true),
+                      )}
+                    >
+                      <button
+                        type="submit"
+                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                        title={
+                          (section?.includeInProposal ?? true)
+                            ? "Hide this section from the Proposal PDF"
+                            : "Show this section on the Proposal PDF"
+                        }
+                      >
+                        {(section?.includeInProposal ?? true) ? "Hide from proposal" : "Show on proposal"}
+                      </button>
+                    </form>
+                    <form
+                      action={updateSectionProposalSummaryForSectionAction.bind(
+                        null,
+                        estimateId,
+                        version.id,
+                        group.sectionId,
+                        !section?.summarizeOnProposal,
+                      )}
+                    >
+                      <button
+                        type="submit"
+                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                        title={
+                          section?.summarizeOnProposal
+                            ? "Show this section's full line-item detail on the Proposal PDF"
+                            : "Hide this section's line-item detail on the Proposal PDF, but keep its cost in the total"
+                        }
+                      >
+                        {section?.summarizeOnProposal ? "Show full detail" : "Summarize on proposal"}
+                      </button>
+                    </form>
+                    <form
+                      action={updateSectionExcludedFromTotalsForSectionAction.bind(
+                        null,
+                        estimateId,
+                        version.id,
+                        group.sectionId,
+                        !section?.excludedFromTotals,
+                      )}
+                    >
+                      <button
+                        type="submit"
+                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                        title={
+                          section?.excludedFromTotals
+                            ? "Count this section's cost in the estimate's totals and the client PDF again"
+                            : "Remove this section's cost from the estimate's totals entirely -- for internal reference data that isn't real client scope"
+                        }
+                      >
+                        {section?.excludedFromTotals ? "Include in totals" : "Exclude from totals"}
+                      </button>
+                    </form>
+                  </>
+                )}
+                <form
+                  action={updateSectionItemsCategoryAction.bind(null, estimateId, version.id, group.sectionId)}
+                  className="flex items-center gap-1.5 text-neutral-900"
+                >
+                  <SelectField label="" name="category" defaultValue={group.categoryName} options={moveCategoryOptions} />
+                  <Button variant="secondary" type="submit">
+                    Move section
+                  </Button>
+                </form>
+              </div>
             )}
           </div>
           <div className="p-4">
@@ -3323,7 +3459,8 @@ function CategoryTabContent({
             )}
           </div>
         </div>
-      ))}
+        );
+      })}
       {!version.isLocked && emptySections.length > 0 && (
         <details className="group/add-to-empty border-t border-neutral-200 pt-4">
           <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-full border border-dashed border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 marker:content-none [&::-webkit-details-marker]:hidden">

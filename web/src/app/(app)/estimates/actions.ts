@@ -19,6 +19,7 @@ import {
   deleteLineItem,
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
+  moveFlatSectionProposalOrder,
   moveLineItemsToCategory,
   moveLineItemWithinSection,
   moveSectionOrder,
@@ -223,7 +224,7 @@ export async function updateSectionProposalVisibilityAction(
 ) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
-  await updateSectionProposalVisibility(versionId, groupLabel, includeInProposal);
+  await updateSectionProposalVisibility(versionId, { groupLabel }, includeInProposal);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
@@ -235,7 +236,7 @@ export async function updateSectionProposalSummaryAction(
 ) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
-  await updateSectionProposalSummary(versionId, groupLabel, summarizeOnProposal);
+  await updateSectionProposalSummary(versionId, { groupLabel }, summarizeOnProposal);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
@@ -247,7 +248,7 @@ export async function updateSectionExcludedFromTotalsAction(
 ) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
-  await updateSectionExcludedFromTotals(versionId, groupLabel, excludedFromTotals);
+  await updateSectionExcludedFromTotals(versionId, { groupLabel }, excludedFromTotals);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
@@ -261,6 +262,60 @@ export async function moveSectionProposalOrderAction(
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await moveSectionProposalOrder(versionId, groupLabel, categoryName, direction);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// sectionId-scoped counterparts to the four booth actions above -- for a
+// standalone section (groupLabel: null) shown via the Line Items tab's
+// own flatSectionGroups, which has no groupLabel to scope by (see
+// SectionScope's own comment in estimate-service.ts for why that matters,
+// not just which field name is used).
+export async function updateSectionProposalVisibilityForSectionAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  includeInProposal: boolean,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await updateSectionProposalVisibility(versionId, { sectionId }, includeInProposal);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateSectionProposalSummaryForSectionAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  summarizeOnProposal: boolean,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await updateSectionProposalSummary(versionId, { sectionId }, summarizeOnProposal);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateSectionExcludedFromTotalsForSectionAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  excludedFromTotals: boolean,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await updateSectionExcludedFromTotals(versionId, { sectionId }, excludedFromTotals);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function moveFlatSectionProposalOrderAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  categoryName: string,
+  direction: "up" | "down",
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await moveFlatSectionProposalOrder(versionId, sectionId, categoryName, direction);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

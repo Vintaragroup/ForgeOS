@@ -27,6 +27,7 @@ import {
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
   moveElementGroupOrder,
+  moveFlatSectionProposalOrder,
   moveLineItemsToCategory,
   moveLineItemToEstimate,
   moveLineItemWithinSection,
@@ -1807,7 +1808,7 @@ describe("updateSectionProposalVisibility", () => {
     const sectionA = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
     const sectionB = await addSection(version.id, { name: "Wall Panels", sectionType: "COMPONENT", groupLabel });
 
-    await updateSectionProposalVisibility(version.id, groupLabel, false);
+    await updateSectionProposalVisibility(version.id, { groupLabel }, false);
     const [hiddenA, hiddenB] = await Promise.all([
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
@@ -1815,7 +1816,7 @@ describe("updateSectionProposalVisibility", () => {
     expect(hiddenA.includeInProposal).toBe(false);
     expect(hiddenB.includeInProposal).toBe(false);
 
-    await updateSectionProposalVisibility(version.id, groupLabel, true);
+    await updateSectionProposalVisibility(version.id, { groupLabel }, true);
     const [shownA, shownB] = await Promise.all([
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
@@ -1832,7 +1833,23 @@ describe("updateSectionProposalVisibility", () => {
     await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 20 });
     await lockEstimateVersion(version.id);
 
-    await expect(updateSectionProposalVisibility(version.id, groupLabel, false)).rejects.toThrow();
+    await expect(updateSectionProposalVisibility(version.id, { groupLabel }, false)).rejects.toThrow();
+  });
+
+  it("scoped by sectionId, touches only that one standalone section -- not a sibling section with no groupLabel of its own", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const target = await addSection(version.id, { name: "Design Consulting Fee", sectionType: "CATEGORY", groupLabel: null });
+    const other = await addSection(version.id, { name: "Other", sectionType: "CATEGORY", groupLabel: null });
+
+    await updateSectionProposalVisibility(version.id, { sectionId: target.id }, false);
+
+    const [updatedTarget, updatedOther] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: target.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: other.id } }),
+    ]);
+    expect(updatedTarget.includeInProposal).toBe(false);
+    expect(updatedOther.includeInProposal).toBe(true);
   });
 });
 
@@ -1844,7 +1861,7 @@ describe("updateSectionProposalSummary", () => {
     const sectionA = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
     const sectionB = await addSection(version.id, { name: "Wall Panels", sectionType: "COMPONENT", groupLabel });
 
-    await updateSectionProposalSummary(version.id, groupLabel, true);
+    await updateSectionProposalSummary(version.id, { groupLabel }, true);
     const [summarizedA, summarizedB] = await Promise.all([
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
@@ -1852,7 +1869,7 @@ describe("updateSectionProposalSummary", () => {
     expect(summarizedA.summarizeOnProposal).toBe(true);
     expect(summarizedB.summarizeOnProposal).toBe(true);
 
-    await updateSectionProposalSummary(version.id, groupLabel, false);
+    await updateSectionProposalSummary(version.id, { groupLabel }, false);
     const [fullA, fullB] = await Promise.all([
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
@@ -1867,7 +1884,7 @@ describe("updateSectionProposalSummary", () => {
     const groupLabel = "SECTION 211";
     const section = await addSection(version.id, { name: "BeMatrix", sectionType: "COMPONENT", groupLabel });
 
-    await updateSectionProposalSummary(version.id, groupLabel, true);
+    await updateSectionProposalSummary(version.id, { groupLabel }, true);
 
     const updated = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
     expect(updated.summarizeOnProposal).toBe(true);
@@ -1882,7 +1899,23 @@ describe("updateSectionProposalSummary", () => {
     await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 20 });
     await lockEstimateVersion(version.id);
 
-    await expect(updateSectionProposalSummary(version.id, groupLabel, true)).rejects.toThrow();
+    await expect(updateSectionProposalSummary(version.id, { groupLabel }, true)).rejects.toThrow();
+  });
+
+  it("scoped by sectionId, touches only that one standalone section", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const target = await addSection(version.id, { name: "Design Consulting Fee", sectionType: "CATEGORY", groupLabel: null });
+    const other = await addSection(version.id, { name: "Other", sectionType: "CATEGORY", groupLabel: null });
+
+    await updateSectionProposalSummary(version.id, { sectionId: target.id }, true);
+
+    const [updatedTarget, updatedOther] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: target.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: other.id } }),
+    ]);
+    expect(updatedTarget.summarizeOnProposal).toBe(true);
+    expect(updatedOther.summarizeOnProposal).toBe(false);
   });
 });
 
@@ -1894,7 +1927,7 @@ describe("updateSectionExcludedFromTotals", () => {
     const sectionA = await addSection(version.id, { name: "Labor", sectionType: "COMPONENT", groupLabel });
     const sectionB = await addSection(version.id, { name: "Shipping", sectionType: "COMPONENT", groupLabel });
 
-    await updateSectionExcludedFromTotals(version.id, groupLabel, true);
+    await updateSectionExcludedFromTotals(version.id, { groupLabel }, true);
     const [excludedA, excludedB] = await Promise.all([
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
@@ -1902,7 +1935,7 @@ describe("updateSectionExcludedFromTotals", () => {
     expect(excludedA.excludedFromTotals).toBe(true);
     expect(excludedB.excludedFromTotals).toBe(true);
 
-    await updateSectionExcludedFromTotals(version.id, groupLabel, false);
+    await updateSectionExcludedFromTotals(version.id, { groupLabel }, false);
     const [includedA, includedB] = await Promise.all([
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
       db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
@@ -1928,7 +1961,7 @@ describe("updateSectionExcludedFromTotals", () => {
     const before = await recomputeVersionTotals(version.id);
     expect(before.totalCost.toNumber()).toBe(21100); // 1000 real + 20100 comparison
 
-    await updateSectionExcludedFromTotals(version.id, groupLabel, true);
+    await updateSectionExcludedFromTotals(version.id, { groupLabel }, true);
 
     const after = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
     expect(after.totalCost.toNumber()).toBe(1000); // comparison line item's cost no longer counted
@@ -1941,7 +1974,7 @@ describe("updateSectionExcludedFromTotals", () => {
     const groupLabel = "Bid Comparison";
     const section = await addSection(version.id, { name: "Labor", sectionType: "COMPONENT", groupLabel });
 
-    await updateSectionExcludedFromTotals(version.id, groupLabel, true);
+    await updateSectionExcludedFromTotals(version.id, { groupLabel }, true);
 
     const updated = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
     expect(updated.excludedFromTotals).toBe(true);
@@ -1957,7 +1990,27 @@ describe("updateSectionExcludedFromTotals", () => {
     await addLineItem(version.id, section.id, { lineType: "LABOR", description: "Rate", qty: 1, unitCost: 20 });
     await lockEstimateVersion(version.id);
 
-    await expect(updateSectionExcludedFromTotals(version.id, groupLabel, true)).rejects.toThrow();
+    await expect(updateSectionExcludedFromTotals(version.id, { groupLabel }, true)).rejects.toThrow();
+  });
+
+  it("scoped by sectionId, touches only that one standalone section and still recomputes totals correctly", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const target = await addSection(version.id, { name: "Bid Comparison", sectionType: "CATEGORY", groupLabel: null });
+    await addLineItem(version.id, target.id, { lineType: "MATERIAL", description: "Comparison rate", qty: 1, unitCost: 500 });
+    const other = await addSection(version.id, { name: "Other", sectionType: "CATEGORY", groupLabel: null });
+    await addLineItem(version.id, other.id, { lineType: "MATERIAL", description: "Real scope", qty: 1, unitCost: 300 });
+
+    await updateSectionExcludedFromTotals(version.id, { sectionId: target.id }, true);
+
+    const [updatedTarget, updatedOther, updatedVersion] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: target.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: other.id } }),
+      db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } }),
+    ]);
+    expect(updatedTarget.excludedFromTotals).toBe(true);
+    expect(updatedOther.excludedFromTotals).toBe(false);
+    expect(updatedVersion.totalCost.toNumber()).toBe(300);
   });
 });
 
@@ -2175,6 +2228,95 @@ describe("moveSectionProposalOrder", () => {
     await lockEstimateVersion(version.id);
 
     await expect(moveSectionProposalOrder(version.id, "Booth A", "Labor", "down")).rejects.toThrow();
+  });
+});
+
+describe("moveFlatSectionProposalOrder", () => {
+  async function makeStandaloneSection(versionId: string, name: string, categoryName: string) {
+    const section = await addSection(versionId, { name, sectionType: "CATEGORY", groupLabel: null });
+    await addLineItem(versionId, section.id, {
+      lineType: "MATERIAL",
+      description: `${name} fee`,
+      category: categoryName,
+      qty: 1,
+      unitCost: 100,
+    });
+    return section;
+  }
+
+  it("moves a standalone section up/down among only the OTHER standalone sections in one category, leaving proposalSortOrder untouched for the rest", async () => {
+    await makeCategory("Professional Services", "professional_services");
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const sectionA = await makeStandaloneSection(version.id, "Design Fee", "Professional Services");
+    const sectionB = await makeStandaloneSection(version.id, "Engineering Fee", "Professional Services");
+    const sectionC = await makeStandaloneSection(version.id, "Permit Fee", "Professional Services");
+
+    // Starting order is alphabetical (every proposalSortOrder defaults to
+    // 0, so the tiebreak applies): Design, Engineering, Permit.
+    await moveFlatSectionProposalOrder(version.id, sectionC.id, "Professional Services", "up");
+
+    const [updatedA, updatedB, updatedC] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionC.id } }),
+    ]);
+    expect(updatedA.proposalSortOrder).toBe(0);
+    expect(updatedB.proposalSortOrder).toBe(2);
+    expect(updatedC.proposalSortOrder).toBe(1);
+  });
+
+  it("does nothing when asked to move the first section up or the last section down", async () => {
+    await makeCategory("Professional Services", "professional_services");
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const sectionA = await makeStandaloneSection(version.id, "Design Fee", "Professional Services");
+    const sectionB = await makeStandaloneSection(version.id, "Engineering Fee", "Professional Services");
+
+    await moveFlatSectionProposalOrder(version.id, sectionA.id, "Professional Services", "up");
+    await moveFlatSectionProposalOrder(version.id, sectionB.id, "Professional Services", "down");
+
+    const [updatedA, updatedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(updatedA.proposalSortOrder).toBe(0);
+    expect(updatedB.proposalSortOrder).toBe(0);
+  });
+
+  it("ignores a real booth sharing the same category -- a booth is never a standalone section's sibling here", async () => {
+    await makeCategory("Labor", "labor");
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const booth = await addSection(version.id, { name: "Labor", sectionType: "COMPONENT", groupLabel: "Booth A" });
+    await db.estimateSection.update({ where: { id: booth.id }, data: { buildType: "RENTAL" } });
+    await addLineItem(version.id, booth.id, { lineType: "LABOR", description: "Booth A labor", category: "Labor", qty: 1, unitCost: 100 });
+    // Alphabetical tiebreak (both default to proposalSortOrder 0) puts
+    // "Overtime Buffer" (B) before "Show Site Lead" (A) to start.
+    const sectionA = await makeStandaloneSection(version.id, "Show Site Lead", "Labor");
+    const sectionB = await makeStandaloneSection(version.id, "Overtime Buffer", "Labor");
+
+    await moveFlatSectionProposalOrder(version.id, sectionB.id, "Labor", "down");
+
+    const [updatedBooth, updatedA, updatedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: booth.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(updatedBooth.proposalSortOrder).toBe(0); // never touched -- not a standalone sibling
+    expect(updatedA.proposalSortOrder).toBe(0);
+    expect(updatedB.proposalSortOrder).toBe(1);
+  });
+
+  it("rejects on a locked version", async () => {
+    await makeCategory("Professional Services", "professional_services");
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const sectionA = await makeStandaloneSection(version.id, "Design Fee", "Professional Services");
+    await makeStandaloneSection(version.id, "Engineering Fee", "Professional Services");
+    await lockEstimateVersion(version.id);
+
+    await expect(moveFlatSectionProposalOrder(version.id, sectionA.id, "Professional Services", "down")).rejects.toThrow();
   });
 });
 

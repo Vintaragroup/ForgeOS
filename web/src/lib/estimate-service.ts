@@ -19,6 +19,7 @@ import type {
 import { inferCategoryFromDescription, mapDesignCostCategoryToCanonical } from "@/lib/line-item-category";
 import {
   boothGroupsByCategoryForEditing,
+  bucketLineItemsByCategory,
   groupBoothLineItemsForEditing,
   resolveEffectiveCategory,
   resolveTypeKeyForCategoryKey,
@@ -303,56 +304,72 @@ export async function updateSectionBuildType(
   });
 }
 
-// Whole-booth Proposal PDF visibility -- same updateMany-by-groupLabel
-// pattern as updateSectionBuildType above, so hiding a booth hides it
-// everywhere it appears (every category tab its items touch), not just
-// wherever the toggle was clicked. See EstimateSection.includeInProposal's
-// own schema comment for why this is booth-wide while proposalSortOrder
-// below deliberately isn't.
+// Shared by the three proposal-facing section toggles below -- a real
+// booth is often several EstimateSection rows sharing one groupLabel, so
+// toggling "the booth" has to updateMany by that label to keep every one
+// of them in sync (same reasoning as updateSectionBuildType above). A
+// standalone/flat section (groupLabel: null, e.g. one added via "Add
+// section" with Group left blank) has no such shared identity -- and
+// { groupLabel: null } would match EVERY other flat section in the
+// version too, not just this one -- so it's addressed by its own
+// sectionId instead. Same shape as moveLineItemsToCategory's own
+// CategoryMoveScope.
+export type SectionScope = { sectionId: string } | { groupLabel: string };
+
+function sectionScopeWhere(estimateVersionId: string, scope: SectionScope) {
+  return "sectionId" in scope
+    ? { id: scope.sectionId, estimateVersionId }
+    : { estimateVersionId, groupLabel: scope.groupLabel };
+}
+
+// Whole-booth (or single standalone section's) Proposal PDF visibility --
+// see sectionScopeWhere above for why this is scoped by groupLabel for a
+// real booth but by sectionId for a standalone one. See
+// EstimateSection.includeInProposal's own schema comment for why this is
+// booth-wide while proposalSortOrder below deliberately isn't.
 export async function updateSectionProposalVisibility(
   estimateVersionId: string,
-  groupLabel: string,
+  scope: SectionScope,
   includeInProposal: boolean,
 ) {
   await assertUnlocked(estimateVersionId);
   await db.estimateSection.updateMany({
-    where: { estimateVersionId, groupLabel },
+    where: sectionScopeWhere(estimateVersionId, scope),
     data: { includeInProposal },
   });
 }
 
-// Same booth-wide updateMany-by-groupLabel pattern as
-// updateSectionProposalVisibility above -- see
+// Same scoping as updateSectionProposalVisibility above -- see
 // EstimateSection.summarizeOnProposal's own schema comment for how this
 // differs from that one (this never removes the booth's cost from any
 // total, only its itemized detail on the client-facing PDF).
 export async function updateSectionProposalSummary(
   estimateVersionId: string,
-  groupLabel: string,
+  scope: SectionScope,
   summarizeOnProposal: boolean,
 ) {
   await assertUnlocked(estimateVersionId);
   await db.estimateSection.updateMany({
-    where: { estimateVersionId, groupLabel },
+    where: sectionScopeWhere(estimateVersionId, scope),
     data: { summarizeOnProposal },
   });
 }
 
-// Same booth-wide updateMany-by-groupLabel pattern as
-// updateSectionProposalVisibility/updateSectionProposalSummary above --
-// see EstimateSection.excludedFromTotals's own schema comment for how
-// this differs from those two: this one DOES change the estimate's own
+// Same scoping as updateSectionProposalVisibility/
+// updateSectionProposalSummary above -- see
+// EstimateSection.excludedFromTotals's own schema comment for how this
+// differs from those two: this one DOES change the estimate's own
 // numbers (computeVersionTotals skips excluded sections entirely), so it
 // recomputes and persists totalCost/grandTotal immediately rather than
 // waiting for some unrelated line-item edit to trigger it.
 export async function updateSectionExcludedFromTotals(
   estimateVersionId: string,
-  groupLabel: string,
+  scope: SectionScope,
   excludedFromTotals: boolean,
 ) {
   await assertUnlocked(estimateVersionId);
   await db.estimateSection.updateMany({
-    where: { estimateVersionId, groupLabel },
+    where: sectionScopeWhere(estimateVersionId, scope),
     data: { excludedFromTotals },
   });
   await recomputeVersionTotals(estimateVersionId);
@@ -441,6 +458,69 @@ export async function moveSectionProposalOrder(
     UPDATE "estimate_sections" AS es
     SET "proposalSortOrder" = v.sort_order
     FROM (VALUES ${Prisma.join(updates.map((u) => Prisma.sql`(${u.id}::text, ${u.sortOrder}::int)`))}) AS v(id, sort_order)
+    WHERE es.id = v.id
+  `;
+}
+
+// Standalone-section counterpart to moveSectionProposalOrder above -- a
+// section with no groupLabel (e.g. one added via "Add section" with
+// Group left blank) is never part of a multi-section booth, so its
+// siblings here are the OTHER standalone sections showing in this same
+// category tab (bucketLineItemsByCategory's own sectionGroups, filtered
+// to groupLabel: null -- the exact set the Line Items tab renders as
+// flatSectionGroups), not boothGroupsByCategoryForEditing's booths.
+// Reuses the same proposalSortOrder field a booth's reorder writes to --
+// the two lists render as separate blocks (booths, then standalone
+// sections) so they never need to interleave against each other.
+export async function moveFlatSectionProposalOrder(
+  estimateVersionId: string,
+  sectionId: string,
+  categoryName: string,
+  direction: "up" | "down",
+) {
+  await assertUnlocked(estimateVersionId);
+
+  const [sections, categories] = await Promise.all([
+    db.estimateSection.findMany({
+      where: { estimateVersionId },
+      select: {
+        id: true,
+        name: true,
+        groupLabel: true,
+        buildType: true,
+        description: true,
+        pendingDescription: true,
+        proposalSortOrder: true,
+        lineItems: { select: { id: true, category: true } },
+      },
+    }),
+    db.category.findMany({ where: { deletedAt: null }, select: { id: true, name: true, key: true, parentId: true } }),
+  ]);
+
+  const sectionsById = new Map(sections.map((s) => [s.id, s]));
+  const bucket = bucketLineItemsByCategory(sections, categories).find((b) => b.category.name === categoryName);
+  const siblings = (bucket?.sectionGroups ?? [])
+    .filter((g) => !g.groupLabel)
+    .map((g) => ({
+      sectionId: g.sectionId,
+      sortKey: sectionsById.get(g.sectionId)?.proposalSortOrder ?? 0,
+      name: g.sectionName,
+    }));
+  // Same stable alphabetical tiebreak as moveSectionProposalOrder above.
+  siblings.sort((a, b) => a.sortKey - b.sortKey || a.name.localeCompare(b.name));
+
+  const index = siblings.findIndex((s) => s.sectionId === sectionId);
+  if (index === -1) return;
+  const swapWith = direction === "up" ? index - 1 : index + 1;
+  if (swapWith < 0 || swapWith >= siblings.length) return;
+
+  const reordered = [...siblings];
+  [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
+
+  await db.$executeRaw`
+    UPDATE "estimate_sections" AS es
+    SET "proposalSortOrder" = v.sort_order
+    FROM (VALUES ${Prisma.join(reordered.map((s, i) => Prisma.sql`(${s.sectionId}::text, ${i}::int)`))}) AS v(id, sort_order)
     WHERE es.id = v.id
   `;
 }

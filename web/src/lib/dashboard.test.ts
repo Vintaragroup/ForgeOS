@@ -48,7 +48,7 @@ async function makeFlaggedOpportunity(showName: string, ownerId: string | null, 
     qty: 1,
     unitCost: cost,
   });
-  await updateSectionExcludedFromTotals(version.id, groupLabel, true);
+  await updateSectionExcludedFromTotals(version.id, { groupLabel }, true);
   return { opportunity, estimateId: estimate.id, groupLabel };
 }
 
