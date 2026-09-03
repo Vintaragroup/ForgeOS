@@ -3252,23 +3252,37 @@ function CategoryTabContent({
         </div>
       )}
       {flatSectionGroups.map((group) => (
-        <div key={group.sectionId} className="border-t border-neutral-200 pt-4 first:border-t-0 first:pt-0">
-          <h4 className="mb-3 flex flex-wrap items-center gap-2 text-sm font-medium text-neutral-700">
-            <SectionHeadingEditor
-              fallbackLabel={group.sectionName}
-              description={group.description}
-              pendingDescription={group.pendingDescription}
-              isMapped={group.isMapped}
-              isLocked={version.isLocked}
-              suggestAction={suggestSectionDescriptionAction.bind(null, estimateId, group.sectionId)}
-              updateAction={updateSectionDescriptionAction.bind(null, estimateId, group.sectionId)}
-              rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionId)}
-            />
-            {group.groupLabel && <span className="font-normal text-neutral-500">— {group.groupLabel}</span>}
+        // Same dark header treatment as a tagged booth's H1 above --
+        // otherwise this renders lighter (a plain neutral-700 heading,
+        // no dark bar) purely because it has no groupLabel/buildType yet,
+        // which reads as "this wasn't created the same way" even though
+        // it's the exact same kind of top-level section (confirmed live:
+        // a section added via "Add section" with Group left blank looked
+        // visually demoted next to every AI-imported or booth-tagged
+        // section). Still genuinely different underneath -- no Hide/
+        // Summarize/Exclude-from-totals/Untag/merge controls, since those
+        // are booth-specific concepts that don't apply to a project-wide
+        // section -- just restyled to match.
+        <div key={group.sectionId} className="overflow-hidden rounded-md border border-neutral-200">
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
+            <h4 className="flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wide">
+              <SectionHeadingEditor
+                fallbackLabel={group.sectionName}
+                description={group.description}
+                pendingDescription={group.pendingDescription}
+                isMapped={group.isMapped}
+                isLocked={version.isLocked}
+                theme="dark"
+                suggestAction={suggestSectionDescriptionAction.bind(null, estimateId, group.sectionId)}
+                updateAction={updateSectionDescriptionAction.bind(null, estimateId, group.sectionId)}
+                rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionId)}
+              />
+              {group.groupLabel && <span className="font-normal normal-case text-neutral-400">— {group.groupLabel}</span>}
+            </h4>
             {!version.isLocked && (
               <form
                 action={updateSectionItemsCategoryAction.bind(null, estimateId, version.id, group.sectionId)}
-                className="ml-auto flex items-center gap-1.5"
+                className="flex items-center gap-1.5 text-neutral-900"
               >
                 <SelectField label="" name="category" defaultValue={group.categoryName} options={moveCategoryOptions} />
                 <Button variant="secondary" type="submit">
@@ -3276,36 +3290,38 @@ function CategoryTabContent({
                 </Button>
               </form>
             )}
-          </h4>
-          <SectionLineItemsBlock
-            lineItems={group.lineItems}
-            version={version}
-            estimateId={estimateId}
-            opportunityId={opportunityId}
-            laborRates={laborRates}
-            categoryOptions={categoryOptions}
-          />
-          {version.isLocked && (
-            <>
-              <p className="mb-3 text-xs text-neutral-400 sm:hidden">← Scroll the table for Actual &amp; Variance</p>
-              <div className="mb-3 flex flex-col gap-2">
-                {group.lineItems.map((li) => (
-                  <RecordActualForm key={li.id} estimateId={estimateId} lineItem={li} users={users} />
-                ))}
-              </div>
-            </>
-          )}
-          {!version.isLocked && (
-            <AddLineItemForm
+          </div>
+          <div className="p-4">
+            <SectionLineItemsBlock
+              lineItems={group.lineItems}
+              version={version}
               estimateId={estimateId}
-              versionId={version.id}
-              sectionId={group.sectionId}
-              attachments={attachments}
+              opportunityId={opportunityId}
               laborRates={laborRates}
               categoryOptions={categoryOptions}
-              defaultCategory={bucket.category.name}
             />
-          )}
+            {version.isLocked && (
+              <>
+                <p className="mb-3 text-xs text-neutral-400 sm:hidden">← Scroll the table for Actual &amp; Variance</p>
+                <div className="mb-3 flex flex-col gap-2">
+                  {group.lineItems.map((li) => (
+                    <RecordActualForm key={li.id} estimateId={estimateId} lineItem={li} users={users} />
+                  ))}
+                </div>
+              </>
+            )}
+            {!version.isLocked && (
+              <AddLineItemForm
+                estimateId={estimateId}
+                versionId={version.id}
+                sectionId={group.sectionId}
+                attachments={attachments}
+                laborRates={laborRates}
+                categoryOptions={categoryOptions}
+                defaultCategory={bucket.category.name}
+              />
+            )}
+          </div>
         </div>
       ))}
       {!version.isLocked && emptySections.length > 0 && (
