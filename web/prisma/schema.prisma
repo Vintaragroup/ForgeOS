@@ -336,6 +336,12 @@ enum AiFeature {
   VENDOR_LINE_MATCH
   SPREADSHEET_LINE_ITEMS
   SECTION_DESCRIPTION
+  // Booth-level, several sentences describing physical scope for the
+  // Proposal PDF's "Summarize on proposal" body text -- distinct from
+  // SECTION_DESCRIPTION (a 2-8 word heading) since it's a materially
+  // longer generation task with its own token-cost profile worth
+  // tracking separately.
+  BOOTH_PROPOSAL_SUMMARY
   // Chat roadmap Phase 3: embedding a document's chunks at analysis time
   // (document-embedding-service.ts's indexDocument) and embedding each
   // chat question at retrieval time both record here -- tracked apart
@@ -1102,6 +1108,20 @@ model EstimateSection {
   // encountered for a given booth (groupBoothLineItemsForEditing).
   boothDescription        String?
   boothPendingDescription String?
+
+  // A few client-readable sentences describing this booth's physical
+  // components and scope -- shown on the Proposal PDF in place of the
+  // itemized detail when summarizeOnProposal above is true (a bare
+  // name+total row alone read as "hidden," not "summarized," to a real
+  // estimator -- confirmed live). Unlike boothDescription above (a short
+  // heading replacement, always shown, drives no PDF content itself),
+  // this is body text that only ever reaches proposal-pdf.tsx's
+  // summarized-booth branch; the Line Items tab (editing view) never
+  // renders it. Same propose (AI, boothPendingSummary) -> approve
+  // (boothSummary) shape, and the same booth-wide updateMany-by-groupLabel
+  // sync, as boothDescription/boothPendingDescription.
+  boothSummary        String?
+  boothPendingSummary String?
 
   // Whole-group PDF visibility -- hides this section and every one of its
   // line items from the Proposal PDF regardless of each item's own

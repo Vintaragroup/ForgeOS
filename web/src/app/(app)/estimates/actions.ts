@@ -8,6 +8,7 @@ import {
   archiveEstimate,
   assertEstimateNotArchived,
   clearBoothPendingDescription,
+  clearBoothPendingSummary,
   clearCategoryMarginOverride,
   clearSectionPendingDescription,
   confirmDraftLineItem,
@@ -27,6 +28,7 @@ import {
   setCategoryMarginOverride,
   unarchiveEstimate,
   updateBoothDescription,
+  updateBoothSummary,
   updateLineItem,
   updateMarginTarget,
   updateSectionBuildType,
@@ -35,7 +37,7 @@ import {
   updateSectionProposalSummary,
   updateSectionProposalVisibility,
 } from "@/lib/estimate-service";
-import { suggestBoothDescription, suggestSectionDescription } from "@/lib/ai/section-description-service";
+import { suggestBoothDescription, suggestBoothSummary, suggestSectionDescription } from "@/lib/ai/section-description-service";
 import { approveEstimateVersion, generateProposal } from "@/lib/proposal-service";
 import { inferCategoryFromDescription, inferIsClientOwned } from "@/lib/line-item-category";
 import { recordCostActual } from "@/lib/cost-actual-service";
@@ -375,6 +377,36 @@ export async function clearBoothPendingDescriptionAction(estimateId: string, ver
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await clearBoothPendingDescription(versionId, groupLabel);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Same three actions as the booth description trio above, for the
+// few-sentence Proposal PDF summary body text (EstimateSection.boothSummary).
+export async function suggestBoothSummaryAction(estimateId: string, versionId: string, groupLabel: string) {
+  const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await suggestBoothSummary(versionId, groupLabel, user.id);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateBoothSummaryAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const summary = String(formData.get("summary") ?? "").trim();
+  if (!summary) throw new Error("Summary is required");
+  await updateBoothSummary(versionId, groupLabel, summary);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function clearBoothPendingSummaryAction(estimateId: string, versionId: string, groupLabel: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await clearBoothPendingSummary(versionId, groupLabel);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

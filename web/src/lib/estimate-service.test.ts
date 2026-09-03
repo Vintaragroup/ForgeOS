@@ -40,6 +40,8 @@ import {
   updateBoothDescription,
   updateLineItem,
   updateMarginTarget,
+  updateBoothSummary,
+  clearBoothPendingSummary,
   updateSectionDescription,
   updateSectionExcludedFromTotals,
   updateSectionProposalSummary,
@@ -1883,6 +1885,54 @@ describe("updateSectionExcludedFromTotals", () => {
     await lockEstimateVersion(version.id);
 
     await expect(updateSectionExcludedFromTotals(version.id, groupLabel, true)).rejects.toThrow();
+  });
+});
+
+describe("updateBoothSummary / clearBoothPendingSummary", () => {
+  it("sets boothSummary and clears any pending suggestion, across every section sharing the groupLabel", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "FS - Hitting Bay Wall";
+    const sectionA = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT", groupLabel });
+    const sectionB = await addSection(version.id, { name: "Structure", sectionType: "COMPONENT", groupLabel });
+    await db.estimateSection.updateMany({ where: { estimateVersionId: version.id, groupLabel }, data: { boothPendingSummary: "AI draft" } });
+
+    await updateBoothSummary(version.id, groupLabel, "A custom hitting bay wall with integrated monitor mounts.");
+
+    const [updatedA, updatedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(updatedA.boothSummary).toBe("A custom hitting bay wall with integrated monitor mounts.");
+    expect(updatedA.boothPendingSummary).toBeNull();
+    expect(updatedB.boothSummary).toBe("A custom hitting bay wall with integrated monitor mounts.");
+    expect(updatedB.boothPendingSummary).toBeNull();
+  });
+
+  it("clearBoothPendingSummary only clears the pending suggestion, leaving an approved boothSummary untouched", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "FS - Hitting Bay Wall";
+    await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT", groupLabel });
+    await updateBoothSummary(version.id, groupLabel, "Approved summary.");
+    await db.estimateSection.updateMany({ where: { estimateVersionId: version.id, groupLabel }, data: { boothPendingSummary: "New AI draft" } });
+
+    await clearBoothPendingSummary(version.id, groupLabel);
+
+    const section = await db.estimateSection.findFirstOrThrow({ where: { estimateVersionId: version.id, groupLabel } });
+    expect(section.boothSummary).toBe("Approved summary.");
+    expect(section.boothPendingSummary).toBeNull();
+  });
+
+  it("rejects on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "FS - Hitting Bay Wall";
+    const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT", groupLabel });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    await expect(updateBoothSummary(version.id, groupLabel, "Summary")).rejects.toThrow();
   });
 });
 

@@ -234,6 +234,27 @@ describe("groupBoothLineItems", () => {
     expect(booth.elementGroups[0].items).toHaveLength(2);
   });
 
+  it("carries boothSummary through to the BoothGroup, defaulting null when unset", () => {
+    const withSummary: ProposalViewSection[] = [
+      {
+        name: "Platform",
+        groupLabel: "SECTION 231",
+        summarizeOnProposal: true,
+        boothSummary: "A custom hitting bay wall with integrated monitor mounts.",
+        lineItems: [li({ id: "a", totalCost: 100 })],
+      },
+    ];
+    const withoutSummary: ProposalViewSection[] = [
+      { name: "Platform", groupLabel: "SECTION 428", summarizeOnProposal: true, lineItems: [li({ id: "b", totalCost: 100 })] },
+    ];
+
+    const [boothWithSummary] = groupBoothLineItems(withSummary);
+    const [boothWithoutSummary] = groupBoothLineItems(withoutSummary);
+
+    expect(boothWithSummary.boothSummary).toBe("A custom hitting bay wall with integrated monitor mounts.");
+    expect(boothWithoutSummary.boothSummary).toBeNull();
+  });
+
   it("excludes a section whose includeInProposal is false, and a line item whose own flag is false", () => {
     const sections: ProposalViewSection[] = [
       { name: "BeMatrix", groupLabel: "SECTION 211", includeInProposal: false, lineItems: [li({ id: "a", totalCost: 100 })] },

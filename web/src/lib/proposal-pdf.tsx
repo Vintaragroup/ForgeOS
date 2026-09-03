@@ -161,6 +161,10 @@ const styles = StyleSheet.create({
     color: BRAND.white,
   },
   boothHeaderTotal: { fontSize: 8, fontWeight: 700, color: BRAND.white },
+  // Body text for a summarized booth (EstimateSection.boothSummary) --
+  // same font size/line-height as professionalServicesItem below, the
+  // other place this document already sets prose rather than a table row.
+  boothSummaryText: { fontSize: 8.5, lineHeight: 1.6, marginBottom: 10, color: "#333" },
   elementTypeSection: { marginLeft: 10, marginBottom: 8 },
   elementTypeHeaderRow: {
     flexDirection: "row",
@@ -757,12 +761,17 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                         {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
                       </Text>
                     </View>
-                    {/* summarizeOnProposal renders only the header row
-                        above -- booth.subtotal already includes every
-                        item regardless, so the total stays correct with
-                        nothing itemized underneath. See
-                        EstimateSection.summarizeOnProposal's own schema
-                        comment. */}
+                    {/* summarizeOnProposal skips itemized detail below --
+                        booth.subtotal already includes every item
+                        regardless, so the total stays correct either way.
+                        A written boothSummary (a few sentences, see that
+                        field's own schema comment) fills the gap a bare
+                        name+total row would otherwise leave; with neither
+                        set yet, the booth renders as just its header,
+                        same as before this existed. */}
+                    {booth.summarizeOnProposal && booth.boothSummary && (
+                      <Text style={styles.boothSummaryText}>{booth.boothSummary}</Text>
+                    )}
                     {!booth.summarizeOnProposal && booth.elementGroups.map((group) => (
                       <View key={group.elementType} style={styles.elementTypeSection}>
                         <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>

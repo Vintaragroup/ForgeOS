@@ -537,6 +537,26 @@ export async function clearBoothPendingDescription(estimateVersionId: string, gr
   });
 }
 
+// Same propose/approve/reject shape as updateBoothDescription/
+// clearBoothPendingDescription above, for the few-sentence body text a
+// summarized booth shows on the Proposal PDF instead of its itemized
+// detail -- see EstimateSection.boothSummary's own schema comment.
+export async function updateBoothSummary(estimateVersionId: string, groupLabel: string, summary: string) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { boothSummary: summary, boothPendingSummary: null },
+  });
+}
+
+export async function clearBoothPendingSummary(estimateVersionId: string, groupLabel: string) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { boothPendingSummary: null },
+  });
+}
+
 // A category move's scope -- a whole section (the per-section "Move
 // section" dropdown, for a section with no groupLabel so ineligible for the
 // Rental/Custom Build tagging above, e.g. a generic "Platform" section whose

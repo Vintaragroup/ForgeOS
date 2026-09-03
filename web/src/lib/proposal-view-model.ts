@@ -76,6 +76,10 @@ export interface ProposalViewSection {
   // same reasoning as includeInProposal above: undefined means "real
   // scope, counted as normal."
   excludedFromTotals?: boolean;
+  // A few client-readable sentences shown on the Proposal PDF in place of
+  // itemized detail when summarizeOnProposal above is true -- see
+  // EstimateSection.boothSummary's own schema comment.
+  boothSummary?: string | null;
   lineItems: ProposalViewLineItem[];
 }
 
@@ -415,6 +419,11 @@ export interface BoothGroup {
   // in `subtotal` above, unaffected) and skips elementGroups entirely
   // when this is true.
   summarizeOnProposal: boolean;
+  // Body text proposal-pdf.tsx renders in place of the skipped
+  // elementGroups above when summarizeOnProposal is true -- see
+  // EstimateSection.boothSummary's own schema comment. Null until an
+  // estimator writes or approves one.
+  boothSummary: string | null;
 }
 
 // Companion to aggregateByCategory, not a replacement -- reads sections
@@ -448,6 +457,9 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // above or the subtotal math below -- only proposal-pdf.tsx's own
   // rendering decision skips elementGroups for a summarized booth.
   const boothSummarize = new Map<string, boolean>();
+  // Same "first section wins" convention as boothSummarize above -- see
+  // EstimateSection.boothSummary's own schema comment.
+  const boothSummaryText = new Map<string, string | null>();
 
   for (const section of sections) {
     if (!section.groupLabel || section.includeInProposal === false) continue;
@@ -461,6 +473,9 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     elementSortOrder.set(elementKey, Math.min(elementSortOrder.get(elementKey) ?? Infinity, section.sortOrder ?? 0));
     if (!boothSummarize.has(boothLabel)) {
       boothSummarize.set(boothLabel, section.summarizeOnProposal ?? false);
+    }
+    if (!boothSummaryText.has(boothLabel)) {
+      boothSummaryText.set(boothLabel, section.boothSummary ?? null);
     }
 
     let byElementType = byBooth.get(boothLabel);
@@ -542,7 +557,13 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
         .filter((g) => g.items.length > 0);
       if (elementGroups.length === 0) return null;
       const subtotal = elementGroups.reduce((sum, g) => sum + g.subtotal, 0);
-      return { boothLabel, elementGroups, subtotal, summarizeOnProposal: boothSummarize.get(boothLabel) ?? false };
+      return {
+        boothLabel,
+        elementGroups,
+        subtotal,
+        summarizeOnProposal: boothSummarize.get(boothLabel) ?? false,
+        boothSummary: boothSummaryText.get(boothLabel) ?? null,
+      };
     })
     .filter((g): g is BoothGroup => g !== null);
 }

@@ -158,3 +158,96 @@ export async function suggestBoothDescription(
 
   return parsed.description;
 }
+
+function buildSummarySchema() {
+  return {
+    name: "booth_proposal_summary",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        summary: {
+          type: "string",
+          description:
+            "2-4 plain-English sentences describing this booth's physical components and scope, for a client " +
+            "reading a Proposal PDF where the itemized line items are hidden. Describe what's being built (materials, " +
+            "structure, finishes, graphics, lighting -- whatever actually applies), not the raw category/acquisition " +
+            "method the line items were filed under, and never mention prices, costs, or quantities.",
+        },
+      },
+      required: ["summary"],
+    },
+  };
+}
+
+// Booth-level "Summarize on proposal" body text -- see
+// EstimateSection.boothSummary's own schema comment. Same propose-then-
+// commit shape as suggestBoothDescription above, but a materially longer
+// generation task (a few sentences of real scope description, not a
+// short title), which is why it's tracked under its own AiFeature.
+export async function suggestBoothSummary(
+  estimateVersionId: string,
+  groupLabel: string,
+  userId: string | null,
+): Promise<string> {
+  await assertUnlocked(estimateVersionId);
+
+  const sections = await db.estimateSection.findMany({
+    where: { estimateVersionId, groupLabel },
+    include: { lineItems: { select: { description: true }, take: MAX_ITEM_DESCRIPTIONS } },
+  });
+  if (sections.length === 0) throw new Error(`No sections found for booth "${groupLabel}".`);
+
+  const version = await db.estimateVersion.findUniqueOrThrow({
+    where: { id: estimateVersionId },
+    select: { estimate: { select: { opportunityId: true } } },
+  });
+
+  const client = getOpenAiClient();
+  const itemList = sections
+    .flatMap((s) => s.lineItems.map((li) => li.description))
+    .slice(0, MAX_ITEM_DESCRIPTIONS)
+    .map((d) => `- ${d}`)
+    .join("\n");
+
+  const completion = await client.chat.completions.create({
+    model: BASIC_MODEL,
+    temperature: 0.2,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You write short, client-facing scope summaries for one booth/exhibit component in a trade-show " +
+          "proposal, given its raw booth label and the list of materials/line items across every part of it. " +
+          "The client will read this instead of an itemized breakdown, so describe the physical thing being " +
+          "built in plain language a non-expert can picture -- never prices, quantities, vendor/acquisition " +
+          "details, or internal category names.",
+      },
+      {
+        role: "user",
+        content: `Booth label: ${groupLabel}\nMaterials:\n${itemList || "(no line items yet)"}`,
+      },
+    ],
+    response_format: { type: "json_schema", json_schema: buildSummarySchema() },
+  });
+
+  await recordAiUsage({
+    userId,
+    feature: "BOOTH_PROPOSAL_SUMMARY",
+    model: BASIC_MODEL,
+    usage: completion.usage,
+    opportunityId: version.estimate.opportunityId,
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned an empty response.");
+  const parsed = JSON.parse(content) as { summary: string };
+
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { boothPendingSummary: parsed.summary },
+  });
+
+  return parsed.summary;
+}

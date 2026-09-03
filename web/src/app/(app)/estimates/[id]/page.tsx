@@ -28,6 +28,7 @@ import {
   archiveEstimateAction,
   bulkMoveLineItemsCategoryAction,
   clearBoothPendingDescriptionAction,
+  clearBoothPendingSummaryAction,
   clearCategoryMarginOverrideAction,
   clearSectionPendingDescriptionAction,
   confirmDraftLineItemAction,
@@ -45,9 +46,11 @@ import {
   restoreLineItemAction,
   setCategoryMarginOverrideAction,
   suggestBoothDescriptionAction,
+  suggestBoothSummaryAction,
   suggestSectionDescriptionAction,
   toggleLineItemProposalVisibilityAction,
   updateBoothDescriptionAction,
+  updateBoothSummaryAction,
   updateEstimateDetails,
   updateLineItemAction,
   updateMarginTargetAction,
@@ -61,6 +64,7 @@ import {
   updateSectionProposalVisibilityAction,
 } from "../actions";
 import { SectionHeadingEditor } from "@/components/section-heading-editor";
+import { BoothSummaryEditor } from "@/components/booth-summary-editor";
 import {
   buildFullEstimateFromDocumentsAction,
   commitImportAction,
@@ -2798,6 +2802,12 @@ function CategoryTabContent({
             const boothSummarized =
               version.sections.find((s) => s.groupLabel === booth.boothLabel)?.summarizeOnProposal ?? false;
             // Same "any one section is correct to read" reasoning as
+            // boothSummarized above -- updateBoothSummary keeps every
+            // section sharing this groupLabel in sync.
+            const boothSummaryFirstSection = version.sections.find((s) => s.groupLabel === booth.boothLabel);
+            const boothSummary = boothSummaryFirstSection?.boothSummary ?? null;
+            const boothPendingSummary = boothSummaryFirstSection?.boothPendingSummary ?? null;
+            // Same "any one section is correct to read" reasoning as
             // boothVisible/boothSummarized above -- updateSectionExcludedFromTotals
             // keeps every section sharing this groupLabel in sync.
             const boothExcludedFromTotals =
@@ -2984,6 +2994,20 @@ function CategoryTabContent({
                 </div>
               </div>
               <div className="flex flex-col gap-5 p-4">
+                {/* Only surfaced while summarized -- this text only ever
+                    reaches the Proposal PDF's summarized-booth branch
+                    (proposal-pdf.tsx), so it'd be pure clutter here for
+                    the vast majority of booths that stay full-detail. */}
+                {boothSummarized && (
+                  <BoothSummaryEditor
+                    summary={boothSummary}
+                    pendingSummary={boothPendingSummary}
+                    isLocked={version.isLocked}
+                    suggestAction={suggestBoothSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                    updateAction={updateBoothSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                    rejectAction={clearBoothPendingSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                  />
+                )}
                 {(() => {
                   // Every group in the booth is reorderable relative to
                   // its siblings, the 6 fixed ELEMENT_TYPE_MAP labels
