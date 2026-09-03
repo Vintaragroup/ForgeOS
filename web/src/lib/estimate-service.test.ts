@@ -41,6 +41,7 @@ import {
   updateLineItem,
   updateMarginTarget,
   updateSectionDescription,
+  updateSectionExcludedFromTotals,
   updateSectionProposalSummary,
   updateSectionProposalVisibility,
 } from "@/lib/estimate-service";
@@ -146,6 +147,24 @@ describe("computeVersionTotals", () => {
     expect(totals.grandTotal.toNumber()).toBe(1200);
     // (1200-600)/1200 * 100 = 50 -- recovers the margin target independently
     expect(totals.grossMarginPct.toNumber()).toBe(50);
+  });
+
+  it("skips a section flagged excludedFromTotals entirely", () => {
+    const totals = computeVersionTotals({
+      marginTargetPct: 50,
+      sections: [
+        { groupLabel: null, buildType: null, lineItems: [{ totalCost: 100, category: null }] },
+        {
+          groupLabel: "Bid Comparison",
+          buildType: null,
+          excludedFromTotals: true,
+          lineItems: [{ totalCost: 20100, category: null }],
+        },
+      ],
+    });
+
+    expect(totals.totalCost.toNumber()).toBe(100);
+    expect(totals.grandTotal.toNumber()).toBe(200);
   });
 
   it("handles an estimate with no line items yet", () => {
@@ -1789,6 +1808,81 @@ describe("updateSectionProposalSummary", () => {
     await lockEstimateVersion(version.id);
 
     await expect(updateSectionProposalSummary(version.id, groupLabel, true)).rejects.toThrow();
+  });
+});
+
+describe("updateSectionExcludedFromTotals", () => {
+  it("sets excludedFromTotals across every section sharing the groupLabel, both directions", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "Bid Comparison";
+    const sectionA = await addSection(version.id, { name: "Labor", sectionType: "COMPONENT", groupLabel });
+    const sectionB = await addSection(version.id, { name: "Shipping", sectionType: "COMPONENT", groupLabel });
+
+    await updateSectionExcludedFromTotals(version.id, groupLabel, true);
+    const [excludedA, excludedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(excludedA.excludedFromTotals).toBe(true);
+    expect(excludedB.excludedFromTotals).toBe(true);
+
+    await updateSectionExcludedFromTotals(version.id, groupLabel, false);
+    const [includedA, includedB] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionA.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: sectionB.id } }),
+    ]);
+    expect(includedA.excludedFromTotals).toBe(false);
+    expect(includedB.excludedFromTotals).toBe(false);
+  });
+
+  it("removes the excluded section's cost from the version's own totalCost/grandTotal immediately", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 30);
+    const groupLabel = "Bid Comparison";
+    const realSection = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
+    await addLineItem(version.id, realSection.id, { lineType: "MATERIAL", description: "Real scope", qty: 1, unitCost: 1000 });
+    const comparisonSection = await addSection(version.id, { name: "Labor", sectionType: "COMPONENT", groupLabel });
+    await addLineItem(version.id, comparisonSection.id, {
+      lineType: "LABOR",
+      description: "Straight Time Rate in Chicago - CSI",
+      qty: 100,
+      unitCost: 201,
+    });
+
+    const before = await recomputeVersionTotals(version.id);
+    expect(before.totalCost.toNumber()).toBe(21100); // 1000 real + 20100 comparison
+
+    await updateSectionExcludedFromTotals(version.id, groupLabel, true);
+
+    const after = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(after.totalCost.toNumber()).toBe(1000); // comparison line item's cost no longer counted
+    expect(after.grandTotal.toNumber()).toBeCloseTo(1000 / (1 - 0.3), 2);
+  });
+
+  it("never touches includeInProposal/summarizeOnProposal -- excluding from totals is independent of PDF presentation", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "Bid Comparison";
+    const section = await addSection(version.id, { name: "Labor", sectionType: "COMPONENT", groupLabel });
+
+    await updateSectionExcludedFromTotals(version.id, groupLabel, true);
+
+    const updated = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    expect(updated.excludedFromTotals).toBe(true);
+    expect(updated.includeInProposal).toBe(true);
+    expect(updated.summarizeOnProposal).toBe(false);
+  });
+
+  it("rejects on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "Bid Comparison";
+    const section = await addSection(version.id, { name: "Labor", sectionType: "COMPONENT", groupLabel });
+    await addLineItem(version.id, section.id, { lineType: "LABOR", description: "Rate", qty: 1, unitCost: 20 });
+    await lockEstimateVersion(version.id);
+
+    await expect(updateSectionExcludedFromTotals(version.id, groupLabel, true)).rejects.toThrow();
   });
 });
 

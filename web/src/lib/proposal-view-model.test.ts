@@ -115,6 +115,23 @@ describe("aggregateByCategory -- booth-scoped grouping", () => {
     expect(bucket.items[0].description).toBe("Visible");
     expect(bucket.items[0].totalCost).toBe(150);
   });
+
+  it("excludes a whole section flagged excludedFromTotals from the client PDF, distinct from includeInProposal", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Labor",
+        groupLabel: "Bid Comparison",
+        excludedFromTotals: true,
+        lineItems: [li({ id: "a", description: "Straight Time Rate in Chicago - CSI", totalCost: 20100 })],
+      },
+      { name: "Booth", groupLabel: "SECTION 203", lineItems: [li({ id: "b", description: "Real scope", totalCost: 5000 })] },
+    ];
+
+    const [bucket] = aggregateByCategory(sections, categories);
+
+    expect(bucket.items).toHaveLength(1);
+    expect(bucket.items[0].description).toBe("Real scope");
+  });
 });
 
 describe("groupBoothLineItems", () => {

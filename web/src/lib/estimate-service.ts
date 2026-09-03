@@ -119,6 +119,7 @@ export function computeVersionTotals(
     sections: {
       groupLabel: string | null;
       buildType?: SectionBuildType | null;
+      excludedFromTotals?: boolean;
       lineItems: { totalCost: DecimalInput; isDraft?: boolean; category: string | null }[];
     }[];
   },
@@ -129,6 +130,13 @@ export function computeVersionTotals(
   let grandTotal = new Prisma.Decimal(0);
 
   for (const section of version.sections) {
+    // Real, useful estimating work (a labor/freight rate comparison
+    // against another vendor, a competitor-bid snapshot) that happens to
+    // live inside this version but isn't real client scope -- see
+    // EstimateSection.excludedFromTotals's own schema comment. Skipped
+    // entirely here, unlike includeInProposal/summarizeOnProposal which
+    // never reach this function at all (PDF-only concerns).
+    if (section.excludedFromTotals) continue;
     for (const li of section.lineItems) {
       if (li.isDraft) continue;
       const cost = new Prisma.Decimal(li.totalCost);
@@ -302,6 +310,26 @@ export async function updateSectionProposalSummary(
     where: { estimateVersionId, groupLabel },
     data: { summarizeOnProposal },
   });
+}
+
+// Same booth-wide updateMany-by-groupLabel pattern as
+// updateSectionProposalVisibility/updateSectionProposalSummary above --
+// see EstimateSection.excludedFromTotals's own schema comment for how
+// this differs from those two: this one DOES change the estimate's own
+// numbers (computeVersionTotals skips excluded sections entirely), so it
+// recomputes and persists totalCost/grandTotal immediately rather than
+// waiting for some unrelated line-item edit to trigger it.
+export async function updateSectionExcludedFromTotals(
+  estimateVersionId: string,
+  groupLabel: string,
+  excludedFromTotals: boolean,
+) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.updateMany({
+    where: { estimateVersionId, groupLabel },
+    data: { excludedFromTotals },
+  });
+  await recomputeVersionTotals(estimateVersionId);
 }
 
 // Reorders one booth (identified by groupLabel) among only the OTHER

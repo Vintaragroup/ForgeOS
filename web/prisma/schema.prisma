@@ -1129,6 +1129,27 @@ model EstimateSection {
   // dropped that booth's dollar amount from the PDF's own Grand Total.
   summarizeOnProposal Boolean @default(false)
 
+  // Whole-booth "this isn't real client scope" -- unlike includeInProposal/
+  // summarizeOnProposal above (both purely PDF-presentation concerns that
+  // never touch the estimate's own numbers), this ALSO removes the
+  // booth's line items from computeVersionTotals (estimate-service.ts),
+  // so totalCost/grandTotal never include it either. For internal
+  // reference data that happens to live inside a real client estimate
+  // (a labor/freight rate comparison against another vendor, a
+  // competitor-bid snapshot) -- real, useful estimating work, but not
+  // something the client is being quoted for. The Line Items tab (this
+  // app's own editing view) always shows it in full regardless, exactly
+  // like summarizeOnProposal's own editing-view carve-out -- excluding it
+  // from totals must never mean hiding it from the person who needs to
+  // review, reconcile, or eventually delete it. Same booth-wide
+  // updateMany-by-groupLabel sync as the flags above. Added after a real
+  // production estimate ("Bid Comparison" -- Chicago labor/freight rates
+  // an estimator was pricing against another vendor) turned up sitting in
+  // the same version as a live client proposal, silently inflating both
+  // the estimate's Grand Total and the client-facing PDF by ~$139k with
+  // no indication it wasn't real scope.
+  excludedFromTotals Boolean @default(false)
+
   // This section's position among the other booths visible within ONE
   // category, for Proposal PDF ordering -- deliberately NOT the same
   // field as sortOrder above (which orders sections generally / production

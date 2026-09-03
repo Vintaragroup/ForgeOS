@@ -31,6 +31,7 @@ import {
   updateMarginTarget,
   updateSectionBuildType,
   updateSectionDescription,
+  updateSectionExcludedFromTotals,
   updateSectionProposalSummary,
   updateSectionProposalVisibility,
 } from "@/lib/estimate-service";
@@ -207,6 +208,18 @@ export async function updateSectionProposalSummaryAction(
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await updateSectionProposalSummary(versionId, groupLabel, summarizeOnProposal);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function updateSectionExcludedFromTotalsAction(
+  estimateId: string,
+  versionId: string,
+  groupLabel: string,
+  excludedFromTotals: boolean,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await updateSectionExcludedFromTotals(versionId, groupLabel, excludedFromTotals);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

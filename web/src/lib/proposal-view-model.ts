@@ -70,6 +70,12 @@ export interface ProposalViewSection {
   // full detail (unaffected), so no existing caller/test fixture needs
   // updating just because this field exists.
   summarizeOnProposal?: boolean;
+  // Real, useful estimating work that isn't real client scope (a vendor
+  // rate comparison, a competitor-bid snapshot) -- see
+  // EstimateSection.excludedFromTotals's own schema comment. Optional,
+  // same reasoning as includeInProposal above: undefined means "real
+  // scope, counted as normal."
+  excludedFromTotals?: boolean;
   lineItems: ProposalViewLineItem[];
 }
 
@@ -218,6 +224,7 @@ export function aggregateByCategory(sections: ProposalViewSection[], categories:
 
   for (const section of sections) {
     if (section.includeInProposal === false) continue;
+    if (section.excludedFromTotals) continue;
     for (const li of section.lineItems) {
       if (li.includeInProposal === false) continue;
       const category = resolveEffectiveCategory(li, section, categories);

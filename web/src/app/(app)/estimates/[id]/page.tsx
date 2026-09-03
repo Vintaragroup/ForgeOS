@@ -56,6 +56,7 @@ import {
   updateSectionBuildTypeAction,
   updateSectionDescriptionAction,
   updateSectionItemsCategoryAction,
+  updateSectionExcludedFromTotalsAction,
   updateSectionProposalSummaryAction,
   updateSectionProposalVisibilityAction,
 } from "../actions";
@@ -710,6 +711,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     attachments={attachments}
                     users={users}
                     confirmedCount={confirmedCount}
+                    auditLog={lineItemAuditLog}
                   />
                 ),
                 options: (
@@ -1252,6 +1254,7 @@ function LineItemsTab({
   attachments,
   users,
   confirmedCount,
+  auditLog,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -1263,12 +1266,45 @@ function LineItemsTab({
   attachments: { id: string; fileRef: string }[];
   users: { id: string; name: string }[];
   confirmedCount: number | null;
+  auditLog: LineItemAuditLogEntry[];
 }) {
   const buckets = bucketLineItemsByCategory(version.sections, categories);
   const primaryTabs = groupPrimaryCategoryTabs(buckets, categories);
   const marginOverrideByCategoryId = new Map(categoryMarginOverrides.map((o) => [o.categoryId, o.marginPct]));
   const addSectionWithIds = addSectionAction.bind(null, estimateId, version.id);
   const draftCount = version.sections.flatMap((s) => s.lineItems).filter((li) => li.isDraft).length;
+
+  // Real, useful estimating work (a vendor rate comparison, a
+  // competitor-bid snapshot) that isn't real client scope -- see
+  // EstimateSection.excludedFromTotals's own schema comment. Surfaced as
+  // its own review banner below rather than silently vanishing from the
+  // totals, so nobody has to rediscover by accident (again) that a chunk
+  // of "the estimate" was quietly excluded. auditLog's CREATE entry (if
+  // any -- most jobs' data predates line-item audit logging entirely)
+  // answers "where did this come from," same actor/timestamp the History
+  // tab already shows for anyone who wants the full trail.
+  const excludedGroupLabels = [
+    ...new Set(version.sections.filter((s) => s.excludedFromTotals && s.groupLabel).map((s) => s.groupLabel!)),
+  ];
+  const excludedGroups = excludedGroupLabels.map((groupLabel) => {
+    const sections = version.sections.filter((s) => s.groupLabel === groupLabel && s.excludedFromTotals);
+    const items = sections.flatMap((s) => s.lineItems).filter((li) => !li.isDraft);
+    const lineItemIds = new Set(items.map((li) => li.id));
+    const createEntry = auditLog.find(
+      (log) => log.action === "CREATE" && log.lineItemId && lineItemIds.has(log.lineItemId),
+    );
+    const earliestCreatedAt = sections.reduce(
+      (min, s) => (s.createdAt < min ? s.createdAt : min),
+      sections[0].createdAt,
+    );
+    return {
+      groupLabel,
+      cost: items.reduce((sum, li) => sum + Number(li.totalCost), 0),
+      itemCount: items.length,
+      createdAt: earliestCreatedAt,
+      actorName: createEntry?.actor?.name ?? null,
+    };
+  });
 
   // Every booth/component-linked section (EstimateSection.groupLabel).
   // Most jobs have none of these. A booth's tag (EstimateSection.
@@ -1317,6 +1353,42 @@ function LineItemsTab({
           <p className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
             Confirmed {confirmedCount} draft line item{confirmedCount === 1 ? "" : "s"} -- now counted in the version total.
           </p>
+        )}
+
+        {excludedGroups.length > 0 && (
+          <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 p-4">
+            <h3 className="text-sm font-semibold text-amber-900">Excluded from totals -- flagged for review</h3>
+            <p className="mt-1 text-xs text-amber-800">
+              The items below aren&apos;t counted in this version&apos;s Total cost/Grand total and never appear on the
+              client Proposal PDF. Review each one, then either delete it or include it again if it turns out to be
+              real client scope.
+            </p>
+            <ul className="mt-3 flex flex-col gap-2">
+              {excludedGroups.map((g) => (
+                <li key={g.groupLabel} className="rounded border border-amber-200 bg-white p-3 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium">{g.groupLabel}</span>
+                    <span className="font-semibold">{money(g.cost)}</span>
+                  </div>
+                  <p className="mt-1 text-amber-700">
+                    {g.itemCount} item{g.itemCount === 1 ? "" : "s"}, added {g.createdAt.toLocaleDateString()}
+                    {g.actorName ? ` by ${g.actorName}` : " -- no creation record (likely a bulk import or predates change tracking)"}
+                    . See the History tab for the full detail.
+                  </p>
+                  {!version.isLocked && (
+                    <form
+                      action={updateSectionExcludedFromTotalsAction.bind(null, estimateId, version.id, g.groupLabel, false)}
+                      className="mt-2"
+                    >
+                      <button type="submit" className="text-xs font-medium text-amber-900 underline hover:no-underline">
+                        Include in totals again
+                      </button>
+                    </form>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         {version.isLocked ? (
@@ -2725,6 +2797,11 @@ function CategoryTabContent({
             // every section sharing this groupLabel in sync.
             const boothSummarized =
               version.sections.find((s) => s.groupLabel === booth.boothLabel)?.summarizeOnProposal ?? false;
+            // Same "any one section is correct to read" reasoning as
+            // boothVisible/boothSummarized above -- updateSectionExcludedFromTotals
+            // keeps every section sharing this groupLabel in sync.
+            const boothExcludedFromTotals =
+              version.sections.find((s) => s.groupLabel === booth.boothLabel)?.excludedFromTotals ?? false;
             const otherBoothLabels = allBoothLabels.filter((label) => label !== booth.boothLabel);
             // A section just added to this booth via the "+ Group" tool
             // below (or one imported with no items yet) never appears in
@@ -2756,6 +2833,11 @@ function CategoryTabContent({
                   {boothSummarized && (
                     <span className="ml-2 rounded bg-amber-900 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-amber-200">
                       Summarized on proposal
+                    </span>
+                  )}
+                  {boothExcludedFromTotals && (
+                    <span className="ml-2 rounded bg-red-900 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-red-200">
+                      Excluded from totals -- flagged for review
                     </span>
                   )}
                 </h4>
@@ -2812,6 +2894,36 @@ function CategoryTabContent({
                           }
                         >
                           {boothSummarized ? "Show full detail" : "Summarize on proposal"}
+                        </button>
+                      </form>
+                      {/* Distinct from both toggles above -- this one
+                          removes the booth's cost from computeVersionTotals
+                          (the estimate's own Total cost/Grand total) as
+                          well as the client PDF, for booths that aren't
+                          real client scope at all (a vendor rate
+                          comparison, a competitor-bid snapshot). See
+                          EstimateSection.excludedFromTotals's own schema
+                          comment, and the review banner above this tab's
+                          category list. */}
+                      <form
+                        action={updateSectionExcludedFromTotalsAction.bind(
+                          null,
+                          estimateId,
+                          version.id,
+                          booth.boothLabel,
+                          !boothExcludedFromTotals,
+                        )}
+                      >
+                        <button
+                          type="submit"
+                          className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                          title={
+                            boothExcludedFromTotals
+                              ? "Count this booth's cost in the estimate's totals and the client PDF again"
+                              : "Remove this booth's cost from the estimate's totals entirely -- for internal reference data that isn't real client scope"
+                          }
+                        >
+                          {boothExcludedFromTotals ? "Include in totals" : "Exclude from totals"}
                         </button>
                       </form>
                       <form action={untagSectionBuildTypeAction.bind(null, estimateId, version.id, booth.boothLabel)}>
