@@ -851,19 +851,89 @@ export async function moveLineItemsToSection(estimateVersionId: string, lineItem
 // not the Method-tagging flow that check exists for, so it just carries
 // through whatever buildType (including none) the booth's other sections
 // already have via resolveBoothBuildType.
+//
+// groupLabel itself is ALSO resolved case-insensitively before either
+// lookup, using whatever casing is already stored -- confirmed live as a
+// real trap: every booth's H1 heading renders in all-caps (CSS
+// `uppercase`), but the groupLabel string actually stored underneath
+// usually isn't, so retyping a booth's name exactly as displayed created
+// a second, differently-cased groupLabel -- a phantom booth, invisible to
+// every OTHER exact-match groupLabel query in this file
+// (groupBoothLineItemsForEditing, allBoothLabels, mergeBoothIntoAnotherBooth,
+// ...), rather than merging into the real one. Every booth-matching or
+// -creating call in this function uses this same resolved, canonical
+// casing from here on, never the caller's own.
 export async function resolveOrCreateTargetSection(
   estimateVersionId: string,
   groupLabel: string | null,
   sectionName: string,
   actorId?: string | null,
 ) {
+  const canonicalGroupLabel =
+    groupLabel === null
+      ? null
+      : ((
+          await db.estimateSection.findFirst({
+            where: { estimateVersionId, groupLabel: { equals: groupLabel, mode: "insensitive" } },
+            select: { groupLabel: true },
+          })
+        )?.groupLabel ?? groupLabel);
+
   const existing = await db.estimateSection.findFirst({
-    where: { estimateVersionId, groupLabel, name: { equals: sectionName, mode: "insensitive" } },
+    where: { estimateVersionId, groupLabel: canonicalGroupLabel, name: { equals: sectionName, mode: "insensitive" } },
   });
   if (existing) return existing;
 
-  const buildType = groupLabel ? await resolveBoothBuildType(estimateVersionId, groupLabel) : null;
-  return addSection(estimateVersionId, { name: sectionName, sectionType: "COMPONENT", groupLabel, buildType }, actorId);
+  const buildType = canonicalGroupLabel ? await resolveBoothBuildType(estimateVersionId, canonicalGroupLabel) : null;
+  return addSection(
+    estimateVersionId,
+    { name: sectionName, sectionType: "COMPONENT", groupLabel: canonicalGroupLabel, buildType },
+    actorId,
+  );
+}
+
+// Relocates every line item OUT of one existing section and INTO a
+// different booth/group entirely, then deletes the now-empty source --
+// MoveToGroupBar (bulkMoveLineItemsToGroupAction) deliberately restricts
+// its own move to the selected items' shared CURRENT booth (see its own
+// comment): a line item normally only needs to move between H2 groups of
+// the SAME booth. This is the rarer, different case that needs an escape
+// hatch -- a whole section has no correct booth at all right now, most
+// often restoreLineItem's own shared recovery section (see its "section
+// no longer exists" fallback comment): the section a deleted group's
+// items land back in when their real original booth can no longer be
+// determined, since the DELETE snapshot never captured it. An estimator
+// who recognizes where they actually belong needs a way to say so by
+// hand. Reuses resolveOrCreateTargetSection's own loose, case-insensitive
+// name matching, so retyping an existing booth's exact name (or one close
+// enough) lands items as a new H2 there rather than a duplicate booth.
+// No-ops (and leaves the source alone) if the resolved target turns out
+// to BE the source itself -- retyping the section's own current name/booth
+// is a same-place "move," not a real relocation, and must never delete a
+// section out from under its own still-live items.
+export async function moveSectionToGroup(
+  estimateVersionId: string,
+  sourceSectionId: string,
+  groupLabel: string | null,
+  sectionName: string,
+  actorId?: string | null,
+) {
+  await assertUnlocked(estimateVersionId);
+  const items = await db.lineItem.findMany({
+    where: { sectionId: sourceSectionId, section: { estimateVersionId } },
+    select: { id: true },
+  });
+  const target = await resolveOrCreateTargetSection(estimateVersionId, groupLabel, sectionName, actorId);
+  if (target.id === sourceSectionId) return target;
+  if (items.length > 0) {
+    await moveLineItemsToSection(
+      estimateVersionId,
+      items.map((i) => i.id),
+      target.id,
+    );
+  }
+  await deleteEmptySection(estimateVersionId, sourceSectionId);
+  return target;
 }
 
 // Merges an entire booth into a different existing one -- every

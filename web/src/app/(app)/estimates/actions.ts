@@ -26,6 +26,7 @@ import {
   moveLineItemsToSection,
   moveLineItemWithinSection,
   moveSectionOrder,
+  moveSectionToGroup,
   moveElementGroupOrder,
   moveSectionProposalOrder,
   recomputeVersionTotals,
@@ -412,6 +413,31 @@ export async function bulkMoveLineItemsToGroupAction(
   const groupLabel = data.groupLabel.trim() || null;
   const targetSection = await resolveOrCreateTargetSection(versionId, groupLabel, sectionName, user.id);
   await moveLineItemsToSection(versionId, data.lineItemIds, targetSection.id);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Whole-section counterpart to bulkMoveLineItemsToGroupAction above, for
+// the case that tool deliberately doesn't cover -- relocating EVERY item
+// in a section to an arbitrary, DIFFERENT booth, not just between H2
+// groups of whichever booth the selected items already belong to. Exists
+// specifically for restoreLineItem's shared recovery section (see its own
+// "section no longer exists" fallback comment): an estimator who
+// recognizes which real booth a recovered section's items actually
+// belong to needs a way to put them there and make the temporary
+// container disappear -- see moveSectionToGroup's own comment for why it
+// deletes the now-empty source afterward.
+export async function moveSectionToGroupAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  formData: FormData,
+) {
+  const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const sectionName = String(formData.get("sectionName") ?? "").trim();
+  if (!sectionName) throw new Error("Name the group to move these items to.");
+  const groupLabel = String(formData.get("groupLabel") ?? "").trim() || null;
+  await moveSectionToGroup(versionId, sectionId, groupLabel, sectionName, user.id);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

@@ -50,6 +50,7 @@ import {
   moveFlatSectionProposalOrderAction,
   moveLineItemAction,
   moveSectionProposalOrderAction,
+  moveSectionToGroupAction,
   recordCostActualAction,
   restoreLineItemAction,
   setCategoryMarginOverrideAction,
@@ -3533,6 +3534,46 @@ function CategoryTabContent({
                         }
                       >
                         {section?.excludedFromTotals ? "Include in totals" : "Exclude from totals"}
+                      </button>
+                    </form>
+                    {/* Whole-section reparent to an arbitrary, different
+                        booth -- not the category-only "Move section" form
+                        below, and not MoveToGroupBar's own per-item move
+                        (deliberately same-booth-only, see its header
+                        comment). Exists for a section that has no correct
+                        booth at all right now -- most often
+                        restoreLineItem's own shared recovery section (see
+                        its "section no longer exists" fallback comment) --
+                        so an estimator who recognizes where these items
+                        actually belong can put them there by hand; the
+                        temporary container itself is deleted once empty
+                        (moveSectionToGroup's own comment). Booth left
+                        blank keeps/returns items to the project-wide
+                        bucket -- same "" = no booth convention
+                        MoveToGroupBar's own group picker uses. */}
+                    <form
+                      action={moveSectionToGroupAction.bind(null, estimateId, version.id, group.sectionId)}
+                      className="flex items-center gap-1.5"
+                    >
+                      <input
+                        type="text"
+                        name="groupLabel"
+                        placeholder="Booth (blank = project-wide)"
+                        className="w-40 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
+                      />
+                      <input
+                        type="text"
+                        name="sectionName"
+                        placeholder="Group name"
+                        required
+                        className="w-32 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
+                      />
+                      <button
+                        type="submit"
+                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                        title="Move every item in this section to a different booth/group, and remove this now-empty section"
+                      >
+                        Move all items to booth
                       </button>
                     </form>
                   </>

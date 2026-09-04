@@ -36,6 +36,7 @@ import {
   moveLineItemWithinSection,
   moveSectionOrder,
   moveSectionProposalOrder,
+  moveSectionToGroup,
   recategorizeLineItems,
   recomputeVersionTotals,
   removeLineItemFromBidPackage,
@@ -1396,6 +1397,121 @@ describe("resolveOrCreateTargetSection", () => {
 
     expect(created.id).not.toBe(otherBoothsSection.id);
     expect(created.groupLabel).toBe("FS - Hitting Bay Wall");
+  });
+
+  it("resolves a differently-cased groupLabel to the booth's own stored casing, instead of creating a phantom duplicate booth", async () => {
+    // Confirmed live: every booth's H1 heading renders in all-caps (CSS
+    // uppercase), so retyping it exactly as displayed is the natural thing
+    // to do -- this must never create a second, differently-cased
+    // groupLabel that every OTHER exact-match groupLabel query in this
+    // file (groupBoothLineItemsForEditing, allBoothLabels, ...) would
+    // treat as an unrelated booth.
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const existingBoothSection = await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 203 - Camera Booth - Page 2 & 3",
+    });
+
+    const created = await resolveOrCreateTargetSection(version.id, "SECTION 203 - CAMERA BOOTH - PAGE 2 & 3", "BeMatrix Rental");
+
+    expect(created.groupLabel).toBe("Section 203 - Camera Booth - Page 2 & 3");
+    const groupLabels = await db.estimateSection.findMany({
+      where: { estimateVersionId: version.id },
+      select: { groupLabel: true },
+    });
+    expect(new Set(groupLabels.map((s) => s.groupLabel))).toEqual(new Set(["Section 203 - Camera Booth - Page 2 & 3"]));
+    expect(existingBoothSection.groupLabel).toBe("Section 203 - Camera Booth - Page 2 & 3"); // unchanged
+  });
+});
+
+describe("moveSectionToGroup", () => {
+  it("moves every item into the target booth/group and deletes the now-empty source section", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    // Mirrors restoreLineItem's own shared recovery section -- a
+    // project-wide standalone section (no groupLabel) with items an
+    // estimator now recognizes really belong to a real booth.
+    const recoverySection = await addSection(version.id, { name: "Recovered items", sectionType: "COMPONENT" });
+    const itemA = await addLineItem(version.id, recoverySection.id, { lineType: "MATERIAL", description: "Item A", qty: 1, unitCost: 10 });
+    const itemB = await addLineItem(version.id, recoverySection.id, { lineType: "MATERIAL", description: "Item B", qty: 1, unitCost: 20 });
+
+    const target = await moveSectionToGroup(version.id, recoverySection.id, "FS - Hitting Bay Wall", "BeMatrix Rental");
+
+    expect(target.groupLabel).toBe("FS - Hitting Bay Wall");
+    expect(target.name).toBe("BeMatrix Rental");
+
+    const [rowA, rowB] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: itemA.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: itemB.id } }),
+    ]);
+    expect(rowA.sectionId).toBe(target.id);
+    expect(rowB.sectionId).toBe(target.id);
+
+    const sourceStillExists = await db.estimateSection.findUnique({ where: { id: recoverySection.id } });
+    expect(sourceStillExists).toBeNull();
+  });
+
+  it("reuses an existing section under the target booth instead of creating a duplicate", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const existingTarget = await addSection(version.id, {
+      name: "BeMatrix Rental",
+      sectionType: "COMPONENT",
+      groupLabel: "FS - Hitting Bay Wall",
+    });
+    const recoverySection = await addSection(version.id, { name: "Recovered items", sectionType: "COMPONENT" });
+    await addLineItem(version.id, recoverySection.id, { lineType: "MATERIAL", description: "Item A", qty: 1, unitCost: 10 });
+
+    const target = await moveSectionToGroup(version.id, recoverySection.id, "FS - Hitting Bay Wall", "bematrix rental");
+
+    expect(target.id).toBe(existingTarget.id);
+  });
+
+  it("does nothing and keeps the source when the resolved target is the source itself", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "BeMatrix Rental", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall" });
+    const item = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Item A", qty: 1, unitCost: 10 });
+
+    const target = await moveSectionToGroup(version.id, section.id, "FS - Hitting Bay Wall", "bematrix rental");
+
+    expect(target.id).toBe(section.id);
+    const row = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(row.sectionId).toBe(section.id);
+    const stillExists = await db.estimateSection.findUnique({ where: { id: section.id } });
+    expect(stillExists).not.toBeNull();
+  });
+
+  it("rejects moving a section on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Recovered items", sectionType: "COMPONENT" });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Item A", qty: 1, unitCost: 10 });
+    await lockEstimateVersion(version.id);
+
+    await expect(moveSectionToGroup(version.id, section.id, "FS - Hitting Bay Wall", "BeMatrix Rental")).rejects.toThrow(/locked/);
+  });
+
+  it("merges into the real booth even when the typed booth name's casing doesn't match what's stored (e.g. retyped from its all-caps H1 heading)", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    await addSection(version.id, {
+      name: "Booth Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 203 - Camera Booth - Page 2 & 3",
+    });
+    const recoverySection = await addSection(version.id, { name: "Recovered items", sectionType: "COMPONENT" });
+    const item = await addLineItem(version.id, recoverySection.id, { lineType: "MATERIAL", description: "Item A", qty: 1, unitCost: 10 });
+
+    const target = await moveSectionToGroup(version.id, recoverySection.id, "SECTION 203 - CAMERA BOOTH - PAGE 2 & 3", "BeMatrix Rental");
+
+    expect(target.groupLabel).toBe("Section 203 - Camera Booth - Page 2 & 3");
+    const row = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(row.sectionId).toBe(target.id);
+    const groupLabels = await db.estimateSection.findMany({ where: { estimateVersionId: version.id }, select: { groupLabel: true } });
+    expect(new Set(groupLabels.map((s) => s.groupLabel))).toEqual(new Set(["Section 203 - Camera Booth - Page 2 & 3"]));
   });
 });
 
