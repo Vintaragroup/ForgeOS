@@ -249,6 +249,47 @@ describe("standaloneSummaryGroupsByCategory", () => {
     expect(group?.boothDescription).toBe("Custom Flooring Installation");
   });
 
+  it("prefers a per-category description override over the section's shared description, for both the booth (H1) and element-type (H2) headings", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        id: "s1",
+        name: "QUOTE-EXPOCCI-55672-BASEBALL_BOOTH.PDF",
+        description: null,
+        groupLabel: null,
+        summarizeOnProposal: true,
+        categoryDescriptions: [{ categoryId: "structure", description: "Suspended Baseball Signage Display" }],
+        lineItems: [li({ id: "a", totalCost: 100 })],
+      },
+    ];
+
+    const [group] = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
+
+    expect(group?.boothDescription).toBe("Suspended Baseball Signage Display");
+    // elementTypeForSection (groupBoothLineItems' own H2 label) reads
+    // straight off whatever `name` it's given -- without also resolving
+    // this override into the clone's `name`, H2 would still show the raw
+    // filename even after H1 was fixed (exactly what production showed).
+    expect(group?.elementGroups[0]?.elementType).toBe("Suspended Baseball Signage Display");
+  });
+
+  it("falls back to the shared description when a category-override row exists but hasn't been approved yet", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        id: "s1",
+        name: "Raw Filename.pdf",
+        description: "Shared Approved Heading",
+        groupLabel: null,
+        summarizeOnProposal: true,
+        categoryDescriptions: [{ categoryId: "structure", description: null }],
+        lineItems: [li({ id: "a", totalCost: 100 })],
+      },
+    ];
+
+    const [group] = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
+
+    expect(group?.boothDescription).toBe("Shared Approved Heading");
+  });
+
   it("keeps two different summarized standalone sections as two separate groups, not merged into one", () => {
     const sections: ProposalViewSection[] = [
       { id: "s1", name: "Flooring A", groupLabel: null, summarizeOnProposal: true, lineItems: [li({ id: "a", totalCost: 100 })] },

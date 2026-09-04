@@ -33,7 +33,13 @@ export async function GET(_request: Request, { params }: RouteContext<"/proposal
             // exactly what's confirmed -- this is the REAL, client-facing
             // download for an already-sent Proposal, so getting this right
             // matters even more here.
-            sections: { where: { optionId: null }, include: { lineItems: { where: { isDraft: false } } } },
+            // categoryDescriptions -- per-(section, category) H1 heading
+            // override; see EstimateSectionCategoryDescription's own schema
+            // comment and standaloneSummaryGroupsByCategory's use of it.
+            sections: {
+              where: { optionId: null },
+              include: { lineItems: { where: { isDraft: false } }, categoryDescriptions: true },
+            },
             categoryMarginOverrides: true,
           },
         },

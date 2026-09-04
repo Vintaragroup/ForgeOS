@@ -55,6 +55,16 @@ export interface ProposalViewSection {
   // falls back to the raw `name` when absent, same as boothDescription's
   // own fallback to boothLabel.
   description?: string | null;
+  // Per-(section, category) override of `description` above -- see
+  // EstimateSectionCategoryDescription's own schema comment. The SAME
+  // section's items can resolve into more than one category tab at once,
+  // and this section's flat H1 heading can be independently approved from
+  // each one (LineItemsTab's flatDescriptionOverride does exactly this
+  // lookup for the editor view). Optional so every existing caller/test
+  // fixture without this concept in play is unaffected; when absent,
+  // standaloneSummaryGroupsByCategory falls back to `description` unchanged
+  // for every category, same as before this field existed.
+  categoryDescriptions?: { categoryId: string; description: string | null }[];
   // The numbered booth/exhibit a pricing-schedule import split this
   // section out for (e.g. "Section 402 - Booth 1 - Page 8") -- see
   // pricing-import-service.ts's own groupLabel comment. Null for
@@ -716,10 +726,30 @@ export function boothGroupsByCategory(
 // section's own approved description/name. A non-summarized standalone
 // section is deliberately NOT included here -- its items keep exactly
 // the existing cross-section-merged flat rendering, unaffected.
+// Same (sectionId, categoryId) override the editor's own
+// flatDescriptionOverride resolves (LineItemsTab, sectionCategoryDescriptionByKey)
+// -- a section approved from one category tab specifically must keep
+// showing THAT heading here too, not fall back to the shared field a
+// different tab's edit last touched, and never the raw `name` (often a
+// source-document filename for an AI-imported section -- confirmed live
+// on production's own Signage tab, both as the booth H1 AND, before this
+// helper existed, as groupBoothLineItems' elementType/H2 label too, since
+// that reads straight off whatever `name` it's given).
+function resolveStandaloneHeading(
+  section: ProposalViewSection,
+  categoryId: string | undefined,
+): string {
+  const categoryDescription = categoryId
+    ? section.categoryDescriptions?.find((d) => d.categoryId === categoryId)?.description
+    : undefined;
+  return categoryDescription ?? section.description ?? section.name;
+}
+
 export function standaloneSummaryGroupsByCategory(
   sections: ProposalViewSection[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
 ): Map<string, BoothGroup[]> {
+  const categoryIdByName = new Map(categories.map((c) => [c.name, c.id]));
   const sectionsByCategoryName = new Map<string, ProposalViewSection[]>();
   const sectionByScopeKey = new Map<string, ProposalViewSection>();
   for (const section of sections) {
@@ -734,7 +764,11 @@ export function standaloneSummaryGroupsByCategory(
       else itemsByCategoryName.set(categoryName, [li]);
     }
     for (const [categoryName, items] of itemsByCategoryName) {
-      const clone: ProposalViewSection = { ...section, groupLabel: scopeKey, lineItems: items };
+      // `name` feeds elementTypeForSection (groupBoothLineItems' own H2
+      // label) below -- resolving it to the same approved heading here
+      // keeps H1 and H2 in agreement instead of only fixing one of them.
+      const resolvedName = resolveStandaloneHeading(section, categoryIdByName.get(categoryName));
+      const clone: ProposalViewSection = { ...section, name: resolvedName, groupLabel: scopeKey, lineItems: items };
       const arr = sectionsByCategoryName.get(categoryName);
       if (arr) arr.push(clone);
       else sectionsByCategoryName.set(categoryName, [clone]);
@@ -744,7 +778,10 @@ export function standaloneSummaryGroupsByCategory(
   for (const [categoryName, sectionsForCategory] of sectionsByCategoryName) {
     const groups = groupBoothLineItems(sectionsForCategory).map((group) => {
       const section = sectionByScopeKey.get(group.boothLabel);
-      return { ...group, boothDescription: section?.description ?? section?.name ?? group.boothLabel };
+      const boothDescription = section
+        ? resolveStandaloneHeading(section, categoryIdByName.get(categoryName))
+        : group.boothLabel;
+      return { ...group, boothDescription };
     });
     result.set(categoryName, groups);
   }

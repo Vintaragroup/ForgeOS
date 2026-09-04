@@ -59,7 +59,13 @@ export async function GET(
         // filter here, a real job's preview once showed thousands of
         // dollars of itemized draft subtotals with nothing confirmed yet
         // to back them.
-        sections: { where: { optionId: null }, include: { lineItems: { where: { isDraft: false } } } },
+        // categoryDescriptions -- per-(section, category) H1 heading
+        // override; see EstimateSectionCategoryDescription's own schema
+        // comment and standaloneSummaryGroupsByCategory's use of it.
+        sections: {
+          where: { optionId: null },
+          include: { lineItems: { where: { isDraft: false } }, categoryDescriptions: true },
+        },
         categoryMarginOverrides: true,
       },
     }),
