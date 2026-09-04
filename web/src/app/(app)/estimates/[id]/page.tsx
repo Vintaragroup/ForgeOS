@@ -3483,6 +3483,10 @@ function CategoryTabContent({
         );
         const flatDescription = flatDescriptionOverride?.description ?? group.description;
         const flatPendingDescription = flatDescriptionOverride?.pendingDescription ?? group.pendingDescription;
+        // Same Cost -> Price total a real booth's H1 shows (booth.subtotal
+        // above) -- a flat/standalone group never had this at all, so its
+        // header gave no cost signal until fully expanded.
+        const flatSubtotal = group.lineItems.reduce((sum, li) => sum + li.totalCost.toNumber(), 0);
         return (
         <div key={group.sectionId} className="overflow-hidden rounded-md border border-neutral-200">
           <CollapsibleGroup
@@ -3517,6 +3521,11 @@ function CategoryTabContent({
             actions={
             !version.isLocked && (
               <div className="flex items-center gap-1.5">
+                <div className="text-xs">
+                  <span className="text-neutral-400">Cost {money(flatSubtotal)}</span>
+                  <span className="mx-1.5 text-neutral-500">&rarr;</span>
+                  <span className="font-semibold">{money(sell(flatSubtotal))}</span>
+                </div>
                 {isStandalone && (
                   <>
                     <form action={moveFlatSectionProposalOrderAction.bind(null, estimateId, version.id, group.sectionId, bucket.category.name, "up")}>
