@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Fragment, Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
@@ -137,6 +137,7 @@ import { BidPackageSelectionProvider } from "@/components/bid-package-selection"
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { MoveSelectedItemsBar } from "@/components/move-selected-items-bar";
 import { MoveToGroupBar } from "@/components/move-to-group-bar";
+import { CollapsibleGroup } from "@/components/collapsible-group";
 import { BoothActionsMenu } from "@/components/booth-actions-menu";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
@@ -2999,7 +3000,10 @@ function CategoryTabContent({
             );
             return (
             <div key={booth.boothLabel} className="overflow-hidden rounded-md border border-neutral-200">
-              <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
+              <CollapsibleGroup
+                headerClassName="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white"
+                bodyClassName="flex flex-col gap-5 p-4"
+                title={
                 <h4 className="text-sm font-semibold uppercase tracking-wide">
                   <SectionHeadingEditor
                     fallbackLabel={booth.boothLabel}
@@ -3027,6 +3031,8 @@ function CategoryTabContent({
                     </span>
                   )}
                 </h4>
+                }
+                actions={
                 <div className="flex items-center gap-3">
                   <div className="text-xs">
                     <span className="text-neutral-400">Cost {money(booth.subtotal)}</span>
@@ -3169,8 +3175,8 @@ function CategoryTabContent({
                     </>
                   )}
                 </div>
-              </div>
-              <div className="flex flex-col gap-5 p-4">
+                }
+              >
                 {/* Always shown, regardless of summarizeOnProposal or any
                     line item's own visibility -- this text renders on the
                     Proposal PDF's booth header unconditionally (see
@@ -3210,7 +3216,11 @@ function CategoryTabContent({
                     const elementPendingSummary = elementSection?.elementPendingSummary ?? null;
                     return (
                   <div key={group.elementType}>
-                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded bg-neutral-100 px-3 py-1.5">
+                    <CollapsibleGroup
+                      headerClassName="mb-2 flex flex-wrap items-center justify-between gap-2 rounded bg-neutral-100 px-3 py-1.5"
+                      chevronClassName="text-neutral-400 hover:text-neutral-900"
+                      bodyClassName="flex flex-col gap-2"
+                      title={
                       <h5 className="text-xs font-semibold uppercase tracking-wide text-neutral-600">
                         <SectionHeadingEditor
                           fallbackLabel={group.elementType}
@@ -3223,6 +3233,8 @@ function CategoryTabContent({
                           rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionIds[0])}
                         />
                       </h5>
+                      }
+                      actions={
                       <div className="flex items-center gap-3">
                         {!version.isLocked && movableIndex !== -1 && (
                           <div className="flex items-center gap-1">
@@ -3263,7 +3275,8 @@ function CategoryTabContent({
                           </form>
                         )}
                       </div>
-                    </div>
+                      }
+                    >
                     {group.sectionIds[0] && (
                       <SummaryEditor
                         summary={elementSummary}
@@ -3300,6 +3313,7 @@ function CategoryTabContent({
                         />
                       </div>
                     )}
+                    </CollapsibleGroup>
                   </div>
                     );
                   });
@@ -3318,7 +3332,7 @@ function CategoryTabContent({
                       defaultCategory={bucket.category.name}
                     />
                   ))}
-              </div>
+              </CollapsibleGroup>
             </div>
             );
           })}
@@ -3344,7 +3358,10 @@ function CategoryTabContent({
         const standaloneIndex = isStandalone ? standaloneSectionGroups.findIndex((g) => g.sectionId === group.sectionId) : -1;
         return (
         <div key={group.sectionId} className="overflow-hidden rounded-md border border-neutral-200">
-          <div className="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white">
+          <CollapsibleGroup
+            headerClassName="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white"
+            bodyClassName="p-4"
+            title={
             <h4 className="flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wide">
               <SectionHeadingEditor
                 fallbackLabel={group.sectionName}
@@ -3369,7 +3386,9 @@ function CategoryTabContent({
                 </span>
               )}
             </h4>
-            {!version.isLocked && (
+            }
+            actions={
+            !version.isLocked && (
               <div className="flex items-center gap-1.5">
                 {isStandalone && (
                   <>
@@ -3466,10 +3485,11 @@ function CategoryTabContent({
                   </Button>
                 </form>
               </div>
-            )}
-          </div>
-          <div className="p-4">
+            )
+            }
+          >
             <SectionLineItemsBlock
+              key="items"
               lineItems={group.lineItems}
               version={version}
               estimateId={estimateId}
@@ -3478,17 +3498,18 @@ function CategoryTabContent({
               categoryOptions={categoryOptions}
             />
             {version.isLocked && (
-              <>
+              <Fragment key="actuals">
                 <p className="mb-3 text-xs text-neutral-400 sm:hidden">← Scroll the table for Actual &amp; Variance</p>
                 <div className="mb-3 flex flex-col gap-2">
                   {group.lineItems.map((li) => (
                     <RecordActualForm key={li.id} estimateId={estimateId} lineItem={li} users={users} />
                   ))}
                 </div>
-              </>
+              </Fragment>
             )}
             {!version.isLocked && (
               <AddLineItemForm
+                key="add-form"
                 estimateId={estimateId}
                 versionId={version.id}
                 sectionId={group.sectionId}
@@ -3498,7 +3519,7 @@ function CategoryTabContent({
                 defaultCategory={bucket.category.name}
               />
             )}
-          </div>
+          </CollapsibleGroup>
         </div>
         );
       })}
