@@ -2815,7 +2815,7 @@ function CategoryTabContent({
             // first item in an empty category to whichever section
             // happens to be first. Let the user pick.
             <SectionScopedForm
-              sections={version.sections.map((s) => ({ id: s.id, name: s.name }))}
+              sections={version.sections.map((s) => ({ id: s.id, name: s.groupLabel ? `${s.name} (${s.groupLabel})` : s.name }))}
               content={Object.fromEntries(
                 version.sections.map((s) => [
                   s.id,
