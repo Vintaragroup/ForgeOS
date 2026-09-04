@@ -662,33 +662,43 @@ export async function deleteEmptySection(estimateVersionId: string, sectionId: s
 }
 
 // Approve-with-text (green check on an AI suggestion) or a manual save --
-// either way the result lands in `description` and any pending suggestion
-// is cleared, since it's now superseded either by the user's own approval
-// or by their own hand-typed text.
-export async function updateSectionDescription(sectionId: string, description: string) {
+// either way the result lands in this (section, category) pair's own
+// EstimateSectionCategoryDescription row (creating it on first edit) and
+// any pending suggestion for that same pair is cleared, since it's now
+// superseded either by the user's own approval or by their own hand-typed
+// text. Scoped by categoryId -- see that model's own schema comment for
+// why a section's heading can't just live on EstimateSection.description
+// directly: the same section can surface its own H1 card under several
+// different category tabs at once, and an edit made from one of those
+// tabs must never rewrite what a different tab shows.
+export async function updateSectionDescription(sectionId: string, categoryId: string, description: string) {
   const section = await db.estimateSection.findUniqueOrThrow({
     where: { id: sectionId },
     select: { estimateVersionId: true },
   });
   await assertUnlocked(section.estimateVersionId);
-  await db.estimateSection.update({
-    where: { id: sectionId },
-    data: { description, pendingDescription: null },
+  await db.estimateSectionCategoryDescription.upsert({
+    where: { sectionId_categoryId: { sectionId, categoryId } },
+    create: { sectionId, categoryId, description, pendingDescription: null },
+    update: { description, pendingDescription: null },
   });
 }
 
-// Reject (red X) -- clears only the pending suggestion, leaving
-// `description` untouched (null in the common case, reverting the UI back
-// to its empty/"Suggest with AI" prompt state).
-export async function clearSectionPendingDescription(sectionId: string) {
+// Reject (red X) -- clears only this (section, category) pair's pending
+// suggestion, leaving its `description` untouched (null in the common
+// case, reverting that category's heading back to its empty/"Suggest with
+// AI" prompt state). Every other category showing this same section keeps
+// its own independent state either way.
+export async function clearSectionPendingDescription(sectionId: string, categoryId: string) {
   const section = await db.estimateSection.findUniqueOrThrow({
     where: { id: sectionId },
     select: { estimateVersionId: true },
   });
   await assertUnlocked(section.estimateVersionId);
-  await db.estimateSection.update({
-    where: { id: sectionId },
-    data: { pendingDescription: null },
+  await db.estimateSectionCategoryDescription.upsert({
+    where: { sectionId_categoryId: { sectionId, categoryId } },
+    create: { sectionId, categoryId, pendingDescription: null },
+    update: { pendingDescription: null },
   });
 }
 

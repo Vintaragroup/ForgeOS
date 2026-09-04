@@ -1,11 +1,14 @@
 // Suggests a short, human-readable title for one EstimateSection whose
 // raw name has no ELEMENT_TYPE_MAP entry (proposal-view-model.ts's
 // elementTypeForSection) -- e.g. "Custom Build" tells an estimator
-// nothing about what was actually built. Writes into
-// EstimateSection.pendingDescription only, never `description` directly:
-// the user must explicitly approve (or type their own) before it's shown
-// as the real heading -- same propose-then-commit shape as
-// Document.proposedLineItems elsewhere in this app.
+// nothing about what was actually built. Writes into that (section,
+// category) pair's own EstimateSectionCategoryDescription.pendingDescription
+// only, never `description` directly: the user must explicitly approve (or
+// type their own) before it's shown as the real heading -- same
+// propose-then-commit shape as Document.proposedLineItems elsewhere in
+// this app. Scoped by categoryId since the same section can surface its
+// own H1 card under several different category tabs at once -- see that
+// model's own schema comment.
 
 import { db } from "@/lib/db";
 import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
@@ -35,7 +38,11 @@ function buildSuggestionSchema() {
   };
 }
 
-export async function suggestSectionDescription(sectionId: string, userId: string | null): Promise<string> {
+export async function suggestSectionDescription(
+  sectionId: string,
+  categoryId: string,
+  userId: string | null,
+): Promise<string> {
   const section = await db.estimateSection.findUniqueOrThrow({
     where: { id: sectionId },
     include: {
@@ -82,9 +89,15 @@ export async function suggestSectionDescription(sectionId: string, userId: strin
   if (!content) throw new Error("OpenAI returned an empty response.");
   const parsed = JSON.parse(content) as { description: string };
 
-  await db.estimateSection.update({
-    where: { id: sectionId },
-    data: { pendingDescription: parsed.description },
+  // See EstimateSectionCategoryDescription's own schema comment -- this
+  // (section, category) pair's pending suggestion lives on its own row,
+  // not on EstimateSection.pendingDescription directly, so suggesting a
+  // new heading from one category tab never overwrites what a different
+  // category tab is currently showing for this same section.
+  await db.estimateSectionCategoryDescription.upsert({
+    where: { sectionId_categoryId: { sectionId, categoryId } },
+    create: { sectionId, categoryId, pendingDescription: parsed.description },
+    update: { pendingDescription: parsed.description },
   });
 
   return parsed.description;

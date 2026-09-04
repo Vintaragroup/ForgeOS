@@ -6,12 +6,14 @@ import { suggestBoothDescription, suggestSectionDescription } from "@/lib/ai/sec
 
 afterEach(async () => {
   await db.lineItemAuditLog.deleteMany();
+  await db.estimateSectionCategoryDescription.deleteMany();
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
+  await db.category.deleteMany();
 });
 
 afterAll(async () => {
@@ -32,23 +34,27 @@ describe("suggestSectionDescription", () => {
   // document-summary-service.test.ts: this verifies the "AI features not
   // configured" path leaves pendingDescription untouched, not the real
   // OpenAI call itself (that needs a real key, tested manually).
-  it("throws AiNotConfiguredError without writing pendingDescription", async () => {
+  it("throws AiNotConfiguredError without writing a pendingDescription override", async () => {
     const { section } = await makeSection();
+    const category = await db.category.create({ data: { name: "Labor", key: "labor" } });
 
-    await expect(suggestSectionDescription(section.id, null)).rejects.toBeInstanceOf(AiNotConfiguredError);
+    await expect(suggestSectionDescription(section.id, category.id, null)).rejects.toBeInstanceOf(AiNotConfiguredError);
 
-    const refreshed = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
-    expect(refreshed.pendingDescription).toBeNull();
+    const override = await db.estimateSectionCategoryDescription.findUnique({
+      where: { sectionId_categoryId: { sectionId: section.id, categoryId: category.id } },
+    });
+    expect(override).toBeNull();
   });
 
   it("rejects on a locked version, without ever reaching the AI call", async () => {
     const { section, version } = await makeSection();
+    const category = await db.category.create({ data: { name: "Labor", key: "labor" } });
     await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 1, unitCost: 20 });
     await lockEstimateVersion(version.id);
 
     // A locked version must fail on the lock check, not on the (also-true)
     // missing-API-key condition -- confirms assertUnlocked runs first.
-    await expect(suggestSectionDescription(section.id, null)).rejects.toThrow(/locked/);
+    await expect(suggestSectionDescription(section.id, category.id, null)).rejects.toThrow(/locked/);
   });
 });
 

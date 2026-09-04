@@ -61,6 +61,7 @@ import {
 afterEach(async () => {
   await db.categoryMarginOverride.deleteMany();
   await db.estimateCategorySummary.deleteMany();
+  await db.estimateSectionCategoryDescription.deleteMany();
   await db.lineItem.deleteMany();
   await db.attachment.deleteMany();
   await db.document.deleteMany();
@@ -1825,31 +1826,70 @@ describe("opportunity-ownership checks (cross-resource ID authorization)", () =>
 });
 
 describe("updateSectionDescription / clearSectionPendingDescription", () => {
-  it("updateSectionDescription sets description and clears any pendingDescription", async () => {
+  it("updateSectionDescription sets this (section, category) pair's description and clears its pendingDescription", async () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);
     const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
-    await db.estimateSection.update({ where: { id: section.id }, data: { pendingDescription: "AI suggestion" } });
+    const category = await makeCategory("Labor", "labor");
+    await db.estimateSectionCategoryDescription.create({
+      data: { sectionId: section.id, categoryId: category.id, pendingDescription: "AI suggestion" },
+    });
 
-    await updateSectionDescription(section.id, "Reception counter");
+    await updateSectionDescription(section.id, category.id, "Reception counter");
 
-    const updated = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    const updated = await db.estimateSectionCategoryDescription.findUniqueOrThrow({
+      where: { sectionId_categoryId: { sectionId: section.id, categoryId: category.id } },
+    });
     expect(updated.description).toBe("Reception counter");
     expect(updated.pendingDescription).toBeNull();
+  });
+
+  it("keeps a second category's override independent -- the exact collision EstimateSectionCategoryDescription exists to prevent", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
+    const labor = await makeCategory("Labor", "labor");
+    const shipping = await makeCategory("Shipping", "shipping");
+
+    await updateSectionDescription(section.id, labor.id, "Install crew");
+    await updateSectionDescription(section.id, shipping.id, "Freight to venue");
+
+    const laborRow = await db.estimateSectionCategoryDescription.findUniqueOrThrow({
+      where: { sectionId_categoryId: { sectionId: section.id, categoryId: labor.id } },
+    });
+    const shippingRow = await db.estimateSectionCategoryDescription.findUniqueOrThrow({
+      where: { sectionId_categoryId: { sectionId: section.id, categoryId: shipping.id } },
+    });
+    expect(laborRow.description).toBe("Install crew");
+    expect(shippingRow.description).toBe("Freight to venue");
+
+    // Editing Shipping's title again must never touch Labor's.
+    await updateSectionDescription(section.id, shipping.id, "Freight and drayage");
+    const laborUnchanged = await db.estimateSectionCategoryDescription.findUniqueOrThrow({
+      where: { sectionId_categoryId: { sectionId: section.id, categoryId: labor.id } },
+    });
+    expect(laborUnchanged.description).toBe("Install crew");
   });
 
   it("clearSectionPendingDescription clears only pendingDescription, leaving description untouched", async () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);
     const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
-    await db.estimateSection.update({
-      where: { id: section.id },
-      data: { description: "Approved title", pendingDescription: "A new suggestion" },
+    const category = await makeCategory("Labor", "labor");
+    await db.estimateSectionCategoryDescription.create({
+      data: {
+        sectionId: section.id,
+        categoryId: category.id,
+        description: "Approved title",
+        pendingDescription: "A new suggestion",
+      },
     });
 
-    await clearSectionPendingDescription(section.id);
+    await clearSectionPendingDescription(section.id, category.id);
 
-    const updated = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    const updated = await db.estimateSectionCategoryDescription.findUniqueOrThrow({
+      where: { sectionId_categoryId: { sectionId: section.id, categoryId: category.id } },
+    });
     expect(updated.description).toBe("Approved title");
     expect(updated.pendingDescription).toBeNull();
   });
@@ -1858,11 +1898,12 @@ describe("updateSectionDescription / clearSectionPendingDescription", () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);
     const section = await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT" });
+    const category = await makeCategory("Labor", "labor");
     await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 1, unitCost: 20 });
     await lockEstimateVersion(version.id);
 
-    await expect(updateSectionDescription(section.id, "Reception counter")).rejects.toThrow();
-    await expect(clearSectionPendingDescription(section.id)).rejects.toThrow();
+    await expect(updateSectionDescription(section.id, category.id, "Reception counter")).rejects.toThrow();
+    await expect(clearSectionPendingDescription(section.id, category.id)).rejects.toThrow();
   });
 });
 

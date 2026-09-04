@@ -455,28 +455,40 @@ export async function moveSectionAction(estimateId: string, sectionId: string, d
 // The three section-heading-editor.tsx actions -- see its own header
 // comment for the Empty/Pending/Approved state machine these drive.
 // "Suggest with AI" (Empty -> Pending) and "regenerate" (Approved/Pending
-// -> Pending again) are the same call.
-export async function suggestSectionDescriptionAction(estimateId: string, sectionId: string) {
+// -> Pending again) are the same call. categoryId is which category tab
+// this heading is being edited from -- see
+// EstimateSectionCategoryDescription's own schema comment for why that
+// matters: the same section can surface its own H1 card under several
+// different category tabs at once, and an edit from one must never bleed
+// into another.
+export async function suggestSectionDescriptionAction(estimateId: string, sectionId: string, categoryId: string) {
   const user = await requireEstimateAccess(estimateId);
-  await suggestSectionDescription(sectionId, user.id);
+  await suggestSectionDescription(sectionId, categoryId, user.id);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
 // Approve (green check, formData carries the pending text back unchanged)
 // or a manual save (formData carries the user's own typed text) -- either
-// way this is the one call that ever writes `description`.
-export async function updateSectionDescriptionAction(estimateId: string, sectionId: string, formData: FormData) {
+// way this is the one call that ever writes this (section, category)
+// pair's `description`.
+export async function updateSectionDescriptionAction(
+  estimateId: string,
+  sectionId: string,
+  categoryId: string,
+  formData: FormData,
+) {
   await requireEstimateAccess(estimateId);
   const description = String(formData.get("description") ?? "").trim();
   if (!description) throw new Error("Description is required");
-  await updateSectionDescription(sectionId, description);
+  await updateSectionDescription(sectionId, categoryId, description);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
-// Reject (red X) -- reverts to the Empty state.
-export async function clearSectionPendingDescriptionAction(estimateId: string, sectionId: string) {
+// Reject (red X) -- reverts this (section, category) pair to the Empty
+// state.
+export async function clearSectionPendingDescriptionAction(estimateId: string, sectionId: string, categoryId: string) {
   await requireEstimateAccess(estimateId);
-  await clearSectionPendingDescription(sectionId);
+  await clearSectionPendingDescription(sectionId, categoryId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

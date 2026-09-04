@@ -703,8 +703,9 @@ model Category {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  marginOverrides   CategoryMarginOverride[]
-  proposalSummaries EstimateCategorySummary[]
+  marginOverrides     CategoryMarginOverride[]
+  proposalSummaries   EstimateCategorySummary[]
+  sectionDescriptions EstimateSectionCategoryDescription[]
 
   @@map("categories")
 }
@@ -1266,8 +1267,9 @@ model EstimateSection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lineItems     LineItem[]
-  internalCosts InternalCost[]
+  lineItems            LineItem[]
+  internalCosts        InternalCost[]
+  categoryDescriptions EstimateSectionCategoryDescription[]
 
   // Postgres doesn't auto-index foreign key columns the way MySQL does --
   // every estimate page load fans out from an EstimateVersion to its
@@ -1278,6 +1280,41 @@ model EstimateSection {
   @@index([estimateVersionId])
   @@index([optionId])
   @@map("estimate_sections")
+}
+
+// Independent override of EstimateSection.description/pendingDescription
+// (the flat/standalone H1 heading -- see that field's own comment) for ONE
+// category tab. That field is one shared value per section row, but the
+// SAME section's line items can resolve into several different category
+// tabs at once (bucketLineItemsByCategory groups by (category, sectionId)
+// pair, not by section alone) -- e.g. a section holding both a Labor line
+// and a Shipping line surfaces its own H1 card under both the Labor and
+// Shipping tabs. Before this model, editing that heading from either tab
+// rewrote the one shared field, so a change made from Labor's tab silently
+// changed what Shipping's tab showed too. Absent a row here for a given
+// (section, category) pair, that category still falls back to
+// EstimateSection.description/pendingDescription unchanged -- a section
+// that only ever appears in one category tab (the overwhelming majority)
+// never gets a row and behaves exactly as before this model existed; a row
+// is created only the first time someone actually edits (or requests an AI
+// suggestion for) that section's heading from that specific category tab,
+// and from then on that category's heading is independent of the shared
+// field and of every other category's own override.
+model EstimateSectionCategoryDescription {
+  id         String          @id @default(cuid())
+  sectionId  String
+  section    EstimateSection @relation(fields: [sectionId], references: [id])
+  categoryId String
+  category   Category        @relation(fields: [categoryId], references: [id])
+
+  description        String?
+  pendingDescription String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sectionId, categoryId])
+  @@map("estimate_section_category_descriptions")
 }
 
 // Total = qty * unitCost for every line type -- material qty x unit cost

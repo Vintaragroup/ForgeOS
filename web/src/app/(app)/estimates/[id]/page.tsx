@@ -377,6 +377,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     categories,
     categoryMarginOverrides,
     categoryProposalSummaries,
+    sectionCategoryDescriptions,
     attachments,
     pricingScheduleDocuments,
     scopeDocuments,
@@ -404,6 +405,13 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     // EstimateCategorySummary's own schema comment.
     currentVersion
       ? db.estimateCategorySummary.findMany({ where: { estimateVersionId: currentVersion.id } })
+      : Promise.resolve([]),
+    // Per-(section, category) H1 heading overrides -- see
+    // EstimateSectionCategoryDescription's own schema comment for why a
+    // flat/standalone section's heading can't just live on
+    // EstimateSection.description directly.
+    currentVersion
+      ? db.estimateSectionCategoryDescription.findMany({ where: { section: { estimateVersionId: currentVersion.id } } })
       : Promise.resolve([]),
     db.attachment.findMany({
       where: { estimateId: estimate.id, deletedAt: null },
@@ -778,6 +786,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     confirmedCount={confirmedCount}
                     auditLog={lineItemAuditLog}
                     categoryProposalSummaries={categoryProposalSummaries}
+                    sectionCategoryDescriptions={sectionCategoryDescriptions}
                   />
                 ),
                 options: (
@@ -1329,6 +1338,13 @@ function SectionLineItemsBlock({
 // section heading) is deliberately dropped from this pass rather than
 // half-ported into a category-filtered view where "up" wouldn't reliably
 // mean what it used to -- a real follow-up, not an oversight.
+// Shared by every reader/writer of EstimateSectionCategoryDescription --
+// see that model's own schema comment. One canonical join so a lookup Map
+// key always agrees with the key an upsert would use.
+function sectionCategoryDescriptionKey(sectionId: string, categoryId: string): string {
+  return `${sectionId}:${categoryId}`;
+}
+
 function LineItemsTab({
   estimateId,
   opportunityId,
@@ -1342,6 +1358,7 @@ function LineItemsTab({
   confirmedCount,
   auditLog,
   categoryProposalSummaries,
+  sectionCategoryDescriptions,
 }: {
   estimateId: string;
   opportunityId: string;
@@ -1355,10 +1372,21 @@ function LineItemsTab({
   confirmedCount: number | null;
   auditLog: LineItemAuditLogEntry[];
   categoryProposalSummaries: { categoryId: string; summary: string | null; pendingSummary: string | null }[];
+  sectionCategoryDescriptions: { sectionId: string; categoryId: string; description: string | null; pendingDescription: string | null }[];
 }) {
   const buckets = bucketLineItemsByCategory(version.sections, categories);
   const primaryTabs = groupPrimaryCategoryTabs(buckets, categories);
   const marginOverrideByCategoryId = new Map(categoryMarginOverrides.map((o) => [o.categoryId, o.marginPct]));
+  // Per-(section, category) H1 heading override -- see
+  // EstimateSectionCategoryDescription's own schema comment. Absent a key
+  // here, CategoryTabContent falls back to the section's own shared
+  // description/pendingDescription fields unchanged.
+  const sectionCategoryDescriptionByKey = new Map(
+    sectionCategoryDescriptions.map((d) => [
+      sectionCategoryDescriptionKey(d.sectionId, d.categoryId),
+      { description: d.description, pendingDescription: d.pendingDescription },
+    ]),
+  );
   // Top tier of the three-level Proposal PDF copy system -- see
   // EstimateCategorySummary's own schema comment.
   const categorySummaryByCategoryId = new Map(
@@ -1685,6 +1713,7 @@ function LineItemsTab({
                   categories={categories}
                   marginOverrideByCategoryId={marginOverrideByCategoryId}
                   categorySummaryByCategoryId={categorySummaryByCategoryId}
+                  sectionCategoryDescriptionByKey={sectionCategoryDescriptionByKey}
                 />,
               ]),
             )}
@@ -2661,6 +2690,7 @@ function PrimaryCategoryTabContent({
   categories: { id: string; name: string; key: string; parentId: string | null }[];
   marginOverrideByCategoryId: Map<string, Prisma.Decimal>;
   categorySummaryByCategoryId: Map<string, { summary: string | null; pendingSummary: string | null }>;
+  sectionCategoryDescriptionByKey: Map<string, { description: string | null; pendingDescription: string | null }>;
 }) {
   if (!tab.hasMethodSplit) {
     return (
@@ -2712,6 +2742,7 @@ function CategoryTabContent({
   categories,
   marginOverrideByCategoryId,
   categorySummaryByCategoryId,
+  sectionCategoryDescriptionByKey,
 }: {
   bucket: RawCategoryBucket<SectionLineItem>;
   version: VersionWithSections;
@@ -2732,6 +2763,9 @@ function CategoryTabContent({
   // Top tier of the three-level Proposal PDF copy system -- see
   // EstimateCategorySummary's own schema comment.
   categorySummaryByCategoryId: Map<string, { summary: string | null; pendingSummary: string | null }>;
+  // Per-(section, category) H1 heading override -- see
+  // EstimateSectionCategoryDescription's own schema comment.
+  sectionCategoryDescriptionByKey: Map<string, { description: string | null; pendingDescription: string | null }>;
 }) {
   const hasBoothGroups = !!boothGroups && boothGroups.length > 0;
   const flatSectionGroups = hasBoothGroups ? bucket.sectionGroups.filter((g) => !g.groupLabel) : bucket.sectionGroups;
@@ -3214,6 +3248,20 @@ function CategoryTabContent({
                     const elementSection = version.sections.find((s) => s.id === group.sectionIds[0]);
                     const elementSummary = elementSection?.elementSummary ?? null;
                     const elementPendingSummary = elementSection?.elementPendingSummary ?? null;
+                    // A tagged booth's H2 group always resolves into this
+                    // one category (a tagged booth's Method is fixed, so
+                    // it never surfaces under a second category tab the
+                    // way a flat/untagged section can) -- this lookup is
+                    // harmless overkill here, not a real collision case,
+                    // but sharing one read path with the flat H1 below
+                    // keeps both consistent instead of one silently
+                    // reading stale group.description if it ever gains
+                    // an override row some other way.
+                    const elementDescriptionOverride = sectionCategoryDescriptionByKey.get(
+                      sectionCategoryDescriptionKey(group.sectionIds[0], bucket.category.id),
+                    );
+                    const elementDescription = elementDescriptionOverride?.description ?? group.description;
+                    const elementPendingDescription = elementDescriptionOverride?.pendingDescription ?? group.pendingDescription;
                     return (
                   <div key={group.elementType}>
                     <CollapsibleGroup
@@ -3224,13 +3272,13 @@ function CategoryTabContent({
                       <h5 className="text-xs font-semibold uppercase tracking-wide text-neutral-600">
                         <SectionHeadingEditor
                           fallbackLabel={group.elementType}
-                          description={group.description}
-                          pendingDescription={group.pendingDescription}
+                          description={elementDescription}
+                          pendingDescription={elementPendingDescription}
                           isMapped={group.isMapped}
                           isLocked={version.isLocked}
-                          suggestAction={suggestSectionDescriptionAction.bind(null, estimateId, group.sectionIds[0])}
-                          updateAction={updateSectionDescriptionAction.bind(null, estimateId, group.sectionIds[0])}
-                          rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionIds[0])}
+                          suggestAction={suggestSectionDescriptionAction.bind(null, estimateId, group.sectionIds[0], bucket.category.id)}
+                          updateAction={updateSectionDescriptionAction.bind(null, estimateId, group.sectionIds[0], bucket.category.id)}
+                          rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionIds[0], bucket.category.id)}
                         />
                       </h5>
                       }
@@ -3356,6 +3404,19 @@ function CategoryTabContent({
         const isStandalone = !group.groupLabel;
         const section = isStandalone ? version.sections.find((s) => s.id === group.sectionId) : undefined;
         const standaloneIndex = isStandalone ? standaloneSectionGroups.findIndex((g) => g.sectionId === group.sectionId) : -1;
+        // This is exactly the collision case EstimateSectionCategoryDescription
+        // exists for -- this same sectionId can surface its own flat H1
+        // card under several different category tabs (an untagged booth,
+        // or a standalone section, with line items resolving into more
+        // than one category), and group.description is one shared value
+        // across every one of them. An override here means someone has
+        // already edited THIS category's heading independently; absent
+        // one, every category still shows the shared value unchanged.
+        const flatDescriptionOverride = sectionCategoryDescriptionByKey.get(
+          sectionCategoryDescriptionKey(group.sectionId, bucket.category.id),
+        );
+        const flatDescription = flatDescriptionOverride?.description ?? group.description;
+        const flatPendingDescription = flatDescriptionOverride?.pendingDescription ?? group.pendingDescription;
         return (
         <div key={group.sectionId} className="overflow-hidden rounded-md border border-neutral-200">
           <CollapsibleGroup
@@ -3365,14 +3426,14 @@ function CategoryTabContent({
             <h4 className="flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wide">
               <SectionHeadingEditor
                 fallbackLabel={group.sectionName}
-                description={group.description}
-                pendingDescription={group.pendingDescription}
+                description={flatDescription}
+                pendingDescription={flatPendingDescription}
                 isMapped={group.isMapped}
                 isLocked={version.isLocked}
                 theme="dark"
-                suggestAction={suggestSectionDescriptionAction.bind(null, estimateId, group.sectionId)}
-                updateAction={updateSectionDescriptionAction.bind(null, estimateId, group.sectionId)}
-                rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionId)}
+                suggestAction={suggestSectionDescriptionAction.bind(null, estimateId, group.sectionId, bucket.category.id)}
+                updateAction={updateSectionDescriptionAction.bind(null, estimateId, group.sectionId, bucket.category.id)}
+                rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionId, bucket.category.id)}
               />
               {group.groupLabel && <span className="font-normal normal-case text-neutral-400">— {group.groupLabel}</span>}
               {isStandalone && section?.summarizeOnProposal && (
