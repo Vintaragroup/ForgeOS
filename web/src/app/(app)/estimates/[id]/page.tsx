@@ -138,6 +138,7 @@ import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { MoveSelectedItemsBar } from "@/components/move-selected-items-bar";
 import { MoveToGroupBar } from "@/components/move-to-group-bar";
 import { CollapsibleGroup } from "@/components/collapsible-group";
+import { LocalTimestamp } from "@/components/local-timestamp";
 import { BoothActionsMenu } from "@/components/booth-actions-menu";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
@@ -5769,10 +5770,7 @@ function HistoryTab({
                 {log.map((entry) => (
                   <tr key={entry.id} className="border-t border-neutral-100 align-top">
                     <td className="whitespace-nowrap px-3 py-2 text-neutral-500">
-                      {entry.createdAt.toLocaleString("en-US", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
+                      <LocalTimestamp iso={entry.createdAt} />
                     </td>
                     <td className="px-3 py-2">{entry.actor.name}</td>
                     <td className="px-3 py-2">{APPLY_METHOD_LABELS[entry.method] ?? entry.method}</td>
@@ -5854,11 +5852,27 @@ function LineItemChangeHistoryCard({
       ) : (
         <div className="flex flex-col gap-2">
           {(() => {
-            // A DELETE whose original lineItemId shows up again on a later
-            // RESTORE (restoreLineItem reuses the original id) has already
-            // been put back -- don't offer Restore on it a second time.
-            const restoredLineItemIds = new Set(
-              auditLog.filter((e) => e.action === "RESTORE" && e.lineItemId).map((e) => e.lineItemId!),
+            // A DELETE row that already has its own RESTORE -- restoreLineItem
+            // records { restoredFromAuditLogId: <this DELETE's own id> } on
+            // the RESTORE row it writes (see its own header comment), so
+            // this is keyed by the DELETE entry's id, not by lineItemId.
+            // lineItemId alone isn't unique enough: restoreLineItem reuses
+            // the original id, so a line item deleted, restored, and later
+            // deleted AGAIN produces a second DELETE row with the exact same
+            // lineItemId as the first -- keying this off lineItemId made
+            // that second, genuinely-still-deleted row read as "already
+            // restored" too and hid its Restore button, even though it had
+            // never been restored itself.
+            const restoredDeleteAuditLogIds = new Set(
+              auditLog
+                .filter(
+                  (e): e is typeof e & { detail: { restoredFromAuditLogId: string } } =>
+                    e.action === "RESTORE" &&
+                    !!e.detail &&
+                    typeof e.detail === "object" &&
+                    typeof (e.detail as Record<string, unknown>).restoredFromAuditLogId === "string",
+                )
+                .map((e) => e.detail.restoredFromAuditLogId),
             );
 
             return auditLog.map((entry) => {
@@ -5868,7 +5882,7 @@ function LineItemChangeHistoryCard({
                 entry.action === "DELETE" &&
                 !isLocked &&
                 !!entry.lineItemId &&
-                !restoredLineItemIds.has(entry.lineItemId) &&
+                !restoredDeleteAuditLogIds.has(entry.id) &&
                 !!snapshot &&
                 "sectionId" in snapshot;
 
@@ -5883,7 +5897,7 @@ function LineItemChangeHistoryCard({
                     <span className="text-neutral-500">{entry.actor?.name ?? "System/Import"}</span>
                     <span className="text-neutral-400">·</span>
                     <span className="text-neutral-500">
-                      {entry.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
+                      <LocalTimestamp iso={entry.createdAt} />
                     </span>
                     {canRestore && (
                       <form action={restoreLineItemAction.bind(null, estimateId, entry.id)} className="ml-auto">

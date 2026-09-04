@@ -759,19 +759,40 @@ describe("restoreLineItem", () => {
     await expect(restoreLineItem(estimate.opportunityId, deleteLog.id)).rejects.toThrow(/locked/);
   });
 
-  it("rejects restoring when the original section no longer exists", async () => {
+  it("lands in a shared recovery section when the original section no longer exists, instead of failing outright", async () => {
+    // The exact shape deleteElementGroup leaves behind -- it hard-deletes
+    // an H1/H2 group's EstimateSection rows alongside every one of its
+    // line items (see that function's own comment), so every one of those
+    // items' own DELETE snapshots point at a sectionId that's now gone.
+    // Before this fallback, that made every one of them permanently
+    // unrestorable with no path forward -- a real production incident
+    // (Full Swing PGA Show Orlando, 14 line items) is exactly this case.
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);
     const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
-    const lineItem = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 1, unitCost: 1 });
-    await deleteLineItem(estimate.opportunityId, lineItem.id);
-    const deleteLog = await db.lineItemAuditLog.findFirstOrThrow({
-      where: { estimateVersionId: version.id, action: "DELETE" },
-    });
+    const itemA = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 1, unitCost: 1 });
+    const itemB = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Screws", qty: 1, unitCost: 1 });
+    await deleteLineItem(estimate.opportunityId, itemA.id);
+    await deleteLineItem(estimate.opportunityId, itemB.id);
+    const [deleteLogA, deleteLogB] = await Promise.all([
+      db.lineItemAuditLog.findFirstOrThrow({ where: { estimateVersionId: version.id, lineItemId: itemA.id, action: "DELETE" } }),
+      db.lineItemAuditLog.findFirstOrThrow({ where: { estimateVersionId: version.id, lineItemId: itemB.id, action: "DELETE" } }),
+    ]);
 
     await db.estimateSection.delete({ where: { id: section.id } });
 
-    await expect(restoreLineItem(estimate.opportunityId, deleteLog.id)).rejects.toThrow(/section .* no longer exists/i);
+    const restoredA = await restoreLineItem(estimate.opportunityId, deleteLogA.id);
+    const restoredB = await restoreLineItem(estimate.opportunityId, deleteLogB.id);
+
+    // Both items' original section pointed at the same now-deleted
+    // sectionId -- they must land together in ONE shared recovery
+    // section, not two separate ad-hoc ones.
+    expect(restoredA.sectionId).toBe(restoredB.sectionId);
+    expect(restoredA.sectionId).not.toBe(section.id);
+
+    const recoverySection = await db.estimateSection.findUniqueOrThrow({ where: { id: restoredA.sectionId } });
+    expect(recoverySection.name).toContain(section.id.slice(-8));
+    expect(recoverySection.estimateVersionId).toBe(version.id);
   });
 
   it("rejects restoring a DELETE row recorded before the snapshot included location", async () => {

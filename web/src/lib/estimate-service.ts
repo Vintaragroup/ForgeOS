@@ -1530,7 +1530,10 @@ export async function deleteLineItem(opportunityId: string, lineItemId: string, 
 // Puts a deleted line item back using its own DELETE audit row's
 // snapshot -- same section, same sortOrder (so it lands back among the
 // same neighbors it had, not at the bottom of the list), same everything
-// else. Restores with its ORIGINAL id (Prisma allows an explicit value
+// else, UNLESS the original section itself no longer exists (see the
+// fallback-section branch below), in which case it lands in a shared
+// recovery section instead of failing outright. Restores with its
+// ORIGINAL id (Prisma allows an explicit value
 // for an @default(cuid()) field on create) rather than a fresh one, so
 // any existing citation link pointing at #line-item-<id> (chat mentions,
 // vendor-match history, cost-actual records) resolves again instead of
@@ -1560,17 +1563,37 @@ export async function restoreLineItem(opportunityId: string, auditLogId: string,
 
   await assertUnlocked(entry.estimateVersionId);
 
-  const section = await db.estimateSection.findFirst({
+  let section = await db.estimateSection.findFirst({
     where: { id: snapshot.sectionId, estimateVersionId: entry.estimateVersionId },
   });
   if (!section) {
-    throw new Error("The section this line item was in no longer exists -- it can't be restored automatically.");
+    // The original section is gone, not just this one item -- most often
+    // a whole H1/H2 group deleted at once (deleteElementGroup hard-deletes
+    // its EstimateSection rows alongside every one of its line items, see
+    // that function's own comment), which used to make every one of those
+    // otherwise-perfectly-restorable items permanently unrestorable: this
+    // same "no longer exists" error, on every single one, forever, with no
+    // path forward. LineItemDeleteSnapshot never captured the section's
+    // own name/groupLabel (only sectionId/sortOrder), so the ORIGINAL
+    // section can't be reconstructed -- this lands the item in a shared
+    // recovery section instead, named after the missing sectionId so every
+    // item that pointed at the SAME deleted section (i.e. the same
+    // deleted group) finds and reuses the one already created for it
+    // rather than each getting its own. An estimator can rename/move it
+    // once restored; the alternative (refusing forever) is strictly worse.
+    const fallbackName = `Recovered items (deleted section ${snapshot.sectionId.slice(-8)})`;
+    section = await db.estimateSection.findFirst({
+      where: { estimateVersionId: entry.estimateVersionId, name: fallbackName },
+    });
+    section ??= await db.estimateSection.create({
+      data: { estimateVersionId: entry.estimateVersionId, name: fallbackName, sectionType: "COMPONENT" },
+    });
   }
 
   const restored = await db.lineItem.create({
     data: {
       id: entry.lineItemId,
-      sectionId: snapshot.sectionId,
+      sectionId: section.id,
       sortOrder: snapshot.sortOrder,
       lineType: snapshot.lineType!,
       description: entry.description,
