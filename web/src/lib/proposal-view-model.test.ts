@@ -420,6 +420,25 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
     expect(booth.boothPendingDescription).toBeNull();
   });
 
+  it("prefers a section with a real booth description over one encountered first with none", () => {
+    // Regression: a brand-new H2 joining an already-described booth (e.g.
+    // via "Move to group", or a booth merge from before
+    // resolveOrCreateTargetSection/mergeBoothIntoAnotherBooth both started
+    // inheriting the booth's fields) could still land here with a null
+    // boothDescription. If that section happened to sort before the
+    // booth's real, approved one, the old "first section wins outright"
+    // rule made an already-approved H1 heading appear to silently revert
+    // to its raw groupLabel -- confirmed live on a real production estimate.
+    const sections = [
+      editableSection({ id: "s1", name: "New Component", groupLabel: "SECTION 211", boothDescription: null }),
+      editableSection({ id: "s2", name: "BeMatrix", groupLabel: "SECTION 211", boothDescription: "Acme Corp booth" }),
+    ];
+
+    const [booth] = groupBoothLineItemsForEditing(sections);
+
+    expect(booth.boothDescription).toBe("Acme Corp booth");
+  });
+
   it("orders a booth's own custom-named groups by sortOrder (moveElementGroupOrder's own field)", () => {
     const sections = [
       editableSection({ id: "s1", name: "Platform", groupLabel: "SECTION 231", sortOrder: 1 }),

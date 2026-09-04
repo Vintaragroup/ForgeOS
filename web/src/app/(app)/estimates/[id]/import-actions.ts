@@ -86,7 +86,26 @@ export async function commitImportAction(
       if (optionName) sheetDestinations[sheetName] = { target: "option", optionName };
     }
   }
-  await commitPricingImport(versionId, documentId, sheetDestinations);
+  try {
+    await commitPricingImport(versionId, documentId, sheetDestinations);
+  } catch (err) {
+    // A business-rule rejection here (already imported, no rows, ...) used
+    // to propagate straight out of this server action, which Next.js
+    // treats as an unhandled render error -- the whole page got replaced
+    // by the framework's generic error screen instead of a message the
+    // user could act on. Confirmed live: a re-import attempt on an
+    // already-committed pricing schedule (see commitPricingImport's own
+    // "already been imported" guard, and page.tsx's importedPricingScheduleDocumentIds
+    // comment on why that document stays selectable at all) sent the user
+    // to a dead end instead of back to this tab. Redirecting back to the
+    // same import preview with the message as a query param, instead of
+    // re-throwing, keeps this failure on the page like importPreview's own
+    // instanceof Error handling already does for a rejected PREVIEW.
+    const message = err instanceof Error ? err.message : "Import failed.";
+    redirect(
+      `/estimates/${estimateId}?tab=documents&importDocumentId=${documentId}&commitImportError=${encodeURIComponent(message)}`,
+    );
+  }
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}?tab=documents`);
 }

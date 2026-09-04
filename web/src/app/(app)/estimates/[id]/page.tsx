@@ -220,8 +220,15 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     enrichCadDocumentId: enrichCadDocumentIdParam,
     enrichResult: enrichResultParam,
     enrichApplied: enrichAppliedParam,
+    commitImportError: commitImportErrorParam,
   } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
+  // commitImportAction's own error-redirect (see its comment) -- a
+  // business-rule rejection (already imported, locked version, ...) lands
+  // back here as a message instead of crashing the whole page to Next's
+  // generic error screen, same "redirect back to this tab with the result"
+  // shape buildResult/reconcileResult/enrichResult already use.
+  const commitImportError = Array.isArray(commitImportErrorParam) ? commitImportErrorParam[0] : commitImportErrorParam;
   const reconcileDocumentId = Array.isArray(reconcileDocumentIdParam) ? reconcileDocumentIdParam[0] : reconcileDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
   const buildResultRaw = Array.isArray(buildResultParam) ? buildResultParam[0] : buildResultParam;
@@ -828,6 +835,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     previewImportAction={previewImportWithId}
                     importDocumentId={importDocumentId}
                     importPreview={importPreview}
+                    commitImportError={commitImportError}
                     mirrorDocuments={mirrorDocuments}
                     currentVersion={currentVersion}
                     scopeDocuments={scopeDocuments}
@@ -4010,6 +4018,7 @@ function DocumentsTab({
   previewImportAction,
   importDocumentId,
   importPreview,
+  commitImportError,
   mirrorDocuments,
   currentVersion,
   scopeDocuments,
@@ -4040,6 +4049,7 @@ function DocumentsTab({
   previewImportAction: (formData: FormData) => void | Promise<void>;
   importDocumentId: string | undefined;
   importPreview: Awaited<ReturnType<typeof previewPricingImport>> | Error | null;
+  commitImportError: string | undefined;
   mirrorDocuments: { id: string; filename: string; buildName: string | null }[];
   currentVersion: VersionWithSections;
   scopeDocuments: { id: string; filename: string }[];
@@ -4176,6 +4186,12 @@ function DocumentsTab({
           {importPreview instanceof Error && (
             <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {importPreview.message}
+            </p>
+          )}
+
+          {commitImportError && (
+            <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {commitImportError}
             </p>
           )}
 

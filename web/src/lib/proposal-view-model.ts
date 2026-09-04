@@ -735,7 +735,15 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     const elementKey = `${boothLabel}::${elementType}`;
     elementSortOrder.set(elementKey, Math.min(elementSortOrder.get(elementKey) ?? Infinity, section.sortOrder ?? 0));
 
-    if (!boothDescriptions.has(boothLabel)) {
+    // Prefers a non-null value over whichever section is simply encountered
+    // first -- every section sharing a groupLabel is SUPPOSED to carry an
+    // identical boothDescription (mergeBoothIntoAnotherBooth and
+    // resolveOrCreateTargetSection both keep that invariant on write), but
+    // this is the read-side backstop for the one moment a new section can
+    // still be seen with a stale/null value, so a real approved H1 heading
+    // never appears to silently revert just because of array order.
+    const currentBoothDescription = boothDescriptions.get(boothLabel);
+    if (!currentBoothDescription || (currentBoothDescription.description === null && section.boothDescription !== null)) {
       boothDescriptions.set(boothLabel, {
         description: section.boothDescription,
         pendingDescription: section.boothPendingDescription,

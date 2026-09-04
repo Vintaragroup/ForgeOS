@@ -1374,6 +1374,27 @@ describe("resolveOrCreateTargetSection", () => {
     expect(created.buildType).toBe("RENTAL");
   });
 
+  it("creates a new section carrying through the booth's existing approved H1 heading, instead of leaving it null", async () => {
+    // Regression: a freshly-created H2 joining an already-described booth
+    // used to leave its own boothDescription null. groupBoothLineItemsForEditing's
+    // "first section encountered" read could then pick that null value over
+    // the booth's real one, making an already-approved H1 heading appear to
+    // silently revert -- confirmed live on a real production estimate via
+    // the "Move to group" flow.
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const tagged = await addSection(version.id, { name: "Booth Build", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall" });
+    await db.estimateSection.update({
+      where: { id: tagged.id },
+      data: { boothDescription: "Large LED Display Wall", boothPendingDescription: "New AI text" },
+    });
+
+    const created = await resolveOrCreateTargetSection(version.id, "FS - Hitting Bay Wall", "Labor");
+
+    expect(created.boothDescription).toBe("Large LED Display Wall");
+    expect(created.boothPendingDescription).toBe("New AI text");
+  });
+
   it("creates a project-wide section (no booth) when groupLabel is null and no match exists", async () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);

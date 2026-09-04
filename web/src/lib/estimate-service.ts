@@ -216,6 +216,18 @@ export async function addSection(
     optionId?: string | null;
     groupLabel?: string | null;
     buildType?: SectionBuildType | null;
+    // Same "new section joining an existing booth inherits the booth's
+    // shared fields" invariant as buildType above (see
+    // resolveBoothBuildType's own comment) -- resolveOrCreateTargetSection
+    // passes these through when groupLabel matches an existing booth, so a
+    // freshly-created H2 never regresses the booth's already-approved H1
+    // heading/summary back to its empty state. Left undefined (not
+    // defaulted to null here) for every OTHER caller creating a genuinely
+    // new booth, which has nothing to inherit yet.
+    boothDescription?: string | null;
+    boothPendingDescription?: string | null;
+    boothSummary?: string | null;
+    boothPendingSummary?: string | null;
     // A brand-new section has no category of its own -- EstimateSection
     // carries no category field at all; membership in a category tab is
     // resolved entirely from its line items' own category (see
@@ -239,6 +251,10 @@ export async function addSection(
       optionId: data.optionId,
       groupLabel: data.groupLabel,
       buildType: data.buildType ?? null,
+      boothDescription: data.boothDescription ?? null,
+      boothPendingDescription: data.boothPendingDescription ?? null,
+      boothSummary: data.boothSummary ?? null,
+      boothPendingSummary: data.boothPendingSummary ?? null,
     },
   });
   if (data.placeholderCategory) {
@@ -884,10 +900,35 @@ export async function resolveOrCreateTargetSection(
   });
   if (existing) return existing;
 
-  const buildType = canonicalGroupLabel ? await resolveBoothBuildType(estimateVersionId, canonicalGroupLabel) : null;
+  // A brand-new H2 joining an EXISTING booth inherits that booth's already-
+  // approved H1 heading/summary, the same way it already inherits buildType
+  // above -- confirmed live as a real bug: creating a new section under a
+  // described booth (e.g. via "Move to group") left the new section's own
+  // boothDescription null, and groupBoothLineItemsForEditing's "first
+  // section encountered" convention could then pick THAT null value over
+  // the booth's real one, silently reverting an approved H1 heading back to
+  // its raw groupLabel with no edit having touched it directly.
+  const [buildType, boothFields] = canonicalGroupLabel
+    ? await Promise.all([
+        resolveBoothBuildType(estimateVersionId, canonicalGroupLabel),
+        db.estimateSection.findFirst({
+          where: { estimateVersionId, groupLabel: canonicalGroupLabel },
+          select: { boothDescription: true, boothPendingDescription: true, boothSummary: true, boothPendingSummary: true },
+        }),
+      ])
+    : [null, null];
   return addSection(
     estimateVersionId,
-    { name: sectionName, sectionType: "COMPONENT", groupLabel: canonicalGroupLabel, buildType },
+    {
+      name: sectionName,
+      sectionType: "COMPONENT",
+      groupLabel: canonicalGroupLabel,
+      buildType,
+      boothDescription: boothFields?.boothDescription,
+      boothPendingDescription: boothFields?.boothPendingDescription,
+      boothSummary: boothFields?.boothSummary,
+      boothPendingSummary: boothFields?.boothPendingSummary,
+    },
     actorId,
   );
 }
