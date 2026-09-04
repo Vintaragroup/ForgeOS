@@ -24,6 +24,7 @@ import {
   createEstimateVersion,
   createNewVersionFromLocked,
   deleteElementGroup,
+  deleteEmptySection,
   deleteLineItem,
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
@@ -2669,5 +2670,43 @@ describe("deleteElementGroup", () => {
     await expect(deleteElementGroup(estimate.opportunityId, version.id, "Section 231 - Booth", "Booth Build")).rejects.toThrow(
       /locked/,
     );
+  });
+});
+
+describe("deleteEmptySection", () => {
+  it("deletes a section with no line items", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, {
+      name: "Custom Build",
+      sectionType: "COMPONENT",
+      groupLabel: "Section 231 - Booth",
+      buildType: "RENTAL",
+    });
+
+    await deleteEmptySection(version.id, section.id);
+
+    expect(await db.estimateSection.findUnique({ where: { id: section.id } })).toBeNull();
+  });
+
+  it("refuses to delete a section that still has line items", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Booth Build", sectionType: "COMPONENT" });
+    const item = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 10 });
+
+    await expect(deleteEmptySection(version.id, section.id)).rejects.toThrow(/still has line items/);
+
+    expect(await db.estimateSection.findUnique({ where: { id: section.id } })).not.toBeNull();
+    expect(await db.lineItem.findUnique({ where: { id: item.id } })).not.toBeNull();
+  });
+
+  it("rejects on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Booth Build", sectionType: "COMPONENT" });
+    await lockEstimateVersion(version.id);
+
+    await expect(deleteEmptySection(version.id, section.id)).rejects.toThrow(/locked/);
   });
 });

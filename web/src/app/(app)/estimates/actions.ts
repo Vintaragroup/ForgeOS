@@ -17,6 +17,7 @@ import {
   createEstimateVersion,
   createNewVersionFromLocked,
   deleteElementGroup,
+  deleteEmptySection,
   deleteLineItem,
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
@@ -345,6 +346,16 @@ export async function deleteElementGroupAction(estimateId: string, versionId: st
   const opportunityId = await estimateOpportunityId(estimateId);
   await deleteElementGroup(opportunityId, versionId, groupLabel, elementType, user.id);
   await recomputeVersionTotals(versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Counterpart to deleteElementGroupAction above, for a group that never
+// got its first line item -- see deleteEmptySection's own comment in
+// estimate-service.ts for why that's a separate code path.
+export async function deleteEmptySectionAction(estimateId: string, versionId: string, sectionId: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await deleteEmptySection(versionId, sectionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

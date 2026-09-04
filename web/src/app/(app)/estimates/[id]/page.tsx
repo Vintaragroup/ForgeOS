@@ -39,6 +39,7 @@ import {
   createFirstVersion,
   createNewVersionAction,
   deleteElementGroupAction,
+  deleteEmptySectionAction,
   deleteInternalCostAction,
   deleteLineItemAction,
   generateProposalAction,
@@ -3561,7 +3562,18 @@ function EmptyGroupCard({
 }) {
   return (
     <div className="rounded border border-dashed border-neutral-300 p-3">
-      <p className="mb-2 text-xs font-medium text-neutral-500">{sectionName} — no items yet</p>
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-xs font-medium text-neutral-500">{sectionName} — no items yet</p>
+        <form action={deleteEmptySectionAction.bind(null, estimateId, versionId, sectionId)}>
+          <button
+            className="text-sm text-neutral-400 hover:text-red-600"
+            title="Delete this empty group"
+            aria-label="Delete empty group"
+          >
+            ✕
+          </button>
+        </form>
+      </div>
       <AddLineItemForm
         estimateId={estimateId}
         versionId={versionId}

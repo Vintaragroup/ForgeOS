@@ -639,6 +639,28 @@ export async function deleteElementGroup(
   await db.estimateSection.deleteMany({ where: { id: { in: target.sectionIds } } });
 }
 
+// Deletes a genuinely empty H2 group -- one just added via "+ Group" (or
+// imported with no items yet) that never got its first line item. See
+// emptyChildSections' own comment in the page component for why this is a
+// real, separate render path from deleteElementGroup above: a section
+// with zero items never appears in groupBoothLineItemsForEditing's own
+// elementGroups (that's built entirely from existing line items), so it
+// was previously invisible to that delete tool too -- confirmed live as
+// a real "three empty groups with no way to delete them" report. No line
+// items to snapshot/audit-log here, unlike deleteElementGroup -- there's
+// nothing to lose, just the empty container itself.
+export async function deleteEmptySection(estimateVersionId: string, sectionId: string) {
+  await assertUnlocked(estimateVersionId);
+  const section = await db.estimateSection.findFirstOrThrow({
+    where: { id: sectionId, estimateVersionId },
+    select: { id: true, lineItems: { select: { id: true } } },
+  });
+  if (section.lineItems.length > 0) {
+    throw new Error("This group still has line items -- move or delete them first.");
+  }
+  await db.estimateSection.delete({ where: { id: sectionId } });
+}
+
 // Approve-with-text (green check on an AI suggestion) or a manual save --
 // either way the result lands in `description` and any pending suggestion
 // is cleared, since it's now superseded either by the user's own approval
