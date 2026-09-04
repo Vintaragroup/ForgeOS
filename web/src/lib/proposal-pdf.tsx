@@ -15,6 +15,7 @@ import {
   bucketSubtotal,
   buildTopLevelCategoryViews,
   computeRentalAndServicesTotals,
+  standaloneSummaryGroupsByCategory,
   type AggregatedLineItem,
   type BoothGroup,
   type ProposalViewSection,
@@ -502,8 +503,15 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // contributes no booth groups and keeps rendering flat under its own
   // raw category, unchanged.
   const boothGroupsByCategoryName = boothGroupsByCategory(data.sections, data.categories);
-  const boothGroupsForCategory = (categoryName: string): BoothGroup[] =>
-    boothGroupsByCategoryName.get(categoryName) ?? [];
+  // A summarized standalone section (see its own comment) renders through
+  // this exact same booth-shaped machinery -- merged in here rather than
+  // handled as a separate lookup, so every call site below (top-level and
+  // per-child alike) picks it up automatically, same as a real booth.
+  const standaloneSummaryGroupsByCategoryName = standaloneSummaryGroupsByCategory(data.sections, data.categories);
+  const boothGroupsForCategory = (categoryName: string): BoothGroup[] => [
+    ...(boothGroupsByCategoryName.get(categoryName) ?? []),
+    ...(standaloneSummaryGroupsByCategoryName.get(categoryName) ?? []),
+  ];
 
   // Every distinct aggregated item renders as its own row, always -- no
   // detail-mode toggle, no "Includes: A, B, C" collapse. Cross-booth
@@ -583,6 +591,64 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           >
             {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sellForCategory(li.totalCost, categoryName))}
           </Text>
+        </View>
+      ))}
+    </>
+  );
+
+  // Shared by the top-level category loop and each of its Method-split
+  // children below -- boothGroupsByCategory keys its output by whichever
+  // EFFECTIVE category (resolveEffectiveCategory) a tagged booth's items
+  // actually resolved into, which is the COMPOSED leaf name (e.g.
+  // "Audio/Visual - Rental") for any Type that has a Method split, not
+  // the plain top-level name. A booth living entirely under one such
+  // split-leaf category used to never be looked up at all -- only the
+  // top-level name was ever passed to boothGroupsForCategory -- so it
+  // silently fell all the way through to the flat per-child render below
+  // with no booth heading, no boothSummary, and no summarizeOnProposal
+  // effect. Confirmed live: a real booth ("Large LED Display Wall",
+  // resolved into "Audio/Visual - Rental") rendered correctly in the Line
+  // Items tab but as a flat, unlabeled item dump on the actual Proposal
+  // PDF specifically.
+  const renderBoothGroups = (boothGroups: BoothGroup[], categoryName: string, hidePrice: boolean, isSummary: boolean, isServiceStyle: boolean) => (
+    <>
+      {boothGroups.map((booth) => (
+        <View key={booth.boothLabel} style={styles.boothSection}>
+          <View style={styles.boothHeaderRow} minPresenceAhead={24}>
+            <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
+            <Text style={styles.boothHeaderTotal}>
+              {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
+            </Text>
+          </View>
+          {/* Middle tier -- see EstimateSection.boothSummary's own schema
+              comment. Always shown when written, independent of
+              summarizeOnProposal: booth.subtotal already includes every
+              item regardless, so the total stays correct whichever way
+              that flag is set, and this copy is additive context, not a
+              replacement for anything. */}
+          {booth.boothSummary && <Text style={styles.proposalSummaryText}>{booth.boothSummary}</Text>}
+          {booth.elementGroups.map((group) => (
+            <View key={group.elementType} style={styles.elementTypeSection}>
+              <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
+                <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
+                <Text style={styles.elementTypeHeaderTotal}>
+                  {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
+                </Text>
+              </View>
+              {/* Bottom tier -- same "always shown" reasoning as
+                  boothSummary above. */}
+              {group.elementSummary && <Text style={styles.proposalSummaryText}>{group.elementSummary}</Text>}
+              {/* summarizeOnProposal's only remaining job: skip just the
+                  itemized rows below. See EstimateSection.summarizeOnProposal's
+                  own schema comment. */}
+              {!booth.summarizeOnProposal &&
+                (isSummary
+                  ? renderSummaryBody(group.items)
+                  : isServiceStyle
+                    ? renderServiceBody(group.items, categoryName, hidePrice)
+                    : renderBody(group.items, categoryName, hidePrice))}
+            </View>
+          ))}
         </View>
       ))}
     </>
@@ -724,16 +790,31 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           const boothGroups = boothGroupsForCategory(categoryName);
           const hasBoothGroups = boothGroups.length > 0;
           const flatOwnItems = hasBoothGroups ? ownItems.filter((li) => !li.boothLabel) : ownItems;
-          const flatChildren = (
-            hasBoothGroups
-              ? children.map((child) => ({ name: child.name, items: child.items.filter((li) => !li.boothLabel) }))
-              : children
-          ).filter((child) => child.items.length > 0);
-          if (flatOwnItems.length === 0 && flatChildren.length === 0 && !hasBoothGroups) return null;
+          // Each Method-split child (e.g. "Audio/Visual - Rental") is its
+          // own effective category in boothGroupsByCategory's own terms --
+          // resolveEffectiveCategory composes the Method suffix onto a
+          // tagged booth's leaf category before that booth ever reaches
+          // this file, so a booth living entirely under one such child
+          // must be looked up by the CHILD's own name, not the top-level
+          // categoryName above (see renderBoothGroups' own comment for the
+          // real bug this fixes). Computed per child, independent of this
+          // category's own hasBoothGroups.
+          const childViews = children
+            .map((child) => {
+              const childBoothGroups = boothGroupsForCategory(child.name);
+              const items = childBoothGroups.length > 0 ? child.items.filter((li) => !li.boothLabel) : child.items;
+              return { name: child.name, items, boothGroups: childBoothGroups };
+            })
+            .filter((child) => child.items.length > 0 || child.boothGroups.length > 0);
+          if (flatOwnItems.length === 0 && childViews.length === 0 && !hasBoothGroups) return null;
 
           const boothTotal = boothGroups.reduce((sum, b) => sum + b.subtotal, 0);
-          const flatTotal = bucketSubtotal(flatOwnItems) + flatChildren.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
-          const sectionTotal = boothTotal + flatTotal;
+          const childBoothTotal = childViews.reduce(
+            (sum, c) => sum + c.boothGroups.reduce((s, b) => s + b.subtotal, 0),
+            0,
+          );
+          const flatTotal = bucketSubtotal(flatOwnItems) + childViews.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
+          const sectionTotal = boothTotal + childBoothTotal + flatTotal;
 
           return (
             <View key={categoryName} style={styles.section}>
@@ -767,70 +848,28 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     </View>
                   </View>
                 )}
-              {hasBoothGroups &&
-                boothGroups.map((booth) => (
-                  <View key={booth.boothLabel} style={styles.boothSection}>
-                    <View style={styles.boothHeaderRow} minPresenceAhead={24}>
-                      <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
-                      <Text style={styles.boothHeaderTotal}>
-                        {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
-                      </Text>
-                    </View>
-                    {/* Middle tier -- see EstimateSection.boothSummary's
-                        own schema comment. Always shown when written,
-                        independent of summarizeOnProposal: booth.subtotal
-                        already includes every item regardless, so the
-                        total stays correct whichever way that flag is
-                        set, and this copy is additive context, not a
-                        replacement for anything. */}
-                    {booth.boothSummary && <Text style={styles.proposalSummaryText}>{booth.boothSummary}</Text>}
-                    {booth.elementGroups.map((group) => (
-                      <View key={group.elementType} style={styles.elementTypeSection}>
-                        <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
-                          <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
-                          <Text style={styles.elementTypeHeaderTotal}>
-                            {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
-                          </Text>
-                        </View>
-                        {/* Bottom tier -- same "always shown" reasoning as
-                            boothSummary above. */}
-                        {group.elementSummary && <Text style={styles.proposalSummaryText}>{group.elementSummary}</Text>}
-                        {/* summarizeOnProposal's only remaining job: skip
-                            just the itemized rows below. See
-                            EstimateSection.summarizeOnProposal's own
-                            schema comment. */}
-                        {!booth.summarizeOnProposal &&
-                          (isSummary
-                            ? renderSummaryBody(group.items)
-                            : isServiceStyle
-                              ? renderServiceBody(group.items, categoryName, hidePrice)
-                              : renderBody(group.items, categoryName, hidePrice))}
-                      </View>
-                    ))}
-                  </View>
-                ))}
+              {hasBoothGroups && renderBoothGroups(boothGroups, categoryName, hidePrice, isSummary, isServiceStyle)}
               {isSummary
                 ? renderSummaryBody(flatOwnItems)
                 : isServiceStyle
                   ? renderServiceBody(flatOwnItems, categoryName, hidePrice)
                   : renderBody(flatOwnItems, categoryName, hidePrice)}
-              {flatChildren.map((child) => (
-                <View key={child.name} style={styles.subsection}>
-                  <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
-                    <Text style={styles.subsectionHeaderText}>{child.name}</Text>
-                    <Text style={styles.subsectionHeaderTotal}>
-                      {hidePrice
-                        ? ""
-                        : amountContent(
-                            bucketSubtotal(child.items),
-                            sellForCategory(bucketSubtotal(child.items), child.name),
-                            data.showCost,
-                          )}
-                    </Text>
+              {childViews.map((child) => {
+                const childTotal = bucketSubtotal(child.items) + child.boothGroups.reduce((s, b) => s + b.subtotal, 0);
+                return (
+                  <View key={child.name} style={styles.subsection}>
+                    <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
+                      <Text style={styles.subsectionHeaderText}>{child.name}</Text>
+                      <Text style={styles.subsectionHeaderTotal}>
+                        {hidePrice ? "" : amountContent(childTotal, sellForCategory(childTotal, child.name), data.showCost)}
+                      </Text>
+                    </View>
+                    {child.boothGroups.length > 0 &&
+                      renderBoothGroups(child.boothGroups, child.name, hidePrice, isSummary, isServiceStyle)}
+                    {isSummary ? renderSummaryBody(child.items) : renderBody(child.items, child.name, hidePrice)}
                   </View>
-                  {isSummary ? renderSummaryBody(child.items) : renderBody(child.items, child.name, hidePrice)}
-                </View>
-              ))}
+                );
+              })}
             </View>
           );
         })}

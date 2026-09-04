@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Prisma } from "@/generated/prisma/client";
 import {
   aggregateByCategory,
+  boothGroupsByCategory,
   bucketLineItemsByCategory,
   groupBoothLineItems,
   groupBoothLineItemsForEditing,
@@ -9,6 +10,7 @@ import {
   mergeBoothGroupsForAllMethods,
   mergeCategoryBucketsForAllMethods,
   resolveEffectiveCategory,
+  standaloneSummaryGroupsByCategory,
   type ProposalViewSection,
   type RawBoothGroup,
   type RawCategoryBucket,
@@ -131,6 +133,159 @@ describe("aggregateByCategory -- booth-scoped grouping", () => {
 
     expect(bucket.items).toHaveLength(1);
     expect(bucket.items[0].description).toBe("Real scope");
+  });
+
+  it("scopes a summarized standalone section's items to itself, never cross-merging with another section", () => {
+    // Regression: a booth-independent line normally sums across the whole
+    // show on purpose (see the "Compliant Door" test above) -- but a
+    // section explicitly switched to "Summarized on proposal" is meant to
+    // render as its OWN lump-sum line (standaloneSummaryGroupsByCategory
+    // below), so its items must stay scoped to that one section the same
+    // way a real booth's own items already do, not get folded into an
+    // unrelated section's identical-looking row.
+    const sections: ProposalViewSection[] = [
+      {
+        id: "s1",
+        name: "Custom Flooring",
+        groupLabel: null,
+        summarizeOnProposal: true,
+        lineItems: [li({ id: "a", description: "Turf", qty: 1, totalCost: 5000 })],
+      },
+      {
+        id: "s2",
+        name: "Other Flooring Section",
+        groupLabel: null,
+        summarizeOnProposal: false,
+        lineItems: [li({ id: "b", description: "Turf", qty: 1, totalCost: 5000 })],
+      },
+    ];
+
+    const [bucket] = aggregateByCategory(sections, categories);
+
+    expect(bucket.items).toHaveLength(2);
+    const totalCost = bucket.items.reduce((sum, i) => sum + i.totalCost, 0);
+    expect(totalCost).toBe(10000);
+    const summarizedItem = bucket.items.find((i) => i.boothLabel?.includes("s1"));
+    expect(summarizedItem?.qty).toBe(1);
+    expect(summarizedItem?.boothLabel).not.toBeNull();
+  });
+});
+
+describe("boothGroupsByCategory", () => {
+  it("keys a tagged booth's own group by the composed Method leaf, not the plain top-level Type name", () => {
+    // This is the exact mismatch proposal-pdf.tsx's own render loop used
+    // to fall into: a tagged booth's items resolve (resolveEffectiveCategory)
+    // into the COMPOSED leaf category ("Audio/Visual - Rental") the
+    // instant its section has both a groupLabel and a buildType, so this
+    // function's own output has to be keyed there too, not under the
+    // plain Type name a caller might naively look it up by.
+    const audioVisual = cat("Audio/Visual", "audio_visual");
+    const audioVisualRental = {
+      id: "audio_visual_rental",
+      name: "Audio/Visual - Rental",
+      key: "audio_visual_rental",
+      parentId: "audio_visual",
+      sortOrder: 0,
+      isShowService: false,
+      isLumpSum: false,
+      deletedAt: null,
+    } as never;
+    const categoriesWithSplit = [audioVisual, audioVisualRental];
+    const sections: ProposalViewSection[] = [
+      {
+        name: "LED Screen",
+        groupLabel: "RENTAL",
+        buildType: "RENTAL",
+        boothDescription: "Large LED Display Wall",
+        lineItems: [li({ id: "a", description: "LED Screen 8h x 11w", category: "Audio/Visual", totalCost: 16460 })],
+      },
+    ];
+
+    const result = boothGroupsByCategory(sections, categoriesWithSplit);
+
+    expect(result.get("Audio/Visual")).toBeUndefined();
+    const [booth] = result.get("Audio/Visual - Rental") ?? [];
+    expect(booth?.boothDescription).toBe("Large LED Display Wall");
+    expect(booth?.subtotal).toBe(16460);
+  });
+});
+
+describe("standaloneSummaryGroupsByCategory", () => {
+  it("renders a booth-independent summarized section as its own lump-sum group, using its approved description", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        id: "s1",
+        name: "Custom Flooring Installation",
+        description: "Turf & Carpet Package",
+        groupLabel: null,
+        summarizeOnProposal: true,
+        lineItems: [
+          li({ id: "a", description: "Turf", qty: 1, totalCost: 5000 }),
+          li({ id: "b", description: "Carpet", qty: 1, totalCost: 3000 }),
+        ],
+      },
+    ];
+
+    const [group] = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
+
+    expect(group?.boothDescription).toBe("Turf & Carpet Package");
+    expect(group?.subtotal).toBe(8000);
+    expect(group?.summarizeOnProposal).toBe(true);
+  });
+
+  it("falls back to the section's raw name when it has no approved description", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        id: "s1",
+        name: "Custom Flooring Installation",
+        groupLabel: null,
+        summarizeOnProposal: true,
+        lineItems: [li({ id: "a", totalCost: 100 })],
+      },
+    ];
+
+    const [group] = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
+
+    expect(group?.boothDescription).toBe("Custom Flooring Installation");
+  });
+
+  it("keeps two different summarized standalone sections as two separate groups, not merged into one", () => {
+    const sections: ProposalViewSection[] = [
+      { id: "s1", name: "Flooring A", groupLabel: null, summarizeOnProposal: true, lineItems: [li({ id: "a", totalCost: 100 })] },
+      { id: "s2", name: "Flooring B", groupLabel: null, summarizeOnProposal: true, lineItems: [li({ id: "b", totalCost: 200 })] },
+    ];
+
+    const groups = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.subtotal).sort()).toEqual([100, 200]);
+  });
+
+  it("excludes a non-summarized standalone section entirely -- unaffected, unchanged flat rendering", () => {
+    const sections: ProposalViewSection[] = [
+      { id: "s1", name: "Flooring", groupLabel: null, summarizeOnProposal: false, lineItems: [li({ id: "a", totalCost: 100 })] },
+    ];
+
+    const groups = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
+
+    expect(groups).toHaveLength(0);
+  });
+
+  it("excludes a real tagged booth entirely -- that's boothGroupsByCategory's own job", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        id: "s1",
+        name: "Booth",
+        groupLabel: "SECTION 211",
+        buildType: "RENTAL",
+        summarizeOnProposal: true,
+        lineItems: [li({ id: "a", totalCost: 100 })],
+      },
+    ];
+
+    const groups = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
+
+    expect(groups).toHaveLength(0);
   });
 });
 

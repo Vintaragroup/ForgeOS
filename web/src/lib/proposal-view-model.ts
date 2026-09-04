@@ -38,7 +38,23 @@ export interface ProposalViewLineItem {
 }
 
 export interface ProposalViewSection {
+  // A real EstimateSection id in every production caller (Prisma's
+  // default full-row select always includes it) -- used only to scope a
+  // summarized standalone section's own items to itself (see
+  // standaloneSummaryGroupsByCategory below), never displayed. Optional
+  // only so a test fixture built before this field existed still
+  // type-checks; standaloneSummaryGroupsByCategory falls back to `name`
+  // as its scoping key when absent, which is fine for a fixture that
+  // never has two same-named summarized sections anyway.
+  id?: string;
   name: string;
+  // User-approved short heading override for a booth-INDEPENDENT
+  // section's own flat H1 -- see EstimateSection.description's own schema
+  // comment. Optional/undefined so every existing caller/test fixture
+  // without this concept in play is unaffected; standaloneSummaryGroupsByCategory
+  // falls back to the raw `name` when absent, same as boothDescription's
+  // own fallback to boothLabel.
+  description?: string | null;
   // The numbered booth/exhibit a pricing-schedule import split this
   // section out for (e.g. "Section 402 - Booth 1 - Page 8") -- see
   // pricing-import-service.ts's own groupLabel comment. Null for
@@ -240,6 +256,21 @@ export function aggregateByCategory(sections: ProposalViewSection[], categories:
   for (const section of sections) {
     if (section.includeInProposal === false) continue;
     if (section.excludedFromTotals) continue;
+    // A summarized standalone section (groupLabel null, summarizeOnProposal
+    // true) is ALSO rendered as its own lump-sum "booth" by
+    // standaloneSummaryGroupsByCategory -- its own items still stay in
+    // this flat pool too (so every total that sums over these buckets,
+    // e.g. documentGrandTotal below, keeps including them, exactly like a
+    // real tagged booth's items already do), but scoped to their own
+    // section (never cross-merged with a different section's items the
+    // way an ordinary booth-independent line still is -- see boothScope's
+    // own comment) and boothLabel-tagged the same way, so proposal-pdf.tsx's
+    // existing "skip whatever a booth group already covers" filter (an
+    // item's own boothLabel truthiness) excludes them from the flat
+    // itemized render there without a second, parallel exclusion list.
+    const standaloneSummaryScope = !section.groupLabel && section.summarizeOnProposal
+      ? `__standalone_summary_${section.id ?? section.name}`
+      : null;
     for (const li of section.lineItems) {
       if (li.includeInProposal === false) continue;
       const category = resolveEffectiveCategory(li, section, categories);
@@ -273,7 +304,7 @@ export function aggregateByCategory(sections: ProposalViewSection[], categories:
       // sections really is one combined order, not 16 things to show
       // separately.
       const isAssembly = isCompoundAssemblyDescription(li.description);
-      const boothScope = section.groupLabel ? `${section.groupLabel} ` : "";
+      const boothScope = section.groupLabel ? `${section.groupLabel} ` : standaloneSummaryScope ? `${standaloneSummaryScope} ` : "";
       const key = isAssembly ? `assembly:${li.id}` : `${boothScope}${li.description} ${li.unit ?? ""}`;
       const existing = bucket.get(key);
       if (existing) {
@@ -285,7 +316,7 @@ export function aggregateByCategory(sections: ProposalViewSection[], categories:
         bucket.set(key, {
           key,
           description: li.description,
-          boothLabel: section.groupLabel,
+          boothLabel: section.groupLabel ?? standaloneSummaryScope,
           qty: li.qty.toNumber(),
           unit: li.unit,
           totalCost: li.totalCost.toNumber(),
@@ -658,6 +689,64 @@ export function boothGroupsByCategory(
   const result = new Map<string, BoothGroup[]>();
   for (const [categoryName, sectionsForCategory] of sectionsByCategoryName) {
     result.set(categoryName, groupBoothLineItems(sectionsForCategory));
+  }
+  return result;
+}
+
+// Companion to boothGroupsByCategory, for the OTHER kind of section whose
+// own summarizeOnProposal has to reach this document: a genuinely
+// booth-INDEPENDENT (groupLabel: null) section that's been explicitly
+// switched to "hide the detail, keep the price" (see
+// EstimateSection.summarizeOnProposal's own schema comment) is otherwise
+// invisible to boothGroupsByCategory (it requires a real groupLabel) and
+// falls through to the flat, cross-section-merged rendering the rest of
+// aggregateByCategory uses -- which has no concept of a section boundary
+// at all, so the toggle was silently ignored. Confirmed live: a
+// standalone section's "Summarized on proposal" badge showed correctly
+// in the Line Items tab while the real Proposal PDF itemized every one
+// of its rows anyway.
+//
+// Reuses groupBoothLineItems itself (via a synthetic, per-section
+// groupLabel so a summarized section's own items never merge with any
+// OTHER section's, unlike the real cross-show merge every other
+// booth-independent item still gets -- see aggregateByCategory's own
+// comment on why that merge is correct there) rather than a second,
+// independent implementation of the same booth-shaped rendering. Only
+// the heading is swapped afterward, from the synthetic key to the
+// section's own approved description/name. A non-summarized standalone
+// section is deliberately NOT included here -- its items keep exactly
+// the existing cross-section-merged flat rendering, unaffected.
+export function standaloneSummaryGroupsByCategory(
+  sections: ProposalViewSection[],
+  categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
+): Map<string, BoothGroup[]> {
+  const sectionsByCategoryName = new Map<string, ProposalViewSection[]>();
+  const sectionByScopeKey = new Map<string, ProposalViewSection>();
+  for (const section of sections) {
+    if (section.groupLabel || !section.summarizeOnProposal) continue;
+    const scopeKey = `__standalone_summary_${section.id ?? section.name}`;
+    sectionByScopeKey.set(scopeKey, section);
+    const itemsByCategoryName = new Map<string, ProposalViewLineItem[]>();
+    for (const li of section.lineItems) {
+      const categoryName = resolveEffectiveCategory(li, section, categories);
+      const bucket = itemsByCategoryName.get(categoryName);
+      if (bucket) bucket.push(li);
+      else itemsByCategoryName.set(categoryName, [li]);
+    }
+    for (const [categoryName, items] of itemsByCategoryName) {
+      const clone: ProposalViewSection = { ...section, groupLabel: scopeKey, lineItems: items };
+      const arr = sectionsByCategoryName.get(categoryName);
+      if (arr) arr.push(clone);
+      else sectionsByCategoryName.set(categoryName, [clone]);
+    }
+  }
+  const result = new Map<string, BoothGroup[]>();
+  for (const [categoryName, sectionsForCategory] of sectionsByCategoryName) {
+    const groups = groupBoothLineItems(sectionsForCategory).map((group) => {
+      const section = sectionByScopeKey.get(group.boothLabel);
+      return { ...group, boothDescription: section?.description ?? section?.name ?? group.boothLabel };
+    });
+    result.set(categoryName, groups);
   }
   return result;
 }

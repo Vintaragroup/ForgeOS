@@ -3642,6 +3642,49 @@ function CategoryTabContent({
                     </form>
                   </>
                 )}
+                {/* An untagged booth (real groupLabel, no buildType yet --
+                    see flatSectionGroups' own comment above on why this
+                    lands here at all) gets NONE of the isStandalone tools
+                    above (it does have a real groupLabel) and none of a
+                    real booth's own tools either (Untag/kebab/+Group,
+                    rendered only in the hasBoothGroups branch) -- until
+                    tagged, it's stuck with no way to hide, summarize,
+                    exclude, or move itself at all. Confirmed live as a
+                    real dead end: a section whose groupLabel had been set
+                    to the wrong value entirely (matching an unrelated
+                    line item's own description text, not any real booth)
+                    had no path back to a normal, working state short of a
+                    direct database edit. Same detach-to-a-different-or-no-
+                    booth form isStandalone's own "Move all items to
+                    booth" already offers, just also offered here so this
+                    case always has a way out. */}
+                {!isStandalone && group.groupLabel && (
+                  <form
+                    action={moveSectionToGroupAction.bind(null, estimateId, version.id, group.sectionId)}
+                    className="flex items-center gap-1.5"
+                  >
+                    <input
+                      type="text"
+                      name="groupLabel"
+                      placeholder="Booth (blank = project-wide)"
+                      className="w-40 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
+                    />
+                    <input
+                      type="text"
+                      name="sectionName"
+                      placeholder="Group name"
+                      required
+                      className="w-32 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                      title="Move every item in this untagged booth to a different (or no) booth/group, and remove this now-empty section"
+                    >
+                      Move all items to booth
+                    </button>
+                  </form>
+                )}
                 <form
                   action={updateSectionItemsCategoryAction.bind(null, estimateId, version.id, group.sectionId)}
                   className="flex items-center gap-1.5 text-neutral-900"
