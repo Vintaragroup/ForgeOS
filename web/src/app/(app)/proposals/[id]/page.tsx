@@ -221,7 +221,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                   <div key={booth.boothLabel}>
                     <div className="mb-1 flex items-center justify-between bg-brand-navy px-2 py-1.5">
                       <span className="text-[10px] font-semibold uppercase tracking-wide text-white">
-                        {booth.boothLabel}
+                        {booth.boothDescription ?? booth.boothLabel}
                       </span>
                       <span className="text-[10px] font-semibold text-white">{moneyFromNumber(booth.subtotal)}</span>
                     </div>

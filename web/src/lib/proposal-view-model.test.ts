@@ -234,6 +234,55 @@ describe("groupBoothLineItems", () => {
     expect(booth.elementGroups[0].items).toHaveLength(2);
   });
 
+  it("uses the booth's approved boothDescription for its heading, falling back to the raw boothLabel when unset", () => {
+    // Regression: this function -- the one the real Proposal PDF and web
+    // proposal are built from -- never read boothDescription at all, so
+    // an estimator's approved friendly booth name (e.g. "Large LED
+    // Display Wall") never reached the client-facing document; it always
+    // showed the raw, often cryptic internal groupLabel (e.g. "RENTAL")
+    // instead, even though the Line Items tab showed the approved name
+    // correctly. Confirmed live on a real production estimate.
+    const described: ProposalViewSection[] = [
+      {
+        name: "Platform",
+        groupLabel: "RENTAL",
+        boothDescription: "Large LED Display Wall",
+        lineItems: [li({ id: "a", totalCost: 100 })],
+      },
+    ];
+    const plain: ProposalViewSection[] = [
+      { name: "Platform", groupLabel: "SECTION 428", lineItems: [li({ id: "b", totalCost: 100 })] },
+    ];
+
+    const [describedBooth] = groupBoothLineItems(described);
+    const [plainBooth] = groupBoothLineItems(plain);
+
+    expect(describedBooth.boothDescription).toBe("Large LED Display Wall");
+    expect(plainBooth.boothDescription).toBeNull();
+  });
+
+  it("prefers a section with a real boothDescription over one encountered first with none", () => {
+    // Same class of bug as groupBoothLineItemsForEditing's own regression
+    // test -- a new section joining an already-described booth (e.g. via
+    // "Move to group" or a merge) could still land here with a null
+    // boothDescription; if it happened to sort before the booth's real,
+    // approved section, "first section wins outright" made an approved
+    // heading appear to silently revert on the PDF specifically.
+    const sections: ProposalViewSection[] = [
+      { name: "Labor", groupLabel: "RENTAL", boothDescription: null, lineItems: [li({ id: "a", totalCost: 100 })] },
+      {
+        name: "Platform",
+        groupLabel: "RENTAL",
+        boothDescription: "Large LED Display Wall",
+        lineItems: [li({ id: "b", totalCost: 200 })],
+      },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+
+    expect(booth.boothDescription).toBe("Large LED Display Wall");
+  });
+
   it("carries boothSummary through to the BoothGroup, defaulting null when unset", () => {
     const withSummary: ProposalViewSection[] = [
       {

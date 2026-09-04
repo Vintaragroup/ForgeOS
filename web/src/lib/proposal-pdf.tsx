@@ -771,7 +771,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 boothGroups.map((booth) => (
                   <View key={booth.boothLabel} style={styles.boothSection}>
                     <View style={styles.boothHeaderRow} minPresenceAhead={24}>
-                      <Text style={styles.boothHeaderText}>{booth.boothLabel}</Text>
+                      <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
                       <Text style={styles.boothHeaderTotal}>
                         {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
                       </Text>

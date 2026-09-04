@@ -228,6 +228,17 @@ export async function addSection(
     boothPendingDescription?: string | null;
     boothSummary?: string | null;
     boothPendingSummary?: string | null;
+    // Same booth-wide sync as the four fields above -- see
+    // EstimateSection.includeInProposal/summarizeOnProposal/
+    // excludedFromTotals's own schema comments (each documents the exact
+    // same "kept in sync across every section sharing this booth's
+    // groupLabel via updateMany" invariant). Left undefined for a
+    // genuinely new booth, which falls through to this column's own
+    // schema default -- only resolveOrCreateTargetSection passes a real
+    // value, carried over from the existing booth being joined.
+    includeInProposal?: boolean;
+    summarizeOnProposal?: boolean;
+    excludedFromTotals?: boolean;
     // A brand-new section has no category of its own -- EstimateSection
     // carries no category field at all; membership in a category tab is
     // resolved entirely from its line items' own category (see
@@ -255,6 +266,13 @@ export async function addSection(
       boothPendingDescription: data.boothPendingDescription ?? null,
       boothSummary: data.boothSummary ?? null,
       boothPendingSummary: data.boothPendingSummary ?? null,
+      // Non-nullable columns with their own schema default -- left as
+      // `undefined` (not coerced with `?? false`/`?? true`) when the
+      // caller doesn't pass one, so Prisma applies that column default
+      // exactly as before this inheritance existed.
+      includeInProposal: data.includeInProposal,
+      summarizeOnProposal: data.summarizeOnProposal,
+      excludedFromTotals: data.excludedFromTotals,
     },
   });
   if (data.placeholderCategory) {
@@ -900,20 +918,33 @@ export async function resolveOrCreateTargetSection(
   });
   if (existing) return existing;
 
-  // A brand-new H2 joining an EXISTING booth inherits that booth's already-
-  // approved H1 heading/summary, the same way it already inherits buildType
+  // A brand-new H2 joining an EXISTING booth inherits every one of that
+  // booth's whole-booth fields, the same way it already inherits buildType
   // above -- confirmed live as a real bug: creating a new section under a
   // described booth (e.g. via "Move to group") left the new section's own
   // boothDescription null, and groupBoothLineItemsForEditing's "first
   // section encountered" convention could then pick THAT null value over
   // the booth's real one, silently reverting an approved H1 heading back to
-  // its raw groupLabel with no edit having touched it directly.
+  // its raw groupLabel with no edit having touched it directly. Same risk
+  // for includeInProposal/summarizeOnProposal/excludedFromTotals -- each is
+  // documented on the schema as synced booth-wide via updateMany, so a new
+  // section defaulting to its own column default instead could silently
+  // un-hide a booth the estimator explicitly hid, or leave it showing full
+  // detail when the rest of the booth was switched to summary-only.
   const [buildType, boothFields] = canonicalGroupLabel
     ? await Promise.all([
         resolveBoothBuildType(estimateVersionId, canonicalGroupLabel),
         db.estimateSection.findFirst({
           where: { estimateVersionId, groupLabel: canonicalGroupLabel },
-          select: { boothDescription: true, boothPendingDescription: true, boothSummary: true, boothPendingSummary: true },
+          select: {
+            boothDescription: true,
+            boothPendingDescription: true,
+            boothSummary: true,
+            boothPendingSummary: true,
+            includeInProposal: true,
+            summarizeOnProposal: true,
+            excludedFromTotals: true,
+          },
         }),
       ])
     : [null, null];
@@ -928,6 +959,9 @@ export async function resolveOrCreateTargetSection(
       boothPendingDescription: boothFields?.boothPendingDescription,
       boothSummary: boothFields?.boothSummary,
       boothPendingSummary: boothFields?.boothPendingSummary,
+      includeInProposal: boothFields?.includeInProposal,
+      summarizeOnProposal: boothFields?.summarizeOnProposal,
+      excludedFromTotals: boothFields?.excludedFromTotals,
     },
     actorId,
   );
@@ -988,8 +1022,9 @@ export async function moveSectionToGroup(
 // which shared string every one of the source sections carries.
 //
 // Copies the TARGET's own boothDescription/boothPendingDescription/
-// boothSummary/boothPendingSummary onto every incoming section, rather
-// than clearing the incoming sections' own values -- the view layer reads
+// boothSummary/boothPendingSummary/includeInProposal/summarizeOnProposal/
+// excludedFromTotals onto every incoming section, rather than leaving the
+// incoming sections' own values in place -- the view layer reads
 // whichever section it finds first for a groupLabel
 // (groupBoothLineItemsForEditing, and page.tsx's own boothSummaryFirstSection),
 // a plain array .find() with no preference for a non-null value, so
@@ -1025,7 +1060,15 @@ export async function mergeBoothIntoAnotherBooth(
   // create a brand-new, phantom booth instead of merging into a real one.
   const targetSection = await db.estimateSection.findFirst({
     where: { estimateVersionId, groupLabel: targetGroupLabel },
-    select: { boothDescription: true, boothPendingDescription: true, boothSummary: true, boothPendingSummary: true },
+    select: {
+      boothDescription: true,
+      boothPendingDescription: true,
+      boothSummary: true,
+      boothPendingSummary: true,
+      includeInProposal: true,
+      summarizeOnProposal: true,
+      excludedFromTotals: true,
+    },
   });
   if (!targetSection) throw new Error("Target booth not found on this estimate version.");
 
@@ -1037,6 +1080,9 @@ export async function mergeBoothIntoAnotherBooth(
       boothPendingDescription: targetSection.boothPendingDescription,
       boothSummary: targetSection.boothSummary,
       boothPendingSummary: targetSection.boothPendingSummary,
+      includeInProposal: targetSection.includeInProposal,
+      summarizeOnProposal: targetSection.summarizeOnProposal,
+      excludedFromTotals: targetSection.excludedFromTotals,
     },
   });
 }

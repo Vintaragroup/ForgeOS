@@ -76,6 +76,14 @@ export interface ProposalViewSection {
   // same reasoning as includeInProposal above: undefined means "real
   // scope, counted as normal."
   excludedFromTotals?: boolean;
+  // User-approved short heading override for this booth's H1, shown in
+  // place of the raw groupLabel -- see EstimateSection.boothDescription's
+  // own schema comment. Optional/undefined (not just nullable) so an
+  // existing caller/test fixture without any booth-heading concept in
+  // play never has to change just because this field exists; groupBoothLineItems
+  // below falls back to the raw boothLabel when it's absent, same as
+  // before this field was read here at all.
+  boothDescription?: string | null;
   // A few client-readable sentences shown on the Proposal PDF's booth
   // header, always -- see EstimateSection.boothSummary's own schema
   // comment.
@@ -419,6 +427,16 @@ export interface ElementTypeGroup {
 
 export interface BoothGroup {
   boothLabel: string;
+  // The booth's own approved H1 heading override, when it has one --
+  // see EstimateSection.boothDescription's own schema comment. Null
+  // until an estimator writes or approves one, in which case the raw,
+  // often-meaningless boothLabel (a pricing-schedule's own internal
+  // groupLabel, e.g. "RENTAL") is what a viewer would otherwise see.
+  // proposal-pdf.tsx and the web proposal page render this in place of
+  // boothLabel whenever it's set -- neither field alone is enough on its
+  // own: boothLabel is always present and is the merge/move-tool's own
+  // key, boothDescription is the friendly text a person actually reads.
+  boothDescription: string | null;
   elementGroups: ElementTypeGroup[];
   subtotal: number;
   // See EstimateSection.summarizeOnProposal's own schema comment --
@@ -454,6 +472,17 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // a moved group kept rendering in its old position there even though the
   // editing view already reflected the move correctly).
   const elementSortOrder = new Map<string, number>();
+  // The booth's own approved H1 heading override -- prefers a real,
+  // non-null value over whichever section is simply encountered first
+  // (mirroring groupBoothLineItemsForEditing's own identical fix): every
+  // section sharing a groupLabel is SUPPOSED to carry an identical
+  // boothDescription (mergeBoothIntoAnotherBooth/resolveOrCreateTargetSection
+  // both keep that invariant on write), but this is the read-side
+  // backstop against a section that still slipped through with a stale
+  // null -- otherwise an approved heading could silently render as the
+  // raw, often cryptic groupLabel instead on THIS specific view, even
+  // while the Line Items tab kept showing it correctly.
+  const boothDescriptionText = new Map<string, string | null>();
   // Whole-booth "hide detail, keep the price" -- read off the first
   // section encountered for this booth, same convention as
   // boothDescription elsewhere (updateSectionProposalSummary always
@@ -462,7 +491,7 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // above or the subtotal math below -- only proposal-pdf.tsx's own
   // rendering decision skips elementGroups for a summarized booth.
   const boothSummarize = new Map<string, boolean>();
-  // Same "first section wins" convention as boothSummarize above -- see
+  // Same "prefer non-null" convention as boothDescriptionText above -- see
   // EstimateSection.boothSummary's own schema comment.
   const boothSummaryText = new Map<string, string | null>();
   // Same convention, one level down, keyed the same way as
@@ -488,7 +517,12 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     if (!boothSummarize.has(boothLabel)) {
       boothSummarize.set(boothLabel, section.summarizeOnProposal ?? false);
     }
-    if (!boothSummaryText.has(boothLabel)) {
+    const currentBoothDescription = boothDescriptionText.get(boothLabel);
+    if (currentBoothDescription === undefined || (currentBoothDescription === null && section.boothDescription != null)) {
+      boothDescriptionText.set(boothLabel, section.boothDescription ?? null);
+    }
+    const currentBoothSummary = boothSummaryText.get(boothLabel);
+    if (currentBoothSummary === undefined || (currentBoothSummary === null && section.boothSummary != null)) {
       boothSummaryText.set(boothLabel, section.boothSummary ?? null);
     }
 
@@ -578,6 +612,7 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
       const subtotal = elementGroups.reduce((sum, g) => sum + g.subtotal, 0);
       return {
         boothLabel,
+        boothDescription: boothDescriptionText.get(boothLabel) ?? null,
         elementGroups,
         subtotal,
         summarizeOnProposal: boothSummarize.get(boothLabel) ?? false,

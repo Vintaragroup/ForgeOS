@@ -1498,6 +1498,31 @@ describe("resolveOrCreateTargetSection", () => {
     expect(created.boothPendingDescription).toBe("New AI text");
   });
 
+  it("creates a new section carrying through includeInProposal/summarizeOnProposal/excludedFromTotals, instead of resetting to each column's own default", async () => {
+    // Same class of regression as the boothDescription test above, for the
+    // other three whole-booth fields (see EstimateSection's own schema
+    // comments -- each documents the identical updateMany-by-groupLabel
+    // sync). Left unfixed, a new H2 joining a booth the estimator had
+    // explicitly hidden (includeInProposal false), switched to
+    // summary-only (summarizeOnProposal true), or marked as non-client
+    // scope (excludedFromTotals true) would silently un-hide it, show full
+    // detail, or count it in totals again -- on the client-facing PDF
+    // specifically, since that's the only place these three flags matter.
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const tagged = await addSection(version.id, { name: "Booth Build", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall" });
+    await db.estimateSection.update({
+      where: { id: tagged.id },
+      data: { includeInProposal: false, summarizeOnProposal: true, excludedFromTotals: true },
+    });
+
+    const created = await resolveOrCreateTargetSection(version.id, "FS - Hitting Bay Wall", "Labor");
+
+    expect(created.includeInProposal).toBe(false);
+    expect(created.summarizeOnProposal).toBe(true);
+    expect(created.excludedFromTotals).toBe(true);
+  });
+
   it("creates a project-wide section (no booth) when groupLabel is null and no match exists", async () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);
@@ -1705,6 +1730,28 @@ describe("mergeBoothIntoAnotherBooth", () => {
     const merged = await db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } });
     expect(merged.boothDescription).toBeNull();
     expect(merged.boothPendingDescription).toBeNull();
+  });
+
+  it("adopts the target's includeInProposal/summarizeOnProposal/excludedFromTotals on every moved section", async () => {
+    // Same reasoning as the boothDescription test above, for the other
+    // three whole-booth fields -- left as the incoming sections' own
+    // values, a merged booth could end up with some of its own sections
+    // hidden/summarized/excluded and others not, which is exactly the
+    // "some tools drop, summary gets stuck" inconsistency this whole
+    // group of fixes addresses. The target's values are the ones that
+    // survive, same as boothDescription.
+    const { version, sourceSection, targetSection } = await makeTwoBooths();
+    await db.estimateSection.update({
+      where: { id: targetSection.id },
+      data: { includeInProposal: false, summarizeOnProposal: true, excludedFromTotals: true },
+    });
+
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth");
+
+    const merged = await db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } });
+    expect(merged.includeInProposal).toBe(false);
+    expect(merged.summarizeOnProposal).toBe(true);
+    expect(merged.excludedFromTotals).toBe(true);
   });
 
   it("keeps the moved section's own line items intact", async () => {
