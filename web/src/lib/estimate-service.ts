@@ -946,17 +946,27 @@ export async function moveSectionToGroup(
 // EstimateSection.groupLabel's own comment); merging is just changing
 // which shared string every one of the source sections carries.
 //
-// Clears the incoming sections' own boothDescription/boothPendingDescription
-// rather than trying to reconcile them with the target's -- the view layer
-// reads whichever section it finds first for a groupLabel
-// (groupBoothLineItemsForEditing), so the source booth's own description
-// text would otherwise sit orphaned in the DB, winning that pick or not
-// depending on section ordering. Clearing it makes the target booth's own
-// description unambiguously the one that applies after a merge; buildType
-// and proposalSortOrder are left as-is on the incoming sections (a booth
-// already tolerates its own sections carrying different buildTypes when
-// tagged separately, and proposalSortOrder settles the next time someone
-// actually reorders the merged booth).
+// Copies the TARGET's own boothDescription/boothPendingDescription/
+// boothSummary/boothPendingSummary onto every incoming section, rather
+// than clearing the incoming sections' own values -- the view layer reads
+// whichever section it finds first for a groupLabel
+// (groupBoothLineItemsForEditing, and page.tsx's own boothSummaryFirstSection),
+// a plain array .find() with no preference for a non-null value, so
+// nulling the incoming sections' fields does NOT reliably make the
+// target's own values "win": if an incoming section happens to sort
+// before the target's own row, `.find()` still returns it first, and a
+// null there reads as "no description at all" -- confirmed live: merging
+// a plain booth into one with an AI-approved H1 description silently
+// reverted the combined booth's heading to its raw, often-meaningless
+// groupLabel. Copying the target's actual values onto every incoming
+// section keeps the real invariant this whole sync pattern depends on
+// (every section sharing a groupLabel carries identical values) true
+// regardless of row order, so whichever one .find() happens to return is
+// correct either way. buildType and proposalSortOrder are left as-is on
+// the incoming sections (a booth already tolerates its own sections
+// carrying different buildTypes when tagged separately, and
+// proposalSortOrder settles the next time someone actually reorders the
+// merged booth).
 export async function mergeBoothIntoAnotherBooth(
   estimateVersionId: string,
   sourceGroupLabel: string,
@@ -972,15 +982,21 @@ export async function mergeBoothIntoAnotherBooth(
   // opportunity-access.ts's own header comment on the general pattern).
   // Without this, a typo'd or stale target groupLabel would silently
   // create a brand-new, phantom booth instead of merging into a real one.
-  const targetExists = await db.estimateSection.findFirst({
+  const targetSection = await db.estimateSection.findFirst({
     where: { estimateVersionId, groupLabel: targetGroupLabel },
-    select: { id: true },
+    select: { boothDescription: true, boothPendingDescription: true, boothSummary: true, boothPendingSummary: true },
   });
-  if (!targetExists) throw new Error("Target booth not found on this estimate version.");
+  if (!targetSection) throw new Error("Target booth not found on this estimate version.");
 
   await db.estimateSection.updateMany({
     where: { estimateVersionId, groupLabel: sourceGroupLabel },
-    data: { groupLabel: targetGroupLabel, boothDescription: null, boothPendingDescription: null },
+    data: {
+      groupLabel: targetGroupLabel,
+      boothDescription: targetSection.boothDescription,
+      boothPendingDescription: targetSection.boothPendingDescription,
+      boothSummary: targetSection.boothSummary,
+      boothPendingSummary: targetSection.boothPendingSummary,
+    },
   });
 }
 

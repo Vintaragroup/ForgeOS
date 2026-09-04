@@ -37,10 +37,15 @@ export function MoveToGroupBar({
   // items are currently checked, which one H1 parent (if any single one)
   // they all share.
   lineItemGroupLabels: Record<string, string | null>;
-  // Every H1's own H2 group names -- keyed by groupLabel, with "" as the
+  // Every H1's own H2 groups -- keyed by groupLabel, with "" as the
   // project-wide bucket's key (mirrors lineItemGroupLabels' null the only
-  // way a plain object key can).
-  sectionNamesByGroupLabel: Record<string, string[]>;
+  // way a plain object key can). `value` is the group's raw section name
+  // (what actually gets submitted, and what resolveOrCreateTargetSection
+  // matches against); `label` is whatever that H2's heading is showing
+  // right now (its AI-set description, if one's been approved, otherwise
+  // the same raw name) -- see page.tsx's own comment on why those two can
+  // differ and why the dropdown has to show the second one.
+  sectionNamesByGroupLabel: Record<string, { value: string; label: string }[]>;
 }) {
   const selection = useBidPackageSelection();
   const [isPending, startTransition] = useTransition();
@@ -111,9 +116,9 @@ export function MoveToGroupBar({
             onChange={(e) => setChoice(e.target.value)}
             className="mt-1 block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-500"
           >
-            {siblingNames.map((name) => (
-              <option key={name} value={name}>
-                {name}
+            {siblingNames.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
               </option>
             ))}
             <option value={NEW_GROUP_VALUE}>+ Create new group…</option>

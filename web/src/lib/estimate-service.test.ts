@@ -1547,8 +1547,12 @@ describe("mergeBoothIntoAnotherBooth", () => {
     return { version, sourceSection, targetSection, unrelatedSection, item };
   }
 
-  it("moves every section sharing the source groupLabel onto the target, clearing their booth description", async () => {
+  it("moves every section sharing the source groupLabel onto the target, adopting the target's booth description", async () => {
     const { version, sourceSection, targetSection, unrelatedSection } = await makeTwoBooths();
+    await db.estimateSection.update({
+      where: { id: targetSection.id },
+      data: { boothDescription: "Large LED Display Wall", boothPendingDescription: "New AI text" },
+    });
 
     await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth");
 
@@ -1558,10 +1562,25 @@ describe("mergeBoothIntoAnotherBooth", () => {
       db.estimateSection.findUniqueOrThrow({ where: { id: unrelatedSection.id } }),
     ]);
     expect(merged.groupLabel).toBe("Section 203 - Booth");
+    // The incoming section's own description ("The camera booth") must not
+    // win just because it happens to sort before the target's row -- every
+    // section sharing a groupLabel has to carry the SAME booth-level values,
+    // and the target's is the one the user actually approved for this booth.
+    expect(merged.boothDescription).toBe("Large LED Display Wall");
+    expect(merged.boothPendingDescription).toBe("New AI text");
+    expect(target.groupLabel).toBe("Section 203 - Booth");
+    expect(target.boothDescription).toBe("Large LED Display Wall");
+    expect(unrelated.groupLabel).toBe("Section 231 - Booth");
+  });
+
+  it("clears the moved sections' booth description when the target has none of its own", async () => {
+    const { version, sourceSection } = await makeTwoBooths();
+
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth");
+
+    const merged = await db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } });
     expect(merged.boothDescription).toBeNull();
     expect(merged.boothPendingDescription).toBeNull();
-    expect(target.groupLabel).toBe("Section 203 - Booth");
-    expect(unrelated.groupLabel).toBe("Section 231 - Booth");
   });
 
   it("keeps the moved section's own line items intact", async () => {

@@ -1453,11 +1453,37 @@ function LineItemsTab({
   // (never a free-text jump to an unrelated booth). "" is the
   // project-wide bucket's key, the only way a plain object key can stand
   // in for groupLabel: null.
+  //
+  // Each option carries the RAW section name as its value -- that's what
+  // actually identifies the section to resolveOrCreateTargetSection, and
+  // what every other "reuse by name" caller (Add section's own Group
+  // field, pricing-import-service.ts) already keys off -- but a DIFFERENT
+  // label for display: whatever the H2's heading is actually showing
+  // right now, AI-renamed or not. Without this split, a group renamed via
+  // SectionHeadingEditor's AI suggest/approve (which only ever writes a
+  // display override, never the raw name -- see
+  // EstimateSectionCategoryDescription's own schema comment) showed its
+  // OLD, pre-rename name in this dropdown, confirmed live to leave an
+  // estimator unable to tell which option was the group they'd just
+  // renamed (the move itself still worked -- the raw name never changed
+  // underneath -- but there was no way to recognize it from the list).
+  // Picks the first override found for a section regardless of which
+  // category it was set from -- a tagged booth's H2 only ever resolves
+  // into one category anyway, so there's at most one to find.
+  const sectionDisplayNameById = new Map<string, string>();
+  for (const d of sectionCategoryDescriptions) {
+    if (d.description && !sectionDisplayNameById.has(d.sectionId)) {
+      sectionDisplayNameById.set(d.sectionId, d.description);
+    }
+  }
   const lineItemGroupLabels: Record<string, string | null> = {};
-  const sectionNamesByGroupLabel: Record<string, string[]> = {};
+  const sectionNamesByGroupLabel: Record<string, { value: string; label: string }[]> = {};
   for (const section of version.sections) {
     const key = section.groupLabel ?? "";
-    (sectionNamesByGroupLabel[key] ??= []).push(section.name);
+    (sectionNamesByGroupLabel[key] ??= []).push({
+      value: section.name,
+      label: sectionDisplayNameById.get(section.id) ?? section.description ?? section.name,
+    });
     for (const li of section.lineItems) {
       lineItemGroupLabels[li.id] = section.groupLabel;
     }
@@ -2821,6 +2847,24 @@ function CategoryTabContent({
   // into" dropdown's own options, per booth excluding itself (computed at
   // render time per booth below).
   const allBoothLabels = [...new Set(version.sections.map((s) => s.groupLabel).filter((l): l is string => !!l))];
+  // groupLabel is what mergeBoothIntoAnotherBooth actually merges on and
+  // must stay as the dropdown's VALUE, but it's frequently NOT what the
+  // booth's H1 is showing -- boothDescription (SectionHeadingEditor's own
+  // AI-approved override, see its schema comment) replaces the raw
+  // groupLabel as the heading text the moment one's approved, and a booth
+  // imported with a meaningless raw label (confirmed live: a real
+  // production booth whose groupLabel was literally the string "RENTAL",
+  // renamed via AI to "Large LED Display Wall") can end up with a heading
+  // that shares nothing in common with its own groupLabel at all. Without
+  // this, "Merge into" always listed booths by their raw, possibly-stale
+  // groupLabel, so a booth's own current heading could be entirely absent
+  // from the list an estimator was reading it against.
+  const boothDisplayLabelByGroupLabel = new Map<string, string>();
+  for (const s of version.sections) {
+    if (s.groupLabel && s.boothDescription && !boothDisplayLabelByGroupLabel.has(s.groupLabel)) {
+      boothDisplayLabelByGroupLabel.set(s.groupLabel, s.boothDescription);
+    }
+  }
 
   // Grosses up at THIS bucket's own resolved category's margin (its
   // override if set, else the document target) -- not one global
@@ -3180,7 +3224,10 @@ function CategoryTabContent({
                             ? mergeBoothAction.bind(null, estimateId, version.id, booth.boothLabel)
                             : null
                         }
-                        targetBoothOptions={otherBoothLabels.map((label) => ({ value: label, label }))}
+                        targetBoothOptions={otherBoothLabels.map((label) => ({
+                          value: label,
+                          label: boothDisplayLabelByGroupLabel.get(label) ?? label,
+                        }))}
                       />
                       {/* Adds a new H2 child section under this same booth
                           -- groupLabel/buildType are both already fixed by
