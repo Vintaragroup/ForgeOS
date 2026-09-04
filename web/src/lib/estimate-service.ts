@@ -1612,36 +1612,61 @@ interface LineItemDeleteSnapshot {
   bidPackageId: string | null;
 }
 
+// Shared by deleteLineItem and deleteLineItemsByDocument below -- captured
+// BEFORE the delete, this snapshot is the only remaining record of a row
+// once it's gone (LineItemAuditLog.lineItemId is deliberately not a live
+// FK, see its own schema comment), and the only thing restoreLineItem has
+// to work from. Kept as one function so the two callers' snapshots can
+// never quietly drift apart on which fields get captured.
+function buildLineItemDeleteSnapshot(item: {
+  sectionId: string;
+  sortOrder: number;
+  lineType: LineItemType;
+  department: string | null;
+  category: string | null;
+  isClientOwned: boolean;
+  usageTag: LineItemUsageTag | null;
+  qty: Decimal;
+  unit: string | null;
+  unitCost: Decimal;
+  totalCost: Decimal;
+  isDraft: boolean;
+  attachmentId: string | null;
+  documentId: string | null;
+  sourceQuote: string | null;
+  sourcePageNumber: number | null;
+  positionCode: string | null;
+  bidPackageId: string | null;
+}): LineItemDeleteSnapshot {
+  return {
+    sectionId: item.sectionId,
+    sortOrder: item.sortOrder,
+    lineType: item.lineType,
+    department: item.department,
+    category: item.category,
+    isClientOwned: item.isClientOwned,
+    usageTag: item.usageTag,
+    qty: item.qty.toString(),
+    unit: item.unit,
+    unitCost: item.unitCost.toString(),
+    totalCost: item.totalCost.toString(),
+    isDraft: item.isDraft,
+    attachmentId: item.attachmentId,
+    documentId: item.documentId,
+    sourceQuote: item.sourceQuote,
+    sourcePageNumber: item.sourcePageNumber,
+    positionCode: item.positionCode,
+    bidPackageId: item.bidPackageId,
+  };
+}
+
 export async function deleteLineItem(opportunityId: string, lineItemId: string, actorId?: string | null) {
   const existing = await db.lineItem.findFirstOrThrow({
     where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId } } } },
     include: { section: true },
   });
   await assertUnlocked(existing.section.estimateVersionId);
-  // Captured BEFORE the delete -- this snapshot is the only remaining
-  // record of the row once it's gone (LineItemAuditLog.lineItemId is
-  // deliberately not a live FK, see its own schema comment), and the
-  // only thing restoreLineItem below has to work from.
-  const snapshot: LineItemDeleteSnapshot = {
-    sectionId: existing.sectionId,
-    sortOrder: existing.sortOrder,
-    lineType: existing.lineType,
-    department: existing.department,
-    category: existing.category,
-    isClientOwned: existing.isClientOwned,
-    usageTag: existing.usageTag,
-    qty: existing.qty.toString(),
-    unit: existing.unit,
-    unitCost: existing.unitCost.toString(),
-    totalCost: existing.totalCost.toString(),
-    isDraft: existing.isDraft,
-    attachmentId: existing.attachmentId,
-    documentId: existing.documentId,
-    sourceQuote: existing.sourceQuote,
-    sourcePageNumber: existing.sourcePageNumber,
-    positionCode: existing.positionCode,
-    bidPackageId: existing.bidPackageId,
-  };
+  const snapshot = buildLineItemDeleteSnapshot(existing);
   const deleted = await db.lineItem.delete({ where: { id: lineItemId } });
   await recordLineItemAudit(
     existing.section.estimateVersionId,
@@ -1652,6 +1677,30 @@ export async function deleteLineItem(opportunityId: string, lineItemId: string, 
     lineItemId,
   );
   return { ...deleted, estimateVersionId: existing.section.estimateVersionId };
+}
+
+// Bulk counterpart to deleteLineItem, scoped to every LineItem tied to one
+// Document within one version -- automates the "delete its existing line
+// items first" recovery path commitPricingImport's own "already been
+// imported" guard tells the user to do manually (see that guard's own
+// comment), for the "Delete & re-import" button next to that error
+// instead of requiring each row be found and deleted by hand. Same
+// project-wide-safe `optionId: null` scope as that guard's own query, and
+// the same per-row DELETE audit trail as deleteLineItem -- every row
+// stays individually restorable afterward; a bulk delete is not a
+// different, less-recoverable kind of delete.
+export async function deleteLineItemsByDocument(estimateVersionId: string, documentId: string, actorId?: string | null) {
+  await assertUnlocked(estimateVersionId);
+  const items = await db.lineItem.findMany({
+    where: { documentId, section: { estimateVersionId, optionId: null } },
+  });
+  for (const item of items) {
+    const snapshot = buildLineItemDeleteSnapshot(item);
+    await db.lineItem.delete({ where: { id: item.id } });
+    await recordLineItemAudit(estimateVersionId, "DELETE", item.description, actorId ?? null, snapshot as unknown as Prisma.InputJsonValue, item.id);
+  }
+  if (items.length > 0) await recomputeVersionTotals(estimateVersionId);
+  return items.length;
 }
 
 // Puts a deleted line item back using its own DELETE audit row's

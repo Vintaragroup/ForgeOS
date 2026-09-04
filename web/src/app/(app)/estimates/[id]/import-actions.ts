@@ -14,10 +14,12 @@ import { reconcilePullSheetAgainstExcel } from "@/lib/cad-reconciliation-service
 import { applyPullSheetEnrichment, previewPullSheetEnrichment } from "@/lib/cad-enrichment-service";
 import {
   confirmAllDraftLineItems,
+  deleteLineItemsByDocument,
   recategorizeLineItems,
   recomputeVersionTotals,
   updateLineItem,
 } from "@/lib/estimate-service";
+import { AlreadyImportedError } from "@/lib/import-errors";
 import { assertVersionBelongsToEstimate, estimateOpportunityId, requireEstimateAccess } from "@/lib/opportunity-access";
 import { db } from "@/lib/db";
 
@@ -101,6 +103,56 @@ export async function commitImportAction(
     // same import preview with the message as a query param, instead of
     // re-throwing, keeps this failure on the page like importPreview's own
     // instanceof Error handling already does for a rejected PREVIEW.
+    const message = err instanceof Error ? err.message : "Import failed.";
+    // AlreadyImportedError specifically is the one rejection with a real,
+    // automatable recovery -- delete the old rows and try again -- unlike
+    // "no rows found", where deleting nothing and retrying wouldn't help.
+    // Flagged with its own param (not string-matched off the message) so
+    // the page only offers "Delete & re-import" for the case that's
+    // actually safe to offer it for.
+    const recoverableParam = err instanceof AlreadyImportedError ? "&canDeleteAndReimport=1" : "";
+    redirect(
+      `/estimates/${estimateId}?tab=documents&importDocumentId=${documentId}&commitImportError=${encodeURIComponent(message)}${recoverableParam}`,
+    );
+  }
+  revalidatePath(`/estimates/${estimateId}`);
+  redirect(`/estimates/${estimateId}?tab=documents`);
+}
+
+// The "Delete & re-import" recovery path commitImportAction's own
+// AlreadyImportedError handling above offers -- deletes every line item
+// this document already contributed to this version (see
+// deleteLineItemsByDocument's own comment: same per-row audit trail as a
+// normal delete, every row stays individually restorable), then re-runs
+// the exact same commit. A user asking to re-import a document ForgeOS
+// already flagged as imported has already been shown the warning and
+// chosen this specific, differently-labeled button, so this proceeds
+// without a second confirmation step.
+export async function deleteAndReimportAction(
+  estimateId: string,
+  versionId: string,
+  documentId: string,
+  formData: FormData,
+) {
+  const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const sheetDestinations: Record<string, SheetDestination> = {};
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("destination__")) continue;
+    const sheetName = key.slice("destination__".length);
+    if (value === "option") {
+      const optionName = String(formData.get(`optionName__${sheetName}`) ?? "").trim();
+      if (optionName) sheetDestinations[sheetName] = { target: "option", optionName };
+    }
+  }
+  await deleteLineItemsByDocument(versionId, documentId, user.id);
+  try {
+    await commitPricingImport(versionId, documentId, sheetDestinations);
+  } catch (err) {
+    // The old rows are already gone at this point -- surfacing whatever
+    // went wrong on the fresh attempt (e.g. no rows found this time) still
+    // has to redirect rather than throw, same as commitImportAction's own
+    // catch above.
     const message = err instanceof Error ? err.message : "Import failed.";
     redirect(
       `/estimates/${estimateId}?tab=documents&importDocumentId=${documentId}&commitImportError=${encodeURIComponent(message)}`,

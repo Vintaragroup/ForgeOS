@@ -26,6 +26,7 @@ import {
   deleteElementGroup,
   deleteEmptySection,
   deleteLineItem,
+  deleteLineItemsByDocument,
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
   moveElementGroupOrder,
@@ -505,6 +506,108 @@ describe("estimate version lifecycle", () => {
 
     const refreshed = await recomputeVersionTotals(version.id);
     expect(refreshed.totalCost.toNumber()).toBe(0);
+  });
+});
+
+describe("deleteLineItemsByDocument", () => {
+  async function makeDocumentFixture() {
+    const company = await db.company.create({ data: { name: "Doc Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Doc Show" } });
+    const document = await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "Signage Schedule.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        sizeBytes: 100,
+        storageKey: "test-key",
+        documentType: "PRICING_SCHEDULE",
+      },
+    });
+    return { company, opportunity, document };
+  }
+
+  it("deletes only the rows this document contributed, leaving other rows in the same section untouched", async () => {
+    const { document } = await makeDocumentFixture();
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Signage", sectionType: "CATEGORY" });
+    const [fromDocument] = await addLineItemsBulk(
+      version.id,
+      section.id,
+      [{ lineType: "MATERIAL", description: "Directional sign", qty: 1, unitCost: 500, documentId: document.id }],
+      { isDraft: false },
+    );
+    const manuallyAdded = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Hand-added extra sign",
+      qty: 1,
+      unitCost: 100,
+    });
+
+    const count = await deleteLineItemsByDocument(version.id, document.id);
+
+    expect(count).toBe(1);
+    await expect(db.lineItem.findUniqueOrThrow({ where: { id: fromDocument.id } })).rejects.toThrow();
+    const stillThere = await db.lineItem.findUniqueOrThrow({ where: { id: manuallyAdded.id } });
+    expect(stillThere.description).toBe("Hand-added extra sign");
+  });
+
+  it("recomputes version totals after deleting, and leaves them alone when there was nothing to delete", async () => {
+    const { document } = await makeDocumentFixture();
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Signage", sectionType: "CATEGORY" });
+    await addLineItemsBulk(
+      version.id,
+      section.id,
+      [{ lineType: "MATERIAL", description: "Directional sign", qty: 1, unitCost: 500, documentId: document.id }],
+      { isDraft: false },
+    );
+
+    await deleteLineItemsByDocument(version.id, document.id);
+    const refreshed = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(refreshed.totalCost.toNumber()).toBe(0);
+
+    const count = await deleteLineItemsByDocument(version.id, document.id);
+    expect(count).toBe(0);
+  });
+
+  it("leaves every deleted row individually restorable, same as a normal single delete", async () => {
+    const { document } = await makeDocumentFixture();
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Signage", sectionType: "CATEGORY" });
+    const [item] = await addLineItemsBulk(
+      version.id,
+      section.id,
+      [{ lineType: "MATERIAL", description: "Directional sign", qty: 1, unitCost: 500, documentId: document.id }],
+      { isDraft: false },
+    );
+
+    await deleteLineItemsByDocument(version.id, document.id);
+    const deleteLog = await db.lineItemAuditLog.findFirstOrThrow({
+      where: { estimateVersionId: version.id, action: "DELETE", lineItemId: item.id },
+    });
+
+    const restored = await restoreLineItem(estimate.opportunityId, deleteLog.id);
+    expect(restored.id).toBe(item.id);
+    expect(restored.description).toBe("Directional sign");
+  });
+
+  it("rejects on a locked version", async () => {
+    const { document } = await makeDocumentFixture();
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Signage", sectionType: "CATEGORY" });
+    await addLineItemsBulk(
+      version.id,
+      section.id,
+      [{ lineType: "MATERIAL", description: "Directional sign", qty: 1, unitCost: 500, documentId: document.id }],
+      { isDraft: false },
+    );
+    await lockEstimateVersion(version.id);
+
+    await expect(deleteLineItemsByDocument(version.id, document.id)).rejects.toThrow(/locked/);
   });
 });
 

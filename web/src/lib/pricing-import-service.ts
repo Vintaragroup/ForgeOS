@@ -15,6 +15,7 @@
 import ExcelJS from "exceljs";
 import { getDocumentBytes } from "@/lib/document-service";
 import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
+import { AlreadyImportedError } from "@/lib/import-errors";
 import { db } from "@/lib/db";
 import { cellText } from "@/lib/xlsx-utils";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
@@ -383,9 +384,7 @@ export async function commitPricingImport(
     where: { documentId, section: { estimateVersionId, optionId: null } },
   });
   if (alreadyImported) {
-    throw new Error(
-      `"${preview.filename}" has already been imported into this estimate. Delete its existing line items first if you want to re-import.`,
-    );
+    throw new AlreadyImportedError(preview.filename);
   }
 
   const existingSectionCount = await db.estimateSection.count({

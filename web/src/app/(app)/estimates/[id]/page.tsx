@@ -88,6 +88,7 @@ import { InternalCostRow } from "@/components/internal-cost-row";
 import {
   buildFullEstimateFromDocumentsAction,
   commitImportAction,
+  deleteAndReimportAction,
   commitScopeItemsAction,
   confirmAllDraftLineItemsAction,
   applyPullSheetEnrichmentAction,
@@ -221,6 +222,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     enrichResult: enrichResultParam,
     enrichApplied: enrichAppliedParam,
     commitImportError: commitImportErrorParam,
+    canDeleteAndReimport: canDeleteAndReimportParam,
   } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   // commitImportAction's own error-redirect (see its comment) -- a
@@ -229,6 +231,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   // generic error screen, same "redirect back to this tab with the result"
   // shape buildResult/reconcileResult/enrichResult already use.
   const commitImportError = Array.isArray(commitImportErrorParam) ? commitImportErrorParam[0] : commitImportErrorParam;
+  // Set alongside commitImportError only for AlreadyImportedError
+  // specifically (see commitImportAction's own comment on why) -- gates
+  // the "Delete & re-import" button so it's never offered for a
+  // rejection deleting nothing and retrying wouldn't actually fix.
+  const canDeleteAndReimport = (Array.isArray(canDeleteAndReimportParam) ? canDeleteAndReimportParam[0] : canDeleteAndReimportParam) === "1";
   const reconcileDocumentId = Array.isArray(reconcileDocumentIdParam) ? reconcileDocumentIdParam[0] : reconcileDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
   const buildResultRaw = Array.isArray(buildResultParam) ? buildResultParam[0] : buildResultParam;
@@ -836,6 +843,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     importDocumentId={importDocumentId}
                     importPreview={importPreview}
                     commitImportError={commitImportError}
+                    canDeleteAndReimport={canDeleteAndReimport}
+                    deleteAndReimportAction={deleteAndReimportAction}
                     mirrorDocuments={mirrorDocuments}
                     currentVersion={currentVersion}
                     scopeDocuments={scopeDocuments}
@@ -4019,6 +4028,8 @@ function DocumentsTab({
   importDocumentId,
   importPreview,
   commitImportError,
+  canDeleteAndReimport,
+  deleteAndReimportAction,
   mirrorDocuments,
   currentVersion,
   scopeDocuments,
@@ -4050,6 +4061,13 @@ function DocumentsTab({
   importDocumentId: string | undefined;
   importPreview: Awaited<ReturnType<typeof previewPricingImport>> | Error | null;
   commitImportError: string | undefined;
+  canDeleteAndReimport: boolean;
+  deleteAndReimportAction: (
+    estimateId: string,
+    versionId: string,
+    documentId: string,
+    formData: FormData,
+  ) => void | Promise<void>;
   mirrorDocuments: { id: string; filename: string; buildName: string | null }[];
   currentVersion: VersionWithSections;
   scopeDocuments: { id: string; filename: string }[];
@@ -4190,9 +4208,17 @@ function DocumentsTab({
           )}
 
           {commitImportError && (
-            <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {commitImportError}
-            </p>
+            <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              <p>{commitImportError}</p>
+              {canDeleteAndReimport && importDocumentId && (
+                <form
+                  action={deleteAndReimportAction.bind(null, estimateId, currentVersion.id, importDocumentId)}
+                  className="mt-2"
+                >
+                  <Button variant="danger">Delete existing line items &amp; re-import</Button>
+                </form>
+              )}
+            </div>
           )}
 
           {importPreview && !(importPreview instanceof Error) && (
