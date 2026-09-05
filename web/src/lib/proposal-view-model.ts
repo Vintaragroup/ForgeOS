@@ -796,7 +796,27 @@ export function standaloneSummaryGroupsByCategory(
       const boothDescription = section
         ? resolveApprovedSectionHeading(section, categoryIdByName.get(categoryName))
         : group.boothLabel;
-      return { ...group, boothDescription };
+      // A standalone section's own "AI proposed summary" lives in
+      // elementSummary -- the H1-level SummaryEditor page.tsx wires up
+      // for these sections (LineItemsTab, right below the flat-section
+      // header) reads/writes that exact field, not boothSummary, since
+      // a never-tagged section has no real booth to sync a boothSummary
+      // across. But groupBoothLineItems' own boothSummaryText map only
+      // ever reads section.boothSummary -- always null here -- so this
+      // group's real summary rendered one tier too low: after the H2
+      // elementType header (renderBoothGroups' own render order), which
+      // for a lump-sum group repeats the exact same text as H1 anyway
+      // (boothDescription above), instead of right after the H1 header
+      // the way a real booth's own boothSummary already does. Confirmed
+      // live: this only ever showed up as a Flooring-only-looking
+      // quirk because Flooring happened to be the one example already
+      // approved with a summary -- every summarized standalone section
+      // has the exact same misplacement. Promoted here, and blanked on
+      // the one elementGroup below so the same paragraph doesn't also
+      // render a second time under the (duplicate) H2.
+      const boothSummary = section?.elementSummary ?? group.boothSummary;
+      const elementGroups = group.elementGroups.map((eg) => ({ ...eg, elementSummary: null }));
+      return { ...group, boothDescription, boothSummary, elementGroups };
     });
     result.set(categoryName, groups);
   }

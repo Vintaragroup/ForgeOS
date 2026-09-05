@@ -815,6 +815,27 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           );
           const flatTotal = bucketSubtotal(flatOwnItems) + childViews.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
           const sectionTotal = boothTotal + childBoothTotal + flatTotal;
+          // The header's own PRICE can't just gross up sectionTotal (the
+          // combined raw COST) by this top-level category's own margin --
+          // confirmed live as a real bug: a Method-split child category
+          // (e.g. "Structure - Rental") can carry its own margin override
+          // that differs from its parent's, and grossing the parent's
+          // combined cost up by the PARENT's margin alone silently
+          // discarded that override, showing a header total that didn't
+          // match the sum of the child rows underneath it (a $1,000 cost
+          // child correctly priced at $2,000 under its own 50% override
+          // rendered as $1,666.67 in the parent header above it, using
+          // the parent's 40% target instead). Each contributor is grossed
+          // up by its OWN resolved category here -- the top-level's own
+          // booths/flat items by categoryName (unchanged), each child's
+          // own booths/flat items by that child's own name -- then
+          // summed, the same way Cost already does above.
+          const sellSectionTotal =
+            sellForCategory(boothTotal + bucketSubtotal(flatOwnItems), categoryName) +
+            childViews.reduce((sum, c) => {
+              const childRawTotal = bucketSubtotal(c.items) + c.boothGroups.reduce((s, b) => s + b.subtotal, 0);
+              return sum + sellForCategory(childRawTotal, c.name);
+            }, 0);
 
           return (
             <View key={categoryName} style={styles.section}>
@@ -824,7 +845,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   <Text style={styles.sectionHeaderText}>{categoryName}</Text>
                 </View>
                 <Text style={styles.sectionHeaderTotal}>
-                  {hidePrice ? "" : amountContent(sectionTotal, sellForCategory(sectionTotal, categoryName), data.showCost)}
+                  {hidePrice ? "" : amountContent(sectionTotal, sellSectionTotal, data.showCost)}
                 </Text>
               </View>
               {/* Top tier of the three-level Proposal PDF copy system --

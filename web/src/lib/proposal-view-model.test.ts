@@ -263,6 +263,25 @@ describe("standaloneSummaryGroupsByCategory", () => {
     expect(group?.summarizeOnProposal).toBe(true);
   });
 
+  it("promotes the section's own elementSummary to the group's boothSummary (renders right after H1, matching a real booth's own summary), and blanks the H2-tier copy so the same paragraph doesn't render twice under the duplicate H2 (confirmed live: a Flooring section's approved summary rendered below its H2 instead of below its H1, the only place a real booth's own summary ever shows)", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        id: "s1",
+        name: "Custom Flooring Installation",
+        description: "Turf & Carpet Package",
+        elementSummary: "Approved always-shown summary for this section.",
+        groupLabel: null,
+        summarizeOnProposal: true,
+        lineItems: [li({ id: "a", description: "Turf", qty: 1, totalCost: 5000 })],
+      },
+    ];
+
+    const [group] = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
+
+    expect(group?.boothSummary).toBe("Approved always-shown summary for this section.");
+    expect(group?.elementGroups[0]?.elementSummary).toBeNull();
+  });
+
   it("falls back to the section's raw name when it has no approved description", () => {
     const sections: ProposalViewSection[] = [
       {
