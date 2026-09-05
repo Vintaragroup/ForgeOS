@@ -139,6 +139,35 @@ function isLikelyMistaggedSpreadsheet(doc: { mimeType: string; documentType: str
   return doc.mimeType === XLSX_MIME && doc.documentType !== "PRICING_SCHEDULE";
 }
 
+// Single source of truth for "what should this row's retag control default
+// to" -- used to be two separate suggestion sources (the spreadsheet check
+// and the AI one) each rendering their own hint text plus their own
+// one-click form next to the always-present generic retag dropdown, so a
+// document with an AI suggestion showed two different ways to do the same
+// retag at once. The spreadsheet check wins when both could apply (it's a
+// deterministic mime-type fact, not a model guess, and in practice rarely
+// overlaps with getSuggestedRetag anyway since a mistagged spreadsheet
+// usually never reaches COMPLETE in the first place).
+function getSuggestedDocumentType(doc: {
+  mimeType: string;
+  documentType: string;
+  extractionStatus: string;
+  extractedSummary: unknown;
+}): { type: string; reason: string } | null {
+  if (isLikelyMistaggedSpreadsheet(doc)) {
+    return {
+      type: "PRICING_SCHEDULE",
+      reason:
+        "This is a spreadsheet file, but it's not tagged as Pricing Schedule -- it won't get parsed for real qty/unit-cost rows this way.",
+    };
+  }
+  const aiSuggested = getSuggestedRetag(doc);
+  if (aiSuggested) {
+    return { type: aiSuggested, reason: "Suggested from this document's own analyzed content." };
+  }
+  return null;
+}
+
 function CitationLink({
   href,
   source,
@@ -1276,22 +1305,6 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                       Import on Estimate page →
                     </Link>
                   )}
-                  {isLikelyMistaggedSpreadsheet(doc) && (
-                    <>
-                      <span
-                        className="text-xs text-amber-600"
-                        title="This is a spreadsheet file, but it's not tagged as Pricing Schedule -- it won't get parsed for real qty/unit-cost rows this way."
-                      >
-                        Looks like a Pricing Schedule?
-                      </span>
-                      <form action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)} className="flex items-center gap-1">
-                        <input type="hidden" name="documentType" value="PRICING_SCHEDULE" />
-                        <button type="submit" className="text-xs text-brand-navy hover:underline">
-                          Retag as Pricing Schedule
-                        </button>
-                      </form>
-                    </>
-                  )}
                   {isLowYieldDrawingResult(doc) && (
                     <span
                       className="text-xs text-amber-600"
@@ -1300,56 +1313,51 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                       Sparse result
                     </span>
                   )}
-                  {getSuggestedRetag(doc) &&
+                  {/* One retag control per document, always present (except
+                      Pricing Schedule, which has its own dedicated import
+                      flow) -- pre-selects a suggested type when one exists
+                      (getSuggestedDocumentType) instead of showing a second,
+                      separate one-click form next to it. A document stuck at
+                      UNSUPPORTED (e.g. a PNG uploaded as anything other than
+                      Drawing -- see text-extraction.ts) has no suggestion but
+                      still gets this control, which is what gives it any
+                      retag path at all. updateDocumentType resets
+                      extractionStatus back to PENDING on any retag, which is
+                      what makes the Analyze button reappear afterward. */}
+                  {doc.documentType !== "PRICING_SCHEDULE" &&
                     (() => {
-                      const suggested = getSuggestedRetag(doc)!;
-                      const label = DOCUMENT_TYPE_OPTIONS.find((o) => o.value === suggested)?.label ?? suggested;
+                      const suggestion = getSuggestedDocumentType(doc);
+                      const suggestedLabel = suggestion
+                        ? (DOCUMENT_TYPE_OPTIONS.find((o) => o.value === suggestion.type)?.label ?? suggestion.type)
+                        : null;
                       return (
-                        <>
-                          <span className="text-xs text-amber-600" title="Suggested from this document's own analyzed content.">
-                            AI suggests: {label}?
-                          </span>
-                          <form action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)} className="flex items-center gap-1">
-                            <input type="hidden" name="documentType" value={suggested} />
-                            <button type="submit" className="text-xs text-brand-navy hover:underline">
-                              Retag as {label}
-                            </button>
-                          </form>
-                        </>
+                        <form
+                          action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)}
+                          className="flex items-center gap-1"
+                        >
+                          {suggestion && (
+                            <span className="text-xs text-amber-600" title={suggestion.reason}>
+                              Suggested: {suggestedLabel}
+                            </span>
+                          )}
+                          <select
+                            name="documentType"
+                            defaultValue={suggestion?.type ?? doc.documentType}
+                            aria-label={`Change document type for ${doc.filename}`}
+                            className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 outline-none focus:border-neutral-500"
+                          >
+                            {DOCUMENT_TYPE_OPTIONS.map((o) => (
+                              <option key={o.value} value={o.value}>
+                                {o.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button type="submit" className="text-xs text-neutral-500 hover:underline">
+                            Retag
+                          </button>
+                        </form>
                       );
                     })()}
-                  {/* General fallback retag control -- the two nudges above
-                      only ever fire once a document reaches extractionStatus
-                      COMPLETE (getSuggestedRetag) or for a specifically
-                      mistagged spreadsheet (isLikelyMistaggedSpreadsheet).
-                      A document stuck at UNSUPPORTED (e.g. a PNG uploaded as
-                      anything other than Drawing -- see text-extraction.ts)
-                      never reaches COMPLETE, so it had no retag path at all
-                      before this. updateDocumentType resets extractionStatus
-                      back to PENDING on any retag, which is what makes the
-                      Analyze button reappear after this fixes the type. */}
-                  {doc.documentType !== "PRICING_SCHEDULE" && (
-                    <form
-                      action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)}
-                      className="flex items-center gap-1"
-                    >
-                      <select
-                        name="documentType"
-                        defaultValue={doc.documentType}
-                        aria-label={`Change document type for ${doc.filename}`}
-                        className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 outline-none focus:border-neutral-500"
-                      >
-                        {DOCUMENT_TYPE_OPTIONS.map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                      <button type="submit" className="text-xs text-neutral-500 hover:underline">
-                        Retag
-                      </button>
-                    </form>
-                  )}
                   {doc.documentType !== "PRICING_SCHEDULE" &&
                     (doc.extractionStatus === "PENDING" || doc.extractionStatus === "FAILED") && (
                       <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
