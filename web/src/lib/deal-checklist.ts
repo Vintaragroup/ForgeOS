@@ -30,6 +30,11 @@ export interface DealChecklistInput {
   hasScopeDocuments: boolean;
   recommendedClarificationQuestionCount: number;
   bidderQuestionsDeadlineLabel: string | null;
+  // Count of the 11 canonical Timeline milestones (timeline-service.ts)
+  // still missing a date -- includes a Timeline that's never been
+  // generated at all (11/11 missing), same "counts as missing until
+  // resolved" posture as everything else on this checklist.
+  missingTimelineMilestoneCount: number;
   estimateId: string | null;
   currentVersion: { isLocked: boolean; isApproved: boolean } | null;
   // Proposals for the CURRENT estimate version only -- an older version's
@@ -110,6 +115,23 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
         (input.bidderQuestionsDeadlineLabel ? ` (bidder questions due ${input.bidderQuestionsDeadlineLabel}).` : "."),
       href: `/opportunities/${input.opportunityId}#clarification-questions`,
       urgent: Boolean(input.bidderQuestionsDeadlineLabel),
+    });
+  }
+
+  if (input.missingTimelineMilestoneCount > 0) {
+    // Non-urgent while the deal is still early -- there's real time left
+    // to fill these in. Becomes urgent once the estimate is locked+
+    // approved, the same point "generate-proposal"/"send-proposal" would
+    // otherwise appear below: this is exactly the moment "every proposal
+    // needs this timeline" stops being a someday task and starts blocking
+    // a client-ready document from actually being complete.
+    items.push({
+      id: "timeline-incomplete",
+      label:
+        `Fill in ${input.missingTimelineMilestoneCount} missing Timeline milestone` +
+        `${input.missingTimelineMilestoneCount === 1 ? "" : "s"} before the proposal goes out.`,
+      href: `/opportunities/${input.opportunityId}#timeline`,
+      urgent: Boolean(input.currentVersion?.isLocked && input.currentVersion?.isApproved),
     });
   }
 

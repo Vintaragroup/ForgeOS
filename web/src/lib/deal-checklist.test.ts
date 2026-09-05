@@ -12,6 +12,7 @@ function baseInput(overrides: Partial<DealChecklistInput> = {}): DealChecklistIn
     hasScopeDocuments: false,
     recommendedClarificationQuestionCount: 0,
     bidderQuestionsDeadlineLabel: null,
+    missingTimelineMilestoneCount: 0,
     estimateId: null,
     currentVersion: null,
     currentVersionProposals: [],
@@ -70,6 +71,35 @@ describe("buildDealChecklist", () => {
     const item = items.find((i) => i.id === "clarification-questions");
     expect(item?.label).toContain("bidder questions due 19 August 2026");
     expect(item?.urgent).toBe(true);
+  });
+
+  it("flags missing Timeline milestones as non-urgent while the estimate is still in progress", () => {
+    const items = buildDealChecklist(
+      baseInput({ missingTimelineMilestoneCount: 4, estimateId: "est1", currentVersion: { isLocked: false, isApproved: false } }),
+    );
+    const item = items.find((i) => i.id === "timeline-incomplete");
+    expect(item?.label).toBe("Fill in 4 missing Timeline milestones before the proposal goes out.");
+    expect(item?.href).toBe("/opportunities/opp1#timeline");
+    expect(item?.urgent).toBe(false);
+  });
+
+  it("pluralizes a single missing Timeline milestone correctly", () => {
+    const items = buildDealChecklist(baseInput({ missingTimelineMilestoneCount: 1 }));
+    expect(items.find((i) => i.id === "timeline-incomplete")?.label).toBe(
+      "Fill in 1 missing Timeline milestone before the proposal goes out.",
+    );
+  });
+
+  it("makes missing Timeline milestones urgent once the estimate is locked and approved -- right before a proposal would go out", () => {
+    const items = buildDealChecklist(
+      baseInput({ missingTimelineMilestoneCount: 2, estimateId: "est1", currentVersion: { isLocked: true, isApproved: true } }),
+    );
+    expect(items.find((i) => i.id === "timeline-incomplete")?.urgent).toBe(true);
+  });
+
+  it("says nothing about Timeline once every milestone is filled in", () => {
+    const items = buildDealChecklist(baseInput({ missingTimelineMilestoneCount: 0 }));
+    expect(items.map((i) => i.id)).not.toContain("timeline-incomplete");
   });
 
   it("suggests starting an estimate when none exists", () => {

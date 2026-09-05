@@ -885,6 +885,12 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   // version, its proposals), so this adds no new query and can never go
   // stale. See deal-checklist.ts for the actual step-by-step logic.
   const currentEstimateVersion = opportunity.estimates[0]?.versions[0] ?? null;
+  // Computed once here and reused by TimelineCard below -- same JSON blob,
+  // no reason to re-parse it a second time.
+  const timelineData = getTimelineData(opportunity.timelineMilestones);
+  const missingTimelineMilestoneCount = (timelineData?.milestones ?? buildEmptyMilestones()).filter(
+    (m) => !m.date,
+  ).length;
   const dealChecklist = buildDealChecklist({
     opportunityId: opportunity.id,
     stage: opportunity.stage,
@@ -897,6 +903,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     hasScopeDocuments,
     recommendedClarificationQuestionCount: recommendedQuestions.length,
     bidderQuestionsDeadlineLabel: bidderQuestionsDeadline?.date ?? null,
+    missingTimelineMilestoneCount,
     estimateId: estimateId ?? null,
     currentVersion: currentEstimateVersion
       ? { isLocked: currentEstimateVersion.isLocked, isApproved: currentEstimateVersion.isApproved }
@@ -1370,7 +1377,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
 
       <TimelineCard
         opportunityId={opportunity.id}
-        timelineData={getTimelineData(opportunity.timelineMilestones)}
+        timelineData={timelineData}
         documents={documents}
       />
 
