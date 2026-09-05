@@ -1,7 +1,12 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
-import { runTimelineExtraction, resolveTimelineSuggestions, TIMELINE_SCHEMA } from "@/lib/ai/timeline-service";
+import {
+  runTimelineExtraction,
+  resolveTimelineSuggestions,
+  matchCandidatesToTypesByLabel,
+  TIMELINE_SCHEMA,
+} from "@/lib/ai/timeline-service";
 
 afterEach(async () => {
   await db.document.deleteMany();
@@ -80,6 +85,50 @@ async function makeScopeDocument(
   });
 }
 
+describe("matchCandidatesToTypesByLabel", () => {
+  function candidate(label: string): { id: string; filename: string; label: string; date: string; sourceQuote: string; pageNumber: number | null } {
+    return { id: "K1", filename: "doc.docx", label, date: "2026-01-01", sourceQuote: label, pageNumber: null };
+  }
+
+  it("matches every real-world label from the reference project-timeline document to its milestone type", () => {
+    const cases: [string, string][] = [
+      ["SIGNED_PROPOSAL", "Signed Proposal"],
+      ["DEPOSIT_DUE", "50% Deposit: Initiates Build"],
+      ["PRODUCTION_MEETING", "Production Meeting"],
+      ["ARTWORK_DEADLINE", "Production Ready Artwork"],
+      ["BALANCE_DUE", "Balance Due prior to shipping"],
+      ["SHIPPING", "Shipping to Show Site"],
+      ["INSTALLATION", "Installation"],
+      ["SHOW_OPEN", "Show Open"],
+      ["DISMANTLE", "Dismantle"],
+    ];
+    for (const [type, label] of cases) {
+      const matches = matchCandidatesToTypesByLabel([candidate(label)], [type as never]);
+      expect(matches.get(type as never)?.label).toBe(label);
+    }
+  });
+
+  it("does not match ARTWORK_DEADLINE against a rush-fee-cutoff line stating the same phrase", () => {
+    const matches = matchCandidatesToTypesByLabel(
+      [candidate("Production Ready Artwork Before 50% Rush Fees Apply")],
+      ["ARTWORK_DEADLINE"],
+    );
+    expect(matches.has("ARTWORK_DEADLINE")).toBe(false);
+  });
+
+  it("does not match SHIPPING against a Balance Due line that merely mentions shipping as timing context -- the real production bug", () => {
+    const candidates = [candidate("Balance Due prior to shipping"), { ...candidate("Shipping to Show Site"), id: "K2" }];
+    const matches = matchCandidatesToTypesByLabel(candidates, ["BALANCE_DUE", "SHIPPING"]);
+    expect(matches.get("BALANCE_DUE")?.label).toBe("Balance Due prior to shipping");
+    expect(matches.get("SHIPPING")?.label).toBe("Shipping to Show Site");
+  });
+
+  it("leaves a type unmatched when no candidate's label names it", () => {
+    const matches = matchCandidatesToTypesByLabel([candidate("Some unrelated note")], ["DEPOSIT_DUE"]);
+    expect(matches.has("DEPOSIT_DUE")).toBe(false);
+  });
+});
+
 describe("runTimelineExtraction", () => {
   it("returns no suggestions, without touching the OpenAI client, when no requested types are given", async () => {
     const { opportunity } = await makeOpportunity();
@@ -105,13 +154,51 @@ describe("runTimelineExtraction", () => {
     const { opportunity } = await makeOpportunity();
     await makeScopeDocument(
       opportunity.id,
-      [{ label: "50% Deposit Due", date: "2026-09-23", dateType: "DEADLINE", sourceQuote: "50% deposit due", pageNumber: null }],
+      [{ label: "Some ambiguous note", date: "2026-09-23", dateType: "DEADLINE", sourceQuote: "some ambiguous note", pageNumber: null }],
       "A 50% deposit due September 23, 2026 initiates the build.",
     );
 
     await expect(runTimelineExtraction(opportunity.id, null, ["DEPOSIT_DUE"])).rejects.toBeInstanceOf(
       AiNotConfiguredError,
     );
+  });
+
+  it("resolves entirely via label matching, without ever touching the OpenAI client, when every requested type's label is unambiguous -- proves the deterministic path actually short-circuits the AI call", async () => {
+    const { opportunity } = await makeOpportunity();
+    await makeScopeDocument(
+      opportunity.id,
+      [
+        { label: "Shipping to Show Site", date: "2027-01-04", dateType: "MILESTONE", sourceQuote: "Shipping to Show Site", pageNumber: null },
+        { label: "Installation", date: "2027-01-22", dateType: "MILESTONE", sourceQuote: "Installation", pageNumber: null },
+        { label: "Dismantle", date: "2027-01-29", dateType: "MILESTONE", sourceQuote: "Dismantle", pageNumber: null },
+      ],
+      "Full project timeline.",
+    );
+
+    // Would throw AiNotConfiguredError (.env.test has no API key) if this
+    // ever reached the OpenAI client -- succeeding proves it didn't.
+    const suggestions = await runTimelineExtraction(opportunity.id, null, ["SHIPPING", "INSTALLATION", "DISMANTLE"]);
+
+    expect(suggestions).toHaveLength(3);
+    expect(suggestions.find((s) => s.type === "SHIPPING")?.date).toBe(new Date("2027-01-04").toISOString());
+    expect(suggestions.find((s) => s.type === "INSTALLATION")?.date).toBe(new Date("2027-01-22").toISOString());
+    expect(suggestions.find((s) => s.type === "DISMANTLE")?.date).toBe(new Date("2027-01-29").toISOString());
+  });
+
+  it("still throws AiNotConfiguredError for whatever's left over once label matching resolves only some of the requested types", async () => {
+    const { opportunity } = await makeOpportunity();
+    await makeScopeDocument(
+      opportunity.id,
+      [
+        { label: "Shipping to Show Site", date: "2027-01-04", dateType: "MILESTONE", sourceQuote: "Shipping to Show Site", pageNumber: null },
+        { label: "Some unrelated internal note", date: "2026-09-23", dateType: "DEADLINE", sourceQuote: "some unrelated internal note", pageNumber: null },
+      ],
+      "Full project timeline.",
+    );
+
+    await expect(
+      runTimelineExtraction(opportunity.id, null, ["SHIPPING", "DEPOSIT_DUE"]),
+    ).rejects.toBeInstanceOf(AiNotConfiguredError);
   });
 });
 

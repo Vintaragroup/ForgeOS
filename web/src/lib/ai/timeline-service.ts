@@ -123,6 +123,48 @@ export const TIMELINE_SCHEMA = {
   },
 } as const;
 
+// A key date's own label routinely names the milestone outright ("Shipping
+// to Show Site", "Installation", "Dismantle", "50% Deposit: Initiates
+// Build") -- matching these directly, for free and instantly, is both
+// cheaper and more reliable than asking a model to judge something already
+// unambiguous in the text. The AI classification pass below only ever runs
+// for whatever milestone type this can't confidently resolve, not as a
+// first resort. Several patterns exclude another milestone's own keyword
+// so a compound label naming two things at once ("Balance Due prior to
+// SHIPPING", "Production Ready Artwork Before 50% RUSH Fees Apply") gets
+// attributed to the one it's actually ABOUT, not whichever keyword happens
+// to appear in it -- confirmed live: SHIPPING without its "balance"/
+// "deposit" exclusion matched "Balance Due prior to shipping" and stole
+// that row's date.
+const CANDIDATE_LABEL_MATCHERS: Partial<Record<AiEligibleMilestoneType, (label: string) => boolean>> = {
+  SIGNED_PROPOSAL: (l) => /\bsigned\s+proposal\b/i.test(l),
+  DEPOSIT_DUE: (l) => /\bdeposit\b/i.test(l),
+  PRODUCTION_MEETING: (l) => /\bproduction\s+meeting\b|\bkick-?off\s+(meeting|call)\b/i.test(l),
+  ARTWORK_DEADLINE: (l) => /(production.?ready\s+artwork|artwork\s+deadline)/i.test(l) && !/\brush\b/i.test(l),
+  BALANCE_DUE: (l) => /\bbalance\s+due\b|\bfinal\s+payment\b/i.test(l),
+  SHIPPING: (l) => /\bshipping\b|\bfreight\b|\bship\s+date\b/i.test(l) && !/\bbalance\b|\bdeposit\b/i.test(l),
+  INSTALLATION: (l) => /\binstall(ation)?\b|\bmove-?in\b/i.test(l),
+  SHOW_OPEN: (l) => /\bshow\s+open(s|ing)?\b|\bevent\s+open(s|ing)?\b/i.test(l),
+  DISMANTLE: (l) => /\bdismantle\b|\bstrike\b|\bmove-?out\b/i.test(l),
+};
+
+// Exported for direct testing -- first candidate (in extraction order)
+// whose label matches a type's pattern wins; a type with no pattern, or no
+// matching candidate, is simply left for the AI pass to attempt instead.
+export function matchCandidatesToTypesByLabel(
+  candidates: NumberedKeyDateCandidate[],
+  types: AiEligibleMilestoneType[],
+): Map<AiEligibleMilestoneType, NumberedKeyDateCandidate> {
+  const result = new Map<AiEligibleMilestoneType, NumberedKeyDateCandidate>();
+  for (const type of types) {
+    const matcher = CANDIDATE_LABEL_MATCHERS[type];
+    if (!matcher) continue;
+    const match = candidates.find((c) => matcher(c.label));
+    if (match) result.set(type, match);
+  }
+  return result;
+}
+
 const SYSTEM_PROMPT = `You are a senior event/exhibit-industry estimator building a project timeline from a client's RFP/contract documents. You're given a numbered list of CANDIDATE KEY DATES already extracted from those documents, and a fixed list of MILESTONE TYPES to classify.
 
 For each milestone type, decide which single candidate (if any) states that exact milestone -- e.g. a candidate labeled "50% Deposit Due" or "Initial Payment" matches DEPOSIT_DUE; a candidate labeled "Kickoff Call" or "Production Meeting" matches PRODUCTION_MEETING; a candidate labeled "Move-in" matches INSTALLATION; a candidate labeled "Move-out" or "Strike" matches DISMANTLE. Only match a candidate that clearly and specifically states that milestone -- do not guess, do not match a loosely-related date, and do not invent a date that isn't in the candidate list. If no candidate clearly matches, return null for that type. SIGNED_PROPOSAL in particular is usually not stated in a document at all (it's a target date the estimator sets) -- null is the common, correct answer for it unless a document explicitly states a required signing deadline.
@@ -223,42 +265,60 @@ export async function runTimelineExtraction(
   });
   if (candidates.length === 0) return [];
 
-  // Throws AiNotConfiguredError before any call, same posture as
-  // clarification-questions-service.ts / proposeLineItemsFromScope.
-  const client = getOpenAiClient();
+  // Try a direct label match first -- cheap, instant, and more reliable
+  // than a model call whenever a key date's own label already names the
+  // milestone outright (the common case for a real client-supplied
+  // schedule). Only whatever's left over goes to the AI.
+  const labelMatches = matchCandidatesToTypesByLabel(candidates, requestedTypes);
+  const labelVerdicts: RawMilestoneVerdict[] = [...labelMatches.entries()].map(([milestoneType, candidate]) => ({
+    milestoneType,
+    candidateId: candidate.id,
+  }));
+  const remainingTypes = requestedTypes.filter((t) => !labelMatches.has(t));
 
-  const milestoneListBlock = requestedTypes.map((t) => `${t}: ${MILESTONE_TYPE_DESCRIPTIONS[t]}`).join("\n");
-  const candidateListBlock = candidates
-    .map((c) => `${c.id} [${c.filename}]: "${c.label}" -- ${c.date} (quote: "${c.sourceQuote}")`)
-    .join("\n");
+  let aiVerdicts: RawMilestoneVerdict[] = [];
+  if (remainingTypes.length > 0) {
+    // Throws AiNotConfiguredError before any call, same posture as
+    // clarification-questions-service.ts / proposeLineItemsFromScope.
+    const client = getOpenAiClient();
 
-  const completion = await client.chat.completions.create({
-    model: ADVANCED_MODEL,
-    // Low, not zero -- structured classification, not creative writing;
-    // same rationale and value as clarification-questions-service.ts's own
-    // temperature choice.
-    temperature: 0.2,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `MILESTONE TYPES TO CLASSIFY -- exactly one verdict per type:\n\n${milestoneListBlock}\n\nCANDIDATE KEY DATES:\n\n${candidateListBlock}`,
-      },
-    ],
-    response_format: { type: "json_schema", json_schema: TIMELINE_SCHEMA },
-  });
+    const milestoneListBlock = remainingTypes.map((t) => `${t}: ${MILESTONE_TYPE_DESCRIPTIONS[t]}`).join("\n");
+    const candidateListBlock = candidates
+      .map((c) => `${c.id} [${c.filename}]: "${c.label}" -- ${c.date} (quote: "${c.sourceQuote}")`)
+      .join("\n");
 
-  await recordAiUsage({
-    userId,
-    feature: "TIMELINE_MILESTONES",
-    model: ADVANCED_MODEL,
-    usage: completion.usage,
-    opportunityId,
-  });
+    const completion = await client.chat.completions.create({
+      model: ADVANCED_MODEL,
+      // Low, not zero -- structured classification, not creative writing;
+      // same rationale and value as clarification-questions-service.ts's
+      // own temperature choice.
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `MILESTONE TYPES TO CLASSIFY -- exactly one verdict per type:\n\n${milestoneListBlock}\n\nCANDIDATE KEY DATES:\n\n${candidateListBlock}`,
+        },
+      ],
+      response_format: { type: "json_schema", json_schema: TIMELINE_SCHEMA },
+    });
 
-  const content = completion.choices[0]?.message?.content;
-  if (!content) throw new Error("OpenAI returned an empty response.");
-  const parsed = JSON.parse(content) as { verdicts: RawMilestoneVerdict[] };
+    await recordAiUsage({
+      userId,
+      feature: "TIMELINE_MILESTONES",
+      model: ADVANCED_MODEL,
+      usage: completion.usage,
+      opportunityId,
+    });
 
-  return resolveTimelineSuggestions(parsed.verdicts, candidates, scopeDocuments);
+    const content = completion.choices[0]?.message?.content;
+    if (!content) throw new Error("OpenAI returned an empty response.");
+    const parsed = JSON.parse(content) as { verdicts: RawMilestoneVerdict[] };
+    // Only ever asked about remainingTypes above, but filtered again here
+    // regardless -- a model that ignores that scoping shouldn't be able to
+    // clobber a label match resolved with certainty a moment ago.
+    aiVerdicts = parsed.verdicts.filter((v) => remainingTypes.includes(v.milestoneType));
+  }
+
+  return resolveTimelineSuggestions([...labelVerdicts, ...aiVerdicts], candidates, scopeDocuments);
 }
