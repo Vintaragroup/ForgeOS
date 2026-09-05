@@ -270,9 +270,21 @@ export async function regenerateTimeline(opportunityId: string, userId: string |
   // the freshly-rebuilt (null) deadline above, leaving both rush rows
   // stuck unset even though the estimator already supplied a real
   // deadline. Confirmed live against a real opportunity before this fix.
+  // A MANUAL row only really represents a real edit once it has a real
+  // date -- a MANUAL row with a null date is indistinguishable from
+  // "never resolved yet" (emptyMilestone's own baseline defaults every
+  // non-field-backed type to source MANUAL, date null, before anything
+  // has ever tried to classify it). Requiring a real date here is what
+  // makes those types re-attemptable on every regenerate; without it,
+  // confirmed live against a real opportunity: 7 of 11 milestones got
+  // written once with source MANUAL/date null on an early regenerate (from
+  // before label matching or the DRAWING fallback existed) and were then
+  // permanently frozen at Missing forever after, since every later
+  // regenerate saw "MANUAL" and restored that exact stale null value
+  // instead of ever giving the improved matching logic a chance to run.
   const withManualRestored = withAi.map((m) => {
     const existingEntry = existingByType.get(m.type);
-    return existingEntry?.source === "MANUAL" ? existingEntry : m;
+    return existingEntry?.source === "MANUAL" && existingEntry.date !== null ? existingEntry : m;
   });
 
   const milestones = applyRushFeeDefaults(withManualRestored);

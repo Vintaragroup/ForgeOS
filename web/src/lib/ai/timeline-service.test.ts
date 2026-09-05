@@ -123,6 +123,11 @@ describe("matchCandidatesToTypesByLabel", () => {
     expect(matches.get("SHIPPING")?.label).toBe("Shipping to Show Site");
   });
 
+  it("matches BALANCE_DUE when punctuation (not whitespace) separates the two words -- the real production label, a second real bug", () => {
+    const matches = matchCandidatesToTypesByLabel([candidate("BALANCE: Due prior to shipping")], ["BALANCE_DUE"]);
+    expect(matches.get("BALANCE_DUE")?.label).toBe("BALANCE: Due prior to shipping");
+  });
+
   it("leaves a type unmatched when no candidate's label names it", () => {
     const matches = matchCandidatesToTypesByLabel([candidate("Some unrelated note")], ["DEPOSIT_DUE"]);
     expect(matches.has("DEPOSIT_DUE")).toBe(false);

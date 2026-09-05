@@ -141,7 +141,11 @@ const CANDIDATE_LABEL_MATCHERS: Partial<Record<AiEligibleMilestoneType, (label: 
   DEPOSIT_DUE: (l) => /\bdeposit\b/i.test(l),
   PRODUCTION_MEETING: (l) => /\bproduction\s+meeting\b|\bkick-?off\s+(meeting|call)\b/i.test(l),
   ARTWORK_DEADLINE: (l) => /(production.?ready\s+artwork|artwork\s+deadline)/i.test(l) && !/\brush\b/i.test(l),
-  BALANCE_DUE: (l) => /\bbalance\s+due\b|\bfinal\s+payment\b/i.test(l),
+  // "balance" alone, not "balance\s+due" -- a real label often punctuates
+  // between the two ("BALANCE: Due prior to shipping"), which \s+ can't
+  // bridge across the colon. Confirmed live: this exact label silently
+  // failed to match under the stricter pattern.
+  BALANCE_DUE: (l) => /\bbalance\b|\bfinal\s+payment\b/i.test(l),
   SHIPPING: (l) => /\bshipping\b|\bfreight\b|\bship\s+date\b/i.test(l) && !/\bbalance\b|\bdeposit\b/i.test(l),
   INSTALLATION: (l) => /\binstall(ation)?\b|\bmove-?in\b/i.test(l),
   SHOW_OPEN: (l) => /\bshow\s+open(s|ing)?\b|\bevent\s+open(s|ing)?\b/i.test(l),

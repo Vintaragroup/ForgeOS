@@ -14,6 +14,7 @@ import {
 import type { TimelineMilestoneSuggestion } from "@/lib/ai/timeline-service";
 
 afterEach(async () => {
+  await db.document.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
 });
@@ -214,6 +215,66 @@ describe("regenerateTimeline", () => {
 
     const stored = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
     expect(getTimelineData(stored.timelineMilestones)?.milestones).toHaveLength(11);
+  });
+
+  it("re-attempts a still-empty row on a later regenerate rather than freezing it forever -- the real production bug", async () => {
+    const { opportunity } = await makeOpportunity();
+
+    // First regenerate, no scope documents yet -- DEPOSIT_DUE (one of the
+    // 7 types with no structured Opportunity field) gets written with
+    // emptyMilestone's own baseline: source MANUAL, date null. This alone
+    // used to permanently block every future regenerate from ever filling
+    // it in, regardless of what documents later got analyzed.
+    const first = await regenerateTimeline(opportunity.id, null);
+    expect(first.milestones.find((m) => m.type === "DEPOSIT_DUE")?.source).toBe("MANUAL");
+    expect(first.milestones.find((m) => m.type === "DEPOSIT_DUE")?.date).toBeNull();
+
+    // A scope document with clean, unambiguous key dates for every
+    // AI-eligible type shows up later (all label-matchable, so this stays
+    // within reach of a test env with no OPENAI_API_KEY -- regenerateTimeline
+    // always requests all 9 AI-eligible types, not just DEPOSIT_DUE, so any
+    // type left without a candidate here would otherwise force a real
+    // OpenAI call).
+    await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "Project Timeline.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        storageKey: "test-key",
+        documentType: "DRAWING",
+        extractionStatus: "COMPLETE",
+        extractedText: null,
+        extractedSummary: {
+          eventOrProjectName: null,
+          venue: null,
+          submissionDeadline: null,
+          keyDates: [
+            { label: "Signed Proposal", date: "2026-09-18", dateType: "MILESTONE", sourceQuote: "Signed Proposal", pageNumber: 1 },
+            { label: "50% Deposit: Initiates Build", date: "2026-09-23", dateType: "DEADLINE", sourceQuote: "50% Deposit: Initiates Build", pageNumber: 1 },
+            { label: "Production Meeting", date: "2026-09-25", dateType: "MILESTONE", sourceQuote: "Production Meeting", pageNumber: 1 },
+            { label: "Production Ready Artwork", date: "2026-12-07", dateType: "DEADLINE", sourceQuote: "Production Ready Artwork", pageNumber: 1 },
+            { label: "Balance Due prior to shipping", date: "2026-12-30", dateType: "DEADLINE", sourceQuote: "Balance Due prior to shipping", pageNumber: 1 },
+            { label: "Shipping to Show Site", date: "2027-01-04", dateType: "MILESTONE", sourceQuote: "Shipping to Show Site", pageNumber: 1 },
+            { label: "Installation", date: "2027-01-22", dateType: "MILESTONE", sourceQuote: "Installation", pageNumber: 1 },
+            { label: "Show Open", date: "2027-01-26", dateType: "MILESTONE", sourceQuote: "Show Open", pageNumber: 1 },
+            { label: "Dismantle", date: "2027-01-29", dateType: "MILESTONE", sourceQuote: "Dismantle", pageNumber: 1 },
+          ],
+          scopeSummary: [],
+          riskFlags: [],
+        },
+      },
+    });
+
+    const second = await regenerateTimeline(opportunity.id, null);
+    const byType = new Map(second.milestones.map((m) => [m.type, m]));
+    // Every one of the 5 non-field-backed types (all previously frozen at
+    // MANUAL/null by the first regenerate above) is now unfrozen.
+    for (const type of ["SIGNED_PROPOSAL", "DEPOSIT_DUE", "PRODUCTION_MEETING", "ARTWORK_DEADLINE", "BALANCE_DUE"] as const) {
+      expect(byType.get(type)?.date).not.toBeNull();
+      expect(byType.get(type)?.source).toBe("AI_SUGGESTED");
+    }
+    expect(byType.get("DEPOSIT_DUE")?.date).toBe(new Date("2026-09-23").toISOString());
   });
 
   it("computes rush-fee defaults off a MANUALLY-set ARTWORK_DEADLINE, not the freshly-rebuilt (null) one", async () => {
