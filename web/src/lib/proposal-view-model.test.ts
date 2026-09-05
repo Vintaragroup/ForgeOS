@@ -208,6 +208,36 @@ describe("boothGroupsByCategory", () => {
     expect(booth?.boothDescription).toBe("Large LED Display Wall");
     expect(booth?.subtotal).toBe(16460);
   });
+
+  it("keys a real booth's own H2 (elementType) label by its approved per-category heading, not the raw section name (confirmed live on production's Audio/Visual tab: a component approved as 'All Audio and Video elements - Rentals' in the editor still rendered as its raw import filename here)", () => {
+    const audioVisual = cat("Audio/Visual", "audio_visual");
+    const audioVisualRental = {
+      id: "audio_visual_rental",
+      name: "Audio/Visual - Rental",
+      key: "audio_visual_rental",
+      parentId: "audio_visual",
+      sortOrder: 0,
+      isShowService: false,
+      isLumpSum: false,
+      deletedAt: null,
+    } as never;
+    const categoriesWithSplit = [audioVisual, audioVisualRental];
+    const sections: ProposalViewSection[] = [
+      {
+        id: "s1",
+        name: "369711-Version-2-Expo-CCI--Full-Swing-Baseball--ABCA--Chicago--No-LX-or-Rig--V2.pdf",
+        groupLabel: "RENTAL",
+        buildType: "RENTAL",
+        boothDescription: "Large LED Display Wall",
+        categoryDescriptions: [{ categoryId: "audio_visual_rental", description: "All Audio and Video elements - Rentals" }],
+        lineItems: [li({ id: "a", description: "LED Screen 8h x 11w", category: "Audio/Visual", totalCost: 16460 })],
+      },
+    ];
+
+    const [booth] = boothGroupsByCategory(sections, categoriesWithSplit).get("Audio/Visual - Rental") ?? [];
+
+    expect(booth?.elementGroups[0]?.elementType).toBe("All Audio and Video elements - Rentals");
+  });
 });
 
 describe("standaloneSummaryGroupsByCategory", () => {

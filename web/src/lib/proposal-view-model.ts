@@ -679,6 +679,7 @@ export function boothGroupsByCategory(
   sections: ProposalViewSection[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
 ): Map<string, BoothGroup[]> {
+  const categoryIdByName = new Map(categories.map((c) => [c.name, c.id]));
   const sectionsByCategoryName = new Map<string, ProposalViewSection[]>();
   for (const section of sections) {
     if (!section.groupLabel || !section.buildType) continue;
@@ -690,7 +691,15 @@ export function boothGroupsByCategory(
       else itemsByCategoryName.set(categoryName, [li]);
     }
     for (const [categoryName, items] of itemsByCategoryName) {
-      const clone: ProposalViewSection = { ...section, lineItems: items };
+      // `name` feeds elementTypeForSection (groupBoothLineItems' own H2
+      // label) below -- resolving it to this section's own approved
+      // heading here (same precedence the editor's own elementDescription
+      // resolves, see resolveApprovedSectionHeading's own comment) keeps
+      // a real booth's H2 in agreement with what the Line Items tab
+      // already shows for it, instead of always falling back to the raw
+      // section name.
+      const resolvedName = resolveApprovedSectionHeading(section, categoryIdByName.get(categoryName));
+      const clone: ProposalViewSection = { ...section, name: resolvedName, lineItems: items };
       const arr = sectionsByCategoryName.get(categoryName);
       if (arr) arr.push(clone);
       else sectionsByCategoryName.set(categoryName, [clone]);
@@ -727,15 +736,21 @@ export function boothGroupsByCategory(
 // section is deliberately NOT included here -- its items keep exactly
 // the existing cross-section-merged flat rendering, unaffected.
 // Same (sectionId, categoryId) override the editor's own
-// flatDescriptionOverride resolves (LineItemsTab, sectionCategoryDescriptionByKey)
-// -- a section approved from one category tab specifically must keep
-// showing THAT heading here too, not fall back to the shared field a
-// different tab's edit last touched, and never the raw `name` (often a
-// source-document filename for an AI-imported section -- confirmed live
-// on production's own Signage tab, both as the booth H1 AND, before this
-// helper existed, as groupBoothLineItems' elementType/H2 label too, since
-// that reads straight off whatever `name` it's given).
-function resolveStandaloneHeading(
+// flatDescriptionOverride/elementDescriptionOverride resolves (page.tsx's
+// sectionCategoryDescriptionByKey, shared verbatim between its flat H1 and
+// a real booth's own H2 -- see that file's own comment on why the same
+// lookup covers both) -- a section approved from one category tab
+// specifically must keep showing THAT heading here too, not fall back to
+// the shared field a different tab's edit last touched, and never the raw
+// `name` (often a source-document filename for an AI-imported section --
+// confirmed live on production's own Signage tab, as a standalone
+// section's H1, AND on its Audio/Visual tab, as a real booth's own H2:
+// groupBoothLineItems' elementType label reads straight off whatever
+// `name` it's given, with no override awareness of its own, so both
+// boothGroupsByCategory and standaloneSummaryGroupsByCategory resolve the
+// real heading here first and rename their clones before handing them to
+// groupBoothLineItems/elementTypeForSection).
+function resolveApprovedSectionHeading(
   section: ProposalViewSection,
   categoryId: string | undefined,
 ): string {
@@ -767,7 +782,7 @@ export function standaloneSummaryGroupsByCategory(
       // `name` feeds elementTypeForSection (groupBoothLineItems' own H2
       // label) below -- resolving it to the same approved heading here
       // keeps H1 and H2 in agreement instead of only fixing one of them.
-      const resolvedName = resolveStandaloneHeading(section, categoryIdByName.get(categoryName));
+      const resolvedName = resolveApprovedSectionHeading(section, categoryIdByName.get(categoryName));
       const clone: ProposalViewSection = { ...section, name: resolvedName, groupLabel: scopeKey, lineItems: items };
       const arr = sectionsByCategoryName.get(categoryName);
       if (arr) arr.push(clone);
@@ -779,7 +794,7 @@ export function standaloneSummaryGroupsByCategory(
     const groups = groupBoothLineItems(sectionsForCategory).map((group) => {
       const section = sectionByScopeKey.get(group.boothLabel);
       const boothDescription = section
-        ? resolveStandaloneHeading(section, categoryIdByName.get(categoryName))
+        ? resolveApprovedSectionHeading(section, categoryIdByName.get(categoryName))
         : group.boothLabel;
       return { ...group, boothDescription };
     });
