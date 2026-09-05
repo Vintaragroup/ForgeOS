@@ -72,7 +72,6 @@ import {
   untagSectionBuildTypeAction,
   updateSectionBuildTypeAction,
   updateSectionDescriptionAction,
-  updateSectionItemsCategoryAction,
   updateSectionExcludedFromTotalsAction,
   updateSectionExcludedFromTotalsForSectionAction,
   updateSectionProposalSummaryAction,
@@ -3694,15 +3693,6 @@ function CategoryTabContent({
                     </button>
                   </form>
                 )}
-                <form
-                  action={updateSectionItemsCategoryAction.bind(null, estimateId, version.id, group.sectionId)}
-                  className="flex items-center gap-1.5 text-neutral-900"
-                >
-                  <SelectField label="" name="category" defaultValue={group.categoryName} options={moveCategoryOptions} />
-                  <Button variant="secondary" type="submit">
-                    Move section
-                  </Button>
-                </form>
               </div>
             )
             }
