@@ -4,6 +4,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { bucketLineItemsByCategory } from "@/lib/proposal-view-model";
 import {
   addAttachment,
+  addGroupPromotingSection,
   addLineItem,
   addLineItemsBulk,
   addOption,
@@ -1661,6 +1662,61 @@ describe("moveSectionToGroup", () => {
     expect(row.sectionId).toBe(target.id);
     const groupLabels = await db.estimateSection.findMany({ where: { estimateVersionId: version.id }, select: { groupLabel: true } });
     expect(new Set(groupLabels.map((s) => s.groupLabel))).toEqual(new Set(["Section 203 - Camera Booth - Page 2 & 3"]));
+  });
+});
+
+describe("addGroupPromotingSection", () => {
+  it("promotes a genuinely standalone section (no groupLabel) into a brand-new booth, and creates the new group as its sibling under the same booth", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const standalone = await addSection(version.id, { name: "Suspended Baseball Signage Display", sectionType: "COMPONENT" });
+
+    const newSection = await addGroupPromotingSection(
+      version.id,
+      standalone.id,
+      "Suspended Baseball Signage Display",
+      "RENTAL",
+      "Second Signage Component",
+    );
+
+    const promoted = await db.estimateSection.findUniqueOrThrow({ where: { id: standalone.id } });
+    expect(promoted.groupLabel).toBe("Suspended Baseball Signage Display");
+    expect(promoted.buildType).toBe("RENTAL");
+    expect(newSection.groupLabel).toBe("Suspended Baseball Signage Display");
+    expect(newSection.buildType).toBe("RENTAL");
+    expect(newSection.name).toBe("Second Signage Component");
+    expect(newSection.id).not.toBe(standalone.id);
+  });
+
+  it("tags an untagged booth (real groupLabel, no buildType yet) with the given build type, keeping its own groupLabel unchanged", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const untagged = await addSection(version.id, {
+      name: "Weird Untagged Booth",
+      sectionType: "COMPONENT",
+      groupLabel: "Weird Untagged Booth",
+    });
+    expect(untagged.buildType).toBeNull();
+
+    await addGroupPromotingSection(version.id, untagged.id, "Weird Untagged Booth", "CUSTOM_BUILD", "Second Component");
+
+    const promoted = await db.estimateSection.findUniqueOrThrow({ where: { id: untagged.id } });
+    expect(promoted.groupLabel).toBe("Weird Untagged Booth");
+    expect(promoted.buildType).toBe("CUSTOM_BUILD");
+    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id, groupLabel: "Weird Untagged Booth" } });
+    expect(sections).toHaveLength(2);
+    expect(sections.every((s) => s.buildType === "CUSTOM_BUILD")).toBe(true);
+  });
+
+  it("rejects promoting a section on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const standalone = await addSection(version.id, { name: "Signage Display", sectionType: "COMPONENT" });
+    await lockEstimateVersion(version.id);
+
+    await expect(
+      addGroupPromotingSection(version.id, standalone.id, "Signage Display", "RENTAL", "Second Component"),
+    ).rejects.toThrow(/locked/);
   });
 });
 

@@ -3,6 +3,7 @@
 import {
   addAttachment,
   addLineItem,
+  addGroupPromotingSection,
   addOption,
   addSection,
   archiveEstimate,
@@ -198,6 +199,34 @@ export async function addSectionToBoothAction(
   if (!buildType) throw new Error("This booth has no build type yet -- tag it before adding a group to it.");
 
   await addSection(versionId, { name, sectionType, groupLabel, buildType });
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// "+ Group" for a section that isn't a fully-tagged booth yet (a
+// standalone section with no groupLabel at all, or an untagged one with
+// a groupLabel but no buildType) -- see addGroupPromotingSection's own
+// comment for why this needs both a name AND a buildType from the form,
+// unlike addSectionToBoothAction above which only ever needs a name.
+// `groupLabel` is bound by the caller: the section's own existing
+// groupLabel for the untagged-booth case, or its already-resolved
+// display heading (preferring a per-category override, same as
+// SectionHeadingEditor's own flatDescription) for the standalone case --
+// this action trusts whichever the estimates page already computed
+// rather than re-resolving it.
+export async function addGroupPromotingSectionAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  groupLabel: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) throw new Error("Group name is required");
+  const buildType = String(formData.get("buildType") ?? "") as SectionBuildType;
+  if (!buildType) throw new Error("Build type is required");
+  await addGroupPromotingSection(versionId, sectionId, groupLabel, buildType, name);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

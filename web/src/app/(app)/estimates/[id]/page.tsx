@@ -19,6 +19,7 @@ import {
 import { ProposalPreviewModal } from "@/components/proposal-preview-modal";
 import {
   addAttachmentAction,
+  addGroupPromotingSectionAction,
   addInternalCostAction,
   addLineItemAction,
   addOptionAction,
@@ -3655,34 +3656,57 @@ function CategoryTabContent({
                     opposite order from each other, one real, visible
                     inconsistency in an otherwise-identical header. */}
                 <SectionMoveMenu moveAction={moveSectionToGroupAction.bind(null, estimateId, version.id, group.sectionId)} />
-                {/* +Group -- untagged-booth only. addSectionToBoothAction
-                    only ever needs a real groupLabel string to attach a
-                    new component to, which an untagged booth already has
-                    and a genuinely standalone section (isStandalone, no
-                    groupLabel at all) doesn't -- see SectionMoveMenu's own
-                    kebab above for that case's own "make me part of a
-                    booth" path instead. */}
-                {!isStandalone && group.groupLabel && (
-                  <form
-                    action={addSectionToBoothAction.bind(null, estimateId, version.id, group.groupLabel)}
-                    className="flex items-center gap-1"
+                {/* +Group -- for a section that isn't part of a fully-
+                    tagged booth yet (this section's own groupLabel is
+                    real but untagged, or there's no groupLabel at all).
+                    Unlike a real booth's own +Group (addSectionToBoothAction,
+                    which only ever needs a name since resolveBoothBuildType
+                    can already find a real build type to inherit),
+                    neither case here has one yet -- so this asks for both,
+                    same two fields "Add section"'s own booth-creation path
+                    already asks for. Deliberately never lets +Group create
+                    (or leave behind) an untagged booth the way a bare
+                    groupLabel-only promotion would -- see
+                    addGroupPromotingSection's own comment. groupLabel is
+                    the existing booth name for the untagged-booth case, or
+                    this section's own already-resolved heading (same
+                    value its H1 already shows, preferring a per-category
+                    override) for the standalone case, minting a brand new
+                    booth from it. */}
+                <form
+                  action={addGroupPromotingSectionAction.bind(
+                    null,
+                    estimateId,
+                    version.id,
+                    group.sectionId,
+                    group.groupLabel ?? flatDescription ?? group.sectionName,
+                  )}
+                  className="flex items-center gap-1"
+                >
+                  <input
+                    type="text"
+                    name="name"
+                    placeholder="New group name"
+                    required
+                    className="w-32 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
+                  />
+                  <select
+                    name="buildType"
+                    defaultValue="RENTAL"
+                    className="rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none focus:border-neutral-400"
                   >
-                    <input
-                      type="text"
-                      name="name"
-                      placeholder="New group name"
-                      required
-                      className="w-32 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
-                    />
-                    <button
-                      type="submit"
-                      className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                      title="Add a new group (H2) to this booth"
-                    >
-                      + Group
-                    </button>
-                  </form>
-                )}
+                    <option value="RENTAL">Rental</option>
+                    <option value="PURCHASE">Purchase</option>
+                    <option value="CUSTOM_BUILD">Custom Fabricated</option>
+                  </select>
+                  <button
+                    type="submit"
+                    className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                    title="Add a new group (H2) to this booth"
+                  >
+                    + Group
+                  </button>
+                </form>
               </div>
             )
             }

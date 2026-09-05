@@ -967,6 +967,43 @@ export async function resolveOrCreateTargetSection(
   );
 }
 
+// "+Group" for a section that isn't part of a fully-tagged booth yet --
+// either a genuinely standalone section (no groupLabel at all) or an
+// untagged one (a real groupLabel, but buildType still null -- see
+// flatSectionGroups' own comment for how that state arises). A real
+// booth's own +Group (addSectionToBoothAction) only ever needs a name,
+// because resolveBoothBuildType can already find a real build type to
+// inherit; neither case here has one yet, so the caller must supply both
+// -- see the estimates page's own comment on why this deliberately never
+// lets +Group create (or leave behind) an untagged booth the way a bare
+// groupLabel-only promotion would: that's the exact confusing dead end
+// flatSectionGroups' banner exists to recover from, not a state this
+// should ever manufacture on purpose.
+//
+// Promotes `sectionId` in place (sets its own groupLabel/buildType --
+// either confirming values it already had, for the untagged-booth case,
+// or minting brand new ones from its own current display heading, for
+// the standalone case, which the caller resolves and passes in as
+// `groupLabel` since that resolution -- preferring a per-category
+// EstimateSectionCategoryDescription override over the shared
+// description field -- already lives client-side, not worth
+// re-deriving here) and creates a second, brand-new section as its first
+// sibling under that same groupLabel/buildType, named `name`.
+export async function addGroupPromotingSection(
+  estimateVersionId: string,
+  sectionId: string,
+  groupLabel: string,
+  buildType: SectionBuildType,
+  name: string,
+) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.update({
+    where: { id: sectionId },
+    data: { groupLabel, buildType },
+  });
+  return addSection(estimateVersionId, { name, sectionType: "COMPONENT", groupLabel, buildType });
+}
+
 // Relocates every line item OUT of one existing section and INTO a
 // different booth/group entirely, then deletes the now-empty source --
 // MoveToGroupBar (bulkMoveLineItemsToGroupAction) deliberately restricts
