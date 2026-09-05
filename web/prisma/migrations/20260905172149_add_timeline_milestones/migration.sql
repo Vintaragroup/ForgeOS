@@ -1,0 +1,8 @@
+-- CreateEnum
+CREATE TYPE "TimelineMilestoneType" AS ENUM ('SIGNED_PROPOSAL', 'DEPOSIT_DUE', 'PRODUCTION_MEETING', 'ARTWORK_DEADLINE', 'ARTWORK_RUSH_50', 'ARTWORK_RUSH_100', 'BALANCE_DUE', 'SHIPPING', 'INSTALLATION', 'SHOW_OPEN', 'DISMANTLE');
+
+-- CreateEnum
+CREATE TYPE "TimelineResponsibleParty" AS ENUM ('CLIENT', 'EXPO_CC');
+
+-- AlterTable
+ALTER TABLE "opportunities" ADD COLUMN     "timelineMilestones" JSONB;

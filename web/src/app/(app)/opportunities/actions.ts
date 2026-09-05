@@ -1,9 +1,18 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { OpportunityStage, ProjectType, BoothType, BoothSpace, type CloseReason } from "@/generated/prisma/enums";
+import {
+  OpportunityStage,
+  ProjectType,
+  BoothType,
+  BoothSpace,
+  type CloseReason,
+  type TimelineMilestoneType,
+  type TimelineResponsibleParty,
+} from "@/generated/prisma/enums";
 import { changeOpportunityStage } from "@/lib/opportunity-service";
 import { updateOpportunityProfitability } from "@/lib/profitability-service";
+import { updateTimelineMilestone, CANONICAL_MILESTONES } from "@/lib/timeline-service";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
 import { requireAdmin } from "@/lib/auth";
 import { EXTRACTABLE_OPPORTUNITY_FIELDS, type ExtractableOpportunityField } from "@/lib/ai/document-summary-service";
@@ -238,4 +247,25 @@ export async function updateOpportunityProfitabilityAction(
   await updateOpportunityProfitability(opportunityId, { salesRepId, anticipatedFeePct, contractedFeePct });
   revalidatePath(`/opportunities/${opportunityId}`);
   revalidatePath(`/estimates/${estimateId}`);
+}
+
+// Direct per-row edit on the Timeline card -- not gated by any lock, same
+// posture as timeline-service.ts's updateTimelineMilestone itself. `type`
+// is checked against the fixed canonical list rather than trusted from the
+// form post, since it's used as a lookup key, not a dynamic Prisma field.
+export async function updateTimelineMilestoneAction(opportunityId: string, type: string, formData: FormData) {
+  await requireOpportunityAccess(opportunityId);
+
+  if (!CANONICAL_MILESTONES.some((m) => m.type === type)) {
+    throw new Error(`Not a canonical timeline milestone: ${type}`);
+  }
+
+  const rawDate = String(formData.get("date") ?? "").trim();
+  const date = rawDate === "" ? null : new Date(rawDate);
+  if (date && isNaN(date.getTime())) throw new Error("Invalid date.");
+
+  const responsibleParty = String(formData.get("responsibleParty") ?? "CLIENT") as TimelineResponsibleParty;
+
+  await updateTimelineMilestone(opportunityId, type as TimelineMilestoneType, { date, responsibleParty });
+  revalidatePath(`/opportunities/${opportunityId}`);
 }

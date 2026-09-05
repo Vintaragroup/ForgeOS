@@ -7,6 +7,7 @@
 import path from "node:path";
 import { Document, Page, Text, View, Image as PdfImage, StyleSheet, Font } from "@react-pdf/renderer";
 import type { Category, Prisma } from "@/generated/prisma/client";
+import type { TimelineResponsibleParty } from "@/generated/prisma/enums";
 import { BRAND, BRAND_ADDRESS_LINES, BRAND_COMPANY_NAME, BRAND_TAGLINE } from "@/lib/brand";
 import { TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
 import {
@@ -373,6 +374,7 @@ function amountContent(cost: number, price: number, showCost: boolean) {
 export interface ProposalPdfTimelineEntry {
   label: string;
   date: Date;
+  responsibleParty: TimelineResponsibleParty;
 }
 
 // Descriptive scope-of-services copy only -- no price of its own. The
@@ -729,20 +731,6 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           </View>
         </View>
 
-        {data.timeline.length > 0 && (
-          <View style={styles.timelineSection}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionHeaderText}>Timeline</Text>
-            </View>
-            {data.timeline.map((entry, i) => (
-              <View key={`${entry.label}-${i}`} style={styles.timelineRow} wrap={false}>
-                <Text style={styles.timelineDate}>{formatDate(entry.date)}</Text>
-                <Text style={styles.timelineLabel}>{entry.label}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
         {(data.venue || data.scopeSummary.length > 0) && (
           <View style={styles.projectDescriptionSection}>
             <View style={styles.sectionHeaderRow}>
@@ -753,6 +741,22 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               <Text key={i} style={styles.projectScopeItem}>
                 • {item}
               </Text>
+            ))}
+          </View>
+        )}
+
+        {data.timeline.length > 0 && (
+          <View style={styles.timelineSection}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionHeaderText}>Timeline</Text>
+            </View>
+            {data.timeline.map((entry, i) => (
+              <View key={`${entry.label}-${i}`} style={styles.timelineRow} wrap={false}>
+                <Text style={styles.timelineDate}>{formatDate(entry.date)}</Text>
+                <Text style={styles.timelineLabel}>
+                  {entry.label} ({entry.responsibleParty === "CLIENT" ? "Client" : "EXPO CC"} Responsibility)
+                </Text>
+              </View>
             ))}
           </View>
         )}

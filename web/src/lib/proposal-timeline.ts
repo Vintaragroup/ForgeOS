@@ -1,21 +1,24 @@
 // Cover-page content for the proposal PDF: dated milestones, venue, and a
 // short project description -- see historical Expo CCI proposals in
 // data/historical_jobs/pdf, which all lead with a TIMELINE section plus a
-// hand-written scope paragraph before any pricing appears. dashboard.ts
-// already surfaces the same two date sources (WorkOrder date fields +
-// AI-extracted Document.extractedSummary.keyDates) for the "needs
-// attention" list, but that view is windowed to +/-30 days and
-// cross-opportunity -- a proposal cover page needs every date for one
-// opportunity, not just the ones due soon, plus venue/scopeSummary that
-// dashboard.ts has no use for.
+// hand-written scope paragraph before any pricing appears.
+//
+// The timeline itself is sourced from Opportunity.timelineMilestones (see
+// timeline-service.ts) -- the estimator-reviewed, canonical 11-milestone
+// checklist, not WorkOrder (a Project-scoped, post-award model normally
+// empty during proposal drafting). Only entries with a confirmed, non-null
+// date make it onto a client-facing PDF; a milestone still flagged missing
+// simply doesn't render a row rather than showing a blank/TBD one.
 
 import { db } from "@/lib/db";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
-import { parseFreeTextDate } from "@/lib/citation";
+import { getTimelineData } from "@/lib/timeline-service";
+import type { TimelineResponsibleParty } from "@/generated/prisma/enums";
 
 export interface ProposalTimelineEntry {
   label: string;
   date: Date;
+  responsibleParty: TimelineResponsibleParty;
 }
 
 export interface ProposalCoverInfo {
@@ -24,20 +27,13 @@ export interface ProposalCoverInfo {
   scopeSummary: string[];
 }
 
-const WORK_ORDER_DATE_FIELDS: { field: "depositDueDate" | "productionMeetingDate" | "artworkDeadlineDate" | "balanceDueDate" | "installDate"; label: string }[] = [
-  { field: "depositDueDate", label: "Deposit due" },
-  { field: "productionMeetingDate", label: "Production meeting" },
-  { field: "artworkDeadlineDate", label: "Artwork deadline" },
-  { field: "balanceDueDate", label: "Balance due" },
-  { field: "installDate", label: "Installation" },
-];
-
 const MAX_SCOPE_SUMMARY_ITEMS = 8;
 
 export async function getProposalCoverInfo(opportunityId: string): Promise<ProposalCoverInfo> {
-  const [workOrders, documents] = await Promise.all([
-    db.workOrder.findMany({
-      where: { deletedAt: null, project: { deletedAt: null, opportunityId } },
+  const [opportunity, documents] = await Promise.all([
+    db.opportunity.findUniqueOrThrow({
+      where: { id: opportunityId },
+      select: { timelineMilestones: true },
     }),
     db.document.findMany({
       where: { deletedAt: null, extractionStatus: "COMPLETE", opportunityId },
@@ -45,25 +41,16 @@ export async function getProposalCoverInfo(opportunityId: string): Promise<Propo
     }),
   ]);
 
-  const timeline: ProposalTimelineEntry[] = [];
-
-  for (const wo of workOrders) {
-    for (const { field, label } of WORK_ORDER_DATE_FIELDS) {
-      const date = wo[field];
-      if (date) timeline.push({ label, date });
-    }
-  }
+  const timelineData = getTimelineData(opportunity.timelineMilestones);
+  const timeline: ProposalTimelineEntry[] = (timelineData?.milestones ?? [])
+    .filter((m) => m.date !== null)
+    .map((m) => ({ label: m.label, date: new Date(m.date!), responsibleParty: m.responsibleParty }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
 
   let venue: string | null = null;
   const scopeSeen = new Set<string>();
   const scopeSummary: string[] = [];
 
-  // Same INFORMATIONAL-exclusion and label+date dedupe as dashboard.ts's
-  // upcomingDeadlines -- an RFP's narrative PDF and its own Appendix
-  // routinely restate the same fact, and INFORMATIONAL dates describe
-  // something the client already did (e.g. "RFP Sent"), not a milestone
-  // that belongs on a client-facing timeline.
-  const dateSeen = new Set<string>();
   for (const doc of documents) {
     if (!doc.extractedSummary) continue;
     const summary = doc.extractedSummary as unknown as DocumentSummary;
@@ -75,22 +62,7 @@ export async function getProposalCoverInfo(opportunityId: string): Promise<Propo
       scopeSeen.add(text);
       scopeSummary.push(text);
     }
-
-    for (const kd of summary.keyDates) {
-      const dateType = kd.dateType ?? "MILESTONE";
-      if (dateType === "INFORMATIONAL") continue;
-
-      const date = parseFreeTextDate(kd.date);
-      if (!date) continue;
-
-      const dedupeKey = `${kd.label.trim().toLowerCase()}::${date.toISOString().slice(0, 10)}`;
-      if (dateSeen.has(dedupeKey)) continue;
-      dateSeen.add(dedupeKey);
-
-      timeline.push({ label: kd.label, date });
-    }
   }
 
-  timeline.sort((a, b) => a.date.getTime() - b.date.getTime());
   return { timeline, venue, scopeSummary: scopeSummary.slice(0, MAX_SCOPE_SUMMARY_ITEMS) };
 }

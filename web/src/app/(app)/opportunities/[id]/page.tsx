@@ -9,6 +9,7 @@ import {
   deleteOpportunity,
   updateCollaborators,
   updateOpportunity,
+  updateTimelineMilestoneAction,
 } from "../actions";
 import { buildEstimateFromDocumentsAction, convertToEstimate, convertToProject } from "../convert-actions";
 import {
@@ -18,7 +19,9 @@ import {
   finalizeDocumentUploadAction,
   updateDocumentTypeAction,
 } from "./documents/actions";
-import { runClarificationQuestionsAnalysisAction } from "./ai-actions";
+import { regenerateTimelineAction, runClarificationQuestionsAnalysisAction } from "./ai-actions";
+import { getTimelineData, buildEmptyMilestones, type TimelineData } from "@/lib/timeline-service";
+import { TimelineMilestoneRow } from "@/components/timeline-milestone-row";
 import { deleteMisattributedLineItemAction, moveLineItemToEstimateAction } from "./line-item-audit-actions";
 import { findMisattributedLineItems, type MisattributedLineItem } from "@/lib/line-item-audit-service";
 import type { ClarificationQuestion } from "@/lib/ai/clarification-questions-service";
@@ -396,6 +399,83 @@ function ProjectBriefCard({
           </div>
         );
       })}
+    </CollapsibleSection>
+  );
+}
+
+const TIMELINE_DATE_FORMAT: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "numeric" };
+
+// Every proposal needs this fixed 11-milestone checklist -- see
+// timeline-service.ts's CANONICAL_MILESTONES. Always shows all 11 rows,
+// even before a Timeline has ever been generated, so the checklist itself
+// (not just its populated rows) is visible from the start; a row without a
+// confirmed date is flagged, matching the "every proposal needs this"
+// requirement.
+function TimelineCard({
+  opportunityId,
+  timelineData,
+  documents,
+}: {
+  opportunityId: string;
+  timelineData: TimelineData | null;
+  documents: { id: string; filename: string; mimeType: string }[];
+}) {
+  const milestones = timelineData?.milestones ?? buildEmptyMilestones();
+  const regenerateWithId = regenerateTimelineAction.bind(null, opportunityId);
+
+  return (
+    <CollapsibleSection title="Timeline" id="timeline">
+      <p className="mb-4 text-sm text-neutral-500">
+        The standard project schedule for every proposal -- deposit, artwork deadline, install, and everything in
+        between. Auto-populated where possible from onboarding details and scope documents; edit any row directly,
+        or Regenerate to re-run extraction (hand-edited rows are never overwritten by a re-run).
+      </p>
+      <form action={regenerateWithId}>
+        <SubmitButton pendingText={timelineData ? "Re-generating…" : "Generating…"} variant="secondary">
+          {timelineData ? "Re-generate timeline" : "Generate timeline"}
+        </SubmitButton>
+      </form>
+
+      {timelineData && (
+        <p className="mb-3 mt-4 text-xs text-neutral-400">
+          Generated {new Date(timelineData.generatedAt).toLocaleString()} — re-run after onboarding details or
+          documents change.
+        </p>
+      )}
+
+      <table className="mt-4 w-full text-left">
+        <thead>
+          <tr className="border-b border-neutral-200 text-xs uppercase tracking-wide text-neutral-500">
+            <th className="py-1.5 pr-2 font-normal">Milestone</th>
+            <th className="py-1.5 pr-2 font-normal">Date</th>
+            <th className="py-1.5 pr-2 font-normal">Responsible</th>
+            <th className="py-1.5 pl-2 font-normal" />
+          </tr>
+        </thead>
+        <tbody>
+          {milestones.map((m) => {
+            const doc = m.documentId ? documents.find((d) => d.id === m.documentId) : undefined;
+            const href =
+              doc && m.sourceQuote
+                ? citationHref(opportunityId, doc, { sourceQuote: m.sourceQuote, pageNumber: m.pageNumber ?? null })
+                : null;
+            return (
+              <TimelineMilestoneRow
+                key={m.type}
+                label={m.label}
+                displayDate={m.date ? new Date(m.date).toLocaleDateString("en-US", TIMELINE_DATE_FORMAT) : null}
+                rawDate={m.date ? new Date(m.date).toISOString().slice(0, 10) : ""}
+                responsibleParty={m.responsibleParty}
+                source={m.source}
+                confirmed={m.confirmed}
+                citationHref={href}
+                citationLabel={doc ? doc.filename : null}
+                updateAction={updateTimelineMilestoneAction.bind(null, opportunityId, m.type)}
+              />
+            );
+          })}
+        </tbody>
+      </table>
     </CollapsibleSection>
   );
 }
@@ -1255,6 +1335,12 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       </CollapsibleSection>
 
       <ProjectBriefCard opportunityId={opportunity.id} documents={documents} namedEstimates={namedEstimates} />
+
+      <TimelineCard
+        opportunityId={opportunity.id}
+        timelineData={getTimelineData(opportunity.timelineMilestones)}
+        documents={documents}
+      />
 
       <LineItemAuditCard opportunityId={opportunity.id} findings={misattributedLineItems} />
 

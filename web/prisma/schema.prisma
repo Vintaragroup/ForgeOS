@@ -200,6 +200,32 @@ enum BoothSpace {
   PERIMETER
 }
 
+// The fixed, always-present set of milestones every proposal's Timeline
+// covers -- see timeline-service.ts's CANONICAL_MILESTONES, the single
+// source of truth for order/labels/default responsible party. Four of
+// these are deterministic from other Opportunity fields (INSTALLATION,
+// DISMANTLE, SHOW_OPEN, SHIPPING); ARTWORK_RUSH_50/100 are computed from
+// ARTWORK_DEADLINE via a fixed lead-time rule; the rest need either AI
+// extraction from scope documents or manual estimator entry.
+enum TimelineMilestoneType {
+  SIGNED_PROPOSAL
+  DEPOSIT_DUE
+  PRODUCTION_MEETING
+  ARTWORK_DEADLINE
+  ARTWORK_RUSH_50
+  ARTWORK_RUSH_100
+  BALANCE_DUE
+  SHIPPING
+  INSTALLATION
+  SHOW_OPEN
+  DISMANTLE
+}
+
+enum TimelineResponsibleParty {
+  CLIENT
+  EXPO_CC
+}
+
 model Opportunity {
   id        String  @id @default(cuid())
   companyId String
@@ -288,6 +314,16 @@ model Opportunity {
   // expensive, full-overwrite on re-run rather than live-recomputed.
   clarificationQuestions Json?
 
+  // Cache of the last timeline generate/edit -- always exactly 11 entries,
+  // one per TimelineMilestoneType (see timeline-service.ts's
+  // CANONICAL_MILESTONES), each { type, label, date: string|null,
+  // responsibleParty, source: "DETERMINISTIC"|"COMPUTED"|"AI_SUGGESTED"|
+  // "MANUAL", confirmed: boolean, sourceQuote?, documentId?, pageNumber? }.
+  // Same posture as clarificationQuestions above -- explicitly regenerated,
+  // full-overwrite on Regenerate -- but individual rows are also directly
+  // PATCHable via updateTimelineMilestoneAction without a full regenerate.
+  timelineMilestones Json?
+
   stageEvents StageChangeEvent[]
   estimates   Estimate[]
   projects    Project[]
@@ -375,6 +411,12 @@ enum AiFeature {
   // from CHAT since it's a different OpenAI endpoint (embeddings, not
   // chat completions) with its own per-token rate.
   DOCUMENT_EMBEDDING
+  // Maps a scope document's already-extracted keyDates onto the 5
+  // non-deterministic canonical Timeline milestone types -- see
+  // timeline-service.ts. Distinct from RFP_CLARIFICATION_QUESTIONS despite
+  // reusing the same numbered-candidate-checklist pattern: this classifies
+  // dates onto a FIXED milestone list, not open-ended gap-finding.
+  TIMELINE_MILESTONES
 }
 
 // One row per OpenAI call, for case-based model routing's cost/token
