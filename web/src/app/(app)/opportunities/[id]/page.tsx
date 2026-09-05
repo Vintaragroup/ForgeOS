@@ -1293,6 +1293,38 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                         </>
                       );
                     })()}
+                  {/* General fallback retag control -- the two nudges above
+                      only ever fire once a document reaches extractionStatus
+                      COMPLETE (getSuggestedRetag) or for a specifically
+                      mistagged spreadsheet (isLikelyMistaggedSpreadsheet).
+                      A document stuck at UNSUPPORTED (e.g. a PNG uploaded as
+                      anything other than Drawing -- see text-extraction.ts)
+                      never reaches COMPLETE, so it had no retag path at all
+                      before this. updateDocumentType resets extractionStatus
+                      back to PENDING on any retag, which is what makes the
+                      Analyze button reappear after this fixes the type. */}
+                  {doc.documentType !== "PRICING_SCHEDULE" && (
+                    <form
+                      action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)}
+                      className="flex items-center gap-1"
+                    >
+                      <select
+                        name="documentType"
+                        defaultValue={doc.documentType}
+                        aria-label={`Change document type for ${doc.filename}`}
+                        className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 outline-none focus:border-neutral-500"
+                      >
+                        {DOCUMENT_TYPE_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button type="submit" className="text-xs text-neutral-500 hover:underline">
+                        Retag
+                      </button>
+                    </form>
+                  )}
                   {doc.documentType !== "PRICING_SCHEDULE" &&
                     (doc.extractionStatus === "PENDING" || doc.extractionStatus === "FAILED") && (
                       <form action={analyzeDocumentAction.bind(null, opportunity.id, doc.id)}>
