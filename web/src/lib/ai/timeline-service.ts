@@ -50,6 +50,15 @@ interface NumberedKeyDateCandidate {
   label: string;
   date: string;
   sourceQuote: string;
+  // Already resolved once, at Analyze time -- by document-summary-
+  // service.ts's text-based pass for a text document, or by
+  // drawing-summary-service.ts's vision pass for a DRAWING (which has no
+  // extractedText at all -- text-extraction.ts deliberately marks DRAWING
+  // UNSUPPORTED for text extraction). resolveTimelineSuggestions below
+  // uses this directly for a DRAWING-sourced candidate instead of
+  // re-deriving a page number from extractedText, which a DRAWING simply
+  // doesn't have.
+  pageNumber: number | null;
 }
 
 interface RawMilestoneVerdict {
@@ -148,16 +157,35 @@ export async function resolveTimelineSuggestions(
     if (!parsedDate) continue; // can't use a date we can't parse
 
     const doc = scopeDocuments.find((d) => d.filename === candidate.filename);
-    if (!doc || !doc.extractedText) continue;
+    if (!doc) continue;
 
-    const sourceQuote = resolveHighlightableQuote(doc.extractedText, candidate.sourceQuote);
-    const pageTexts = await getPageTextsFor(doc);
+    // A DRAWING has no extractedText at all (vision-summarized instead of
+    // text-extracted -- see NumberedKeyDateCandidate's own comment), so
+    // there's no text to re-resolve a quote/page number against. Use the
+    // candidate's own already-resolved quote/page directly in that case,
+    // same as a text document's candidate did before this fix -- dropping
+    // it here (the previous behavior) silently discarded every real
+    // DRAWING-sourced date, confirmed live: a real client-supplied
+    // schedule image had its Deposit/Artwork/Balance dates come through
+    // fine (from a different, text-extractable document) while its own
+    // Shipping/Installation/Dismantle dates were silently dropped here.
+    let sourceQuote: string;
+    let pageNumber: number | null;
+    if (doc.extractedText) {
+      sourceQuote = resolveHighlightableQuote(doc.extractedText, candidate.sourceQuote);
+      const pageTexts = await getPageTextsFor(doc);
+      pageNumber = pageTexts ? locateQuotePage(pageTexts, sourceQuote) : null;
+    } else {
+      sourceQuote = candidate.sourceQuote;
+      pageNumber = candidate.pageNumber;
+    }
+
     suggestions.push({
       type: verdict.milestoneType,
       date: parsedDate.toISOString(),
       sourceQuote,
       documentId: doc.id,
-      pageNumber: pageTexts ? locateQuotePage(pageTexts, sourceQuote) : null,
+      pageNumber,
     });
   }
   return suggestions;
@@ -183,7 +211,14 @@ export async function runTimelineExtraction(
     const keyDates = (d.extractedSummary as unknown as DocumentSummary | null)?.keyDates ?? [];
     return keyDates.map((kd) => {
       candidateCounter += 1;
-      return { id: `K${candidateCounter}`, filename: d.filename, label: kd.label, date: kd.date, sourceQuote: kd.sourceQuote };
+      return {
+        id: `K${candidateCounter}`,
+        filename: d.filename,
+        label: kd.label,
+        date: kd.date,
+        sourceQuote: kd.sourceQuote,
+        pageNumber: kd.pageNumber,
+      };
     });
   });
   if (candidates.length === 0) return [];

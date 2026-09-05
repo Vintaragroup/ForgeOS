@@ -19,6 +19,36 @@ async function makeOpportunity() {
   return { company, opportunity };
 }
 
+// A DRAWING never gets extractedText (text-extraction.ts marks it
+// UNSUPPORTED for text extraction) even though drawing-summary-service.ts's
+// vision pass still populates extractedSummary.keyDates -- this fixture
+// exercises exactly that shape, the one the real production bug hit.
+async function makeDrawingDocument(
+  opportunityId: string,
+  keyDates: { label: string; date: string; dateType: string; sourceQuote: string; pageNumber: number | null }[],
+) {
+  return db.document.create({
+    data: {
+      opportunityId,
+      filename: "Project Timeline.png",
+      mimeType: "image/png",
+      sizeBytes: 100,
+      storageKey: "test-key",
+      documentType: "DRAWING",
+      extractionStatus: "COMPLETE",
+      extractedText: null,
+      extractedSummary: {
+        eventOrProjectName: null,
+        venue: null,
+        submissionDeadline: null,
+        keyDates,
+        scopeSummary: [],
+        riskFlags: [],
+      },
+    },
+  });
+}
+
 // mimeType defaults to DOCX -- resolveTimelineSuggestions fetches real
 // bytes off disk for a PDF source's page number, which this fixture's fake
 // storageKey doesn't have. DOCX has no page concept, exercising the
@@ -93,7 +123,7 @@ describe("resolveTimelineSuggestions", () => {
       [{ label: "50% Deposit Due", date: "2026-09-23", dateType: "DEADLINE", sourceQuote: "50% deposit due", pageNumber: null }],
       "A 50% deposit due September 23, 2026 initiates the build.",
     );
-    const candidates = [{ id: "K1", filename: document.filename, label: "50% Deposit Due", date: "2026-09-23", sourceQuote: "50% deposit due" }];
+    const candidates = [{ id: "K1", filename: document.filename, label: "50% Deposit Due", date: "2026-09-23", sourceQuote: "50% deposit due", pageNumber: null }];
 
     const suggestions = await resolveTimelineSuggestions(
       [{ milestoneType: "DEPOSIT_DUE", candidateId: "K99" }],
@@ -122,7 +152,7 @@ describe("resolveTimelineSuggestions", () => {
       [{ label: "50% Deposit Due", date: "2026-09-23", dateType: "DEADLINE", sourceQuote: "50% deposit due", pageNumber: null }],
       "A 50% deposit due September 23, 2026 initiates the build.",
     );
-    const candidates = [{ id: "K1", filename: document.filename, label: "50% Deposit Due", date: "2026-09-23", sourceQuote: "50% deposit due" }];
+    const candidates = [{ id: "K1", filename: document.filename, label: "50% Deposit Due", date: "2026-09-23", sourceQuote: "50% deposit due", pageNumber: null }];
 
     const suggestions = await resolveTimelineSuggestions(
       [{ milestoneType: "DEPOSIT_DUE", candidateId: "K1" }],
@@ -138,10 +168,31 @@ describe("resolveTimelineSuggestions", () => {
     expect(new Date(suggestions[0].date).toISOString().slice(0, 10)).toBe("2026-09-23");
   });
 
+  it("resolves a DRAWING-sourced candidate using its own quote/page instead of dropping it -- the real production bug", async () => {
+    const { opportunity } = await makeOpportunity();
+    const document = await makeDrawingDocument(opportunity.id, [
+      { label: "Installation", date: "2027-01-22", dateType: "MILESTONE", sourceQuote: "Installation", pageNumber: 1 },
+    ]);
+    const candidates = [
+      { id: "K1", filename: document.filename, label: "Installation", date: "2027-01-22", sourceQuote: "Installation", pageNumber: 1 },
+    ];
+
+    const suggestions = await resolveTimelineSuggestions(
+      [{ milestoneType: "INSTALLATION", candidateId: "K1" }],
+      candidates,
+      [document],
+    );
+
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].sourceQuote).toBe("Installation");
+    expect(suggestions[0].pageNumber).toBe(1);
+    expect(new Date(suggestions[0].date).toISOString().slice(0, 10)).toBe("2027-01-22");
+  });
+
   it("drops a candidate whose date can't be parsed rather than guessing", async () => {
     const { opportunity } = await makeOpportunity();
     const document = await makeScopeDocument(opportunity.id, [], "Some contract text.");
-    const candidates = [{ id: "K1", filename: document.filename, label: "Production Meeting", date: "sometime in the fall", sourceQuote: "production meeting" }];
+    const candidates = [{ id: "K1", filename: document.filename, label: "Production Meeting", date: "sometime in the fall", sourceQuote: "production meeting", pageNumber: null }];
 
     const suggestions = await resolveTimelineSuggestions(
       [{ milestoneType: "PRODUCTION_MEETING", candidateId: "K1" }],
