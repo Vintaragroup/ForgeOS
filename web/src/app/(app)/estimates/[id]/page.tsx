@@ -3711,6 +3711,26 @@ function CategoryTabContent({
             )
             }
           >
+            {/* This H1's own "AI proposed summary" -- same block a real
+                booth's own H1 already shows (line ~3286 above), just bound
+                to this section's own elementSummary/elementPendingSummary
+                (group.sectionId) instead of the whole booth's. A
+                flat/standalone (or untagged-booth) section IS its own only
+                group, the same way a real booth's own single H2 element
+                group already reuses this exact field -- confirmed live as
+                a real gap: unlike a real booth, this block didn't exist
+                here at all, so neither an approved summary nor the
+                "suggest one" prompt was ever reachable for these H1s. */}
+            <SummaryEditor
+              key="summary"
+              summary={group.elementSummary}
+              pendingSummary={group.elementPendingSummary}
+              isLocked={version.isLocked}
+              emptyHint="No proposal summary yet for this section -- optional, and never affects what's itemized below."
+              suggestAction={suggestElementSummaryAction.bind(null, estimateId, version.id, group.sectionId)}
+              updateAction={updateElementSummaryAction.bind(null, estimateId, version.id, group.sectionId)}
+              rejectAction={clearElementPendingSummaryAction.bind(null, estimateId, version.id, group.sectionId)}
+            />
             <SectionLineItemsBlock
               key="items"
               lineItems={group.lineItems}

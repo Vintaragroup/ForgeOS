@@ -1069,6 +1069,15 @@ export interface RawCategorySectionGroup<T> {
   lineItems: T[];
   description: string | null;
   pendingDescription: string | null;
+  // The flat/standalone (or untagged-booth) H1's own "AI proposed
+  // summary" -- same EstimateSection.elementSummary/elementPendingSummary
+  // fields a real booth's own H2 element groups already use (RawElementTypeGroup's
+  // own fields below), just surfaced one tier up here since a flat
+  // section's H1 IS its only group. Always present (defaults to null when
+  // the caller's own section objects didn't carry them -- see
+  // bucketLineItemsByCategory's own comment on why that's optional there).
+  elementSummary: string | null;
+  elementPendingSummary: string | null;
   // Same meaning as RawElementTypeGroup's own isMapped -- true when
   // sectionName resolves through ELEMENT_TYPE_MAP, so this group's heading
   // stays fixed with no edit/AI-suggestion UI.
@@ -1106,6 +1115,19 @@ export function bucketLineItemsByCategory<T extends { category: string | null }>
     buildType?: SectionBuildType | null;
     description: string | null;
     pendingDescription: string | null;
+    // Optional, same reasoning as buildType above -- moveFlatSectionProposalOrder's
+    // own select doesn't need these (it only orders sections), so it's
+    // spared having to add them just to satisfy this type. The estimates
+    // page's own call (version.sections, a full-row select) always has
+    // them. Used for the flat/standalone H1's own "AI proposed summary"
+    // block (SummaryEditor, EstimateSection.elementSummary) -- confirmed
+    // live as a real gap: unlike a real booth (which always shows this
+    // block, even in its empty "no summary yet" state) or a booth's own
+    // H2 element groups, a standalone/untagged-booth section's H1 had no
+    // equivalent block in the UI at all, so its own approved
+    // elementSummary (or the "suggest one" prompt) was never reachable.
+    elementSummary?: string | null;
+    elementPendingSummary?: string | null;
     lineItems: T[];
   }[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
@@ -1139,6 +1161,8 @@ export function bucketLineItemsByCategory<T extends { category: string | null }>
           lineItems: [],
           description: section.description,
           pendingDescription: section.pendingDescription,
+          elementSummary: section.elementSummary ?? null,
+          elementPendingSummary: section.elementPendingSummary ?? null,
           isMapped: isMappedElementType(section.name),
         };
         sectionMap.set(section.id, group);

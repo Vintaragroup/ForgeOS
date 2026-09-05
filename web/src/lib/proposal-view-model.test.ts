@@ -749,6 +749,37 @@ describe("bucketLineItemsByCategory -- description/pendingDescription carry-thro
     expect(group.pendingDescription).toBe("Suggested title");
     expect(group.isMapped).toBe(false);
   });
+
+  it("carries a section's own elementSummary/elementPendingSummary through too, defaulting to null when the caller's section objects don't have them", () => {
+    const sections = [
+      {
+        id: "s1",
+        name: "Custom Build",
+        groupLabel: null,
+        description: null,
+        pendingDescription: null,
+        elementSummary: "Approved summary text.",
+        elementPendingSummary: "Suggested summary text.",
+        lineItems: [li({ id: "a", category: "Structure" })],
+      },
+      {
+        id: "s2",
+        name: "Other Section",
+        groupLabel: null,
+        description: null,
+        pendingDescription: null,
+        lineItems: [li({ id: "b", category: "Structure" })],
+      },
+    ];
+
+    const [bucket] = bucketLineItemsByCategory(sections, categories);
+    const [groupWithSummary, groupWithout] = bucket.sectionGroups;
+
+    expect(groupWithSummary.elementSummary).toBe("Approved summary text.");
+    expect(groupWithSummary.elementPendingSummary).toBe("Suggested summary text.");
+    expect(groupWithout.elementSummary).toBeNull();
+    expect(groupWithout.elementPendingSummary).toBeNull();
+  });
 });
 
 describe("resolveEffectiveCategory", () => {
@@ -910,6 +941,8 @@ describe("mergeCategoryBucketsForAllMethods / mergeBoothGroupsForAllMethods", ()
       lineItems: [],
       description: null,
       pendingDescription: null,
+      elementSummary: null,
+      elementPendingSummary: null,
       isMapped: false,
     };
   }
