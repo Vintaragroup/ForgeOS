@@ -1,9 +1,22 @@
 // Maps a scope document's already-extracted keyDates
 // (document-summary-service.ts's DocumentSummary.keyDates, captured once
-// at Analyze time) onto the 5 canonical Timeline milestone types that have
-// no structured Opportunity field to source from (see timeline-service.ts's
-// DETERMINISTIC_FIELD_BY_TYPE for the other 4, and its rush-fee offsets for
-// the remaining 2).
+// at Analyze time) onto 9 of the 11 canonical Timeline milestone types --
+// every one except the 2 pure rush-fee cutoffs, which stay computed-only
+// (see timeline-service.ts's applyRushFeeDefaults).
+//
+// 4 of these 9 (SHIPPING/INSTALLATION/SHOW_OPEN/DISMANTLE) also have a
+// structured Opportunity field (shipDate/targetMoveIn/targetMoveOut/
+// eventStartDate) -- timeline-service.ts's regenerateTimeline prefers that
+// field when it's set, and only falls back to this AI suggestion when it's
+// still empty. An earlier version of this file classified only the other
+// 5 types, on the assumption that those 4 would always be known from the
+// Opportunity's own onboarding fields -- confirmed wrong live: a real
+// document (the client's own project-timeline schedule) stated ship/
+// install/show-open/dismantle dates directly, and multi-project
+// Opportunities in particular never get those onboarding fields
+// auto-filled at all (see opportunity-service.ts's
+// applyExtractedFieldsToOpportunity), so Timeline had no way to pick them
+// up without this fallback.
 //
 // Follows clarification-questions-service.ts's proven checklist pattern
 // rather than a free-form "populate a timeline" prompt: that file's own
@@ -21,10 +34,7 @@ import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MI
 import { parseFreeTextDate } from "@/lib/citation";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 
-export type NonDeterministicMilestoneType = Extract<
-  TimelineMilestoneType,
-  "SIGNED_PROPOSAL" | "DEPOSIT_DUE" | "PRODUCTION_MEETING" | "ARTWORK_DEADLINE" | "BALANCE_DUE"
->;
+export type AiEligibleMilestoneType = Exclude<TimelineMilestoneType, "ARTWORK_RUSH_50" | "ARTWORK_RUSH_100">;
 
 export interface TimelineMilestoneSuggestion {
   type: TimelineMilestoneType;
@@ -43,11 +53,11 @@ interface NumberedKeyDateCandidate {
 }
 
 interface RawMilestoneVerdict {
-  milestoneType: NonDeterministicMilestoneType;
+  milestoneType: AiEligibleMilestoneType;
   candidateId: string | null;
 }
 
-const MILESTONE_TYPE_DESCRIPTIONS: Record<NonDeterministicMilestoneType, string> = {
+const MILESTONE_TYPE_DESCRIPTIONS: Record<AiEligibleMilestoneType, string> = {
   SIGNED_PROPOSAL:
     "The date the client is expected to sign/return the proposal to kick off the build. This is usually a target date the estimator sets, not something a document states outright -- null is a common, valid answer.",
   DEPOSIT_DUE: "The date a deposit payment (e.g. a 50% deposit) is due to initiate the build.",
@@ -55,6 +65,10 @@ const MILESTONE_TYPE_DESCRIPTIONS: Record<NonDeterministicMilestoneType, string>
   ARTWORK_DEADLINE:
     "The date camera-ready/production-ready artwork is due from the client, BEFORE any rush-fee escalation -- not a later rush cutoff date.",
   BALANCE_DUE: "The date the remaining balance payment is due, typically shortly before shipping.",
+  SHIPPING: "The date the exhibit/booth materials ship to the show site.",
+  INSTALLATION: "The date the booth/exhibit is installed on site (move-in), before the show opens.",
+  SHOW_OPEN: "The date the show/event opens to attendees.",
+  DISMANTLE: "The date the booth is dismantled/struck (move-out), after the show closes.",
 };
 
 export const TIMELINE_SCHEMA = {
@@ -74,7 +88,17 @@ export const TIMELINE_SCHEMA = {
           properties: {
             milestoneType: {
               type: "string",
-              enum: ["SIGNED_PROPOSAL", "DEPOSIT_DUE", "PRODUCTION_MEETING", "ARTWORK_DEADLINE", "BALANCE_DUE"],
+              enum: [
+                "SIGNED_PROPOSAL",
+                "DEPOSIT_DUE",
+                "PRODUCTION_MEETING",
+                "ARTWORK_DEADLINE",
+                "BALANCE_DUE",
+                "SHIPPING",
+                "INSTALLATION",
+                "SHOW_OPEN",
+                "DISMANTLE",
+              ],
             },
             candidateId: {
               type: ["string", "null"],
@@ -92,7 +116,7 @@ export const TIMELINE_SCHEMA = {
 
 const SYSTEM_PROMPT = `You are a senior event/exhibit-industry estimator building a project timeline from a client's RFP/contract documents. You're given a numbered list of CANDIDATE KEY DATES already extracted from those documents, and a fixed list of MILESTONE TYPES to classify.
 
-For each milestone type, decide which single candidate (if any) states that exact milestone -- e.g. a candidate labeled "50% Deposit Due" or "Initial Payment" matches DEPOSIT_DUE; a candidate labeled "Kickoff Call" or "Production Meeting" matches PRODUCTION_MEETING. Only match a candidate that clearly and specifically states that milestone -- do not guess, do not match a loosely-related date, and do not invent a date that isn't in the candidate list. If no candidate clearly matches, return null for that type. SIGNED_PROPOSAL in particular is usually not stated in a document at all (it's a target date the estimator sets) -- null is the common, correct answer for it unless a document explicitly states a required signing deadline.
+For each milestone type, decide which single candidate (if any) states that exact milestone -- e.g. a candidate labeled "50% Deposit Due" or "Initial Payment" matches DEPOSIT_DUE; a candidate labeled "Kickoff Call" or "Production Meeting" matches PRODUCTION_MEETING; a candidate labeled "Move-in" matches INSTALLATION; a candidate labeled "Move-out" or "Strike" matches DISMANTLE. Only match a candidate that clearly and specifically states that milestone -- do not guess, do not match a loosely-related date, and do not invent a date that isn't in the candidate list. If no candidate clearly matches, return null for that type. SIGNED_PROPOSAL in particular is usually not stated in a document at all (it's a target date the estimator sets) -- null is the common, correct answer for it unless a document explicitly states a required signing deadline.
 
 You must return exactly one entry per milestone type listed, in order -- this is a checklist you complete in full, not a shortlist you selectively pull from.`;
 
@@ -147,7 +171,7 @@ export async function resolveTimelineSuggestions(
 export async function runTimelineExtraction(
   opportunityId: string,
   userId: string | null,
-  requestedTypes: NonDeterministicMilestoneType[],
+  requestedTypes: AiEligibleMilestoneType[],
 ): Promise<TimelineMilestoneSuggestion[]> {
   if (requestedTypes.length === 0) return [];
 

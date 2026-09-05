@@ -163,6 +163,10 @@ describe("TIMELINE_SCHEMA", () => {
       "PRODUCTION_MEETING",
       "ARTWORK_DEADLINE",
       "BALANCE_DUE",
+      "SHIPPING",
+      "INSTALLATION",
+      "SHOW_OPEN",
+      "DISMANTLE",
     ]);
     expect(TIMELINE_SCHEMA.schema.properties.verdicts.items.additionalProperties).toBe(false);
   });

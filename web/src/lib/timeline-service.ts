@@ -5,17 +5,25 @@
 // Description. See data/Project-Timeline.png for the reference format this
 // mirrors.
 //
-// Four of the eleven canonical milestones are deterministic (they're just
-// existing structured Opportunity fields); two are computed from a fifth
-// via a fixed lead-time rule; the rest need either AI extraction from scope
-// documents (timeline-service.ts under lib/ai) or manual estimator entry.
+// Four of the eleven canonical milestones have a matching structured
+// Opportunity field (shipDate/targetMoveIn/targetMoveOut/eventStartDate) --
+// that field wins whenever it's set, but AI extraction (lib/ai/
+// timeline-service.ts) is also asked about all 4 as a fallback for when
+// it's empty, since the same document that states the other dates often
+// states these too (confirmed live: a real client-supplied project
+// timeline document did). Two more are computed from a fifth via a fixed
+// lead-time rule; the rest need AI extraction or manual estimator entry.
 // Pure calculation functions are kept separate from the DB-touching
 // orchestration below, same split as estimate-service.ts.
 
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import type { TimelineMilestoneType, TimelineResponsibleParty } from "@/generated/prisma/enums";
-import { runTimelineExtraction, type NonDeterministicMilestoneType } from "@/lib/ai/timeline-service";
+import {
+  runTimelineExtraction,
+  type AiEligibleMilestoneType,
+  type TimelineMilestoneSuggestion,
+} from "@/lib/ai/timeline-service";
 
 export type TimelineMilestoneSource = "DETERMINISTIC" | "COMPUTED" | "AI_SUGGESTED" | "MANUAL";
 
@@ -88,13 +96,14 @@ const DETERMINISTIC_FIELD_BY_TYPE: Partial<Record<TimelineMilestoneType, keyof O
   SHIPPING: "shipDate",
 };
 
-// The 5 canonical types with nothing structured to source from -- these
-// are what lib/ai/timeline-service.ts's extraction pass classifies.
-export const NON_DETERMINISTIC_MILESTONE_TYPES: NonDeterministicMilestoneType[] = CANONICAL_MILESTONES.map(
-  (m) => m.type,
-).filter(
-  (t): t is NonDeterministicMilestoneType =>
-    !(t in DETERMINISTIC_FIELD_BY_TYPE) && t !== "ARTWORK_RUSH_50" && t !== "ARTWORK_RUSH_100",
+// Every canonical type EXCEPT the 2 pure rush-fee cutoffs -- what
+// lib/ai/timeline-service.ts's extraction pass is asked about on every
+// regenerate. The 4 with a matching structured field (see
+// DETERMINISTIC_FIELD_BY_TYPE) are included too, as a fallback source:
+// regenerateTimeline below only applies the AI suggestion for one of
+// those 4 when the structured field itself is still empty.
+export const AI_ELIGIBLE_MILESTONE_TYPES: AiEligibleMilestoneType[] = CANONICAL_MILESTONES.map((m) => m.type).filter(
+  (t): t is AiEligibleMilestoneType => t !== "ARTWORK_RUSH_50" && t !== "ARTWORK_RUSH_100",
 );
 
 function emptyMilestone(type: TimelineMilestoneType): TimelineMilestone {
@@ -154,6 +163,33 @@ export function applyRushFeeDefaults(milestones: TimelineMilestone[]): TimelineM
       return { ...m, date: date.toISOString(), source: "COMPUTED" as const, confirmed: false };
     }
     return m;
+  });
+}
+
+// Overlays AI-classified suggestions onto the deterministic/empty
+// baseline. For one of the 4 types with a matching structured Opportunity
+// field (Shipping/Installation/Show open/Dismantle), the AI suggestion is
+// only applied when that field's own date is still null -- a real,
+// already-confirmed fact on the Opportunity record always outranks a
+// document guess. Every other type applies its suggestion unconditionally
+// (there's no competing structured field to prefer).
+export function applyAiSuggestions(
+  milestones: TimelineMilestone[],
+  suggestions: TimelineMilestoneSuggestion[],
+): TimelineMilestone[] {
+  return milestones.map((m) => {
+    const suggestion = suggestions.find((s) => s.type === m.type);
+    if (!suggestion) return m;
+    if (DETERMINISTIC_FIELD_BY_TYPE[m.type] && m.date !== null) return m;
+    return {
+      ...m,
+      date: suggestion.date,
+      source: "AI_SUGGESTED" as const,
+      confirmed: false,
+      sourceQuote: suggestion.sourceQuote,
+      documentId: suggestion.documentId,
+      pageNumber: suggestion.pageNumber,
+    };
   });
 }
 
@@ -225,21 +261,8 @@ export async function regenerateTimeline(opportunityId: string, userId: string |
   const existingByType = new Map(existing?.milestones.map((m) => [m.type, m]) ?? []);
 
   const deterministic = buildDeterministicMilestones(opportunity);
-  const suggestions = await runTimelineExtraction(opportunityId, userId, NON_DETERMINISTIC_MILESTONE_TYPES);
-
-  const withAi = deterministic.map((m) => {
-    const suggestion = suggestions.find((s) => s.type === m.type);
-    if (!suggestion) return m;
-    return {
-      ...m,
-      date: suggestion.date,
-      source: "AI_SUGGESTED" as const,
-      confirmed: false,
-      sourceQuote: suggestion.sourceQuote,
-      documentId: suggestion.documentId,
-      pageNumber: suggestion.pageNumber,
-    };
-  });
+  const suggestions = await runTimelineExtraction(opportunityId, userId, AI_ELIGIBLE_MILESTONE_TYPES);
+  const withAi = applyAiSuggestions(deterministic, suggestions);
 
   // MANUAL restoration has to happen BEFORE applyRushFeeDefaults, not
   // after -- otherwise a hand-edited ARTWORK_DEADLINE (a MANUAL row) never

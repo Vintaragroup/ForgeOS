@@ -4,12 +4,14 @@ import {
   CANONICAL_MILESTONES,
   buildDeterministicMilestones,
   applyRushFeeDefaults,
+  applyAiSuggestions,
   buildEmptyMilestones,
   updateTimelineMilestone,
   regenerateTimeline,
   getTimelineData,
   type TimelineMilestone,
 } from "@/lib/timeline-service";
+import type { TimelineMilestoneSuggestion } from "@/lib/ai/timeline-service";
 
 afterEach(async () => {
   await db.opportunity.deleteMany();
@@ -111,6 +113,54 @@ describe("applyRushFeeDefaults", () => {
     });
     const result = applyRushFeeDefaults(milestones);
     expect(result.find((m) => m.type === "ARTWORK_RUSH_50")?.date).toBe(overridden);
+  });
+});
+
+describe("applyAiSuggestions", () => {
+  function suggestion(type: TimelineMilestoneSuggestion["type"], date: string): TimelineMilestoneSuggestion {
+    return { type, date: new Date(date).toISOString(), sourceQuote: "quote", documentId: "doc-1", pageNumber: 1 };
+  }
+
+  it("applies a suggestion unconditionally for a type with no competing structured field", () => {
+    const milestones = buildEmptyMilestones();
+    const result = applyAiSuggestions(milestones, [suggestion("DEPOSIT_DUE", "2026-09-23")]);
+    const deposit = result.find((m) => m.type === "DEPOSIT_DUE")!;
+    expect(deposit.date).toBe(new Date("2026-09-23").toISOString());
+    expect(deposit.source).toBe("AI_SUGGESTED");
+    expect(deposit.confirmed).toBe(false);
+  });
+
+  it("prefers a real structured-field value over an AI suggestion for the same type -- confirmed live regression", () => {
+    const milestones = buildDeterministicMilestones({
+      targetMoveIn: new Date("2027-01-22"),
+      targetMoveOut: null,
+      eventStartDate: null,
+      shipDate: null,
+    });
+    const result = applyAiSuggestions(milestones, [suggestion("INSTALLATION", "2027-01-15")]);
+    const installation = result.find((m) => m.type === "INSTALLATION")!;
+    expect(installation.date).toBe(new Date("2027-01-22").toISOString());
+    expect(installation.source).toBe("DETERMINISTIC");
+  });
+
+  it("falls back to an AI suggestion for a structured-field type when that field is still empty -- the real bug this fixes", () => {
+    const milestones = buildDeterministicMilestones({
+      targetMoveIn: null,
+      targetMoveOut: null,
+      eventStartDate: null,
+      shipDate: null,
+    });
+    const result = applyAiSuggestions(milestones, [
+      suggestion("INSTALLATION", "2027-01-22"),
+      suggestion("DISMANTLE", "2027-01-29"),
+      suggestion("SHOW_OPEN", "2027-01-26"),
+      suggestion("SHIPPING", "2027-01-04"),
+    ]);
+    expect(result.find((m) => m.type === "INSTALLATION")?.date).toBe(new Date("2027-01-22").toISOString());
+    expect(result.find((m) => m.type === "INSTALLATION")?.source).toBe("AI_SUGGESTED");
+    expect(result.find((m) => m.type === "DISMANTLE")?.date).toBe(new Date("2027-01-29").toISOString());
+    expect(result.find((m) => m.type === "SHOW_OPEN")?.date).toBe(new Date("2027-01-26").toISOString());
+    expect(result.find((m) => m.type === "SHIPPING")?.date).toBe(new Date("2027-01-04").toISOString());
   });
 });
 
