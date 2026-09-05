@@ -187,6 +187,7 @@ function ProjectBriefCard({
   opportunityId,
   documents,
   namedEstimates,
+  defaultOpen,
 }: {
   opportunityId: string;
   documents: { id: string; filename: string; mimeType: string; extractionStatus: string; extractedSummary: unknown }[];
@@ -196,6 +197,7 @@ function ProjectBriefCard({
   // "Shared / General" catch-all, using each item's own estimateId (see
   // document-summary-service.ts's resolution).
   namedEstimates: { id: string; name: string }[];
+  defaultOpen: boolean;
 }) {
   const analyzed = documents.filter(
     (d) => d.extractionStatus === "COMPLETE" && d.extractedSummary,
@@ -266,7 +268,7 @@ function ProjectBriefCard({
     : [{ key: "all", label: null, keyDates: allKeyDates, scopeSummary: allScopeSummary, riskFlags: allRiskFlags }];
 
   return (
-    <CollapsibleSection title="Project brief">
+    <CollapsibleSection title="Project brief" id="project-brief" defaultOpen={defaultOpen}>
       <p className="mb-4 text-sm text-neutral-500">
         Extracted from {analyzed.length} analyzed document{analyzed.length === 1 ? "" : "s"} — click a citation
         to jump to where it came from; verify against the source before relying on it.
@@ -415,16 +417,18 @@ function TimelineCard({
   opportunityId,
   timelineData,
   documents,
+  defaultOpen,
 }: {
   opportunityId: string;
   timelineData: TimelineData | null;
   documents: { id: string; filename: string; mimeType: string }[];
+  defaultOpen: boolean;
 }) {
   const milestones = timelineData?.milestones ?? buildEmptyMilestones();
   const regenerateWithId = regenerateTimelineAction.bind(null, opportunityId);
 
   return (
-    <CollapsibleSection title="Timeline" id="timeline">
+    <CollapsibleSection title="Timeline" id="timeline" defaultOpen={defaultOpen}>
       <p className="mb-4 text-sm text-neutral-500">
         The standard project schedule for every proposal -- deposit, artwork deadline, install, and everything in
         between. Auto-populated where possible from onboarding details and scope documents; edit any row directly,
@@ -694,7 +698,21 @@ function fmtDate(d: Date | null): string {
 export default async function OpportunityDetailPage(props: PageProps<"/opportunities/[id]">) {
   const { id } = await props.params;
   const searchParams = await props.searchParams;
-  const { editDetails: editDetailsParam, collaboratorsUpdated: collaboratorsUpdatedParam, ask: askParam } = searchParams;
+  const {
+    editDetails: editDetailsParam,
+    collaboratorsUpdated: collaboratorsUpdatedParam,
+    ask: askParam,
+    open: openParam,
+  } = searchParams;
+  // Which collapsed-by-default section (if any) a link elsewhere on the
+  // page should land already expanded in -- native <details> only
+  // auto-expands an ancestor when the linked #id targets content NESTED
+  // inside it, not when the #id is the <details> element's own root (the
+  // case for every section-level "Go →" link the Deal Checklist produces).
+  // Same query-param-drives-server-render convention as editDetails/
+  // collaboratorsUpdated above, just generic across every section that
+  // needs it instead of one boolean per section.
+  const openSection = Array.isArray(openParam) ? openParam[0] : openParam;
   // Set by the dashboard's router (routeDashboardQueryAction) when it
   // matched your typed text to this exact opportunity -- see ChatWidget's
   // own autoOpen/initialInput comment for why this only pre-fills the
@@ -1203,7 +1221,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         )}
       </CollapsibleSection>
 
-      <CollapsibleSection title="Documents" id="documents">
+      <CollapsibleSection title="Documents" id="documents" defaultOpen={openSection === "documents"}>
         <p className="mb-4 text-sm text-neutral-500">
           RFP packages, scope of work, drawings, contracts — anything client-supplied. Uploaded
           documents can seed draft estimate line items and answer questions in chat.
@@ -1373,18 +1391,28 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         />
       </CollapsibleSection>
 
-      <ProjectBriefCard opportunityId={opportunity.id} documents={documents} namedEstimates={namedEstimates} />
+      <ProjectBriefCard
+        opportunityId={opportunity.id}
+        documents={documents}
+        namedEstimates={namedEstimates}
+        defaultOpen={openSection === "project-brief"}
+      />
 
       <TimelineCard
         opportunityId={opportunity.id}
         timelineData={timelineData}
         documents={documents}
+        defaultOpen={openSection === "timeline"}
       />
 
       <LineItemAuditCard opportunityId={opportunity.id} findings={misattributedLineItems} />
 
       {hasScopeDocuments && (
-        <CollapsibleSection title="Clarification questions" id="clarification-questions">
+        <CollapsibleSection
+          title="Clarification questions"
+          id="clarification-questions"
+          defaultOpen={openSection === "clarification-questions"}
+        >
           <p className="mb-4 text-sm text-neutral-500">
             Reviews this RFP&apos;s scope documents for genuine ambiguities or gaps worth asking the client
             about — calibrated to a seasoned professional&apos;s judgment, not just anything that looks

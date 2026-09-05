@@ -79,7 +79,7 @@ describe("buildDealChecklist", () => {
     );
     const item = items.find((i) => i.id === "timeline-incomplete");
     expect(item?.label).toBe("Fill in 4 missing Timeline milestones before the proposal goes out.");
-    expect(item?.href).toBe("/opportunities/opp1#timeline");
+    expect(item?.href).toBe("/opportunities/opp1?open=timeline#timeline");
     expect(item?.urgent).toBe(false);
   });
 

@@ -102,7 +102,13 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
     items.push({
       id: "analyze-documents",
       label: `Analyze ${input.documentsNeedingAnalysisCount} uploaded document${input.documentsNeedingAnalysisCount === 1 ? "" : "s"}.`,
-      href: `/opportunities/${input.opportunityId}#documents`,
+      // ?open=documents, not just the bare #documents hash -- Documents
+      // defaults to collapsed now (opportunities/[id]/page.tsx), and native
+      // <details> only auto-expands an ancestor when a fragment link
+      // targets content NESTED inside it, not when the #id is the
+      // <details> element's own root. The query param drives the server
+      // render directly, same convention as editDetails/collaboratorsUpdated.
+      href: `/opportunities/${input.opportunityId}?open=documents#documents`,
       urgent: false,
     });
   }
@@ -113,7 +119,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
         `Review ${input.recommendedClarificationQuestionCount} recommended clarification question` +
         `${input.recommendedClarificationQuestionCount === 1 ? "" : "s"} to send the client` +
         (input.bidderQuestionsDeadlineLabel ? ` (bidder questions due ${input.bidderQuestionsDeadlineLabel}).` : "."),
-      href: `/opportunities/${input.opportunityId}#clarification-questions`,
+      href: `/opportunities/${input.opportunityId}?open=clarification-questions#clarification-questions`,
       urgent: Boolean(input.bidderQuestionsDeadlineLabel),
     });
   }
@@ -130,7 +136,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
       label:
         `Fill in ${input.missingTimelineMilestoneCount} missing Timeline milestone` +
         `${input.missingTimelineMilestoneCount === 1 ? "" : "s"} before the proposal goes out.`,
-      href: `/opportunities/${input.opportunityId}#timeline`,
+      href: `/opportunities/${input.opportunityId}?open=timeline#timeline`,
       urgent: Boolean(input.currentVersion?.isLocked && input.currentVersion?.isApproved),
     });
   }
