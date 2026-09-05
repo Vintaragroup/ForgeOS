@@ -1603,6 +1603,139 @@ describe("moveSectionToGroup", () => {
     expect(sourceStillExists).toBeNull();
   });
 
+  it("carries the source section's own description and elementSummary onto a brand-new target, instead of losing them", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await db.estimateSection.create({
+      data: {
+        estimateVersionId: version.id,
+        name: "BeMatrix",
+        sectionType: "COMPONENT",
+        groupLabel: "FS - Hitting Bay Wall",
+        buildType: "RENTAL",
+        description: "Approved Shared Heading",
+        elementSummary: "Approved always-shown summary text.",
+      },
+    });
+    await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Post", qty: 1, unitCost: 10 });
+
+    const target = await moveSectionToGroup(version.id, source.id, "FS - Hitting Bay Wall", "Second Component");
+
+    expect(target.description).toBe("Approved Shared Heading");
+    expect(target.elementSummary).toBe("Approved always-shown summary text.");
+  });
+
+  it("never overwrites an EXISTING target's own already-approved description/elementSummary with the source's", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await db.estimateSection.create({
+      data: {
+        estimateVersionId: version.id,
+        name: "BeMatrix",
+        sectionType: "COMPONENT",
+        groupLabel: "FS - Hitting Bay Wall",
+        buildType: "RENTAL",
+        description: "Source's own heading",
+        elementSummary: "Source's own summary.",
+      },
+    });
+    await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Post", qty: 1, unitCost: 10 });
+    await db.estimateSection.create({
+      data: {
+        estimateVersionId: version.id,
+        name: "Wall Panels",
+        sectionType: "COMPONENT",
+        groupLabel: "FS - Hitting Bay Wall",
+        buildType: "RENTAL",
+        description: "Target's own already-approved heading",
+        elementSummary: "Target's own already-approved summary.",
+      },
+    });
+
+    const target = await moveSectionToGroup(version.id, source.id, "FS - Hitting Bay Wall", "Wall Panels");
+
+    expect(target.description).toBe("Target's own already-approved heading");
+    expect(target.elementSummary).toBe("Target's own already-approved summary.");
+  });
+
+  it("backfills an EXISTING but still-blank target's description/elementSummary from the source, since there's nothing of the target's own to protect (confirmed live: moving into a never-edited sibling group silently dropped the source's elementSummary, which has no per-category-override fallback the way description does)", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await db.estimateSection.create({
+      data: {
+        estimateVersionId: version.id,
+        name: "BeMatrix",
+        sectionType: "COMPONENT",
+        groupLabel: "FS - Hitting Bay Wall",
+        buildType: "RENTAL",
+        description: "Source's own heading",
+        elementSummary: "Source's own summary.",
+      },
+    });
+    await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Post", qty: 1, unitCost: 10 });
+    // A target that already exists (e.g. created via "+Group") but was
+    // never given its own heading/summary -- both still at their schema
+    // default (null), nothing established to preserve.
+    await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "Wall Panels", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall", buildType: "RENTAL" },
+    });
+
+    const target = await moveSectionToGroup(version.id, source.id, "FS - Hitting Bay Wall", "Wall Panels");
+
+    expect(target.description).toBe("Source's own heading");
+    expect(target.elementSummary).toBe("Source's own summary.");
+  });
+
+  it("re-points the source's own per-category heading override onto the target instead of failing the move (Foreign key constraint on ON DELETE RESTRICT, confirmed live)", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const category = await makeCategory("Structure", "structure_move_test");
+    const source = await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "BeMatrix", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall", buildType: "RENTAL" },
+    });
+    await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Post", qty: 1, unitCost: 10, category: category.name });
+    await db.estimateSectionCategoryDescription.create({
+      data: { sectionId: source.id, categoryId: category.id, description: "Approved per-category heading" },
+    });
+    const target = await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "Wall Panels", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall", buildType: "RENTAL" },
+    });
+
+    const result = await moveSectionToGroup(version.id, source.id, "FS - Hitting Bay Wall", "Wall Panels");
+
+    expect(result.id).toBe(target.id);
+    const overrides = await db.estimateSectionCategoryDescription.findMany({ where: { categoryId: category.id } });
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0]).toMatchObject({ sectionId: target.id, description: "Approved per-category heading" });
+    const sourceStillExists = await db.estimateSection.findUnique({ where: { id: source.id } });
+    expect(sourceStillExists).toBeNull();
+  });
+
+  it("keeps the target's own per-category override when both source and target have one for the same category, dropping the source's instead of colliding", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const category = await makeCategory("Structure", "structure_move_collision_test");
+    const source = await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "BeMatrix", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall", buildType: "RENTAL" },
+    });
+    await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Post", qty: 1, unitCost: 10, category: category.name });
+    await db.estimateSectionCategoryDescription.create({
+      data: { sectionId: source.id, categoryId: category.id, description: "Source's own heading" },
+    });
+    const target = await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "Wall Panels", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall", buildType: "RENTAL" },
+    });
+    await db.estimateSectionCategoryDescription.create({
+      data: { sectionId: target.id, categoryId: category.id, description: "Target's own already-approved heading" },
+    });
+
+    await moveSectionToGroup(version.id, source.id, "FS - Hitting Bay Wall", "Wall Panels");
+
+    const overrides = await db.estimateSectionCategoryDescription.findMany({ where: { categoryId: category.id } });
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0]).toMatchObject({ sectionId: target.id, description: "Target's own already-approved heading" });
+  });
+
   it("reuses an existing section under the target booth instead of creating a duplicate", async () => {
     const estimate = await makeEstimate();
     const version = await createEstimateVersion(estimate.id, 0);

@@ -228,6 +228,19 @@ export async function addSection(
     boothPendingDescription?: string | null;
     boothSummary?: string | null;
     boothPendingSummary?: string | null;
+    // This section's OWN flat/H2 heading state and always-shown summary --
+    // distinct from the booth-wide fields above (see
+    // EstimateSectionCategoryDescription's own schema comment for why the
+    // real, per-category-approved heading usually lives there instead of
+    // here, and moveSectionToGroup's own comment for how that gets carried
+    // over separately). Same "left undefined for a genuinely new
+    // booth/section" reasoning as every other inherited field here --
+    // resolveOrCreateTargetSection passes these through only when it knows
+    // the one specific section a whole-section move is relocating.
+    description?: string | null;
+    pendingDescription?: string | null;
+    elementSummary?: string | null;
+    elementPendingSummary?: string | null;
     // Same booth-wide sync as the four fields above -- see
     // EstimateSection.includeInProposal/summarizeOnProposal/
     // excludedFromTotals's own schema comments (each documents the exact
@@ -266,6 +279,10 @@ export async function addSection(
       boothPendingDescription: data.boothPendingDescription ?? null,
       boothSummary: data.boothSummary ?? null,
       boothPendingSummary: data.boothPendingSummary ?? null,
+      description: data.description ?? null,
+      pendingDescription: data.pendingDescription ?? null,
+      elementSummary: data.elementSummary ?? null,
+      elementPendingSummary: data.elementPendingSummary ?? null,
       // Non-nullable columns with their own schema default -- left as
       // `undefined` (not coerced with `?? false`/`?? true`) when the
       // caller doesn't pass one, so Prisma applies that column default
@@ -902,6 +919,25 @@ export async function resolveOrCreateTargetSection(
   groupLabel: string | null,
   sectionName: string,
   actorId?: string | null,
+  // The one section a whole-section move (moveSectionToGroup) is
+  // relocating -- passed only by that caller, which always has exactly
+  // one unambiguous source. Omitted by bulkMoveLineItemsToGroupAction's
+  // per-item move, where the selected items can span more than one
+  // source section, so there's no single section whose own heading/
+  // summary would even be correct to inherit. When given and a brand-new
+  // target gets created below, its own description/pendingDescription/
+  // elementSummary/elementPendingSummary carry over the same way the
+  // booth-wide fields already do -- confirmed live as a real bug
+  // (Foreign key constraint violated on
+  // estimate_section_category_descriptions_sectionId_fkey, reproduced via
+  // a direct moveSectionToGroup call): without this, an H2 group with an
+  // approved per-category heading lost that heading (and its
+  // elementSummary) the instant it moved to a different section, and
+  // moveSectionToGroup's own deleteEmptySection call afterward flat-out
+  // failed whenever a lingering EstimateSectionCategoryDescription row
+  // still pointed at the now-empty source -- see moveSectionToGroup's own
+  // comment for the other half of this fix (re-pointing those rows).
+  sourceSectionId?: string,
 ) {
   const canonicalGroupLabel =
     groupLabel === null
@@ -931,10 +967,10 @@ export async function resolveOrCreateTargetSection(
   // section defaulting to its own column default instead could silently
   // un-hide a booth the estimator explicitly hid, or leave it showing full
   // detail when the rest of the booth was switched to summary-only.
-  const [buildType, boothFields] = canonicalGroupLabel
-    ? await Promise.all([
-        resolveBoothBuildType(estimateVersionId, canonicalGroupLabel),
-        db.estimateSection.findFirst({
+  const [buildType, boothFields, sourceFields] = await Promise.all([
+    canonicalGroupLabel ? resolveBoothBuildType(estimateVersionId, canonicalGroupLabel) : null,
+    canonicalGroupLabel
+      ? db.estimateSection.findFirst({
           where: { estimateVersionId, groupLabel: canonicalGroupLabel },
           select: {
             boothDescription: true,
@@ -945,9 +981,15 @@ export async function resolveOrCreateTargetSection(
             summarizeOnProposal: true,
             excludedFromTotals: true,
           },
-        }),
-      ])
-    : [null, null];
+        })
+      : null,
+    sourceSectionId
+      ? db.estimateSection.findUnique({
+          where: { id: sourceSectionId },
+          select: { description: true, pendingDescription: true, elementSummary: true, elementPendingSummary: true },
+        })
+      : null,
+  ]);
   return addSection(
     estimateVersionId,
     {
@@ -962,6 +1004,10 @@ export async function resolveOrCreateTargetSection(
       includeInProposal: boothFields?.includeInProposal,
       summarizeOnProposal: boothFields?.summarizeOnProposal,
       excludedFromTotals: boothFields?.excludedFromTotals,
+      description: sourceFields?.description,
+      pendingDescription: sourceFields?.pendingDescription,
+      elementSummary: sourceFields?.elementSummary,
+      elementPendingSummary: sourceFields?.elementPendingSummary,
     },
     actorId,
   );
@@ -1031,17 +1077,77 @@ export async function moveSectionToGroup(
   actorId?: string | null,
 ) {
   await assertUnlocked(estimateVersionId);
-  const items = await db.lineItem.findMany({
-    where: { sectionId: sourceSectionId, section: { estimateVersionId } },
-    select: { id: true },
-  });
-  const target = await resolveOrCreateTargetSection(estimateVersionId, groupLabel, sectionName, actorId);
+  const [items, source] = await Promise.all([
+    db.lineItem.findMany({
+      where: { sectionId: sourceSectionId, section: { estimateVersionId } },
+      select: { id: true },
+    }),
+    db.estimateSection.findUniqueOrThrow({
+      where: { id: sourceSectionId },
+      select: { description: true, pendingDescription: true, elementSummary: true, elementPendingSummary: true },
+    }),
+  ]);
+  let target = await resolveOrCreateTargetSection(estimateVersionId, groupLabel, sectionName, actorId, sourceSectionId);
   if (target.id === sourceSectionId) return target;
   if (items.length > 0) {
     await moveLineItemsToSection(
       estimateVersionId,
       items.map((i) => i.id),
       target.id,
+    );
+  }
+  // Backfill an EXISTING target's still-blank own description/elementSummary
+  // from the source -- resolveOrCreateTargetSection above only inherits
+  // these onto a BRAND NEW target (never touching a reused existing one,
+  // same as it already does for the booth-wide fields), which is right
+  // when the existing target already has its own approved state to
+  // protect, but wrong when it doesn't: confirmed live, moving into an
+  // existing-but-never-edited sibling group (e.g. one just created via
+  // "+Group" and never given its own heading) silently dropped the
+  // source's own approved elementSummary, which -- unlike description --
+  // has no EstimateSectionCategoryDescription-style per-category fallback
+  // to rescue it the way the override re-pointing below does. Only fills
+  // gaps (target field is null); never overwrites a real existing value.
+  const backfill: { description?: string; pendingDescription?: string; elementSummary?: string; elementPendingSummary?: string } = {};
+  if (target.description === null && source.description !== null) backfill.description = source.description;
+  if (target.pendingDescription === null && source.pendingDescription !== null) backfill.pendingDescription = source.pendingDescription;
+  if (target.elementSummary === null && source.elementSummary !== null) backfill.elementSummary = source.elementSummary;
+  if (target.elementPendingSummary === null && source.elementPendingSummary !== null) {
+    backfill.elementPendingSummary = source.elementPendingSummary;
+  }
+  if (Object.keys(backfill).length > 0) {
+    target = await db.estimateSection.update({ where: { id: target.id }, data: backfill });
+  }
+  // Re-point the source's own per-category heading overrides onto the
+  // target rather than leaving them behind -- resolveOrCreateTargetSection
+  // above only carries the source's shared description/elementSummary
+  // onto a BRAND NEW target; a REUSED existing target needs this separate
+  // step regardless, and either way deleteEmptySection below would
+  // otherwise fail outright (Foreign key constraint violated on
+  // estimate_section_category_descriptions_sectionId_fkey -- confirmed
+  // live) the moment the source ever had an approved per-category
+  // heading, since that FK is ON DELETE RESTRICT, not CASCADE. When the
+  // target already has its OWN override for a category the source also
+  // has one for, the target's wins (same "reused target keeps its own
+  // already-established state" precedent as boothDescription/boothSummary
+  // above) and the source's is simply dropped instead of colliding with
+  // it on the (sectionId, categoryId) unique constraint.
+  const sourceOverrides = await db.estimateSectionCategoryDescription.findMany({ where: { sectionId: sourceSectionId } });
+  if (sourceOverrides.length > 0) {
+    const targetCategoryIds = new Set(
+      (
+        await db.estimateSectionCategoryDescription.findMany({
+          where: { sectionId: target.id },
+          select: { categoryId: true },
+        })
+      ).map((r) => r.categoryId),
+    );
+    await Promise.all(
+      sourceOverrides.map((override) =>
+        targetCategoryIds.has(override.categoryId)
+          ? db.estimateSectionCategoryDescription.delete({ where: { id: override.id } })
+          : db.estimateSectionCategoryDescription.update({ where: { id: override.id }, data: { sectionId: target.id } }),
+      ),
     );
   }
   await deleteEmptySection(estimateVersionId, sourceSectionId);
