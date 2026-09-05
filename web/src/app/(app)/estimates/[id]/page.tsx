@@ -3506,12 +3506,12 @@ function CategoryTabContent({
                 rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionId, bucket.category.id)}
               />
               {group.groupLabel && <span className="font-normal normal-case text-neutral-400">— {group.groupLabel}</span>}
-              {isStandalone && section?.summarizeOnProposal && (
+              {section?.summarizeOnProposal && (
                 <span className="ml-2 rounded bg-amber-900 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-amber-200">
                   Summarized on proposal
                 </span>
               )}
-              {isStandalone && section?.excludedFromTotals && (
+              {section?.excludedFromTotals && (
                 <span className="ml-2 rounded bg-red-900 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-red-200">
                   Excluded from totals -- flagged for review
                 </span>
@@ -3526,6 +3526,14 @@ function CategoryTabContent({
                   <span className="mx-1.5 text-neutral-500">&rarr;</span>
                   <span className="font-semibold">{money(sell(flatSubtotal))}</span>
                 </div>
+                {/* Reorder arrows stay standalone-only -- unlike Hide/
+                    Summarize/Exclude below (plain per-sectionId scopes,
+                    safe for any section), moveFlatSectionProposalOrder's
+                    own sibling ordering is server-side scoped to
+                    "!groupLabel" sections (see its own comment) -- wiring
+                    these up for an untagged booth would render two enabled
+                    buttons that silently do nothing when clicked, worse
+                    than not showing them at all. */}
                 {isStandalone && (
                   <>
                     <form action={moveFlatSectionProposalOrderAction.bind(null, estimateId, version.id, group.sectionId, bucket.category.name, "up")}>
@@ -3546,133 +3554,134 @@ function CategoryTabContent({
                         ▼
                       </button>
                     </form>
-                    <form
-                      action={updateSectionProposalVisibilityForSectionAction.bind(
-                        null,
-                        estimateId,
-                        version.id,
-                        group.sectionId,
-                        !(section?.includeInProposal ?? true),
-                      )}
-                    >
-                      <button
-                        type="submit"
-                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                        title={
-                          (section?.includeInProposal ?? true)
-                            ? "Hide this section from the Proposal PDF"
-                            : "Show this section on the Proposal PDF"
-                        }
-                      >
-                        {(section?.includeInProposal ?? true) ? "Hide from proposal" : "Show on proposal"}
-                      </button>
-                    </form>
-                    <form
-                      action={updateSectionProposalSummaryForSectionAction.bind(
-                        null,
-                        estimateId,
-                        version.id,
-                        group.sectionId,
-                        !section?.summarizeOnProposal,
-                      )}
-                    >
-                      <button
-                        type="submit"
-                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                        title={
-                          section?.summarizeOnProposal
-                            ? "Show this section's full line-item detail on the Proposal PDF"
-                            : "Hide this section's line-item detail on the Proposal PDF, but keep its cost in the total"
-                        }
-                      >
-                        {section?.summarizeOnProposal ? "Show full detail" : "Summarize on proposal"}
-                      </button>
-                    </form>
-                    <form
-                      action={updateSectionExcludedFromTotalsForSectionAction.bind(
-                        null,
-                        estimateId,
-                        version.id,
-                        group.sectionId,
-                        !section?.excludedFromTotals,
-                      )}
-                    >
-                      <button
-                        type="submit"
-                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                        title={
-                          section?.excludedFromTotals
-                            ? "Count this section's cost in the estimate's totals and the client PDF again"
-                            : "Remove this section's cost from the estimate's totals entirely -- for internal reference data that isn't real client scope"
-                        }
-                      >
-                        {section?.excludedFromTotals ? "Include in totals" : "Exclude from totals"}
-                      </button>
-                    </form>
-                    {/* Whole-section reparent to an arbitrary, different
-                        booth -- not the category-only "Move section" form
-                        below, and not MoveToGroupBar's own per-item move
-                        (deliberately same-booth-only, see its header
-                        comment). Exists for a section that has no correct
-                        booth at all right now -- most often
-                        restoreLineItem's own shared recovery section (see
-                        its "section no longer exists" fallback comment) --
-                        so an estimator who recognizes where these items
-                        actually belong can put them there by hand; the
-                        temporary container itself is deleted once empty
-                        (moveSectionToGroup's own comment). Booth left
-                        blank keeps/returns items to the project-wide
-                        bucket -- same "" = no booth convention
-                        MoveToGroupBar's own group picker uses. Tucked
-                        behind SectionMoveMenu's own kebab (same reasoning
-                        as BoothActionsMenu's) instead of sitting inline --
-                        two always-visible text inputs plus this button
-                        used to force Hide/Summarize/Exclude's own labels
-                        to wrap onto extra lines, the real cause of a
-                        standalone section's header reading "taller" than
-                        a tagged booth's despite identical font-size. */}
-                    <SectionMoveMenu moveAction={moveSectionToGroupAction.bind(null, estimateId, version.id, group.sectionId)} />
                   </>
                 )}
-                {/* An untagged booth (real groupLabel, no buildType yet --
-                    see flatSectionGroups' own comment above on why this
-                    lands here at all) gets NONE of the isStandalone tools
-                    above (it does have a real groupLabel) -- but DOES get
-                    a real booth's own +Group (addSectionToBoothAction only
-                    ever needs a groupLabel string, which this case already
-                    has, same as a tagged booth) and SectionMoveMenu kebab,
-                    so its header matches every other H1 instead of being
-                    the one state with no way to hide, summarize, exclude,
-                    or move itself at all. Confirmed live as a real dead
-                    end before this: a section whose groupLabel had been
-                    set to the wrong value entirely (matching an unrelated
-                    line item's own description text, not any real booth)
-                    had no path back to a normal, working state short of a
-                    direct database edit -- SectionMoveMenu's move form is
-                    that path. */}
+                {/* Hide/Summarize/Exclude -- plain per-sectionId toggles
+                    (updateSectionProposalVisibility/Summary/ExcludedFromTotals
+                    all scope by { sectionId }, no groupLabel involved), so
+                    unlike the reorder arrows above these work identically
+                    whether this section is standalone or an untagged
+                    booth. Used to be standalone-only for no real reason --
+                    an untagged booth had no way to hide, summarize, or
+                    exclude itself at all until this. */}
+                <form
+                  action={updateSectionProposalVisibilityForSectionAction.bind(
+                    null,
+                    estimateId,
+                    version.id,
+                    group.sectionId,
+                    !(section?.includeInProposal ?? true),
+                  )}
+                >
+                  <button
+                    type="submit"
+                    className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                    title={
+                      (section?.includeInProposal ?? true)
+                        ? "Hide this section from the Proposal PDF"
+                        : "Show this section on the Proposal PDF"
+                    }
+                  >
+                    {(section?.includeInProposal ?? true) ? "Hide from proposal" : "Show on proposal"}
+                  </button>
+                </form>
+                <form
+                  action={updateSectionProposalSummaryForSectionAction.bind(
+                    null,
+                    estimateId,
+                    version.id,
+                    group.sectionId,
+                    !section?.summarizeOnProposal,
+                  )}
+                >
+                  <button
+                    type="submit"
+                    className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                    title={
+                      section?.summarizeOnProposal
+                        ? "Show this section's full line-item detail on the Proposal PDF"
+                        : "Hide this section's line-item detail on the Proposal PDF, but keep its cost in the total"
+                    }
+                  >
+                    {section?.summarizeOnProposal ? "Show full detail" : "Summarize on proposal"}
+                  </button>
+                </form>
+                <form
+                  action={updateSectionExcludedFromTotalsForSectionAction.bind(
+                    null,
+                    estimateId,
+                    version.id,
+                    group.sectionId,
+                    !section?.excludedFromTotals,
+                  )}
+                >
+                  <button
+                    type="submit"
+                    className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                    title={
+                      section?.excludedFromTotals
+                        ? "Count this section's cost in the estimate's totals and the client PDF again"
+                        : "Remove this section's cost from the estimate's totals entirely -- for internal reference data that isn't real client scope"
+                    }
+                  >
+                    {section?.excludedFromTotals ? "Include in totals" : "Exclude from totals"}
+                  </button>
+                </form>
+                {/* Whole-section reparent to an arbitrary, different booth
+                    -- not the category-only "Move section" form below, and
+                    not MoveToGroupBar's own per-item move (deliberately
+                    same-booth-only, see its header comment). Exists for a
+                    section that has no correct booth at all right now --
+                    most often restoreLineItem's own shared recovery
+                    section (see its "section no longer exists" fallback
+                    comment) -- so an estimator who recognizes where these
+                    items actually belong can put them there by hand; the
+                    temporary container itself is deleted once empty
+                    (moveSectionToGroup's own comment). Booth left blank
+                    keeps/returns items to the project-wide bucket -- same
+                    "" = no booth convention MoveToGroupBar's own group
+                    picker uses. Tucked behind SectionMoveMenu's own kebab
+                    (same reasoning as BoothActionsMenu's) instead of
+                    sitting inline -- two always-visible text inputs plus
+                    this button used to force Hide/Summarize/Exclude's own
+                    labels to wrap onto extra lines, the real cause of a
+                    standalone section's header reading "taller" than a
+                    tagged booth's despite identical font-size. Applies to
+                    both isStandalone and the untagged-booth case -- either
+                    way, group.sectionId is a real section that can be
+                    reparented. Placed BEFORE +Group below, same position
+                    a real booth's own kebab (BoothActionsMenu) takes
+                    relative to ITS +Group -- these used to sit in the
+                    opposite order from each other, one real, visible
+                    inconsistency in an otherwise-identical header. */}
+                <SectionMoveMenu moveAction={moveSectionToGroupAction.bind(null, estimateId, version.id, group.sectionId)} />
+                {/* +Group -- untagged-booth only. addSectionToBoothAction
+                    only ever needs a real groupLabel string to attach a
+                    new component to, which an untagged booth already has
+                    and a genuinely standalone section (isStandalone, no
+                    groupLabel at all) doesn't -- see SectionMoveMenu's own
+                    kebab above for that case's own "make me part of a
+                    booth" path instead. */}
                 {!isStandalone && group.groupLabel && (
-                  <>
-                    <form
-                      action={addSectionToBoothAction.bind(null, estimateId, version.id, group.groupLabel)}
-                      className="flex items-center gap-1"
+                  <form
+                    action={addSectionToBoothAction.bind(null, estimateId, version.id, group.groupLabel)}
+                    className="flex items-center gap-1"
+                  >
+                    <input
+                      type="text"
+                      name="name"
+                      placeholder="New group name"
+                      required
+                      className="w-32 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                      title="Add a new group (H2) to this booth"
                     >
-                      <input
-                        type="text"
-                        name="name"
-                        placeholder="New group name"
-                        required
-                        className="w-32 rounded border border-neutral-600 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-400"
-                      />
-                      <button
-                        type="submit"
-                        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                        title="Add a new group (H2) to this booth"
-                      >
-                        + Group
-                      </button>
-                    </form>
-                    <SectionMoveMenu moveAction={moveSectionToGroupAction.bind(null, estimateId, version.id, group.sectionId)} />
-                  </>
+                      + Group
+                    </button>
+                  </form>
                 )}
               </div>
             )
