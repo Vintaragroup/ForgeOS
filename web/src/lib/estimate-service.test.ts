@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { bucketLineItemsByCategory } from "@/lib/proposal-view-model";
+import { MAX_PROPOSAL_SUMMARY_LENGTH } from "@/lib/proposal-summary-limits";
 import {
   addAttachment,
   addGroupPromotingSection,
@@ -2740,6 +2741,17 @@ describe("updateBoothSummary / clearBoothPendingSummary", () => {
 
     await expect(updateBoothSummary(version.id, groupLabel, "Summary")).rejects.toThrow();
   });
+
+  it("rejects a summary over the length cap -- see proposal-summary-limits.ts for why this exists", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const groupLabel = "FS - Hitting Bay Wall";
+    await addSection(version.id, { name: "Custom Build", sectionType: "COMPONENT", groupLabel });
+
+    await expect(
+      updateBoothSummary(version.id, groupLabel, "x".repeat(MAX_PROPOSAL_SUMMARY_LENGTH + 1)),
+    ).rejects.toThrow(/too long/);
+  });
 });
 
 describe("updateElementSummary / clearElementPendingSummary", () => {
@@ -2786,6 +2798,16 @@ describe("updateElementSummary / clearElementPendingSummary", () => {
     await lockEstimateVersion(version.id);
 
     await expect(updateElementSummary(section.id, "Summary")).rejects.toThrow();
+  });
+
+  it("rejects a summary over the length cap -- see proposal-summary-limits.ts for why this exists", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "COMPONENT", groupLabel: "FS - Hitting Bay Wall" });
+
+    await expect(
+      updateElementSummary(section.id, "x".repeat(MAX_PROPOSAL_SUMMARY_LENGTH + 1)),
+    ).rejects.toThrow(/too long/);
   });
 });
 
@@ -2840,6 +2862,16 @@ describe("updateCategorySummary / clearCategoryPendingSummary", () => {
     await lockEstimateVersion(version.id);
 
     await expect(updateCategorySummary(version.id, category.id, "Summary")).rejects.toThrow();
+  });
+
+  it("rejects a summary over the length cap -- see proposal-summary-limits.ts for why this exists", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const category = await makeCategory("Custom Build", "custom_build");
+
+    await expect(
+      updateCategorySummary(version.id, category.id, "x".repeat(MAX_PROPOSAL_SUMMARY_LENGTH + 1)),
+    ).rejects.toThrow(/too long/);
   });
 });
 

@@ -161,6 +161,7 @@ import { MatchSelectionProvider } from "@/components/match-selection";
 import { MatchRowCheckbox } from "@/components/match-row-checkbox";
 import { MatchGroupCheckbox } from "@/components/match-group-checkbox";
 import { ApplySelectedMatchesBar } from "@/components/apply-selected-matches-bar";
+import { money } from "@/lib/money";
 
 const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
@@ -201,10 +202,6 @@ const LINE_ITEM_USAGE_TAG_OPTIONS = [
   { value: "RENTAL_PANEL", label: "Rental Panel" },
   { value: "GRAPHIC", label: "Graphic" },
 ];
-
-function money(d: { toFixed(n: number): string }): string {
-  return `$${Number(d.toFixed(2)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
 export default async function EstimateDetailPage(props: PageProps<"/estimates/[id]">) {
   const { id } = await props.params;

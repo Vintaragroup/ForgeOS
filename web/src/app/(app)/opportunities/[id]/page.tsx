@@ -22,6 +22,7 @@ import {
 import { regenerateTimelineAction, runClarificationQuestionsAnalysisAction } from "./ai-actions";
 import { getTimelineData, buildEmptyMilestones, type TimelineData } from "@/lib/timeline-service";
 import { TimelineMilestoneRow } from "@/components/timeline-milestone-row";
+import { money } from "@/lib/money";
 import { deleteMisattributedLineItemAction, moveLineItemToEstimateAction } from "./line-item-audit-actions";
 import { findMisattributedLineItems, type MisattributedLineItem } from "@/lib/line-item-audit-service";
 import type { ClarificationQuestion } from "@/lib/ai/clarification-questions-service";
@@ -736,10 +737,6 @@ function fmtDate(d: Date | null): string {
   return d.toISOString().slice(0, 10);
 }
 
-function money(n: number): string {
-  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
 export default async function OpportunityDetailPage(props: PageProps<"/opportunities/[id]">) {
   const { id } = await props.params;
   const searchParams = await props.searchParams;
@@ -953,7 +950,9 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   // record from a list gives no orientation without scrolling. Summed
   // across every active estimate (not just the most recent) rather than
   // showing one project's number as if it were the whole deal's -- the
-  // common single-estimate case is just a sum of one.
+  // common single-estimate case is just a sum of one. headerContactName/
+  // headerOwnerName are also reused by the Details card's own read-only
+  // view below -- same lookup, computed once.
   const headerContactName = contacts.find((c) => c.id === opportunity.primaryContactId)?.name ?? null;
   const headerOwnerName = users.find((u) => u.id === opportunity.ownerId)?.name ?? null;
   const headerEstimateTotals = opportunity.estimates
@@ -1216,11 +1215,8 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                 <ReadOnlyField label="Target move-in" value={fmtDate(opportunity.targetMoveIn)} />
                 <ReadOnlyField label="Target move-out" value={fmtDate(opportunity.targetMoveOut)} />
               </div>
-              <ReadOnlyField
-                label="Primary contact"
-                value={contacts.find((c) => c.id === opportunity.primaryContactId)?.name}
-              />
-              <ReadOnlyField label="Owner" value={users.find((u) => u.id === opportunity.ownerId)?.name} />
+              <ReadOnlyField label="Primary contact" value={headerContactName} />
+              <ReadOnlyField label="Owner" value={headerOwnerName} />
               <ReadOnlyField
                 label="Tax jurisdiction"
                 value={(() => {

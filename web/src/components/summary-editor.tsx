@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui";
 import { SubmitButton } from "@/components/submit-button";
+import { MAX_PROPOSAL_SUMMARY_LENGTH } from "@/lib/proposal-summary-limits";
 
 // Block-level counterpart to SectionHeadingEditor's inline Empty ->
 // Pending -> Approved state machine -- same three actions/shape, but for
@@ -57,6 +58,7 @@ export function SummaryEditor({
           defaultValue={summary ?? ""}
           autoFocus
           rows={3}
+          maxLength={MAX_PROPOSAL_SUMMARY_LENGTH}
           className="w-full rounded border border-neutral-300 px-2 py-1.5 text-xs text-neutral-900"
         />
         <div className="flex items-center gap-2">

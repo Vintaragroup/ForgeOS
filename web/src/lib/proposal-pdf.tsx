@@ -22,6 +22,7 @@ import {
   type ProposalViewSection,
 } from "@/lib/proposal-view-model";
 import { computeMarginGrossUp, resolveLineItemMarginPct } from "@/lib/estimate-service";
+import { MAX_PROPOSAL_SUMMARY_LENGTH } from "@/lib/proposal-summary-limits";
 
 // The extracted primary black logotype (see web/public/brand -- pulled from
 // the brand guide's own "3.1 Logotype" page since we don't have a separate
@@ -352,6 +353,17 @@ function formatQtyNumber(n: number): string {
   return QTY_FORMATTER.format(n);
 }
 
+// The authoritative safety net for the wrap={false} overflow bug (see
+// proposal-summary-limits.ts): estimate-service.ts rejects a new summary
+// over the cap at write time, but that can't retroactively fix a summary
+// already stored before this cap existed. Truncating here guarantees this
+// document can never render an oversized header+summary block regardless
+// of what's actually in the database.
+function truncateProposalSummary(text: string): string {
+  if (text.length <= MAX_PROPOSAL_SUMMARY_LENGTH) return text;
+  return `${text.slice(0, MAX_PROPOSAL_SUMMARY_LENGTH).trimEnd()}…`;
+}
+
 function formatDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -641,7 +653,9 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 item regardless, so the total stays correct whichever way
                 that flag is set, and this copy is additive context, not a
                 replacement for anything. */}
-            {booth.boothSummary && <Text style={styles.proposalSummaryText}>{booth.boothSummary}</Text>}
+            {booth.boothSummary && (
+              <Text style={styles.proposalSummaryText}>{truncateProposalSummary(booth.boothSummary)}</Text>
+            )}
           </View>
           {booth.elementGroups.map((group) => (
             <View key={group.elementType} style={styles.elementTypeSection}>
@@ -654,7 +668,9 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 </View>
                 {/* Bottom tier -- same "always shown" reasoning as
                     boothSummary above. */}
-                {group.elementSummary && <Text style={styles.proposalSummaryText}>{group.elementSummary}</Text>}
+                {group.elementSummary && (
+                  <Text style={styles.proposalSummaryText}>{truncateProposalSummary(group.elementSummary)}</Text>
+                )}
               </View>
               {/* summarizeOnProposal's only remaining job: skip just the
                   itemized rows below. See EstimateSection.summarizeOnProposal's
@@ -882,7 +898,9 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     category, independent of any booth's own
                     summarizeOnProposal/detail state below. */}
                 {data.categorySummaries?.get(categoryName) && (
-                  <Text style={styles.proposalSummaryText}>{data.categorySummaries.get(categoryName)}</Text>
+                  <Text style={styles.proposalSummaryText}>
+                    {truncateProposalSummary(data.categorySummaries.get(categoryName)!)}
+                  </Text>
                 )}
               </View>
               {categoryName === "Professional Services" &&

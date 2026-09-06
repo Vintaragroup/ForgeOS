@@ -24,6 +24,21 @@ import {
   resolveEffectiveCategory,
   resolveTypeKeyForCategoryKey,
 } from "@/lib/proposal-view-model";
+import { MAX_PROPOSAL_SUMMARY_LENGTH } from "@/lib/proposal-summary-limits";
+
+// Shared by updateBoothSummary/updateElementSummary/updateCategorySummary
+// below -- see proposal-summary-limits.ts for why this exists. Covers both
+// a manual textarea edit and accepting an AI-suggested summary as-is
+// (SummaryEditor's Approve button submits the same updateAction), so an
+// unexpectedly long model response can't reach the database uncapped
+// either.
+function assertProposalSummaryLength(summary: string): void {
+  if (summary.length > MAX_PROPOSAL_SUMMARY_LENGTH) {
+    throw new Error(
+      `Proposal summary is too long (${summary.length} characters, max ${MAX_PROPOSAL_SUMMARY_LENGTH}) -- shorten it before saving.`,
+    );
+  }
+}
 
 type Decimal = Prisma.Decimal;
 type DecimalInput = Decimal | number | string;
@@ -759,6 +774,7 @@ export async function clearSectionPendingDescription(sectionId: string, category
 // schema comment. Single-section scope, same as description above (an
 // element group IS one EstimateSection row, no groupLabel sync needed).
 export async function updateElementSummary(sectionId: string, summary: string) {
+  assertProposalSummaryLength(summary);
   const section = await db.estimateSection.findUniqueOrThrow({
     where: { id: sectionId },
     select: { estimateVersionId: true },
@@ -807,6 +823,7 @@ export async function clearBoothPendingDescription(estimateVersionId: string, gr
 // summarized booth shows on the Proposal PDF instead of its itemized
 // detail -- see EstimateSection.boothSummary's own schema comment.
 export async function updateBoothSummary(estimateVersionId: string, groupLabel: string, summary: string) {
+  assertProposalSummaryLength(summary);
   await assertUnlocked(estimateVersionId);
   await db.estimateSection.updateMany({
     where: { estimateVersionId, groupLabel },
@@ -2166,6 +2183,7 @@ export async function clearCategoryMarginOverride(estimateVersionId: string, cat
 // the first summary is written for this version+category pair), but
 // never touches totals, unlike that one.
 export async function updateCategorySummary(estimateVersionId: string, categoryId: string, summary: string) {
+  assertProposalSummaryLength(summary);
   await assertUnlocked(estimateVersionId);
   await db.estimateCategorySummary.upsert({
     where: { estimateVersionId_categoryId: { estimateVersionId, categoryId } },
