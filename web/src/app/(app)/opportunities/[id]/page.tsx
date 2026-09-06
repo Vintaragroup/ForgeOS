@@ -736,6 +736,10 @@ function fmtDate(d: Date | null): string {
   return d.toISOString().slice(0, 10);
 }
 
+function money(n: number): string {
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export default async function OpportunityDetailPage(props: PageProps<"/opportunities/[id]">) {
   const { id } = await props.params;
   const searchParams = await props.searchParams;
@@ -944,6 +948,19 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   // version, its proposals), so this adds no new query and can never go
   // stale. See deal-checklist.ts for the actual step-by-step logic.
   const currentEstimateVersion = opportunity.estimates[0]?.versions[0] ?? null;
+  // At-a-glance header strip -- contact/owner/estimate value are all
+  // several sections down (Details, Estimates) otherwise, so opening the
+  // record from a list gives no orientation without scrolling. Summed
+  // across every active estimate (not just the most recent) rather than
+  // showing one project's number as if it were the whole deal's -- the
+  // common single-estimate case is just a sum of one.
+  const headerContactName = contacts.find((c) => c.id === opportunity.primaryContactId)?.name ?? null;
+  const headerOwnerName = users.find((u) => u.id === opportunity.ownerId)?.name ?? null;
+  const headerEstimateTotals = opportunity.estimates
+    .map((e) => e.versions[0]?.grandTotal)
+    .filter((v): v is NonNullable<typeof v> => v != null);
+  const headerEstimateValue =
+    headerEstimateTotals.length > 0 ? headerEstimateTotals.reduce((sum, v) => sum + Number(v), 0) : null;
   // Computed once here and reused by TimelineCard below -- same JSON blob,
   // no reason to re-parse it a second time.
   const timelineData = getTimelineData(opportunity.timelineMilestones);
@@ -1009,23 +1026,54 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
     );
   }
 
+  const hasHeaderSummary = headerContactName || headerOwnerName || headerEstimateValue !== null;
+
   return (
     <div className="flex flex-col gap-8">
-      <PageHeader
-        backHref="/opportunities"
-        backLabel="Opportunities"
-        title={
-          <>
-            {opportunity.showName}
-            <StageChip stage={opportunity.stage} />
-            {stageAgeDays !== null && stageAgeDays >= STAGE_AGE_WARNING_DAYS && (
-              <StatusChip tone={stageAgeDays >= STAGE_AGE_CRITICAL_DAYS ? "critical" : "warning"}>
-                {stageAgeDays} days in stage
-              </StatusChip>
+      <div>
+        <PageHeader
+          backHref="/opportunities"
+          backLabel="Opportunities"
+          title={
+            <>
+              {opportunity.showName}
+              <StageChip stage={opportunity.stage} />
+              {stageAgeDays !== null && stageAgeDays >= STAGE_AGE_WARNING_DAYS && (
+                <StatusChip tone={stageAgeDays >= STAGE_AGE_CRITICAL_DAYS ? "critical" : "warning"}>
+                  {stageAgeDays} days in stage
+                </StatusChip>
+              )}
+            </>
+          }
+          // Moved out of the Details card -- it used to sit at the bottom of
+          // a long edit form, separated from routine field edits by nothing
+          // but a border, which is not where a destructive, irreversible
+          // action belongs. The confirm dialog (ConfirmForm) is unchanged.
+          action={
+            <ConfirmForm action={deleteWithId} confirmMessage="Delete this opportunity? This can't be undone.">
+              <Button variant="danger">Delete opportunity</Button>
+            </ConfirmForm>
+          }
+        />
+        {hasHeaderSummary && (
+          <div className="-mt-4 flex flex-wrap gap-x-6 gap-y-1 text-sm text-neutral-500">
+            <span>
+              <span className="text-neutral-400">Contact:</span> {headerContactName ?? "—"}
+            </span>
+            <span>
+              <span className="text-neutral-400">Owner:</span> {headerOwnerName ?? "—"}
+            </span>
+            {headerEstimateValue !== null && (
+              <span>
+                <span className="text-neutral-400">
+                  {isMultiProject ? "Estimated total (all projects):" : "Estimate:"}
+                </span>{" "}
+                {money(headerEstimateValue)}
+              </span>
             )}
-          </>
-        }
-      />
+          </div>
+        )}
+      </div>
 
       {statusSuccess && <StatusBanner kind="success">{statusSuccess}</StatusBanner>}
       {statusError && <StatusBanner kind="error">{statusError}</StatusBanner>}
@@ -1192,13 +1240,6 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             <OpportunityFieldSuggestions opportunityId={opportunity.id} opportunity={opportunity} documents={documents} />
           </>
         )}
-        <ConfirmForm
-          action={deleteWithId}
-          confirmMessage="Delete this opportunity? This can't be undone."
-          className="mt-4 border-t border-neutral-200 pt-4"
-        >
-          <Button variant="danger">Delete opportunity</Button>
-        </ConfirmForm>
       </CollapsibleSection>
 
       <CollapsibleSection title="Estimates" id="estimates">
