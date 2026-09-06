@@ -23,6 +23,7 @@ import { regenerateTimelineAction, runClarificationQuestionsAnalysisAction } fro
 import { getTimelineData, buildEmptyMilestones, type TimelineData } from "@/lib/timeline-service";
 import { TimelineMilestoneRow } from "@/components/timeline-milestone-row";
 import { money } from "@/lib/money";
+import { formatOpportunityLabel } from "@/lib/opportunity-name";
 import { deleteMisattributedLineItemAction, moveLineItemToEstimateAction } from "./line-item-audit-actions";
 import { findMisattributedLineItems, type MisattributedLineItem } from "@/lib/line-item-audit-service";
 import type { ClarificationQuestion } from "@/lib/ai/clarification-questions-service";
@@ -49,6 +50,7 @@ import { ChatWidget } from "@/components/chat-widget";
 import { DocumentUploadForm } from "@/components/document-upload-form";
 import { SubmitButton } from "@/components/submit-button";
 import { ProjectTypeFields, ProjectTypeFieldsView } from "@/components/project-type-fields";
+import { OpportunityNamePreview } from "@/components/opportunity-name-preview";
 import { CLOSE_REASON_LABELS, StageChangeFields } from "@/components/stage-change-fields";
 
 const DOCUMENT_TYPE_OPTIONS = [
@@ -1133,6 +1135,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                 options={companies.map((c) => ({ value: c.id, label: c.name }))}
               />
               <Field label="Show name" name="showName" defaultValue={opportunity.showName} required />
+              <OpportunityNamePreview companies={companies.map((c) => ({ id: c.id, name: c.name }))} />
               <ProjectTypeFields
                 defaults={{
                   projectType: opportunity.projectType,
@@ -1196,6 +1199,15 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
             <div className="flex flex-col gap-4">
               <ReadOnlyField label="Company" value={opportunity.company.name} />
               <ReadOnlyField label="Show name" value={opportunity.showName} />
+              <ReadOnlyField
+                label="Naming convention"
+                value={formatOpportunityLabel({
+                  companyName: opportunity.company.name,
+                  showName: opportunity.showName,
+                  eventStartDate: opportunity.eventStartDate,
+                  boothNumber: opportunity.boothNumber,
+                })}
+              />
               <ProjectTypeFieldsView
                 values={{
                   projectType: opportunity.projectType,

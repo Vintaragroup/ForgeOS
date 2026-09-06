@@ -4,6 +4,7 @@ import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 import { EmptyState, LinkButton } from "@/components/ui";
 import { ProjectTypeFields } from "@/components/project-type-fields";
+import { OpportunityNamePreview } from "@/components/opportunity-name-preview";
 
 // The company/user dropdowns must reflect live data, not a build-time
 // snapshot -- see opportunities/page.tsx's comment for the same reasoning.
@@ -40,6 +41,7 @@ export default async function NewOpportunityPage() {
             options={companies.map((c) => ({ value: c.id, label: c.name }))}
           />
           <Field label="Show name" name="showName" required />
+          <OpportunityNamePreview companies={companies.map((c) => ({ id: c.id, name: c.name }))} />
           <ProjectTypeFields
             defaults={{
               projectType: "TRADESHOW_EXHIBIT",
