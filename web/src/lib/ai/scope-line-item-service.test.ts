@@ -422,6 +422,18 @@ describe("buildSystemPrompt", () => {
     expect(withoutTranscript).not.toMatch(/estimating platform\/software itself/);
     expect(withoutTranscript).toMatch(/Scope of Work \/ RFP document/);
   });
+
+  // Roadmap item #3, straight from a 15-year estimator's field feedback:
+  // a paraphrased description silently drops the exact material/finish
+  // spec a custom-build item's source wording carries (their own example:
+  // "single-sided Chinese birch" flattened to a generic "plywood"). This
+  // only proves the instruction is present in the prompt, not that the
+  // model follows it -- that needs a real key and a real RFP.
+  it("instructs the model to preserve source wording for custom-fabricated items", () => {
+    const prompt = buildSystemPrompt([], false);
+    expect(prompt).toMatch(/preserve the source's own specifying language/);
+    expect(prompt).toMatch(/single-sided Chinese birch/);
+  });
 });
 
 describe("flagUncertainClassifications", () => {

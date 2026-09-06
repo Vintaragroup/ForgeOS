@@ -4,7 +4,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { uploadDocument } from "@/lib/document-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
-import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service";
+import { proposeLineItemsFromDrawing, SYSTEM_PROMPT } from "@/lib/ai/drawing-line-item-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
@@ -53,5 +53,19 @@ describe("proposeLineItemsFromDrawing", () => {
     await expect(proposeLineItemsFromDrawing(document.id, otherOpportunity.id)).rejects.toThrow(
       "This document doesn't belong to this opportunity.",
     );
+  });
+});
+
+describe("SYSTEM_PROMPT", () => {
+  // Same fix as scope-line-item-service.ts's buildSystemPrompt, applied
+  // here too -- a drawing has no text layer to verify a sourceQuote
+  // against (sourceQuote stays "" for every drawing-sourced item, see
+  // proposeLineItemsFromDrawing's own comment), which makes getting the
+  // description itself right even more important for this path than the
+  // text-based one. Only proves the instruction is present, not that the
+  // model follows it -- that needs a real key and a real drawing.
+  it("instructs the model to preserve source wording for custom-fabricated items", () => {
+    expect(SYSTEM_PROMPT).toMatch(/preserve the sheet's own specifying language/);
+    expect(SYSTEM_PROMPT).toMatch(/single-sided Chinese birch/);
   });
 });

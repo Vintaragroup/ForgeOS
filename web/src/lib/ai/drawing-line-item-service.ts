@@ -68,9 +68,10 @@ const DRAWING_LINE_ITEM_SCHEMA = {
   },
 } as const;
 
-const SYSTEM_PROMPT = `You are looking at page images of a fabrication/construction drawing or CAD export for an event/exhibit contractor. Propose a list of distinct, biddable line items a contractor would need to price to build what's shown -- the granularity a real pricing schedule would use (e.g. "Booth structure fabrication", "Countertop fabrication", "Rigging/truss installation"), grounded in what's actually labeled or dimensioned on the sheets, not a generic paraphrase of "a booth drawing."
+export const SYSTEM_PROMPT = `You are looking at page images of a fabrication/construction drawing or CAD export for an event/exhibit contractor. Propose a list of distinct, biddable line items a contractor would need to price to build what's shown -- the granularity a real pricing schedule would use (e.g. "Booth structure fabrication", "Countertop fabrication", "Rigging/truss installation"), grounded in what's actually labeled or dimensioned on the sheets, not a generic paraphrase of "a booth drawing."
 
 For each item:
+- description: name the item at that same biddable granularity, but for a custom-fabricated item -- a built structure, graphic, finish, or design element made specifically for this job rather than an off-the-shelf catalog product or rental -- preserve the sheet's own specifying language inside the name: the exact material, finish, dimension, or design detail as labeled or called out (e.g. "single-sided Chinese birch," not a generic paraphrase like "plywood"). That original wording is often the actual spec a shop floor builds from, and a paraphrase can silently lose it. For a standard catalog/rental/labor item, a concise generic name is fine and preferred -- this only matters for items nothing off-the-shelf will satisfy.
 - qty: the quantity actually dimensioned or labeled on the sheet if there is one (a count, square footage, linear footage, etc.). If nothing is stated, use 1 and set qtyIsExplicit to false -- 1 is a placeholder meaning "this item exists, quantity unknown," never a guess at a real number.
 - qtyIsExplicit: true ONLY when that qty value is actually printed on the sheet.
 - unit: a sensible unit for this item (EA, SQFT, LF, HR, LOT) -- infer from context if the sheet doesn't state one.
