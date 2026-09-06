@@ -21,6 +21,9 @@ export function TimelineMilestoneRow({
   confirmed,
   citationHref,
   citationLabel,
+  conflictDisplayDate,
+  conflictCitationHref,
+  conflictCitationLabel,
   updateAction,
 }: {
   label: string;
@@ -33,12 +36,21 @@ export function TimelineMilestoneRow({
   confirmed: boolean;
   citationHref: string | null;
   citationLabel: string | null;
+  // Set only when this row's date comes from a confirmed Opportunity field
+  // that disagrees with what a scope document actually states -- see
+  // timeline-service.ts's TimelineMilestone.conflict. null/undefined means
+  // no known disagreement.
+  conflictDisplayDate?: string | null;
+  conflictCitationHref?: string | null;
+  conflictCitationLabel?: string | null;
   updateAction: (formData: FormData) => void | Promise<void>;
 }) {
   const [isEditing, setIsEditing] = useState(false);
 
   const statusChip = !displayDate ? (
     <StatusChip tone="critical">Missing</StatusChip>
+  ) : conflictDisplayDate ? (
+    <StatusChip tone="warning">Differs from source</StatusChip>
   ) : !confirmed ? (
     <StatusChip tone="warning">{source === "COMPUTED" ? "Computed — review" : "AI-suggested — review"}</StatusChip>
   ) : (
@@ -98,6 +110,16 @@ export function TimelineMilestoneRow({
           <a href={citationHref} className="ml-2 text-xs text-brand-navy hover:underline">
             {citationLabel}
           </a>
+        )}
+        {conflictDisplayDate && (
+          <div className="mt-0.5 text-xs text-amber-600">
+            ⚠ Document says {conflictDisplayDate}
+            {conflictCitationHref && (
+              <a href={conflictCitationHref} className="ml-1 text-brand-navy hover:underline">
+                {conflictCitationLabel}
+              </a>
+            )}
+          </div>
         )}
       </td>
       <td className="py-1.5 pr-2 text-sm text-neutral-500">

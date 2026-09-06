@@ -492,6 +492,13 @@ function TimelineCard({
               doc && m.sourceQuote
                 ? citationHref(opportunityId, doc, { sourceQuote: m.sourceQuote, pageNumber: m.pageNumber ?? null })
                 : null;
+            const conflictDoc = m.conflict ? documents.find((d) => d.id === m.conflict!.documentId) : undefined;
+            const conflictHref = conflictDoc
+              ? citationHref(opportunityId, conflictDoc, {
+                  sourceQuote: m.conflict!.sourceQuote,
+                  pageNumber: m.conflict!.pageNumber,
+                })
+              : null;
             return (
               <TimelineMilestoneRow
                 key={m.type}
@@ -503,6 +510,11 @@ function TimelineCard({
                 confirmed={m.confirmed}
                 citationHref={href}
                 citationLabel={doc ? doc.filename : null}
+                conflictDisplayDate={
+                  m.conflict ? new Date(m.conflict.date).toLocaleDateString("en-US", TIMELINE_DATE_FORMAT) : null
+                }
+                conflictCitationHref={conflictHref}
+                conflictCitationLabel={conflictDoc ? conflictDoc.filename : null}
                 updateAction={updateTimelineMilestoneAction.bind(null, opportunityId, m.type)}
               />
             );

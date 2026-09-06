@@ -42,6 +42,14 @@ export interface TimelineMilestone {
   sourceQuote?: string | null;
   documentId?: string | null;
   pageNumber?: number | null;
+  // Only ever set for one of the 4 structured-field-backed types
+  // (Shipping/Installation/Show open/Dismantle) when that field is set
+  // (so it wins as `date` above) AND a scope document states a genuinely
+  // different date for the same milestone -- surfaced so a stale onboarding
+  // field doesn't silently disagree with the document unnoticed. Confirmed
+  // real: a live opportunity's Show Open field read Jan 3 while its own
+  // source document said Jan 7, and nothing on the page said so before this.
+  conflict?: { date: string; sourceQuote: string; documentId: string; pageNumber: number | null } | null;
 }
 
 export interface TimelineData {
@@ -180,7 +188,24 @@ export function applyAiSuggestions(
   return milestones.map((m) => {
     const suggestion = suggestions.find((s) => s.type === m.type);
     if (!suggestion) return m;
-    if (DETERMINISTIC_FIELD_BY_TYPE[m.type] && m.date !== null) return m;
+    if (DETERMINISTIC_FIELD_BY_TYPE[m.type] && m.date !== null) {
+      // The structured field still wins as the row's actual date -- but a
+      // document stating a genuinely different date is a real signal worth
+      // surfacing, not silently dropping. Same-date agreement clears any
+      // conflict a previous regenerate might have flagged.
+      return {
+        ...m,
+        conflict:
+          suggestion.date !== m.date
+            ? {
+                date: suggestion.date,
+                sourceQuote: suggestion.sourceQuote,
+                documentId: suggestion.documentId,
+                pageNumber: suggestion.pageNumber,
+              }
+            : null,
+      };
+    }
     return {
       ...m,
       date: suggestion.date,
@@ -228,6 +253,11 @@ export async function updateTimelineMilestone(
           responsibleParty: update.responsibleParty,
           source: "MANUAL" as const,
           confirmed: true,
+          // An estimator directly setting this row's value has already
+          // resolved whatever the flag was pointing at -- carrying a stale
+          // conflict forward here would keep flagging a decision that's
+          // already been made.
+          conflict: null,
         }
       : m,
   );

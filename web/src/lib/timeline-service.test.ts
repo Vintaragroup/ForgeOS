@@ -144,6 +144,32 @@ describe("applyAiSuggestions", () => {
     expect(installation.source).toBe("DETERMINISTIC");
   });
 
+  it("flags a conflict when the winning structured field disagrees with what a document states -- confirmed live: Show Open read Jan 3 while its own document said Jan 7", () => {
+    const milestones = buildDeterministicMilestones({
+      targetMoveIn: null,
+      targetMoveOut: null,
+      eventStartDate: new Date("2027-01-03"),
+      shipDate: null,
+    });
+    const result = applyAiSuggestions(milestones, [suggestion("SHOW_OPEN", "2027-01-07")]);
+    const showOpen = result.find((m) => m.type === "SHOW_OPEN")!;
+    expect(showOpen.date).toBe(new Date("2027-01-03").toISOString());
+    expect(showOpen.source).toBe("DETERMINISTIC");
+    expect(showOpen.conflict?.date).toBe(new Date("2027-01-07").toISOString());
+    expect(showOpen.conflict?.documentId).toBe("doc-1");
+  });
+
+  it("does not flag a conflict when the document agrees with the structured field", () => {
+    const milestones = buildDeterministicMilestones({
+      targetMoveIn: null,
+      targetMoveOut: null,
+      eventStartDate: new Date("2027-01-07"),
+      shipDate: null,
+    });
+    const result = applyAiSuggestions(milestones, [suggestion("SHOW_OPEN", "2027-01-07")]);
+    expect(result.find((m) => m.type === "SHOW_OPEN")?.conflict).toBeNull();
+  });
+
   it("falls back to an AI suggestion for a structured-field type when that field is still empty -- the real bug this fixes", () => {
     const milestones = buildDeterministicMilestones({
       targetMoveIn: null,
@@ -186,6 +212,52 @@ describe("updateTimelineMilestone", () => {
 
     expect(data.milestones.find((m) => m.type === "DEPOSIT_DUE")?.date).toBe(new Date("2026-09-23").toISOString());
     expect(data.milestones.find((m) => m.type === "BALANCE_DUE")?.date).toBe(new Date("2026-12-30").toISOString());
+  });
+
+  it("clears a stale conflict flag once the estimator directly edits that row", async () => {
+    const { opportunity } = await makeOpportunity({ eventStartDate: new Date("2027-01-03") });
+    await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "Project Timeline.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        storageKey: "test-key",
+        documentType: "DRAWING",
+        extractionStatus: "COMPLETE",
+        extractedText: null,
+        extractedSummary: {
+          eventOrProjectName: null,
+          venue: null,
+          submissionDeadline: null,
+          // Full label coverage for every AI-eligible type -- regenerateTimeline
+          // always requests all 9, and a type left without a candidate here
+          // would otherwise force a real OpenAI call (.env.test has no key).
+          keyDates: [
+            { label: "Signed Proposal", date: "2026-09-18", dateType: "MILESTONE", sourceQuote: "Signed Proposal", pageNumber: 1 },
+            { label: "Deposit Due", date: "2026-09-23", dateType: "DEADLINE", sourceQuote: "Deposit Due", pageNumber: 1 },
+            { label: "Production Meeting", date: "2026-09-25", dateType: "MILESTONE", sourceQuote: "Production Meeting", pageNumber: 1 },
+            { label: "Production Ready Artwork", date: "2026-12-07", dateType: "DEADLINE", sourceQuote: "Production Ready Artwork", pageNumber: 1 },
+            { label: "Balance Due", date: "2026-12-30", dateType: "DEADLINE", sourceQuote: "Balance Due", pageNumber: 1 },
+            { label: "Shipping to Show Site", date: "2027-01-04", dateType: "MILESTONE", sourceQuote: "Shipping to Show Site", pageNumber: 1 },
+            { label: "Installation", date: "2027-01-06", dateType: "MILESTONE", sourceQuote: "Installation", pageNumber: 1 },
+            { label: "Show Open", date: "2027-01-07", dateType: "MILESTONE", sourceQuote: "Show Open", pageNumber: 1 },
+            { label: "Dismantle", date: "2027-01-10", dateType: "MILESTONE", sourceQuote: "Dismantle", pageNumber: 1 },
+          ],
+          scopeSummary: [],
+          riskFlags: [],
+        },
+      },
+    });
+
+    const regenerated = await regenerateTimeline(opportunity.id, null);
+    expect(regenerated.milestones.find((m) => m.type === "SHOW_OPEN")?.conflict).not.toBeNull();
+
+    const edited = await updateTimelineMilestone(opportunity.id, "SHOW_OPEN", {
+      date: new Date("2027-01-07"),
+      responsibleParty: "CLIENT",
+    });
+    expect(edited.milestones.find((m) => m.type === "SHOW_OPEN")?.conflict).toBeNull();
   });
 
   it("clears a milestone's date back to null when given an empty date", async () => {
