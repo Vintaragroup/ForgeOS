@@ -6,6 +6,7 @@ import { Button, Field, SelectField } from "@/components/ui";
 import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
 import { QuantityOrAreaFields } from "@/components/quantity-or-area-fields";
 import { useBidPackageSelection } from "@/components/bid-package-selection";
+import { useLineItemEditMode } from "@/components/line-item-edit-mode";
 import { ConfirmForm } from "@/components/confirm-form";
 
 // Seventh client component (see document-upload-form.tsx's header
@@ -106,7 +107,85 @@ export function LineItemRow({
   toggleProposalVisibilityAction: (formData: FormData) => void | Promise<void>;
 }) {
   const selection = useBidPackageSelection();
+  const editMode = useLineItemEditMode();
   const [isEditing, setIsEditing] = useState(false);
+
+  // Checked first, ahead of the local isEditing wide-form below: this
+  // row's compact inputs are bare (no <form> of their own), submitted by
+  // the ambient <form> LineItemEditModeProvider wraps the whole table in
+  // -- if isEditing's own <form> were allowed to render at the same time,
+  // it would nest a second <form> inside that one, which browsers can't
+  // represent. The pencil button that sets isEditing is itself hidden
+  // below whenever editMode is active, so this only guards the rare case
+  // where Section Edit Mode is toggled on while a row's wide form was
+  // already open.
+  if (editMode?.isActive && !isLocked) {
+    return (
+      <tr id={`line-item-${id}`} className="border-t border-neutral-100 bg-amber-50/40">
+        <td className="px-2 py-1">
+          <input type="hidden" name="ids" value={id} />
+          <input type="hidden" name={`category__${id}`} value={category} />
+          <input type="hidden" name={`usageTag__${id}`} value={usageTag} />
+          <input type="hidden" name={`isClientOwned__${id}`} value={String(isClientOwned)} />
+          <input type="hidden" name={`includeInProposal__${id}`} value={String(includeInProposal)} />
+          <input
+            name={`description__${id}`}
+            defaultValue={description}
+            required
+            className="w-full rounded border border-neutral-300 px-1.5 py-1 text-sm"
+          />
+        </td>
+        <td className="px-2 py-1">
+          <input
+            name={`department__${id}`}
+            defaultValue={department}
+            className="w-24 rounded border border-neutral-300 px-1.5 py-1 text-sm"
+          />
+        </td>
+        <td className="px-2 py-1">
+          <select
+            name={`lineType__${id}`}
+            defaultValue={lineType}
+            className="w-full rounded border border-neutral-300 px-1 py-1 text-sm"
+          >
+            {lineTypeOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </td>
+        <td className="px-2 py-1">
+          <div className="flex items-center justify-end gap-1">
+            <input
+              name={`qty__${id}`}
+              type="number"
+              step="any"
+              defaultValue={qty}
+              className="w-16 rounded border border-neutral-300 px-1.5 py-1 text-right text-sm"
+            />
+            <input
+              name={`unit__${id}`}
+              defaultValue={unit}
+              placeholder="unit"
+              className="w-14 rounded border border-neutral-300 px-1.5 py-1 text-sm"
+            />
+          </div>
+        </td>
+        <td className="px-2 py-1">
+          <input
+            name={`unitCost__${id}`}
+            type="number"
+            step="any"
+            defaultValue={unitCost}
+            className="w-20 rounded border border-neutral-300 px-1.5 py-1 text-right text-sm"
+          />
+        </td>
+        <td className="px-2 py-1.5 text-right text-neutral-400">{totalCostDisplay}</td>
+        <td className="px-2 py-1.5"></td>
+      </tr>
+    );
+  }
 
   if (isEditing) {
     return (

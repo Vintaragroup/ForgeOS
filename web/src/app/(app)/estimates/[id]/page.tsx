@@ -30,6 +30,7 @@ import {
   archiveEstimateAction,
   bulkMoveLineItemsCategoryAction,
   bulkMoveLineItemsToGroupAction,
+  bulkUpdateLineItemsAction,
   clearBoothPendingDescriptionAction,
   clearBoothPendingSummaryAction,
   clearCategoryMarginOverrideAction,
@@ -138,6 +139,7 @@ import { findClosestCandidateId, type ProposedVendorSection, type VendorLineMatc
 import { BidPackageSelectionProvider } from "@/components/bid-package-selection";
 import { CreateBidPackageBar } from "@/components/create-bid-package-bar";
 import { MoveSelectedItemsBar } from "@/components/move-selected-items-bar";
+import { LineItemEditModeProvider } from "@/components/line-item-edit-mode";
 import { MoveToGroupBar } from "@/components/move-to-group-bar";
 import { CollapsibleGroup } from "@/components/collapsible-group";
 import { LocalTimestamp } from "@/components/local-timestamp";
@@ -1178,7 +1180,7 @@ function LineItemsTable({
   laborRates: LaborRateOption[];
   categoryOptions: { value: string; label: string }[];
 }) {
-  return (
+  const table = (
     <table className="w-full min-w-152 text-sm">
       <thead>
         <tr className="text-left text-neutral-500">
@@ -1270,6 +1272,13 @@ function LineItemsTable({
       </tbody>
     </table>
   );
+
+  // No Section Edit Mode on a locked version -- matches every other
+  // per-row edit affordance above, all already gated on !version.isLocked.
+  if (version.isLocked) return table;
+
+  const bulkUpdateWithIds = bulkUpdateLineItemsAction.bind(null, estimateId, version.id);
+  return <LineItemEditModeProvider bulkUpdateAction={bulkUpdateWithIds}>{table}</LineItemEditModeProvider>;
 }
 
 // One section's worth of line items, rendered wherever it shows up (used

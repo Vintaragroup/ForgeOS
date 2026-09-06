@@ -807,6 +807,53 @@ export async function updateLineItemAction(
   revalidatePath(`/estimates/${estimateId}`);
 }
 
+// Companion to updateLineItemAction above, for Section Edit Mode (see
+// line-item-edit-mode.tsx's own header comment) -- one Save commits
+// every changed row in a table at once instead of one open/edit/save
+// cycle per row. Only exposes the columns visible in the grid
+// (Description/Department/Type/Qty+Unit/Unit cost); category/usageTag/
+// isClientOwned/includeInProposal ride along as hidden per-row
+// passthrough fields carrying each row's CURRENT value, so this never
+// triggers updateLineItem's blank-category/blank-owner auto-detect
+// fallback for a row the estimator didn't intend to touch -- unlike
+// updateLineItemAction's own single-row form, which deliberately re-runs
+// that fallback when its (visible, clearable) category/isClientOwned
+// fields are left blank.
+export async function bulkUpdateLineItemsAction(estimateId: string, versionId: string, formData: FormData) {
+  const user = await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  const ids = [...new Set(formData.getAll("ids").map(String))];
+  if (ids.length === 0) return;
+
+  for (const id of ids) {
+    const description = String(formData.get(`description__${id}`) ?? "").trim();
+    if (!description) throw new Error("Line item description is required");
+    const lineType = String(formData.get(`lineType__${id}`)) as LineItemType;
+    const department = emptyToNull(formData.get(`department__${id}`));
+    const category = emptyToNull(formData.get(`category__${id}`));
+    const isClientOwned = formData.get(`isClientOwned__${id}`) === "true";
+    const usageTag = emptyToNull(formData.get(`usageTag__${id}`)) as LineItemUsageTag | null;
+    const unit = emptyToNull(formData.get(`unit__${id}`));
+    const qty = Number(formData.get(`qty__${id}`));
+    const unitCost = Number(formData.get(`unitCost__${id}`));
+    if (!Number.isFinite(qty) || !Number.isFinite(unitCost)) {
+      throw new Error("Qty and unit cost must be numbers");
+    }
+    const includeInProposal = formData.get(`includeInProposal__${id}`) === "true";
+
+    await updateLineItem(
+      opportunityId,
+      id,
+      { description, lineType, department, category, isClientOwned, usageTag, qty, unit, unitCost, includeInProposal },
+      user.id,
+    );
+  }
+
+  await recomputeVersionTotals(versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
 export async function moveLineItemAction(
   estimateId: string,
   lineItemId: string,
