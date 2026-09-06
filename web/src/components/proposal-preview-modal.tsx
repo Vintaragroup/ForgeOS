@@ -29,8 +29,14 @@ export function ProposalPreviewModal({
 }) {
   const [open, setOpen] = useState(false);
   const [templateId, setTemplateId] = useState(proposalTemplates[0]?.id ?? "");
+  // Defaults on -- an estimator sanity-checking margin math needs cost
+  // visible by default, same as this route always rendered before this
+  // checkbox existed. Switching it off previews exactly what the real
+  // client-facing Proposal PDF will show (price only), without needing the
+  // version locked and approved first to see that page.
+  const [showCost, setShowCost] = useState(true);
 
-  const src = `/estimates/${estimateId}/versions/${versionId}/preview-pdf?templateId=${encodeURIComponent(templateId)}`;
+  const src = `/estimates/${estimateId}/versions/${versionId}/preview-pdf?templateId=${encodeURIComponent(templateId)}${showCost ? "" : "&showCost=0"}`;
 
   return (
     <>
@@ -44,6 +50,15 @@ export function ProposalPreviewModal({
             options={proposalTemplates.map((t) => ({ value: t.id, label: t.name }))}
           />
         </div>
+        <label className="mb-2 flex items-center gap-1.5 text-sm text-neutral-700">
+          <input
+            type="checkbox"
+            checked={showCost}
+            onChange={(e) => setShowCost(e.target.checked)}
+            className="h-4 w-4 rounded border-neutral-300"
+          />
+          Show costs
+        </label>
         <Button type="button" variant="secondary" onClick={() => setOpen(true)}>
           Preview PDF
         </Button>

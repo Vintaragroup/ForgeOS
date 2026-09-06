@@ -42,6 +42,13 @@ export async function GET(
   const categoryOrderIds = (url.searchParams.get("categoryOrder") ?? "").split(",").filter(Boolean);
   const hidePricingIds = new Set((url.searchParams.get("hidePricing") ?? "").split(",").filter(Boolean));
   const summaryIds = new Set((url.searchParams.get("summary") ?? "").split(",").filter(Boolean));
+  // Absent (the common case -- every other caller of this route) means
+  // true, same as before this param existed. Only an explicit "0"/"false"
+  // switches it off, letting an estimator preview exactly what the
+  // client-facing price-only view will look like without needing the
+  // version locked+approved first (see ProposalPreviewModal's checkbox).
+  const showCostParam = url.searchParams.get("showCost");
+  const showCost = showCostParam !== "0" && showCostParam !== "false";
 
   const user = await getCurrentUser();
   if (!user) notFound();
@@ -137,10 +144,11 @@ export async function GET(
         hidePricingCategoryNames,
         summaryCategoryNames,
         categorySummaries,
-        // Internal, still-editing document -- an estimator sanity-checking
-        // margin math needs to see cost next to the marked-up price, never
-        // just the price alone. See ProposalPdfData's own comment.
-        showCost: true,
+        // Defaults true (an estimator sanity-checking margin math needs to
+        // see cost next to the marked-up price by default), but can be
+        // switched off via ?showCost=0 to preview the client's exact
+        // price-only view early -- see ProposalPdfData's own comment.
+        showCost,
         professionalServices,
         termsAndConditions,
         paymentMethodNote,

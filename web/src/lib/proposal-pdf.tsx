@@ -427,12 +427,16 @@ export interface ProposalPdfData {
   // same convention as the two Sets above; only categories with an
   // approved (non-null) summary appear here.
   categorySummaries?: ReadonlyMap<string, string>;
-  // true on the internal Preview PDF (preview-pdf/route.ts): every dollar
-  // figure renders as Cost alongside the marked-up Price, so an estimator
-  // can sanity-check margin math before a version is locked. false on the
-  // real, client-facing Proposal PDF (proposals/[id]/pdf/route.ts): only
-  // the marked-up Price ever renders -- cost never reaches the client.
-  // Neither route can omit this; there's no default that's safe for both.
+  // Defaults true on the internal Preview PDF (preview-pdf/route.ts):
+  // every dollar figure renders as Cost alongside the marked-up Price, so
+  // an estimator can sanity-check margin math before a version is locked
+  // -- though that route's own ?showCost=0 lets an estimator switch to a
+  // price-only preview on demand, without needing the version locked or
+  // approved first. Always false on the real, client-facing Proposal PDF
+  // (proposals/[id]/pdf/route.ts), not configurable there: only the
+  // marked-up Price ever renders -- cost never reaches the client, no
+  // matter what a query string says. Neither route can omit this field;
+  // there's no default that's safe for both.
   showCost: boolean;
   professionalServices: ProposalPdfProfessionalServices | null;
   termsAndConditions: string[];
