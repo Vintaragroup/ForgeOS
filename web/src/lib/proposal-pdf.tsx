@@ -754,7 +754,11 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               <View key={`${entry.label}-${i}`} style={styles.timelineRow} wrap={false}>
                 <Text style={styles.timelineDate}>{formatDate(entry.date)}</Text>
                 <Text style={styles.timelineLabel}>
-                  {entry.label} ({entry.responsibleParty === "CLIENT" ? "Client" : "EXPO CC"} Responsibility)
+                  {/* "EXPO CCI" -- the real company abbreviation (brand.ts's
+                      BRAND_COMPANY_NAME, "Expo Convention Contractors"),
+                      not "EXPO CC". Confirmed live: this line dropped the
+                      trailing "I" on the client-facing PDF. */}
+                  {entry.label} ({entry.responsibleParty === "CLIENT" ? "Client" : "EXPO CCI"} Responsibility)
                 </Text>
               </View>
             ))}

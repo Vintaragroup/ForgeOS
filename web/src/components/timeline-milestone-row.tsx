@@ -3,9 +3,14 @@
 import { useState } from "react";
 import { StatusChip } from "@/components/ui";
 
+// "EXPO_CC" is only the internal Prisma enum value -- the real company
+// name/abbreviation (per brand.ts's BRAND_COMPANY_NAME and the historical
+// EXPO_CCI_*.xlsx files this app already reads) is "Expo CCI", not "Expo
+// CC". Confirmed live: production rendered the abbreviation with the
+// trailing "I" dropped.
 const RESPONSIBLE_PARTY_OPTIONS: { value: string; label: string }[] = [
   { value: "CLIENT", label: "Client" },
-  { value: "EXPO_CC", label: "EXPO CC" },
+  { value: "EXPO_CC", label: "Expo CCI" },
 ];
 
 // One row in the Opportunity page's Timeline card -- same Empty/Editing
