@@ -15,7 +15,18 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        # Plain postgres:16-alpine doesn't ship the pgvector extension --
+        # migration 20260901185550_add_document_chunks's own `CREATE
+        # EXTENSION IF NOT EXISTS vector` (needed for DocumentChunk's
+        # vector(1536) column, chat/embeddings) fails on it with "extension
+        # \"vector\" is not available", failing every single CI run since
+        # that migration was added regardless of what the actual push
+        # changed. pgvector/pgvector:pg16 is the official pgvector project's
+        # own image, built on top of postgres:16 with the extension already
+        # compiled in -- same Postgres 16, just with the extension present.
+        # Local dev/test Postgres and Render production both already have
+        # pgvector, which is why this only ever showed up in CI.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: forgeos
           POSTGRES_PASSWORD: forgeos
