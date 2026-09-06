@@ -620,30 +620,42 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     <>
       {boothGroups.map((booth) => (
         <View key={booth.boothLabel} style={styles.boothSection}>
-          <View style={styles.boothHeaderRow} minPresenceAhead={24}>
-            <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
-            <Text style={styles.boothHeaderTotal}>
-              {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
-            </Text>
+          {/* wrap={false}, not minPresenceAhead, on this outer pair --
+              minPresenceAhead only checks whether the HEADER ROW itself has
+              room; boothSummary is a separate sibling Text, so a header that
+              clears the threshold could still leave its own summary
+              orphaned onto the next page. wrap={false} measures the header
+              + summary together as one atomic block and moves the whole
+              thing if it doesn't fit, same mechanism this file already uses
+              for a line-item row/the signature block. */}
+          <View wrap={false}>
+            <View style={styles.boothHeaderRow}>
+              <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
+              <Text style={styles.boothHeaderTotal}>
+                {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
+              </Text>
+            </View>
+            {/* Middle tier -- see EstimateSection.boothSummary's own schema
+                comment. Always shown when written, independent of
+                summarizeOnProposal: booth.subtotal already includes every
+                item regardless, so the total stays correct whichever way
+                that flag is set, and this copy is additive context, not a
+                replacement for anything. */}
+            {booth.boothSummary && <Text style={styles.proposalSummaryText}>{booth.boothSummary}</Text>}
           </View>
-          {/* Middle tier -- see EstimateSection.boothSummary's own schema
-              comment. Always shown when written, independent of
-              summarizeOnProposal: booth.subtotal already includes every
-              item regardless, so the total stays correct whichever way
-              that flag is set, and this copy is additive context, not a
-              replacement for anything. */}
-          {booth.boothSummary && <Text style={styles.proposalSummaryText}>{booth.boothSummary}</Text>}
           {booth.elementGroups.map((group) => (
             <View key={group.elementType} style={styles.elementTypeSection}>
-              <View style={styles.elementTypeHeaderRow} minPresenceAhead={24}>
-                <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
-                <Text style={styles.elementTypeHeaderTotal}>
-                  {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
-                </Text>
+              <View wrap={false}>
+                <View style={styles.elementTypeHeaderRow}>
+                  <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
+                  <Text style={styles.elementTypeHeaderTotal}>
+                    {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
+                  </Text>
+                </View>
+                {/* Bottom tier -- same "always shown" reasoning as
+                    boothSummary above. */}
+                {group.elementSummary && <Text style={styles.proposalSummaryText}>{group.elementSummary}</Text>}
               </View>
-              {/* Bottom tier -- same "always shown" reasoning as
-                  boothSummary above. */}
-              {group.elementSummary && <Text style={styles.proposalSummaryText}>{group.elementSummary}</Text>}
               {/* summarizeOnProposal's only remaining job: skip just the
                   itemized rows below. See EstimateSection.summarizeOnProposal's
                   own schema comment. */}
@@ -851,23 +863,28 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
 
           return (
             <View key={categoryName} style={styles.section}>
-              <View style={styles.sectionHeaderRow} minPresenceAhead={24}>
-                <View style={styles.sectionHeaderLeft}>
-                  <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
-                  <Text style={styles.sectionHeaderText}>{categoryName}</Text>
+              {/* wrap={false} on the header + its summary together, not
+                  minPresenceAhead on the header alone -- see renderBoothGroups'
+                  own comment on this same fix above. */}
+              <View wrap={false}>
+                <View style={styles.sectionHeaderRow}>
+                  <View style={styles.sectionHeaderLeft}>
+                    <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
+                    <Text style={styles.sectionHeaderText}>{categoryName}</Text>
+                  </View>
+                  <Text style={styles.sectionHeaderTotal}>
+                    {hidePrice ? "" : amountContent(sectionTotal, sellSectionTotal, data.showCost)}
+                  </Text>
                 </View>
-                <Text style={styles.sectionHeaderTotal}>
-                  {hidePrice ? "" : amountContent(sectionTotal, sellSectionTotal, data.showCost)}
-                </Text>
+                {/* Top tier of the three-level Proposal PDF copy system --
+                    see EstimateCategorySummary's own schema comment. Always
+                    shown when written, spanning every booth in this
+                    category, independent of any booth's own
+                    summarizeOnProposal/detail state below. */}
+                {data.categorySummaries?.get(categoryName) && (
+                  <Text style={styles.proposalSummaryText}>{data.categorySummaries.get(categoryName)}</Text>
+                )}
               </View>
-              {/* Top tier of the three-level Proposal PDF copy system --
-                  see EstimateCategorySummary's own schema comment. Always
-                  shown when written, spanning every booth in this
-                  category, independent of any booth's own
-                  summarizeOnProposal/detail state below. */}
-              {data.categorySummaries?.get(categoryName) && (
-                <Text style={styles.proposalSummaryText}>{data.categorySummaries.get(categoryName)}</Text>
-              )}
               {categoryName === "Professional Services" &&
                 data.professionalServices &&
                 data.professionalServices.items.length > 0 && (
