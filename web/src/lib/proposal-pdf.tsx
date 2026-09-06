@@ -106,16 +106,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     marginBottom: 2,
   },
-  sectionHeaderLeft: { flexDirection: "row", alignItems: "center" },
-  sectionAccentSwatch: { width: 7, height: 7, marginRight: 6 },
+  // flex: 1 (flexGrow+flexShrink+flexBasis:0%), not just flexShrink: 1 --
+  // flexShrink alone leaves flexBasis at "auto" (content size), and yoga
+  // measures/wraps this Text before it's reserved room for its sibling
+  // total, so the total's own space still gets overlapped by a wrapped
+  // second line even though wrapping itself now happens (confirmed live:
+  // exactly this happened before this fix). flex: 1 forces yoga to size
+  // the total first, then give this element only the true remainder to
+  // wrap within.
+  sectionHeaderLeft: { flexDirection: "row", alignItems: "center", flex: 1, marginRight: 8 },
+  sectionAccentSwatch: { width: 7, height: 7, marginRight: 6, flexShrink: 0 },
   sectionHeaderText: {
+    flex: 1,
     fontSize: 8,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: 0.75,
     color: BRAND.white,
   },
-  sectionHeaderTotal: { fontSize: 8, fontWeight: 700, color: BRAND.white },
+  sectionHeaderTotal: { flexShrink: 0, fontSize: 8, fontWeight: 700, color: BRAND.white },
   // A category with children (currently just Custom Build > Structure --
   // see line-item-category.ts's CATEGORY_PARENT) renders its own items
   // first, then each child nested underneath via subsection/
@@ -131,14 +140,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     marginBottom: 2,
   },
+  // Same flex: 1 fix as sectionHeaderText above.
   subsectionHeaderText: {
+    flex: 1,
+    marginRight: 8,
     fontSize: 7.5,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: 0.5,
     color: BRAND.black,
   },
-  subsectionHeaderTotal: { fontSize: 7.5, fontWeight: 700, color: BRAND.black },
+  subsectionHeaderTotal: { flexShrink: 0, fontSize: 7.5, fontWeight: 700, color: BRAND.black },
   // "Custom Rental" umbrella -> booth (H2) -> element type (H3) -- a
   // third grouping axis alongside the category/subcategory one above,
   // used only for line items with a known booth (groupBoothLineItems).
@@ -156,14 +168,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     marginBottom: 2,
   },
+  // flex: 1 (not flexShrink alone, and not a fixed/percentage width) --
+  // without it, this Text and boothHeaderTotal are two auto-sized siblings
+  // in a flexDirection: "row" parent, and a long custom boothDescription (a
+  // real, reported production bug -- "Custom Build headings cut off the
+  // description") could overflow past the total. flexShrink: 1 alone
+  // wraps the text, but leaves flexBasis at "auto" (content size), so yoga
+  // still measures/wraps it BEFORE reserving boothHeaderTotal's own width --
+  // confirmed live: the text wrapped, but its second line then rendered
+  // straight through/under the total instead of stopping short of it.
+  // flex: 1 (flexBasis 0%) forces yoga to size boothHeaderTotal
+  // (flexShrink: 0 below) first, then give this Text only the true
+  // remainder to wrap within.
   boothHeaderText: {
+    flex: 1,
+    marginRight: 8,
     fontSize: 8,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: 0.5,
     color: BRAND.white,
   },
-  boothHeaderTotal: { fontSize: 8, fontWeight: 700, color: BRAND.white },
+  boothHeaderTotal: { flexShrink: 0, fontSize: 8, fontWeight: 700, color: BRAND.white },
   // Body text for all three copy tiers (Category/Booth/Element -- see
   // EstimateCategorySummary and EstimateSection.boothSummary/elementSummary's
   // own schema comments) -- same font size/line-height as
@@ -180,14 +206,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     marginBottom: 2,
   },
+  // Same flex: 1 fix as boothHeaderText above, for the same reason.
   elementTypeHeaderText: {
+    flex: 1,
+    marginRight: 8,
     fontSize: 7.5,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: 0.5,
     color: BRAND.black,
   },
-  elementTypeHeaderTotal: { fontSize: 7.5, fontWeight: 700, color: BRAND.black },
+  elementTypeHeaderTotal: { flexShrink: 0, fontSize: 7.5, fontWeight: 700, color: BRAND.black },
   tableHeaderRow: {
     flexDirection: "row",
     borderBottomWidth: 1,

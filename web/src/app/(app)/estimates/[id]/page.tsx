@@ -3376,7 +3376,10 @@ function CategoryTabContent({
                           <span className="font-medium">{money(sell(group.subtotal))}</span>
                         </div>
                         {!version.isLocked && (
-                          <form action={deleteElementGroupAction.bind(null, estimateId, version.id, booth.boothLabel, group.elementType)}>
+                          <ConfirmForm
+                            action={deleteElementGroupAction.bind(null, estimateId, version.id, booth.boothLabel, group.elementType)}
+                            confirmMessage={`Delete "${group.elementType}" and every line item in it? This can't be undone.`}
+                          >
                             <button
                               className="text-sm text-neutral-400 hover:text-red-600"
                               title="Delete this group and every line item in it"
@@ -3384,7 +3387,7 @@ function CategoryTabContent({
                             >
                               ✕
                             </button>
-                          </form>
+                          </ConfirmForm>
                         )}
                       </div>
                       }
@@ -3825,7 +3828,10 @@ function EmptyGroupCard({
     <div className="rounded border border-dashed border-neutral-300 p-3">
       <div className="mb-2 flex items-center justify-between">
         <p className="text-xs font-medium text-neutral-500">{sectionName} — no items yet</p>
-        <form action={deleteEmptySectionAction.bind(null, estimateId, versionId, sectionId)}>
+        <ConfirmForm
+          action={deleteEmptySectionAction.bind(null, estimateId, versionId, sectionId)}
+          confirmMessage={`Delete "${sectionName}"? This can't be undone.`}
+        >
           <button
             className="text-sm text-neutral-400 hover:text-red-600"
             title="Delete this empty group"
@@ -3833,7 +3839,7 @@ function EmptyGroupCard({
           >
             ✕
           </button>
-        </form>
+        </ConfirmForm>
       </div>
       <AddLineItemForm
         estimateId={estimateId}

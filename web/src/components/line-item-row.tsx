@@ -6,6 +6,7 @@ import { Button, Field, SelectField } from "@/components/ui";
 import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
 import { QuantityOrAreaFields } from "@/components/quantity-or-area-fields";
 import { useBidPackageSelection } from "@/components/bid-package-selection";
+import { ConfirmForm } from "@/components/confirm-form";
 
 // Seventh client component (see document-upload-form.tsx's header
 // comment on the fourth, project-type-fields.tsx on the fifth,
@@ -294,11 +295,15 @@ export function LineItemRow({
                 </button>
               </form>
             )}
-            <form action={deleteAction} className="inline">
+            <ConfirmForm
+              action={deleteAction}
+              confirmMessage={`Delete "${description}"? This can't be undone.`}
+              className="inline"
+            >
               <button className="text-sm text-neutral-400 hover:text-red-600" title="Remove" aria-label="Remove line item">
                 ✕
               </button>
-            </form>
+            </ConfirmForm>
           </div>
         </td>
       )}
