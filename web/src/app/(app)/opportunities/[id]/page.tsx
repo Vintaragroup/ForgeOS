@@ -1552,7 +1552,10 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
               <p className="mb-4 text-sm text-neutral-500">
                 No project started yet. Converting creates the production/logistics record for this won job.
               </p>
-              <form action={convertToProjectWithId}>
+              <form action={convertToProjectWithId} className="flex flex-wrap items-end gap-3">
+                <div className="min-w-56">
+                  <Field label="Job number (if known)" name="jobNumber" placeholder="e.g. J-1001" />
+                </div>
                 <Button variant="secondary">Convert to Project</Button>
               </form>
             </>

@@ -6,22 +6,34 @@ import { db } from "@/lib/db";
 import type { ProjectStatus, ShipmentStatus, TaskStatus, WorkOrderStatus } from "@/generated/prisma/enums";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { parseFreeTextDate } from "@/lib/citation";
+import { getTimelineData, getWorkOrderPrefillFromTimeline } from "@/lib/timeline-service";
 
 // docs/migration-plan.md Phase 5: "Convert to Project" from a WON
 // Opportunity -- mirrors Phase 2's "Convert to estimate." No stage
 // transition here (unlike convertOpportunityToEstimate): the opportunity
-// is already at its terminal WON stage by the time this runs.
+// is already at its terminal WON stage by the time this runs -- but that
+// was previously only enforced by the UI conditionally rendering the
+// "Convert to Project" button, not by this function itself.
 //
 // showStartDate/showEndDate inherit from the opportunity's own
 // eventStartDate/eventEndDate (set during onboarding, manually or via an
 // accepted AI suggestion) rather than starting blank -- same inheritance
 // principle as Estimate.taxRateId defaulting from the opportunity in
 // opportunity-service.ts. Still editable afterward on the Project page.
-export async function convertOpportunityToProject(opportunityId: string) {
+//
+// jobNumber is optional here, not required -- an estimator genuinely may
+// not have it yet at the moment of conversion. A still-blank jobNumber is
+// surfaced afterward by project-checklist.ts's buildProjectChecklist
+// instead of being blocked here.
+export async function convertOpportunityToProject(opportunityId: string, data: { jobNumber?: string | null } = {}) {
   const opportunity = await db.opportunity.findUniqueOrThrow({ where: { id: opportunityId } });
+  if (opportunity.stage !== "WON") {
+    throw new Error("Only a WON opportunity can be converted to a Project.");
+  }
   return db.project.create({
     data: {
       opportunityId,
+      jobNumber: data.jobNumber ?? null,
       showStartDate: opportunity.eventStartDate,
       showEndDate: opportunity.eventEndDate,
     },
@@ -38,15 +50,35 @@ export async function updateProjectDetails(
 // A WorkOrder's timeline milestones (deposit -> production meeting ->
 // artwork deadline -> balance due -> install) start as trackable dates,
 // not the workbook's static text -- docs/workflow-map.md's clearest
-// workflow evidence. installDate alone gets a best-effort prefill from
-// the RFP's own extracted key dates (see findInstallDateFromDocuments) --
-// deposit/production-meeting/artwork/balance dates are the shop's own
-// internal production schedule, not something an RFP states, so there's
-// no honest source to prefill those from.
+// workflow evidence. All 5 dates now prefill from the Opportunity's own
+// Timeline (timeline-service.ts's getWorkOrderPrefillFromTimeline) when
+// one has been generated -- deposit/production-meeting/artwork/balance
+// dates used to have no honest source to prefill from at all, since
+// they're the shop's own internal production schedule rather than
+// something the RFP itself states, but the Timeline feature's AI
+// extraction pass (lib/ai/timeline-service.ts) now asks scope documents
+// about exactly these dates too. installDate keeps its original
+// document key-dates scan (findInstallDateFromDocuments) as a fallback
+// for an opportunity that never had a Timeline generated -- the
+// Timeline's own INSTALLATION milestone wins whenever it's set.
 export async function startWorkOrder(projectId: string) {
-  const project = await db.project.findUniqueOrThrow({ where: { id: projectId } });
-  const installDate = await findInstallDateFromDocuments(project.opportunityId);
-  return db.workOrder.create({ data: { projectId, installDate } });
+  const project = await db.project.findUniqueOrThrow({
+    where: { id: projectId },
+    include: { opportunity: { select: { id: true, timelineMilestones: true } } },
+  });
+  const timelineData = getTimelineData(project.opportunity.timelineMilestones);
+  const prefill = getWorkOrderPrefillFromTimeline(timelineData);
+  const installDate = prefill.installDate ?? (await findInstallDateFromDocuments(project.opportunityId));
+  return db.workOrder.create({
+    data: {
+      projectId,
+      installDate,
+      depositDueDate: prefill.depositDueDate,
+      productionMeetingDate: prefill.productionMeetingDate,
+      artworkDeadlineDate: prefill.artworkDeadlineDate,
+      balanceDueDate: prefill.balanceDueDate,
+    },
+  });
 }
 
 // Looks for a key date whose label is about installation STARTING, not a

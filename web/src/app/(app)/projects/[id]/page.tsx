@@ -16,7 +16,8 @@ import {
   updateTaskStatusAction,
   updateWorkOrderAction,
 } from "../actions";
-import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
+import { Button, Card, CollapsibleSection, Field, PageHeader, SelectField } from "@/components/ui";
+import { buildProjectChecklist } from "@/lib/project-checklist";
 
 const PROJECT_STATUS_OPTIONS = [
   { value: "ACTIVE", label: "Active" },
@@ -82,6 +83,18 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
   if (!(await canAccessOpportunity(user, project.opportunityId))) notFound();
 
   const workOrder = project.workOrders[0];
+  const projectChecklist = buildProjectChecklist({
+    projectId: project.id,
+    jobNumber: project.jobNumber,
+    workOrder: workOrder
+      ? {
+          depositDueDate: workOrder.depositDueDate,
+          productionMeetingDate: workOrder.productionMeetingDate,
+          artworkDeadlineDate: workOrder.artworkDeadlineDate,
+          balanceDueDate: workOrder.balanceDueDate,
+        }
+      : null,
+  });
   const [users, vendors] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.vendor.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -120,7 +133,22 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
         }
       />
 
-      <Card className="p-6">
+      {projectChecklist.length > 0 && (
+        <CollapsibleSection title="Next steps for this job">
+          <ul className="flex flex-col gap-2 text-sm">
+            {projectChecklist.map((item) => (
+              <li key={item.id} className="flex items-center justify-between gap-3 rounded-md bg-neutral-50 px-3 py-2">
+                <span className="text-neutral-800">{item.label}</span>
+                <Link href={item.href} className="shrink-0 text-xs font-medium text-brand-navy hover:underline">
+                  Go →
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </CollapsibleSection>
+      )}
+
+      <Card className="p-6" id="details">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
           Details
         </h2>
@@ -197,7 +225,7 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
       )}
 
       {!workOrder ? (
-        <Card className="p-6">
+        <Card className="p-6" id="work-order">
           <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">
             Work order
           </h2>
@@ -235,7 +263,7 @@ function WorkOrderCard({
   const addShipmentWithIds = addShipmentAction.bind(null, projectId, workOrder.id);
 
   return (
-    <Card className="p-6">
+    <Card className="p-6" id="work-order">
       <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
         Work order — timeline
       </h2>

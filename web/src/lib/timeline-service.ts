@@ -227,6 +227,38 @@ export function getTimelineData(timelineMilestones: Prisma.JsonValue | null): Ti
   return parseTimelineData(timelineMilestones);
 }
 
+export interface WorkOrderTimelinePrefill {
+  depositDueDate: Date | null;
+  productionMeetingDate: Date | null;
+  artworkDeadlineDate: Date | null;
+  balanceDueDate: Date | null;
+  installDate: Date | null;
+}
+
+// The WorkOrder production dates that previously had no honest source to
+// prefill from (see project-service.ts's startWorkOrder) now inherit from
+// the matching Timeline milestone. Any non-null date is used regardless of
+// `confirmed` -- an AI_SUGGESTED milestone the estimator hasn't explicitly
+// reviewed yet is still a real document-sourced value, strictly better
+// than the null these fields started with, and stays directly editable
+// afterward on the Work Order card either way -- the same posture the
+// installDate document-scan fallback already has (it has no "confirmed"
+// concept at all). Requiring confirmed:true here would just relocate the
+// "field silently sits blank" problem onto a different page.
+export function getWorkOrderPrefillFromTimeline(timelineData: TimelineData | null): WorkOrderTimelinePrefill {
+  const dateFor = (type: TimelineMilestoneType): Date | null => {
+    const milestone = timelineData?.milestones.find((m) => m.type === type);
+    return milestone?.date ? new Date(milestone.date) : null;
+  };
+  return {
+    depositDueDate: dateFor("DEPOSIT_DUE"),
+    productionMeetingDate: dateFor("PRODUCTION_MEETING"),
+    artworkDeadlineDate: dateFor("ARTWORK_DEADLINE"),
+    balanceDueDate: dateFor("BALANCE_DUE"),
+    installDate: dateFor("INSTALLATION"),
+  };
+}
+
 // Not gated by EstimateVersion.isLocked/Opportunity stage -- this is
 // drafting-phase data, same posture as the profitability tab's internal
 // costs (never blocked by the client-facing lock).

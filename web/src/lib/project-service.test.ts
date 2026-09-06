@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import {
   addShipment,
@@ -12,6 +13,7 @@ import {
   updateTaskStatus,
   updateWorkOrder,
 } from "@/lib/project-service";
+import { buildEmptyMilestones, type TimelineData, type TimelineMilestone } from "@/lib/timeline-service";
 
 afterEach(async () => {
   await db.task.deleteMany();
@@ -35,6 +37,10 @@ async function makeWonOpportunity() {
   });
 }
 
+function withDate(milestones: TimelineMilestone[], type: TimelineMilestone["type"], date: Date, confirmed: boolean): TimelineMilestone[] {
+  return milestones.map((m) => (m.type === type ? { ...m, date: date.toISOString(), confirmed } : m));
+}
+
 describe("convertOpportunityToProject", () => {
   it("creates a Project linked to the opportunity, without touching its stage", async () => {
     const opportunity = await makeWonOpportunity();
@@ -46,6 +52,36 @@ describe("convertOpportunityToProject", () => {
 
     const reloaded = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
     expect(reloaded.stage).toBe("WON"); // unchanged
+  });
+
+  it("accepts an optional jobNumber, captured at the moment of conversion", async () => {
+    const opportunity = await makeWonOpportunity();
+
+    const project = await convertOpportunityToProject(opportunity.id, { jobNumber: "J-3001" });
+
+    expect(project.jobNumber).toBe("J-3001");
+  });
+
+  it("leaves jobNumber null when the estimator doesn't have it yet", async () => {
+    const opportunity = await makeWonOpportunity();
+
+    const project = await convertOpportunityToProject(opportunity.id);
+
+    expect(project.jobNumber).toBeNull();
+  });
+
+  it("rejects a non-WON opportunity -- this was previously only enforced by the page's own conditional rendering", async () => {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({
+      data: { companyId: company.id, showName: "Test Show", stage: "ESTIMATING" },
+    });
+
+    await expect(convertOpportunityToProject(opportunity.id)).rejects.toThrow(
+      "Only a WON opportunity can be converted to a Project.",
+    );
+
+    const projectCount = await db.project.count({ where: { opportunityId: opportunity.id } });
+    expect(projectCount).toBe(0);
   });
 });
 
@@ -126,6 +162,103 @@ describe("startWorkOrder auto-fills installDate from an analyzed document's key 
 
     const workOrder = await startWorkOrder(project.id);
     expect(workOrder.installDate).toBeNull();
+  });
+});
+
+describe("startWorkOrder inherits production dates from the Opportunity's own Timeline", () => {
+  async function seedTimeline(opportunityId: string, milestones: TimelineMilestone[]) {
+    const data: TimelineData = { generatedAt: new Date().toISOString(), milestones };
+    await db.opportunity.update({
+      where: { id: opportunityId },
+      data: { timelineMilestones: data as unknown as Prisma.InputJsonValue },
+    });
+  }
+
+  it("prefills all 4 previously-unfillable dates, including an unconfirmed AI-suggested one", async () => {
+    const opportunity = await makeWonOpportunity();
+    const project = await convertOpportunityToProject(opportunity.id);
+    let milestones = buildEmptyMilestones();
+    milestones = withDate(milestones, "DEPOSIT_DUE", new Date("2026-08-15"), true);
+    milestones = withDate(milestones, "PRODUCTION_MEETING", new Date("2026-08-20"), false);
+    milestones = withDate(milestones, "ARTWORK_DEADLINE", new Date("2026-12-01"), false);
+    milestones = withDate(milestones, "BALANCE_DUE", new Date("2026-12-10"), true);
+    await seedTimeline(opportunity.id, milestones);
+
+    const workOrder = await startWorkOrder(project.id);
+
+    expect(workOrder.depositDueDate?.toISOString().slice(0, 10)).toBe("2026-08-15");
+    expect(workOrder.productionMeetingDate?.toISOString().slice(0, 10)).toBe("2026-08-20");
+    expect(workOrder.artworkDeadlineDate?.toISOString().slice(0, 10)).toBe("2026-12-01");
+    expect(workOrder.balanceDueDate?.toISOString().slice(0, 10)).toBe("2026-12-10");
+  });
+
+  it("prefers the Timeline's own INSTALLATION date over the document key-dates scan", async () => {
+    const opportunity = await makeWonOpportunity();
+    const project = await convertOpportunityToProject(opportunity.id);
+    await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "Appendix A.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+        storageKey: "test-key",
+        documentType: "RFP",
+        extractionStatus: "COMPLETE",
+        extractedSummary: {
+          eventOrProjectName: null,
+          venue: null,
+          submissionDeadline: null,
+          keyDates: [
+            { label: "Start of Installation", date: "January 1, 2027", dateType: "MILESTONE", sourceQuote: "x", pageNumber: null },
+          ],
+          scopeSummary: [],
+          riskFlags: [],
+        },
+      },
+    });
+    const milestones = withDate(buildEmptyMilestones(), "INSTALLATION", new Date("2027-01-15"), true);
+    await seedTimeline(opportunity.id, milestones);
+
+    const workOrder = await startWorkOrder(project.id);
+
+    // The Timeline's Jan 15 wins, not the document scan's Jan 1 -- real
+    // precedence, not just "used when the other source is missing."
+    expect(workOrder.installDate?.toISOString().slice(0, 10)).toBe("2027-01-15");
+  });
+
+  it("falls back to the document key-dates scan when no Timeline has ever been generated", async () => {
+    const opportunity = await makeWonOpportunity();
+    const project = await convertOpportunityToProject(opportunity.id);
+    await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "Appendix A.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+        storageKey: "test-key",
+        documentType: "RFP",
+        extractionStatus: "COMPLETE",
+        extractedSummary: {
+          eventOrProjectName: null,
+          venue: null,
+          submissionDeadline: null,
+          keyDates: [
+            { label: "Start of Installation", date: "January 1, 2027", dateType: "MILESTONE", sourceQuote: "x", pageNumber: null },
+          ],
+          scopeSummary: [],
+          riskFlags: [],
+        },
+      },
+    });
+    // timelineMilestones is left null -- never generated for this opportunity.
+
+    const workOrder = await startWorkOrder(project.id);
+
+    expect(workOrder.installDate?.toISOString().slice(0, 10)).toBe("2027-01-01");
+    expect(workOrder.depositDueDate).toBeNull();
+    expect(workOrder.productionMeetingDate).toBeNull();
+    expect(workOrder.artworkDeadlineDate).toBeNull();
+    expect(workOrder.balanceDueDate).toBeNull();
   });
 });
 

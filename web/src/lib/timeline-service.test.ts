@@ -9,7 +9,9 @@ import {
   updateTimelineMilestone,
   regenerateTimeline,
   getTimelineData,
+  getWorkOrderPrefillFromTimeline,
   type TimelineMilestone,
+  type TimelineData,
 } from "@/lib/timeline-service";
 import type { TimelineMilestoneSuggestion } from "@/lib/ai/timeline-service";
 
@@ -374,5 +376,55 @@ describe("regenerateTimeline", () => {
     const installation = data.milestones.find((m) => m.type === "INSTALLATION")!;
     expect(installation.date).toBe(overridden.toISOString());
     expect(installation.source).toBe("MANUAL");
+  });
+});
+
+describe("getWorkOrderPrefillFromTimeline", () => {
+  function withDate(milestones: TimelineMilestone[], type: TimelineMilestone["type"], date: Date, confirmed: boolean): TimelineMilestone[] {
+    return milestones.map((m) => (m.type === type ? { ...m, date: date.toISOString(), confirmed } : m));
+  }
+
+  it("maps all 5 WorkOrder-relevant milestones by type, regardless of confirmed", () => {
+    let milestones = buildEmptyMilestones();
+    milestones = withDate(milestones, "DEPOSIT_DUE", new Date("2026-08-15"), true);
+    milestones = withDate(milestones, "PRODUCTION_MEETING", new Date("2026-08-20"), false); // AI_SUGGESTED, unconfirmed
+    milestones = withDate(milestones, "ARTWORK_DEADLINE", new Date("2026-12-01"), false);
+    milestones = withDate(milestones, "BALANCE_DUE", new Date("2026-12-10"), true);
+    milestones = withDate(milestones, "INSTALLATION", new Date("2027-01-15"), true);
+    const data: TimelineData = { generatedAt: new Date().toISOString(), milestones };
+
+    const prefill = getWorkOrderPrefillFromTimeline(data);
+
+    expect(prefill.depositDueDate?.toISOString()).toBe(new Date("2026-08-15").toISOString());
+    // Unconfirmed AI_SUGGESTED still prefills -- see the function's own
+    // comment for why requiring confirmed:true here would just relocate
+    // the "field silently sits blank" problem onto a different page.
+    expect(prefill.productionMeetingDate?.toISOString()).toBe(new Date("2026-08-20").toISOString());
+    expect(prefill.artworkDeadlineDate?.toISOString()).toBe(new Date("2026-12-01").toISOString());
+    expect(prefill.balanceDueDate?.toISOString()).toBe(new Date("2026-12-10").toISOString());
+    expect(prefill.installDate?.toISOString()).toBe(new Date("2027-01-15").toISOString());
+  });
+
+  it("returns null for any milestone still unset", () => {
+    const data: TimelineData = { generatedAt: new Date().toISOString(), milestones: buildEmptyMilestones() };
+    const prefill = getWorkOrderPrefillFromTimeline(data);
+    expect(prefill).toEqual({
+      depositDueDate: null,
+      productionMeetingDate: null,
+      artworkDeadlineDate: null,
+      balanceDueDate: null,
+      installDate: null,
+    });
+  });
+
+  it("returns all nulls when there's no Timeline at all", () => {
+    const prefill = getWorkOrderPrefillFromTimeline(null);
+    expect(prefill).toEqual({
+      depositDueDate: null,
+      productionMeetingDate: null,
+      artworkDeadlineDate: null,
+      balanceDueDate: null,
+      installDate: null,
+    });
   });
 });

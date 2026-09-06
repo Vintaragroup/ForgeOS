@@ -48,10 +48,17 @@ export async function buildEstimateFromDocumentsAction(opportunityId: string, do
 
 // docs/migration-plan.md Phase 5: "Convert to Project" from a WON
 // Opportunity. No stage change here -- WON is already the opportunity's
-// terminal pipeline stage.
-export async function convertToProject(opportunityId: string) {
+// terminal pipeline stage (enforced now in convertOpportunityToProject
+// itself, not just by this page's own conditional rendering).
+//
+// jobNumber is optional -- same "capture it now if you have it, flag it
+// later if you don't" posture as convertOpportunityToProject's own
+// comment, read the same way convertToEstimate's own optional `name`
+// field is above.
+export async function convertToProject(opportunityId: string, formData: FormData) {
   await requireOpportunityAccess(opportunityId);
-  const project = await convertOpportunityToProject(opportunityId);
+  const jobNumber = String(formData.get("jobNumber") ?? "").trim() || null;
+  const project = await convertOpportunityToProject(opportunityId, { jobNumber });
 
   revalidatePath("/opportunities");
   revalidatePath(`/opportunities/${opportunityId}`);
