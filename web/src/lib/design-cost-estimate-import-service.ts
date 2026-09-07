@@ -369,7 +369,7 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
   const existingSectionCount = await db.estimateSection.count({ where: { estimateVersionId, optionId: null } });
   const categories = await db.category.findMany({ where: { deletedAt: null } });
 
-  const groupKey = (row: ParsedDesignCostRow) => `${preview.boothLabel ?? ""} ${row.category}`;
+  const groupKey = (row: ParsedDesignCostRow) => `${preview.boothLabel ?? ""} ${row.category}`;
   const seenKeys = new Set<string>();
   const groups: { category: string }[] = [];
   for (const row of preview.rows) {
@@ -389,7 +389,7 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
       groupLabel: preview.boothLabel,
     });
 
-    const rowsForGroup = preview.rows.filter((r) => groupKey(r) === `${preview.boothLabel ?? ""} ${group.category}`);
+    const rowsForGroup = preview.rows.filter((r) => groupKey(r) === `${preview.boothLabel ?? ""} ${group.category}`);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,

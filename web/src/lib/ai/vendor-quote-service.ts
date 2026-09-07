@@ -299,6 +299,15 @@ export async function commitStandaloneVendorQuoteImport(estimateVersionId: strin
         documentId,
         sourceQuote: row.sourceQuote,
         sourcePageNumber: row.pageNumber,
+        aiProposalSnapshot: {
+          description: row.description,
+          qty: String(row.qty ?? 1),
+          unit: row.unit,
+          unitCost: String(row.unitPrice),
+          lineType: "MATERIAL" as const,
+          category: null,
+          aiFeature: "VENDOR_QUOTE_LINE_ITEMS" as const,
+        },
       })),
     );
     created.push({ section, count: lineItems.length });

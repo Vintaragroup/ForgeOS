@@ -309,7 +309,7 @@ export async function commitAiProposedImport(
     }
   }
 
-  const groupKey = (row: ProposedSpreadsheetLineItem) => `${row.sheetName} ${row.category}`;
+  const groupKey = (row: ProposedSpreadsheetLineItem) => `${row.sheetName} ${row.category}`;
   const seenKeys = new Set<string>();
   const groups: { sheetName: string; category: string }[] = [];
   for (const row of preview.rows) {
@@ -333,24 +333,38 @@ export async function commitAiProposedImport(
       optionId,
     });
 
-    const rowsForGroup = preview.rows.filter((r) => groupKey(r) === `${group.sheetName} ${group.category}`);
+    const rowsForGroup = preview.rows.filter((r) => groupKey(r) === `${group.sheetName} ${group.category}`);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,
-      rowsForGroup.map((row) => ({
-        lineType: "MATERIAL" as const,
-        description: row.qtyIsExplicit ? row.description : `${row.description} (qty estimated -- verify)`,
-        qty: row.qty,
-        unit: row.unit || null,
-        // The AI's own read of the sheet's real price is the source of
-        // truth here, same reasoning as design-cost-estimate-import-
-        // service.ts's own commit -- never overridden by a catalog guess.
-        unitCost: row.unitCost,
-        category: resolveLineItemCategory({ explicit: row.category, description: row.description }, liveCategories),
-        isClientOwned: false,
-        documentId,
-        sourceQuote: row.sourceQuote,
-      })),
+      rowsForGroup.map((row) => {
+        const description = row.qtyIsExplicit ? row.description : `${row.description} (qty estimated -- verify)`;
+        const unit = row.unit || null;
+        const resolvedCategory = resolveLineItemCategory({ explicit: row.category, description: row.description }, liveCategories);
+        return {
+          lineType: "MATERIAL" as const,
+          description,
+          qty: row.qty,
+          unit,
+          // The AI's own read of the sheet's real price is the source of
+          // truth here, same reasoning as design-cost-estimate-import-
+          // service.ts's own commit -- never overridden by a catalog guess.
+          unitCost: row.unitCost,
+          category: resolvedCategory,
+          isClientOwned: false,
+          documentId,
+          sourceQuote: row.sourceQuote,
+          aiProposalSnapshot: {
+            description,
+            qty: String(row.qty),
+            unit,
+            unitCost: String(row.unitCost),
+            lineType: "MATERIAL" as const,
+            category: resolvedCategory,
+            aiFeature: "SPREADSHEET_LINE_ITEMS" as const,
+          },
+        };
+      }),
     );
     created.push({ section, count: lineItems.length });
   }

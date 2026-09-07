@@ -1260,6 +1260,7 @@ function LineItemsTable({
               categoryOptions={categoryOptions}
               laborRates={laborRates}
               bidPackageName={li.bidPackage?.name ?? null}
+              hasAiProposal={li.aiProposalSnapshot !== null}
               deleteAction={deleteWithIds}
               confirmAction={confirmWithIds}
               updateAction={updateWithIds}

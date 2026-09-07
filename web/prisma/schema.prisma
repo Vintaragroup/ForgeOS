@@ -114,6 +114,7 @@ model User {
   adminAuditLogsActed      AdminAuditLog[]       @relation("AdminAuditLogActor")
   adminAuditLogsTargeted   AdminAuditLog[]       @relation("AdminAuditLogTarget")
   lineItemAuditLogs        LineItemAuditLog[]
+  lineItemAccuracyFlags    LineItemAccuracyFlag[]
   uploadedDocuments        Document[]
   deadlineActionsTaken     DeadlineAction[]
   aiUsageEvents            AiUsageEvent[]
@@ -1070,6 +1071,7 @@ model EstimateVersion {
   categoryMarginOverrides   CategoryMarginOverride[]
   categoryProposalSummaries EstimateCategorySummary[]
   lineItemAuditLogs         LineItemAuditLog[]
+  lineItemAccuracyFlags     LineItemAccuracyFlag[]
   internalCosts             InternalCost[]
 
   @@map("estimate_versions")
@@ -1132,6 +1134,47 @@ model LineItemAuditLog {
 
   @@index([estimateVersionId, createdAt])
   @@map("line_item_audit_logs")
+}
+
+// A real, deliberate "the AI got this wrong" from an estimator --
+// distinct from LineItemAuditLog's UPDATE rows, which record THAT
+// something changed but not WHY (a routine edit vs. a correction of a
+// genuine AI mistake are otherwise indistinguishable). Only ever created
+// by updateLineItem when a row with a non-null LineItem.aiProposalSnapshot
+// is edited with the "this was wrong" checkbox checked -- see that
+// function's own comment. Append-only, never updated -- the durable
+// accuracy signal this exists for.
+model LineItemAccuracyFlag {
+  id String @id @default(cuid())
+
+  // Deliberately NOT a live foreign key -- same "survives a hard delete"
+  // posture as LineItemAuditLog.lineItemId above.
+  lineItemId String?
+
+  estimateVersionId String
+  estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
+
+  // Which AI pipeline proposed the original item -- copied from the
+  // LineItem's own aiProposalSnapshot at flag time, so this row stays
+  // self-contained even after the LineItem is later hard-deleted.
+  aiFeature AiFeature
+
+  // The AI's original proposed values, copied verbatim from
+  // LineItem.aiProposalSnapshot at the moment of flagging.
+  originalProposal Json
+  // The item's corrected values, as just saved by the estimator in the
+  // same edit that checked "this was wrong."
+  correctedValues Json
+
+  reason String?
+
+  flaggedById String?
+  flaggedBy   User?   @relation(fields: [flaggedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([estimateVersionId, createdAt])
+  @@map("line_item_accuracy_flags")
 }
 
 model EstimateSection {
@@ -1442,6 +1485,17 @@ model LineItem {
   // added line item -- there's no document to check it against.
   sourceQuote      String?
   sourcePageNumber Int?
+
+  // Immutable snapshot of what the AI originally proposed at creation --
+  // null for a deterministic import or a manually-added row (this field
+  // doubles as the "was this AI-proposed" signal, no separate marker
+  // needed). { description, qty, unit, unitCost, lineType, category,
+  // aiFeature }, aiFeature reusing the same AiFeature enum value the
+  // commit path's own recordAiUsage call already tags itself with. Never
+  // rewritten after creation, even if the row is later edited -- that's
+  // the point: updateLineItem's flagAccuracy diff compares against THIS,
+  // not against whatever the row currently holds.
+  aiProposalSnapshot Json?
 
   // A vendor/RFP-assigned position or reference code for this exact row
   // (e.g. "CAM-01") when the source pricing schedule carries one -- see

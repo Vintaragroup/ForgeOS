@@ -826,6 +826,15 @@ export async function commitProposedVendorSectionAction(
           documentId: quoteDocument.id,
           sourceQuote: vl.sourceQuote,
           sourcePageNumber: vl.pageNumber,
+          aiProposalSnapshot: {
+            description: vl.description,
+            qty: String(vl.qty ?? 1),
+            unit: vl.unit,
+            unitCost: String(vl.unitPrice),
+            lineType: proposal.lineType,
+            category: proposal.name,
+            aiFeature: "VENDOR_QUOTE_LINE_ITEMS" as const,
+          },
         };
       }),
       { isDraft: false, bidPackageId },

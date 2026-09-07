@@ -9,6 +9,7 @@
 import { db } from "@/lib/db";
 import { Prisma, type Category } from "@/generated/prisma/client";
 import type {
+  AiFeature,
   BidPackageStatus,
   LineItemAuditAction,
   LineItemType,
@@ -1504,6 +1505,21 @@ export async function addLineItemsBulk(
     // the source pricing schedule carries one -- see LineItem.positionCode's
     // own schema comment for what this unlocks in bid-package matching.
     positionCode?: string | null;
+    // Immutable record of what the AI actually proposed, for a genuinely
+    // AI-derived item only -- see LineItem.aiProposalSnapshot's own schema
+    // comment. Omitted (not just null) by a deterministic import or a
+    // manually-added row; this is what lets a rendered row tell "AI-
+    // proposed" apart from "document-sourced but deterministic," which
+    // documentId/sourceQuote alone can't distinguish.
+    aiProposalSnapshot?: {
+      description: string;
+      qty: string;
+      unit: string | null;
+      unitCost: string;
+      lineType: LineItemType;
+      category: string | null;
+      aiFeature: AiFeature;
+    } | null;
   }[],
   options?: { isDraft?: boolean; bidPackageId?: string | null },
   actorId?: string | null,
@@ -1538,6 +1554,7 @@ export async function addLineItemsBulk(
           sourcePageNumber: item.sourcePageNumber ?? null,
           positionCode: item.positionCode ?? null,
           bidPackageId: options?.bidPackageId ?? null,
+          aiProposalSnapshot: (item.aiProposalSnapshot ?? null) as Prisma.InputJsonValue | undefined,
         },
       }),
     ),
@@ -1592,6 +1609,13 @@ export async function updateLineItem(
     // own schema comment. A hidden EstimateSection hides this regardless
     // of the value here.
     includeInProposal?: boolean;
+    // Set only when the estimator checked "the AI's original proposal
+    // here was wrong" while saving this same edit -- see
+    // LineItemAccuracyFlag's own schema comment. A no-op (not an error)
+    // when the row has no aiProposalSnapshot to flag against; the edit
+    // form only ever renders the checkbox when one exists, so reaching
+    // this with no snapshot means nothing to record, not a bug.
+    flagAccuracy?: { reason?: string | null } | null;
   },
   actorId?: string | null,
 ) {
@@ -1649,6 +1673,29 @@ export async function updateLineItem(
       updated.id,
     );
   }
+
+  if (data.flagAccuracy && existing.aiProposalSnapshot) {
+    const snapshot = existing.aiProposalSnapshot as unknown as { aiFeature: AiFeature };
+    await db.lineItemAccuracyFlag.create({
+      data: {
+        lineItemId: updated.id,
+        estimateVersionId: existing.section.estimateVersionId,
+        aiFeature: snapshot.aiFeature,
+        originalProposal: existing.aiProposalSnapshot as Prisma.InputJsonValue,
+        correctedValues: {
+          description: resolved.description,
+          qty: resolved.qty.toString(),
+          unit: resolved.unit,
+          unitCost: resolved.unitCost.toString(),
+          lineType: resolved.lineType,
+          category: resolved.category,
+        } as Prisma.InputJsonValue,
+        reason: data.flagAccuracy.reason ?? null,
+        flaggedById: actorId ?? null,
+      },
+    });
+  }
+
   return updated;
 }
 

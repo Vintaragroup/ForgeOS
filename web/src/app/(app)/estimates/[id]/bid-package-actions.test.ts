@@ -57,6 +57,7 @@ afterEach(async () => {
   await db.bidPackage.deleteMany();
   await db.estimateSection.deleteMany();
   await db.lineItemAuditLog.deleteMany();
+  await db.lineItemAccuracyFlag.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.opportunity.deleteMany();
@@ -145,6 +146,11 @@ describe("applyVendorMatchAction", () => {
     expect(updatedItem.totalCost.toNumber()).toBe(840);
     expect(updatedItem.documentId).toBe(document.id);
     expect(updatedItem.isDraft).toBe(false);
+    // Out of scope for the AI accuracy signal (see estimate-service.ts's
+    // updateLineItem) -- applying a vendor-match price adjusts an
+    // EXISTING line item's cost, it doesn't create a fresh AI-proposed
+    // one, so this must never set aiProposalSnapshot on it.
+    expect(updatedItem.aiProposalSnapshot).toBeNull();
 
     const updatedVersion = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
     expect(updatedVersion.totalCost.toNumber()).toBe(840);
@@ -1084,6 +1090,23 @@ describe("commitProposedVendorSectionAction", () => {
     expect(updatedMatches[0].confidence).toBe("high");
     expect(updatedMatches[0].needsClarification).toBe(false);
     expect(updated.proposedSections).toEqual([]);
+  });
+
+  it("stamps every created line item's aiProposalSnapshot with aiFeature VENDOR_QUOTE_LINE_ITEMS", async () => {
+    const { estimate, version, bidPackage } = await makePackageWithProposal();
+
+    const formData = new FormData();
+    formData.set("proposedSectionIndex", "0");
+    await commitProposedVendorSectionAction(estimate.id, version.id, bidPackage.id, formData);
+
+    const section = await db.estimateSection.findFirstOrThrow({
+      where: { estimateVersionId: version.id, name: "One Time Service Costs" },
+      include: { lineItems: true },
+    });
+    expect(section.lineItems.length).toBeGreaterThan(0);
+    for (const li of section.lineItems) {
+      expect((li.aiProposalSnapshot as { aiFeature: string } | null)?.aiFeature).toBe("VENDOR_QUOTE_LINE_ITEMS");
+    }
   });
 
   it("does not duplicate line items when the same proposal is committed twice -- reproduces a live incident where a re-extract re-proposed an already-committed section", async () => {

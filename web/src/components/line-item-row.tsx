@@ -45,6 +45,7 @@ export function LineItemRow({
   laborRates,
   bidPackageName,
   positionCode,
+  hasAiProposal,
   deleteAction,
   confirmAction,
   updateAction,
@@ -96,6 +97,12 @@ export function LineItemRow({
   // description/qty/price (a real case: two symmetric booth platforms of
   // the same size legitimately cost the same).
   positionCode?: string | null;
+  // Whether this row has an immutable AI-proposal snapshot -- see
+  // LineItem.aiProposalSnapshot's own schema comment. Drives both the
+  // "AI-proposed" badge below and whether the edit form offers the "the
+  // AI's original proposal here was wrong" flag; a row with no snapshot
+  // (deterministic import, manual add) renders neither.
+  hasAiProposal: boolean;
   deleteAction: (formData: FormData) => void | Promise<void>;
   confirmAction: (formData: FormData) => void | Promise<void>;
   updateAction: (formData: FormData) => void | Promise<void>;
@@ -223,6 +230,15 @@ export function LineItemRow({
               <input type="checkbox" name="includeInProposal" defaultChecked={includeInProposal} />
               Show on Proposal PDF
             </label>
+            {hasAiProposal && (
+              <div className="col-span-2 flex flex-col gap-2 rounded-md bg-amber-50 p-3 sm:order-10">
+                <label className="flex items-center gap-1.5 text-sm text-neutral-700">
+                  <input type="checkbox" name="flagAiProposalWrong" />
+                  The AI&apos;s original proposal here was wrong
+                </label>
+                <Field label="What was wrong? (optional)" name="flagReason" />
+              </div>
+            )}
             <div className="flex gap-3 sm:order-11">
               <Button variant="secondary">Save</Button>
               <button
@@ -257,6 +273,14 @@ export function LineItemRow({
         {description}
         {isDraft && (
           <span className="ml-2 rounded-full bg-brand-tan px-2 py-0.5 text-xs text-amber-900">draft</span>
+        )}
+        {hasAiProposal && (
+          <span
+            className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600"
+            title="Proposed by AI from a document -- edit and check the flag below if it's wrong"
+          >
+            AI-proposed
+          </span>
         )}
         {!includeInProposal && (
           <span

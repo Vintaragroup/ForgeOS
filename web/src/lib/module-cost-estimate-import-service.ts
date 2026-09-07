@@ -378,7 +378,7 @@ export async function commitModuleCostEstimateImport(estimateVersionId: string, 
     category: resolveModuleRowCategory(row, liveCategories),
   }));
 
-  const groupKey = (sheetName: string, category: string | null) => `${sheetName} ${category ?? ""}`;
+  const groupKey = (sheetName: string, category: string | null) => `${sheetName} ${category ?? ""}`;
   const seenKeys = new Set<string>();
   const groups: { sheetName: string; category: string | null }[] = [];
   for (const { row, category } of rowsWithCategory) {

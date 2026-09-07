@@ -64,6 +64,7 @@ afterEach(async () => {
   await db.estimateSection.deleteMany();
   await db.option.deleteMany();
   await db.lineItemAuditLog.deleteMany();
+  await db.lineItemAccuracyFlag.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.document.deleteMany();
@@ -143,6 +144,30 @@ describe("commitAiProposedImport", () => {
     const laborItem = lineItems.find((li) => li.description.includes("Rigging labor"));
     expect(laborItem?.description).toContain("(qty estimated -- verify)");
     expect(laborItem?.category).toBe("Labor");
+  });
+
+  it("stamps every committed row's aiProposalSnapshot with aiFeature SPREADSHEET_LINE_ITEMS", async () => {
+    const { opportunity, document } = await makeDocument();
+    await db.category.createMany({
+      data: [
+        { name: "Audio/Visual", key: "audio_visual" },
+        { name: "Labor", key: "labor" },
+      ],
+    });
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: FAKE_PROPOSAL as unknown as Prisma.InputJsonValue },
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitAiProposedImport(version.id, document.id);
+
+    const lineItems = await db.lineItem.findMany({ where: { documentId: document.id } });
+    expect(lineItems.length).toBeGreaterThan(0);
+    for (const li of lineItems) {
+      expect((li.aiProposalSnapshot as { aiFeature: string } | null)?.aiFeature).toBe("SPREADSHEET_LINE_ITEMS");
+    }
   });
 
   it("refuses a second commit of the same document into the same version", async () => {

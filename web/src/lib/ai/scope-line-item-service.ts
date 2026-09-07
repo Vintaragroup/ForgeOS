@@ -13,6 +13,7 @@
 
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
+import type { AiFeature } from "@/generated/prisma/enums";
 import { extractPdfPageTexts, locateQuotePage, resolveHighlightableQuote, PDF_MIME } from "@/lib/ai/text-extraction";
 import { ADVANCED_MODEL, BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
@@ -475,40 +476,61 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
       sortOrder: nextSortOrder++,
     });
 
+    // Roadmap: the AI accuracy signal (LineItemAccuracyFlag) needs to know
+    // which AI feature actually proposed this item -- both scope-text and
+    // drawing-sourced items flow through this one commit function (see
+    // ProposedLineItem's own comment), distinguished only by the
+    // document they came from.
+    const aiFeature: AiFeature = document.documentType === "DRAWING" ? "DRAWING_LINE_ITEMS" : "SCOPE_LINE_ITEMS";
+
     const itemsForCategory = items.filter((i) => i.category === category);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,
       itemsForCategory.map((item) => {
         const catalogMatch = matchDescription(item.description, catalog);
-        return {
-          lineType: item.lineType,
-          description: item.qtyIsExplicit ? item.description : `${item.description} (qty estimated -- verify)`,
-          qty: item.qty,
-          unit: item.unit || null,
-          unitCost: catalogMatch?.unitCost ?? 0,
-          // A compound "Complete X Build" assembly line wins outright (see
-          // line-item-category.ts -- catalog match is unreliable against
-          // that much text). SEG is checked next -- confirmed live as a
-          // real miscategorization: the AI's own coarse scope bucket (e.g.
-          // "Booth Structure & Walls") otherwise wins over the item's own
-          // description for every line in that bucket, including SEG
-          // fabric graphics lines that don't belong there (see
-          // isAlwaysGraphicsDescription's own comment -- same bug pattern
-          // already fixed in design-cost-estimate-import-service.ts).
-          // Otherwise prefer a confident catalog match's own category over
-          // the AI's coarser scope bucket, and fall back to the
-          // description heuristic only if neither resolved.
-          category: isCompoundAssemblyDescription(item.description)
+        const description = item.qtyIsExplicit ? item.description : `${item.description} (qty estimated -- verify)`;
+        const unit = item.unit || null;
+        const unitCost = catalogMatch?.unitCost ?? 0;
+        // A compound "Complete X Build" assembly line wins outright (see
+        // line-item-category.ts -- catalog match is unreliable against
+        // that much text). SEG is checked next -- confirmed live as a
+        // real miscategorization: the AI's own coarse scope bucket (e.g.
+        // "Booth Structure & Walls") otherwise wins over the item's own
+        // description for every line in that bucket, including SEG
+        // fabric graphics lines that don't belong there (see
+        // isAlwaysGraphicsDescription's own comment -- same bug pattern
+        // already fixed in design-cost-estimate-import-service.ts).
+        // Otherwise prefer a confident catalog match's own category over
+        // the AI's coarser scope bucket, and fall back to the
+        // description heuristic only if neither resolved.
+        const resolvedCategory =
+          isCompoundAssemblyDescription(item.description)
             ? resolveCategoryNameFromKey(liveCategories, CUSTOM_BUILD_CATEGORY_KEY)
             : (isAlwaysGraphicsDescription(item.description) ? resolveCategoryNameFromKey(liveCategories, "graphics") : null) ??
               mapCatalogCategoryToCanonical(catalogMatch?.category, liveCategories) ??
               mapScopeCategoryToCanonical(category, liveCategories) ??
-              inferCategoryFromDescription(item.description, liveCategories),
+              inferCategoryFromDescription(item.description, liveCategories);
+        return {
+          lineType: item.lineType,
+          description,
+          qty: item.qty,
+          unit,
+          unitCost,
+          category: resolvedCategory,
           isClientOwned: inferIsClientOwned(item.description),
           documentId,
           sourceQuote: item.sourceQuote,
           sourcePageNumber: item.pageNumber ?? (pageTexts ? locateQuotePage(pageTexts, item.sourceQuote) : null),
+          aiProposalSnapshot: {
+            description,
+            qty: String(item.qty),
+            unit,
+            unitCost: String(unitCost),
+            lineType: item.lineType,
+            category: resolvedCategory,
+            aiFeature,
+          },
         };
       }),
     );

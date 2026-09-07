@@ -785,6 +785,12 @@ export async function updateLineItemAction(
   // Same "on" convention as isClientOwned above -- an unchecked checkbox
   // simply isn't present in FormData at all.
   const includeInProposal = formData.get("includeInProposal") === "on";
+  // Only ever rendered on a row with an AI-proposed origin (see
+  // line-item-row.tsx's own comment) -- flagAiProposalWrong on a row
+  // with no aiProposalSnapshot is a silent no-op in updateLineItem, not
+  // an error, so there's nothing extra to validate here.
+  const flagAiProposalWrong = formData.get("flagAiProposalWrong") === "on";
+  const flagReason = emptyToNull(formData.get("flagReason"));
 
   await updateLineItem(
     opportunityId,
@@ -800,6 +806,7 @@ export async function updateLineItemAction(
       unit,
       unitCost,
       includeInProposal,
+      flagAccuracy: flagAiProposalWrong ? { reason: flagReason } : null,
     },
     user.id,
   );

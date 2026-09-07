@@ -14,6 +14,7 @@ afterEach(async () => {
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
   await db.lineItemAuditLog.deleteMany();
+  await db.lineItemAccuracyFlag.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.document.deleteMany();
@@ -168,6 +169,24 @@ describe("commitStandaloneVendorQuoteImport", () => {
     const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
     expect(sections.map((s) => s.groupLabel).sort()).toEqual([null, "GFX-01"].sort());
     expect(sections.every((s) => s.name === document.filename)).toBe(true);
+  });
+
+  it("stamps every committed row's aiProposalSnapshot with aiFeature VENDOR_QUOTE_LINE_ITEMS", async () => {
+    const document = await makeAnalyzedDocument("46' x 4'  1  $14,432.88  $14,432.88");
+    await db.document.update({
+      where: { id: document.id },
+      data: { vendorQuoteLineItems: FAKE_VENDOR_LINES as unknown as Prisma.InputJsonValue },
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: document.opportunityId } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitStandaloneVendorQuoteImport(version.id, document.id);
+
+    const lineItems = await db.lineItem.findMany({ where: { documentId: document.id } });
+    expect(lineItems.length).toBeGreaterThan(0);
+    for (const li of lineItems) {
+      expect((li.aiProposalSnapshot as { aiFeature: string } | null)?.aiFeature).toBe("VENDOR_QUOTE_LINE_ITEMS");
+    }
   });
 
   it("refuses a second commit of the same document into the same version", async () => {

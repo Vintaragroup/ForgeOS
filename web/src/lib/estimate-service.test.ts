@@ -73,6 +73,7 @@ afterEach(async () => {
   await db.estimateSection.deleteMany();
   await db.option.deleteMany();
   await db.lineItemAuditLog.deleteMany();
+  await db.lineItemAccuracyFlag.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.opportunity.deleteMany();
@@ -1123,6 +1124,134 @@ describe("Bid packages", () => {
     expect(updated.documentId).toBe(document.id);
     expect(updated.sourceQuote).toBe("Sleeper Floor");
     expect(updated.isDraft).toBe(false);
+  });
+});
+
+describe("aiProposalSnapshot / LineItemAccuracyFlag -- AI accuracy signal", () => {
+  async function makeAiSourcedItem() {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Custom Build", sectionType: "CATEGORY" });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "RFP.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "RFP",
+      },
+    });
+    const [item] = await addLineItemsBulk(
+      version.id,
+      section.id,
+      [
+        {
+          lineType: "MATERIAL",
+          description: "3/4 in. single-sided Chinese birch",
+          qty: 4,
+          unit: "EA",
+          unitCost: 250,
+          documentId: document.id,
+          sourceQuote: "3/4 in. single-sided Chinese birch",
+          aiProposalSnapshot: {
+            description: "3/4 in. single-sided Chinese birch",
+            qty: "4",
+            unit: "EA",
+            unitCost: "250",
+            lineType: "MATERIAL",
+            category: "Custom Build",
+            aiFeature: "SCOPE_LINE_ITEMS",
+          },
+        },
+      ],
+      { isDraft: true },
+    );
+    return { estimate, version, section, document, item };
+  }
+
+  it("addLineItemsBulk persists a passed aiProposalSnapshot verbatim on the created row", async () => {
+    const { item } = await makeAiSourcedItem();
+    expect(item.aiProposalSnapshot).toEqual({
+      description: "3/4 in. single-sided Chinese birch",
+      qty: "4",
+      unit: "EA",
+      unitCost: "250",
+      lineType: "MATERIAL",
+      category: "Custom Build",
+      aiFeature: "SCOPE_LINE_ITEMS",
+    });
+  });
+
+  it("leaves aiProposalSnapshot null when a caller doesn't pass one -- the deterministic-import case", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Flooring", sectionType: "CATEGORY" });
+    const document = await db.document.create({
+      data: {
+        opportunityId: estimate.opportunityId,
+        filename: "Pricing Schedule.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        sizeBytes: 1,
+        storageKey: "test/key",
+        documentType: "PRICING_SCHEDULE",
+      },
+    });
+    const [item] = await addLineItemsBulk(version.id, section.id, [
+      { lineType: "MATERIAL", description: "Sheet plywood", qty: 1, unitCost: 50, documentId: document.id },
+    ]);
+    expect(item.aiProposalSnapshot).toBeNull();
+  });
+
+  it("updateLineItem with flagAccuracy on an AI-proposed row creates one LineItemAccuracyFlag, snapshot untouched", async () => {
+    const { estimate, item } = await makeAiSourcedItem();
+
+    await updateLineItem(
+      estimate.opportunityId,
+      item.id,
+      {
+        description: "3/4 in. raw plywood",
+        flagAccuracy: { reason: "AI paraphrased the material away" },
+      },
+      null,
+    );
+
+    const flags = await db.lineItemAccuracyFlag.findMany({ where: { lineItemId: item.id } });
+    expect(flags).toHaveLength(1);
+    expect(flags[0].aiFeature).toBe("SCOPE_LINE_ITEMS");
+    expect(flags[0].reason).toBe("AI paraphrased the material away");
+    expect(flags[0].originalProposal).toEqual(item.aiProposalSnapshot);
+    expect((flags[0].correctedValues as { description: string }).description).toBe("3/4 in. raw plywood");
+
+    // The snapshot itself never changes, even though the row's own
+    // description just did -- it's the fixed "what AI said" baseline
+    // every future flag on this row diffs against.
+    const reloaded = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(reloaded.aiProposalSnapshot).toEqual(item.aiProposalSnapshot);
+  });
+
+  it("updateLineItem with flagAccuracy on a row with no aiProposalSnapshot is a silent no-op", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Flooring", sectionType: "CATEGORY" });
+    const item = await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "A", qty: 1, unitCost: 0 });
+
+    await updateLineItem(estimate.opportunityId, item.id, {
+      description: "B",
+      flagAccuracy: { reason: "shouldn't matter" },
+    });
+
+    const flags = await db.lineItemAccuracyFlag.findMany({ where: { lineItemId: item.id } });
+    expect(flags).toHaveLength(0);
+  });
+
+  it("updateLineItem without flagAccuracy never creates a flag, even on an AI-proposed row", async () => {
+    const { estimate, item } = await makeAiSourcedItem();
+
+    await updateLineItem(estimate.opportunityId, item.id, { description: "A routine refinement, not a correction" });
+
+    const flags = await db.lineItemAccuracyFlag.findMany({ where: { lineItemId: item.id } });
+    expect(flags).toHaveLength(0);
   });
 });
 

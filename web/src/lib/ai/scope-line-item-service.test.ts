@@ -18,6 +18,7 @@ afterEach(async () => {
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
   await db.lineItemAuditLog.deleteMany();
+  await db.lineItemAccuracyFlag.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
   await db.document.deleteMany();
@@ -403,6 +404,55 @@ describe("commitScopeLineItems", () => {
 
     const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: otherVersion.id } } });
     expect(lineItemCount).toBe(0);
+  });
+
+  it("stamps aiProposalSnapshot with aiFeature SCOPE_LINE_ITEMS for a scope-text document, DRAWING_LINE_ITEMS for a drawing", async () => {
+    const scopeDocument = await makeAnalyzedDocument("some scope text");
+    // Non-PDF mimeType, same reason makeAnalyzedDocument's own default
+    // is a .docx -- commitScopeLineItems only fetches real storage bytes
+    // (for PDF page-locating) when mimeType === PDF_MIME, and this test
+    // has no real storage object behind its fake storageKey.
+    const drawingDocument = await db.document.create({
+      data: {
+        opportunityId: scopeDocument.opportunityId,
+        filename: "Floor Plan.docx",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 100,
+        storageKey: "test-key",
+        documentType: "DRAWING",
+        extractionStatus: "COMPLETE",
+      },
+    });
+    const proposedFor = (description: string): ProposedLineItem[] => [
+      {
+        description,
+        qty: 1,
+        qtyIsExplicit: true,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+      },
+    ];
+    await db.document.update({
+      where: { id: scopeDocument.id },
+      data: { proposedLineItems: proposedFor("Booth walls") as unknown as Prisma.InputJsonValue },
+    });
+    await db.document.update({
+      where: { id: drawingDocument.id },
+      data: { proposedLineItems: proposedFor("Countertop fabrication") as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitScopeLineItems(version.id, scopeDocument.id);
+    await commitScopeLineItems(version.id, drawingDocument.id);
+
+    const scopeItem = await db.lineItem.findFirstOrThrow({ where: { description: "Booth walls" } });
+    const drawingItem = await db.lineItem.findFirstOrThrow({ where: { description: "Countertop fabrication" } });
+    expect((scopeItem.aiProposalSnapshot as { aiFeature: string }).aiFeature).toBe("SCOPE_LINE_ITEMS");
+    expect((drawingItem.aiProposalSnapshot as { aiFeature: string }).aiFeature).toBe("DRAWING_LINE_ITEMS");
   });
 });
 
