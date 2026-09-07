@@ -236,7 +236,37 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                               {moneyFromNumber(group.subtotal)}
                             </span>
                           </div>
-                          <CategoryTable items={group.items} />
+                          {/* Summarize -- see EstimateSection.summarizeOnProposal's
+                              own schema comment. Either the whole booth or just
+                              this one group being summarized skips the itemized
+                              rows entirely, same gate proposal-pdf.tsx's own
+                              renderBoothGroups uses -- this page previously had
+                              no equivalent check at all, so a summarized/buried
+                              booth still rendered every line item here even
+                              though the real client-facing PDF correctly hid
+                              them. */}
+                          {!booth.summarizeOnProposal && !group.summarizeOnProposal && (
+                            <>
+                              <CategoryTable items={group.items} />
+                              {/* H3 -- see ElementTypeGroup.subgroups' own
+                                  comment. Empty for a group that's never used
+                                  H3, so nothing extra renders for every
+                                  existing booth. */}
+                              {group.subgroups.map((subgroup) => (
+                                <div key={subgroup.subgroupLabel} className="mt-1">
+                                  <div className="mb-1 flex items-center justify-between px-2 py-0.5">
+                                    <span className="text-[8px] font-semibold uppercase tracking-wide text-neutral-500">
+                                      {subgroup.subgroupLabel}
+                                    </span>
+                                    <span className="text-[8px] font-semibold text-neutral-500">
+                                      {moneyFromNumber(subgroup.subtotal)}
+                                    </span>
+                                  </div>
+                                  <CategoryTable items={subgroup.items} />
+                                </div>
+                              ))}
+                            </>
+                          )}
                         </div>
                       ))}
                     </div>
