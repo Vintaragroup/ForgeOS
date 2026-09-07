@@ -401,6 +401,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     cadDocuments,
     vendorMatchApplyLog,
     lineItemAuditLog,
+    accuracyFlags,
     chatMessages,
     allOpportunityDocuments,
     citableLineItems,
@@ -489,6 +490,17 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           orderBy: { createdAt: "desc" },
           take: 200,
           include: { actor: { select: { name: true } } },
+        })
+      : Promise.resolve([]),
+    // The AI accuracy signal (see LineItemAccuracyFlag's own schema
+    // comment) -- same "capped at 200, not unpaginated" posture as
+    // lineItemAuditLog just above, for the same reason.
+    currentVersion
+      ? db.lineItemAccuracyFlag.findMany({
+          where: { estimateVersionId: currentVersion.id },
+          orderBy: { createdAt: "desc" },
+          take: 200,
+          include: { flaggedBy: { select: { name: true } } },
         })
       : Promise.resolve([]),
     // Same one-thread-per-opportunity chat as the Opportunity page and
@@ -916,6 +928,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     isLocked={currentVersion.isLocked}
                     log={vendorMatchApplyLog}
                     auditLog={lineItemAuditLog}
+                    accuracyFlags={accuracyFlags}
                   />
                 ),
               }}
@@ -5941,11 +5954,13 @@ function HistoryTab({
   isLocked,
   log,
   auditLog,
+  accuracyFlags,
 }: {
   estimateId: string;
   isLocked: boolean;
   log: Awaited<ReturnType<typeof getVendorMatchApplyLog>>;
   auditLog: LineItemAuditLogEntry[];
+  accuracyFlags: LineItemAccuracyFlagEntry[];
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -6029,11 +6044,62 @@ function HistoryTab({
       )}
 
       <LineItemChangeHistoryCard estimateId={estimateId} isLocked={isLocked} auditLog={auditLog} />
+      <LineItemAccuracyFlagsCard flags={accuracyFlags} />
     </div>
   );
 }
 
 type LineItemAuditLogEntry = Prisma.LineItemAuditLogGetPayload<{ include: { actor: { select: { name: true } } } }>;
+type LineItemAccuracyFlagEntry = Prisma.LineItemAccuracyFlagGetPayload<{ include: { flaggedBy: { select: { name: true } } } }>;
+
+// Read-only view of the AI accuracy signal (see LineItemAccuracyFlag's
+// own schema comment) -- every deliberate "the AI was wrong" an
+// estimator has logged for this estimate's line items, most recent
+// first. Mirrors LineItemChangeHistoryCard's own layout immediately
+// above -- same card shape, same 200-row cap, same reasoning (an
+// unpaginated real estimate caused a real performance problem earlier
+// this session).
+function LineItemAccuracyFlagsCard({ flags }: { flags: LineItemAccuracyFlagEntry[] }) {
+  return (
+    <Card className="p-6">
+      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">AI accuracy flags</h2>
+      <p className="mb-4 text-sm text-neutral-500">
+        Every time an estimator has flagged an AI-proposed line item as wrong while correcting it -- what the AI
+        originally proposed, what it actually should have been, and why. Showing the most recent 200.
+      </p>
+      {flags.length === 0 ? (
+        <p className="text-sm text-neutral-500">No AI proposals have been flagged as wrong yet.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {flags.map((flag) => {
+            const original = flag.originalProposal as { description?: string; aiFeature?: string };
+            const corrected = flag.correctedValues as { description?: string };
+            return (
+              <div key={flag.id} className="rounded-md border border-neutral-200 px-3 py-2 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800">
+                    {flag.aiFeature}
+                  </span>
+                  <span className="text-neutral-400">·</span>
+                  <span className="text-neutral-500">{flag.flaggedBy?.name ?? "Unknown"}</span>
+                  <span className="text-neutral-400">·</span>
+                  <span className="text-neutral-500">
+                    <LocalTimestamp iso={flag.createdAt} />
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-neutral-600">
+                  <span className="font-medium">{original.description ?? "—"}</span> →{" "}
+                  <span className="font-medium">{corrected.description ?? "—"}</span>
+                </p>
+                {flag.reason && <p className="mt-1 text-xs text-neutral-600">Reason: {flag.reason}</p>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 const AUDIT_ACTION_LABEL: Record<string, string> = { CREATE: "Created", UPDATE: "Updated", DELETE: "Deleted", RESTORE: "Restored" };
 const AUDIT_ACTION_STYLE: Record<string, string> = {
