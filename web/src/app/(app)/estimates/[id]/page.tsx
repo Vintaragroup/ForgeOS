@@ -76,6 +76,7 @@ import {
   updateSectionDescriptionAction,
   updateSectionExcludedFromTotalsAction,
   updateSectionExcludedFromTotalsForSectionAction,
+  updateSectionOmittedFromProposalForSectionAction,
   updateSectionProposalSummaryAction,
   updateSectionProposalSummaryForSectionAction,
   updateSectionProposalVisibilityAction,
@@ -3349,6 +3350,8 @@ function CategoryTabContent({
                     );
                     const elementDescription = elementDescriptionOverride?.description ?? group.description;
                     const elementPendingDescription = elementDescriptionOverride?.pendingDescription ?? group.pendingDescription;
+                    const elementSummarized = elementSection?.summarizeOnProposal ?? false;
+                    const elementOmitted = elementSection?.omittedFromProposal ?? false;
                     return (
                   <div key={group.elementType}>
                     <CollapsibleGroup
@@ -3367,6 +3370,20 @@ function CategoryTabContent({
                           updateAction={updateSectionDescriptionAction.bind(null, estimateId, group.sectionIds[0], bucket.category.id)}
                           rejectAction={clearSectionPendingDescriptionAction.bind(null, estimateId, group.sectionIds[0], bucket.category.id)}
                         />
+                        {/* Same "otherwise-silent state" reasoning as the H1
+                            booth badges above -- this group is invisible on
+                            the client PDF either way, so this is the only
+                            place an estimator can tell at a glance. */}
+                        {elementSummarized && (
+                          <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-amber-800">
+                            Summarized on proposal
+                          </span>
+                        )}
+                        {elementOmitted && (
+                          <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-red-800">
+                            Buried -- cost still counted
+                          </span>
+                        )}
                       </h5>
                       }
                       actions={
@@ -3398,6 +3415,68 @@ function CategoryTabContent({
                           <span className="mx-1.5">&rarr;</span>
                           <span className="font-medium">{money(sell(group.subtotal))}</span>
                         </div>
+                        {!version.isLocked && group.sectionIds[0] && (
+                          <>
+                            {/* Same distinction as the H1 booth-wide
+                                Summarize button -- this collapses just THIS
+                                one element group's detail to a name+total
+                                row, the price stays counted, and its
+                                siblings in the same booth are unaffected.
+                                See EstimateSection.summarizeOnProposal's own
+                                schema comment. */}
+                            <form
+                              action={updateSectionProposalSummaryForSectionAction.bind(
+                                null,
+                                estimateId,
+                                version.id,
+                                group.sectionIds[0],
+                                !elementSummarized,
+                              )}
+                            >
+                              <button
+                                type="submit"
+                                className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-white"
+                                title={
+                                  elementSummarized
+                                    ? "Show this group's full line-item detail on the Proposal PDF"
+                                    : "Hide this group's line-item detail on the Proposal PDF, but keep its cost in the total"
+                                }
+                              >
+                                {elementSummarized ? "Show full detail" : "Summarize on proposal"}
+                              </button>
+                            </form>
+                            {/* Distinct from Summarize above and from H1's
+                                own "Hide from proposal" -- this removes the
+                                group entirely from the Proposal PDF (no
+                                heading, no line items, nothing), but unlike
+                                H1's Hide, its cost is NOT subtracted from
+                                the PDF's own Grand Total -- it's folded back
+                                in without ever being itemized. See
+                                EstimateSection.omittedFromProposal's own
+                                schema comment. */}
+                            <form
+                              action={updateSectionOmittedFromProposalForSectionAction.bind(
+                                null,
+                                estimateId,
+                                version.id,
+                                group.sectionIds[0],
+                                !elementOmitted,
+                              )}
+                            >
+                              <button
+                                type="submit"
+                                className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-white"
+                                title={
+                                  elementOmitted
+                                    ? "Show this group on the Proposal PDF again"
+                                    : "Remove this group entirely from the Proposal PDF -- no heading, no line items -- but keep its cost in the Grand Total"
+                                }
+                              >
+                                {elementOmitted ? "Show on proposal" : "Bury (keep cost)"}
+                              </button>
+                            </form>
+                          </>
+                        )}
                         {!version.isLocked && (
                           <ConfirmForm
                             action={deleteElementGroupAction.bind(null, estimateId, version.id, booth.boothLabel, group.elementType)}

@@ -45,6 +45,7 @@ import {
   updateSectionBuildType,
   updateSectionDescription,
   updateSectionExcludedFromTotals,
+  updateSectionOmittedFromProposal,
   updateSectionProposalSummary,
   updateSectionProposalVisibility,
 } from "@/lib/estimate-service";
@@ -337,6 +338,21 @@ export async function updateSectionExcludedFromTotalsForSectionAction(
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   await updateSectionExcludedFromTotals(versionId, { sectionId }, excludedFromTotals);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+// H2-only for now -- no groupLabel-scoped/booth-wide counterpart, unlike
+// the three actions above. See EstimateSection.omittedFromProposal's own
+// schema comment.
+export async function updateSectionOmittedFromProposalForSectionAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  omittedFromProposal: boolean,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  await updateSectionOmittedFromProposal(versionId, { sectionId }, omittedFromProposal);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

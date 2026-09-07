@@ -442,6 +442,28 @@ export async function updateSectionExcludedFromTotals(
   await recomputeVersionTotals(estimateVersionId);
 }
 
+// Same scoping machinery as the three toggles above (only { sectionId }
+// is wired to a button today -- a real H2 element group -- but the full
+// SectionScope union costs nothing extra to accept, in case a booth-wide
+// "bury everything" control is ever added). See
+// EstimateSection.omittedFromProposal's own schema comment for how this
+// differs from all three: like summarizeOnProposal, it never touches
+// computeVersionTotals (the estimate's own internal numbers); like
+// includeInProposal, the client-facing PDF stops itemizing it entirely --
+// but unlike includeInProposal, proposal-pdf.tsx folds its dollar amount
+// back into that document's own Grand Total instead of dropping it.
+export async function updateSectionOmittedFromProposal(
+  estimateVersionId: string,
+  scope: SectionScope,
+  omittedFromProposal: boolean,
+) {
+  await assertUnlocked(estimateVersionId);
+  await db.estimateSection.updateMany({
+    where: sectionScopeWhere(estimateVersionId, scope),
+    data: { omittedFromProposal },
+  });
+}
+
 // Reorders one booth (identified by groupLabel) among only the OTHER
 // booths actually visible within one specific category -- deliberately
 // scoped per-category, not a global reorder, to avoid the exact ambiguity

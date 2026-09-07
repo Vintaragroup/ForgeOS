@@ -102,6 +102,10 @@ export interface ProposalViewSection {
   // same reasoning as includeInProposal above: undefined means "real
   // scope, counted as normal."
   excludedFromTotals?: boolean;
+  // H2-level "bury the cost" -- see EstimateSection.omittedFromProposal's
+  // own schema comment. Optional, same reasoning as includeInProposal
+  // above: undefined means "not buried, fully itemized as normal."
+  omittedFromProposal?: boolean;
   // User-approved short heading override for this booth's H1, shown in
   // place of the raw groupLabel -- see EstimateSection.boothDescription's
   // own schema comment. Optional/undefined (not just nullable) so an
@@ -260,12 +264,28 @@ export interface CategoryBucket {
 // sortOrder) -- both which names are valid (falling back to "Other" for
 // anything else, e.g. a category since renamed/deleted out from under an
 // old LineItem) and the bucket ordering come from it, not a hardcoded list.
-export function aggregateByCategory(sections: ProposalViewSection[], categories: Category[]): CategoryBucket[] {
+export function aggregateByCategory(
+  sections: ProposalViewSection[],
+  categories: Category[],
+  options?: { includeOmittedFromProposal?: boolean },
+): CategoryBucket[] {
   const byCategory = new Map<string, Map<string, AggregatedLineItem>>();
 
   for (const section of sections) {
     if (section.includeInProposal === false) continue;
     if (section.excludedFromTotals) continue;
+    // Excluded here too, not just in groupBoothLineItems below -- unlike
+    // the two checks above, this one's cost isn't gone: foldOmittedIntoTotals
+    // below re-aggregates every omittedFromProposal section separately
+    // (passing includeOmittedFromProposal: true, the only caller that
+    // ever does) and adds the result back into the document's own Grand
+    // Total. Skipping it HERE by default (the single function every
+    // other total/itemized-row view in this file is built from) is what
+    // guarantees it can never leak into a printed row anywhere, rather
+    // than relying on a downstream render-time filter that a real edge
+    // case (this being the only booth-tagged content in its category)
+    // was confirmed to miss.
+    if (section.omittedFromProposal && !options?.includeOmittedFromProposal) continue;
     // A summarized standalone section (groupLabel null, summarizeOnProposal
     // true) is ALSO rendered as its own lump-sum "booth" by
     // standaloneSummaryGroupsByCategory -- its own items still stay in
@@ -464,6 +484,14 @@ export interface ElementTypeGroup {
   // EstimateSection.elementSummary's own schema comment. Null until an
   // estimator writes or approves one.
   elementSummary: string | null;
+  // This ONE element group's own "hide detail, keep the price" -- see
+  // EstimateSection.summarizeOnProposal's own schema comment. Distinct
+  // from BoothGroup.summarizeOnProposal below: either one being true
+  // skips this group's itemized rows (proposal-pdf.tsx's own rendering
+  // decision), so a booth-wide summarize still covers every group inside
+  // it, but a single group can also be summarized without affecting its
+  // siblings in the same booth.
+  summarizeOnProposal: boolean;
 }
 
 export interface BoothGroup {
@@ -524,13 +552,22 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // raw, often cryptic groupLabel instead on THIS specific view, even
   // while the Line Items tab kept showing it correctly.
   const boothDescriptionText = new Map<string, string | null>();
-  // Whole-booth "hide detail, keep the price" -- read off the first
-  // section encountered for this booth, same convention as
-  // boothDescription elsewhere (updateSectionProposalSummary always
-  // keeps every section sharing a groupLabel in sync, so any one is
-  // correct). Deliberately never affects boothSortOrder/elementSortOrder
-  // above or the subtotal math below -- only proposal-pdf.tsx's own
-  // rendering decision skips elementGroups for a summarized booth.
+  // Whole-booth "hide detail, keep the price" -- AND-accumulated across
+  // every section sharing this booth's groupLabel, NOT "first section
+  // wins" the way boothDescription/boothSummary below still are. Those
+  // two stay first-wins safely because they're never set per-section
+  // independently of the rest of the booth; summarizeOnProposal no
+  // longer has that guarantee once elementSummarize below lets a single
+  // H2 group's own section be summarized without touching its siblings
+  // -- reading just the first section could pick up one group's
+  // independently-set value and wrongly summarize (or fail to
+  // summarize) the whole booth depending on iteration order. True here
+  // only when literally every section in the booth has it set, which is
+  // still exactly what updateSectionProposalSummary's booth-wide
+  // (groupLabel-scoped) update produces. Deliberately never affects
+  // boothSortOrder/elementSortOrder above or the subtotal math below --
+  // only proposal-pdf.tsx's own rendering decision skips elementGroups
+  // for a summarized booth.
   const boothSummarize = new Map<string, boolean>();
   // Same "prefer non-null" convention as boothDescriptionText above -- see
   // EstimateSection.boothSummary's own schema comment.
@@ -541,9 +578,15 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // "first section wins" for consistency with every other per-key map
   // here. See EstimateSection.elementSummary's own schema comment.
   const elementSummaryText = new Map<string, string | null>();
+  // Same "first section wins" convention, one level down from
+  // boothSummarize above -- this element group's OWN summarize flag,
+  // independent of whichever booth it belongs to. See
+  // ElementTypeGroup.summarizeOnProposal's own comment for why both are
+  // read (either can trigger summarization for this one group).
+  const elementSummarize = new Map<string, boolean>();
 
   for (const section of sections) {
-    if (!section.groupLabel || section.includeInProposal === false) continue;
+    if (!section.groupLabel || section.includeInProposal === false || section.omittedFromProposal) continue;
     const boothLabel = section.groupLabel;
     const elementType = elementTypeForSection(section.name);
     boothSortOrder.set(
@@ -555,9 +598,13 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     if (!elementSummaryText.has(elementKey)) {
       elementSummaryText.set(elementKey, section.elementSummary ?? null);
     }
-    if (!boothSummarize.has(boothLabel)) {
-      boothSummarize.set(boothLabel, section.summarizeOnProposal ?? false);
+    if (!elementSummarize.has(elementKey)) {
+      elementSummarize.set(elementKey, section.summarizeOnProposal ?? false);
     }
+    boothSummarize.set(
+      boothLabel,
+      (boothSummarize.get(boothLabel) ?? true) && (section.summarizeOnProposal ?? false),
+    );
     const currentBoothDescription = boothDescriptionText.get(boothLabel);
     if (currentBoothDescription === undefined || (currentBoothDescription === null && section.boothDescription != null)) {
       boothDescriptionText.set(boothLabel, section.boothDescription ?? null);
@@ -639,6 +686,7 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
             items,
             subtotal: bucketSubtotal(items),
             elementSummary: elementSummaryText.get(`${boothLabel}::${elementType}`) ?? null,
+            summarizeOnProposal: elementSummarize.get(`${boothLabel}::${elementType}`) ?? false,
           };
         })
         // A section contributes an (elementType, bucket) entry the
@@ -1326,4 +1374,61 @@ export function computeRentalAndServicesTotals(
     .reduce((sum, b) => sum + bucketSubtotal(b.items), 0);
   const hasServiceSplit = buckets.some((b) => showServicesCategories.has(b.name));
   return { rentalTotal, servicesTotal, hasServiceSplit };
+}
+
+export interface ProposalTotalsFold {
+  rentalTotal: number;
+  servicesTotal: number;
+  sellRentalTotal: number;
+  sellServicesTotal: number;
+  totalCostSum: number;
+}
+
+// The Grand-Total half of an omittedFromProposal ("bury the cost") H2
+// group -- see EstimateSection.omittedFromProposal's own schema comment.
+// aggregateByCategory/groupBoothLineItems both exclude these sections
+// from every itemized view; this is what adds their dollar amount back
+// into the document's own totals, re-running the EXACT SAME
+// aggregateByCategory/computeRentalAndServicesTotals/sellForCategory
+// pipeline on just the omitted sections rather than a hand-rolled sum --
+// the only way to guarantee the buried amount's markup can never drift
+// from what the same item would have grossed up to if it were visible.
+// Folds into every total downstream views cross-check against each
+// other (rentalTotal + servicesTotal, taxable basis, showCost's own
+// Total cost), not just documentGrandTotal alone -- patching only the
+// headline number would leave "Rental components total" + "Show
+// services total" silently disagreeing with "Grand total" on the same
+// page. If a section has BOTH includeInProposal: false AND
+// omittedFromProposal: true, this contributes nothing for it: the
+// omittedSections caller passes in still goes through
+// aggregateByCategory's OWN includeInProposal check, so H1's existing
+// "subtracts from the total" behavior wins with no special-casing here.
+export function foldOmittedIntoTotals(
+  visible: ProposalTotalsFold,
+  omittedSections: ProposalViewSection[],
+  categories: Category[],
+  showServiceCategoryNames: ReadonlySet<string>,
+  sellForCategory: (cost: number, categoryName: string) => number,
+): ProposalTotalsFold {
+  // includeOmittedFromProposal: true -- the whole point of this call is
+  // to aggregate the sections aggregateByCategory would otherwise skip.
+  const omittedBuckets = aggregateByCategory(omittedSections, categories, { includeOmittedFromProposal: true });
+  const { rentalTotal: omittedRentalCost, servicesTotal: omittedServicesCost } = computeRentalAndServicesTotals(
+    omittedBuckets,
+    showServiceCategoryNames,
+  );
+  const omittedSellRentalTotal = omittedBuckets
+    .filter((b) => !showServiceCategoryNames.has(b.name))
+    .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
+  const omittedSellServicesTotal = omittedBuckets
+    .filter((b) => showServiceCategoryNames.has(b.name))
+    .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
+  const omittedTotalCost = omittedBuckets.reduce((sum, b) => sum + bucketSubtotal(b.items), 0);
+  return {
+    rentalTotal: visible.rentalTotal + omittedRentalCost,
+    servicesTotal: visible.servicesTotal + omittedServicesCost,
+    sellRentalTotal: visible.sellRentalTotal + omittedSellRentalTotal,
+    sellServicesTotal: visible.sellServicesTotal + omittedSellServicesTotal,
+    totalCostSum: visible.totalCostSum + omittedTotalCost,
+  };
 }

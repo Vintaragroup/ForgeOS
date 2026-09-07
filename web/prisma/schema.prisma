@@ -1328,6 +1328,22 @@ model EstimateSection {
   // no indication it wasn't real scope.
   excludedFromTotals Boolean @default(false)
 
+  // H2-level "bury the cost" -- this element group (one EstimateSection
+  // row -- see this model's own header comment) and its line items
+  // become fully invisible on the Proposal PDF: no header, no summary
+  // line, nothing, unlike summarizeOnProposal above which still shows a
+  // name + total. But unlike includeInProposal, this group's own dollar
+  // amount is still folded into the PDF's own Grand Total, with the
+  // correct per-category markup -- see proposal-pdf.tsx's own comment on
+  // documentGrandTotal for exactly how. A distinct field from
+  // includeInProposal so toggling this can never touch that flag's
+  // existing, already-relied-on "subtracts from the PDF total" behavior
+  // for any booth already hidden today. Section-scoped only (no
+  // groupLabel-wide sync like the three flags above) -- only a per-H2
+  // toggle exists today; a booth-wide "bury everything" control can reuse
+  // the same SectionScope machinery later if it's ever needed.
+  omittedFromProposal Boolean @default(false)
+
   // This section's position among the other booths visible within ONE
   // category, for Proposal PDF ordering -- deliberately NOT the same
   // field as sortOrder above (which orders sections generally / production

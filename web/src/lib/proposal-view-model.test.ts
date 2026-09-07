@@ -4,6 +4,7 @@ import {
   aggregateByCategory,
   boothGroupsByCategory,
   bucketLineItemsByCategory,
+  foldOmittedIntoTotals,
   groupBoothLineItems,
   groupBoothLineItemsForEditing,
   groupPrimaryCategoryTabs,
@@ -135,6 +136,23 @@ describe("aggregateByCategory -- booth-scoped grouping", () => {
     expect(bucket.items[0].description).toBe("Real scope");
   });
 
+  it("excludes an omittedFromProposal ('bury the cost') section from buckets, distinct from includeInProposal/excludedFromTotals", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Custom Build",
+        groupLabel: "SECTION 203",
+        omittedFromProposal: true,
+        lineItems: [li({ id: "a", description: "Buried group", totalCost: 5000 })],
+      },
+      { name: "Booth", groupLabel: "SECTION 203", lineItems: [li({ id: "b", description: "Real scope", totalCost: 1000 })] },
+    ];
+
+    const [bucket] = aggregateByCategory(sections, categories);
+
+    expect(bucket.items).toHaveLength(1);
+    expect(bucket.items[0].description).toBe("Real scope");
+  });
+
   it("scopes a summarized standalone section's items to itself, never cross-merging with another section", () => {
     // Regression: a booth-independent line normally sums across the whole
     // show on purpose (see the "Compliant Door" test above) -- but a
@@ -172,6 +190,23 @@ describe("aggregateByCategory -- booth-scoped grouping", () => {
 });
 
 describe("boothGroupsByCategory", () => {
+  it("propagates omittedFromProposal through to groupBoothLineItems, excluding the section entirely", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Structure",
+        groupLabel: "SECTION 231",
+        buildType: "RENTAL",
+        omittedFromProposal: true,
+        lineItems: [li({ id: "a", category: "Structure", totalCost: 100 })],
+      },
+    ];
+
+    const result = boothGroupsByCategory(sections, categories);
+
+    expect(result.get("Structure") ?? []).toHaveLength(0);
+  });
+
+
   it("keys a tagged booth's own group by the composed Method leaf, not the plain top-level Type name", () => {
     // This is the exact mismatch proposal-pdf.tsx's own render loop used
     // to fall into: a tagged booth's items resolve (resolveEffectiveCategory)
@@ -261,6 +296,24 @@ describe("standaloneSummaryGroupsByCategory", () => {
     expect(group?.boothDescription).toBe("Turf & Carpet Package");
     expect(group?.subtotal).toBe(8000);
     expect(group?.summarizeOnProposal).toBe(true);
+  });
+
+  it("propagates omittedFromProposal through to groupBoothLineItems on its cloned section, excluding it entirely", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        id: "s1",
+        name: "Custom Flooring Installation",
+        description: "Turf & Carpet Package",
+        groupLabel: null,
+        summarizeOnProposal: true,
+        omittedFromProposal: true,
+        lineItems: [li({ id: "a", description: "Turf", qty: 1, totalCost: 5000 })],
+      },
+    ];
+
+    const groups = standaloneSummaryGroupsByCategory(sections, categories);
+
+    expect(groups.get("Structure") ?? []).toHaveLength(0);
   });
 
   it("promotes the section's own elementSummary to the group's boothSummary (renders right after H1, matching a real booth's own summary), and blanks the H2-tier copy so the same paragraph doesn't render twice under the duplicate H2 (confirmed live: a Flooring section's approved summary rendered below its H2 instead of below its H1, the only place a real booth's own summary ever shows)", () => {
@@ -585,6 +638,58 @@ describe("groupBoothLineItems", () => {
 
     expect(groups.map((g) => g.boothLabel)).toEqual(["SECTION 428"]);
     expect(groups[0].subtotal).toBe(200);
+  });
+
+  it("summarizes just ONE H2 element group without affecting a sibling group in the same booth, and leaves the whole booth un-summarized", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Structure",
+        groupLabel: "SECTION 231",
+        summarizeOnProposal: true,
+        lineItems: [li({ id: "a", totalCost: 100 })],
+      },
+      { name: "Graphics", groupLabel: "SECTION 231", summarizeOnProposal: false, lineItems: [li({ id: "b", totalCost: 50 })] },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+    const structureGroup = booth.elementGroups.find((g) => g.elementType === "Structure");
+    const graphicsGroup = booth.elementGroups.find((g) => g.elementType === "Graphics");
+
+    expect(structureGroup?.summarizeOnProposal).toBe(true);
+    expect(graphicsGroup?.summarizeOnProposal).toBe(false);
+    // Not ALL sections in this booth are summarized, so the booth-wide
+    // flag stays false -- proposal-pdf.tsx's own rendering condition
+    // checks both booth.summarizeOnProposal and group.summarizeOnProposal,
+    // so the Graphics group still renders full detail.
+    expect(booth.summarizeOnProposal).toBe(false);
+  });
+
+  it("treats the whole booth as summarized when every one of its sections has the flag set", () => {
+    const sections: ProposalViewSection[] = [
+      { name: "Structure", groupLabel: "SECTION 231", summarizeOnProposal: true, lineItems: [li({ id: "a", totalCost: 100 })] },
+      { name: "Graphics", groupLabel: "SECTION 231", summarizeOnProposal: true, lineItems: [li({ id: "b", totalCost: 50 })] },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+
+    expect(booth.summarizeOnProposal).toBe(true);
+  });
+
+  it("excludes an omittedFromProposal ('bury the cost') H2 group entirely, leaving a sibling group in the same booth fully itemized", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Structure",
+        groupLabel: "SECTION 231",
+        omittedFromProposal: true,
+        lineItems: [li({ id: "a", description: "Buried", totalCost: 100 })],
+      },
+      { name: "Graphics", groupLabel: "SECTION 231", lineItems: [li({ id: "b", description: "Visible", totalCost: 50 })] },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+
+    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Graphics"]);
+    expect(booth.subtotal).toBe(50);
   });
 
   it("falls back to the raw section name for an unmapped element-type category instead of dropping it", () => {
@@ -1040,5 +1145,82 @@ describe("mergeCategoryBucketsForAllMethods / mergeBoothGroupsForAllMethods", ()
     const merged = mergeBoothGroupsForAllMethods(tab, boothGroupsByCategoryName);
 
     expect(merged).toEqual([boothA, boothB]);
+  });
+});
+
+describe("foldOmittedIntoTotals", () => {
+  // Flat 50% markup, easy to verify by hand -- real margin resolution
+  // (resolveLineItemMarginPct/computeMarginGrossUp) is proposal-pdf.tsx's
+  // own concern and already exercised there; this only needs to prove the
+  // fold reuses whatever sellForCategory it's given, correctly, not
+  // re-derive real margin math.
+  const sellForCategory = (cost: number) => cost * 1.5;
+  const zeroVisible = { rentalTotal: 0, servicesTotal: 0, sellRentalTotal: 0, sellServicesTotal: 0, totalCostSum: 0 };
+  const showServiceCategoryNames = new Set<string>();
+
+  it("adds a buried section's marked-up cost to every one of the five totals, not just the headline figure", () => {
+    const omittedSections: ProposalViewSection[] = [
+      {
+        name: "Custom Build",
+        groupLabel: "SECTION 231",
+        omittedFromProposal: true,
+        lineItems: [li({ id: "a", totalCost: 1000 })],
+      },
+    ];
+
+    const folded = foldOmittedIntoTotals(zeroVisible, omittedSections, categories, showServiceCategoryNames, sellForCategory);
+
+    expect(folded.rentalTotal).toBe(1000); // raw cost
+    expect(folded.sellRentalTotal).toBe(1500); // grossed up via sellForCategory
+    expect(folded.totalCostSum).toBe(1000);
+    expect(folded.servicesTotal).toBe(0);
+    expect(folded.sellServicesTotal).toBe(0);
+  });
+
+  it("adds onto whatever visible totals already existed, rather than replacing them", () => {
+    const visible = { rentalTotal: 500, servicesTotal: 0, sellRentalTotal: 750, sellServicesTotal: 0, totalCostSum: 500 };
+    const omittedSections: ProposalViewSection[] = [
+      { name: "Custom Build", groupLabel: "SECTION 231", omittedFromProposal: true, lineItems: [li({ id: "a", totalCost: 1000 })] },
+    ];
+
+    const folded = foldOmittedIntoTotals(visible, omittedSections, categories, showServiceCategoryNames, sellForCategory);
+
+    expect(folded.rentalTotal).toBe(1500);
+    expect(folded.sellRentalTotal).toBe(2250);
+  });
+
+  it("routes a show-service category's buried cost into servicesTotal, not rentalTotal", () => {
+    const serviceCategories = [cat("Labor", "labor")];
+    const omittedSections: ProposalViewSection[] = [
+      { name: "Labor", groupLabel: "SECTION 231", omittedFromProposal: true, lineItems: [li({ id: "a", category: "Labor", totalCost: 400 })] },
+    ];
+
+    const folded = foldOmittedIntoTotals(
+      zeroVisible,
+      omittedSections,
+      serviceCategories,
+      new Set(["Labor"]),
+      sellForCategory,
+    );
+
+    expect(folded.servicesTotal).toBe(400);
+    expect(folded.sellServicesTotal).toBe(600);
+    expect(folded.rentalTotal).toBe(0);
+  });
+
+  it("adds nothing for a section that's ALSO H1-hidden (includeInProposal: false) -- H1's existing 'subtract from total' behavior wins, no double-handling", () => {
+    const omittedSections: ProposalViewSection[] = [
+      {
+        name: "Custom Build",
+        groupLabel: "SECTION 231",
+        includeInProposal: false,
+        omittedFromProposal: true,
+        lineItems: [li({ id: "a", totalCost: 1000 })],
+      },
+    ];
+
+    const folded = foldOmittedIntoTotals(zeroVisible, omittedSections, categories, showServiceCategoryNames, sellForCategory);
+
+    expect(folded).toEqual(zeroVisible);
   });
 });
