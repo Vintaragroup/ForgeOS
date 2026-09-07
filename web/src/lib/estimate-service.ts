@@ -1226,24 +1226,37 @@ export async function moveSectionToGroup(
 // carrying different buildTypes when tagged separately, and
 // proposalSortOrder settles the next time someone actually reorders the
 // merged booth).
-export async function mergeBoothIntoAnotherBooth(
-  estimateVersionId: string,
-  sourceGroupLabel: string,
-  targetGroupLabel: string,
-) {
+// Target can be either a real booth (by groupLabel) or a standalone,
+// never-grouped section (by sectionId) -- a standalone section renders
+// with the exact same H1 heading treatment as a real booth (see
+// orderedFlatSectionGroups's own comment in page.tsx) but has no
+// groupLabel of its own to merge into yet. When the target is standalone,
+// it's promoted into a real one-section booth as part of this same
+// operation, keyed by its own id (opaque, guaranteed unique, never shown
+// -- see resolvedBoothDescription below for what the heading actually
+// shows) rather than requiring the user to invent a groupLabel for it
+// first. Without this, a section created via "Add section" with Group
+// left blank -- which looks identical to every other booth's H1 on
+// screen -- could never appear as a merge target at all (confirmed live:
+// exactly this on a real production estimate, "Large Simulators").
+export async function mergeBoothIntoAnotherBooth(estimateVersionId: string, sourceGroupLabel: string, target: SectionScope) {
   await assertUnlocked(estimateVersionId);
-  if (sourceGroupLabel === targetGroupLabel) {
-    throw new Error("Choose a different booth to merge into.");
+  if ("groupLabel" in target && sourceGroupLabel === target.groupLabel) {
+    throw new Error("Choose a different component to merge into.");
   }
   // Re-verified against the DB rather than trusted from the caller-supplied
-  // string alone -- same ownership discipline as every other
+  // identifier alone -- same ownership discipline as every other
   // caller-supplied-identifier check in this file (see
   // opportunity-access.ts's own header comment on the general pattern).
-  // Without this, a typo'd or stale target groupLabel would silently
+  // Without this, a typo'd or stale target identifier would silently
   // create a brand-new, phantom booth instead of merging into a real one.
   const targetSection = await db.estimateSection.findFirst({
-    where: { estimateVersionId, groupLabel: targetGroupLabel },
+    where: sectionScopeWhere(estimateVersionId, target),
     select: {
+      id: true,
+      name: true,
+      groupLabel: true,
+      buildType: true,
       boothDescription: true,
       boothPendingDescription: true,
       boothSummary: true,
@@ -1253,21 +1266,59 @@ export async function mergeBoothIntoAnotherBooth(
       excludedFromTotals: true,
     },
   });
-  if (!targetSection) throw new Error("Target booth not found on this estimate version.");
+  if (!targetSection) throw new Error("Target component not found on this estimate version.");
+  if (targetSection.groupLabel === sourceGroupLabel) {
+    throw new Error("Choose a different component to merge into.");
+  }
 
-  await db.estimateSection.updateMany({
-    where: { estimateVersionId, groupLabel: sourceGroupLabel },
-    data: {
-      groupLabel: targetGroupLabel,
-      boothDescription: targetSection.boothDescription,
-      boothPendingDescription: targetSection.boothPendingDescription,
-      boothSummary: targetSection.boothSummary,
-      boothPendingSummary: targetSection.boothPendingSummary,
-      includeInProposal: targetSection.includeInProposal,
-      summarizeOnProposal: targetSection.summarizeOnProposal,
-      excludedFromTotals: targetSection.excludedFromTotals,
-    },
-  });
+  const resolvedGroupLabel = targetSection.groupLabel ?? targetSection.id;
+  // A standalone section's own heading falls back to its plain `name`
+  // (see orderedFlatSectionGroups), never boothDescription -- so without
+  // this, promoting it here would make the merged booth's H1 fall back to
+  // resolvedGroupLabel instead (the target's own opaque id, if it was
+  // standalone), silently swapping a readable heading for a random string.
+  const resolvedBoothDescription = targetSection.boothDescription ?? (targetSection.groupLabel ? null : targetSection.name);
+  const sharedFields = {
+    groupLabel: resolvedGroupLabel,
+    boothDescription: resolvedBoothDescription,
+    boothPendingDescription: targetSection.boothPendingDescription,
+    boothSummary: targetSection.boothSummary,
+    boothPendingSummary: targetSection.boothPendingSummary,
+    includeInProposal: targetSection.includeInProposal,
+    summarizeOnProposal: targetSection.summarizeOnProposal,
+    excludedFromTotals: targetSection.excludedFromTotals,
+  };
+
+  // A never-tagged standalone section's own buildType stays null through
+  // promotion above -- boothGroupsByCategoryForEditing skips any section
+  // with a null buildType entirely (its own "!section.buildType" check),
+  // so without this, the promoted target's line items would keep existing
+  // in the database (groupLabel and everything else genuinely merged
+  // correctly) but silently stop rendering as their own H2 group under
+  // the merged booth -- confirmed live: exactly this, on this same "Large
+  // Simulators" fix. The source is always already-real and tagged here
+  // (only a real, already-rendered booth's own kebab menu ever reaches
+  // this function as the merge's source), so its buildType is the correct
+  // one to inherit -- these items are being declared "the same real booth"
+  // as the source, not a fresh, independently-acquired one. Left untouched
+  // if the target already had its own buildType (an already-real booth
+  // merge, where sections legitimately keep independently-tagged
+  // buildTypes -- see sharedFields' own comment above for why that stays
+  // per-section rather than forced uniform).
+  const targetBuildType = targetSection.buildType ?? (await resolveBoothBuildType(estimateVersionId, sourceGroupLabel));
+
+  await db.$transaction([
+    db.estimateSection.updateMany({
+      where: { estimateVersionId, groupLabel: sourceGroupLabel },
+      data: sharedFields,
+    }),
+    // Only needed when the target was standalone (no groupLabel of its
+    // own yet) -- an already-real booth's other sections already carry
+    // resolvedGroupLabel and these same field values.
+    ...(targetSection.groupLabel
+      ? []
+      : [db.estimateSection.update({ where: { id: targetSection.id }, data: { ...sharedFields, buildType: targetBuildType } })]),
+  ]);
 }
 
 // Swaps a section with its immediate neighbor (by current display order)

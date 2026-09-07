@@ -2904,6 +2904,27 @@ function CategoryTabContent({
       boothDisplayLabelByGroupLabel.set(s.groupLabel, s.boothDescription);
     }
   }
+  // Every real booth's "Merge this entire component into" options -- a
+  // grouped booth by groupLabel (encoded "group:<groupLabel>", the value
+  // mergeBoothIntoAnotherBooth actually merges on), plus every standalone
+  // section (encoded "section:<id>") since a section added via "Add
+  // section" with Group left blank renders with the exact same H1 heading
+  // as a real booth (see orderedFlatSectionGroups's own comment below) but
+  // has no groupLabel of its own -- without listing it here too, a
+  // brand-new top-level heading could never be picked as a merge target at
+  // all (confirmed live: exactly this on a real production estimate,
+  // "Large Simulators"). mergeBoothIntoAnotherBooth promotes a standalone
+  // target into a real one-section booth as part of the merge itself.
+  const mergeTargetOptions = [
+    ...allBoothLabels.map((label) => ({
+      value: `group:${label}`,
+      groupLabel: label as string | null,
+      label: boothDisplayLabelByGroupLabel.get(label) ?? label,
+    })),
+    ...version.sections
+      .filter((s) => !s.groupLabel)
+      .map((s) => ({ value: `section:${s.id}`, groupLabel: null as string | null, label: s.description ?? s.name })),
+  ];
 
   // Grosses up at THIS bucket's own resolved category's margin (its
   // override if set, else the document target) -- not one global
@@ -3108,7 +3129,7 @@ function CategoryTabContent({
             // keeps every section sharing this groupLabel in sync.
             const boothExcludedFromTotals =
               version.sections.find((s) => s.groupLabel === booth.boothLabel)?.excludedFromTotals ?? false;
-            const otherBoothLabels = allBoothLabels.filter((label) => label !== booth.boothLabel);
+            const otherMergeTargetOptions = mergeTargetOptions.filter((opt) => opt.groupLabel !== booth.boothLabel);
             // A section just added to this booth via the "+ Group" tool
             // below (or one imported with no items yet) never appears in
             // booth.elementGroups -- that's built entirely from existing
@@ -3259,14 +3280,11 @@ function CategoryTabContent({
                         categoryOptions={moveCategoryOptions}
                         currentCategory={bucket.category.name}
                         mergeAction={
-                          otherBoothLabels.length > 0
+                          otherMergeTargetOptions.length > 0
                             ? mergeBoothAction.bind(null, estimateId, version.id, booth.boothLabel)
                             : null
                         }
-                        targetBoothOptions={otherBoothLabels.map((label) => ({
-                          value: label,
-                          label: boothDisplayLabelByGroupLabel.get(label) ?? label,
-                        }))}
+                        targetBoothOptions={otherMergeTargetOptions.map((opt) => ({ value: opt.value, label: opt.label }))}
                       />
                       {/* Adds a new H2 child section under this same booth
                           -- groupLabel/buildType are both already fixed by

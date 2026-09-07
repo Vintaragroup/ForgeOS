@@ -2022,7 +2022,7 @@ describe("mergeBoothIntoAnotherBooth", () => {
       data: { boothDescription: "Large LED Display Wall", boothPendingDescription: "New AI text" },
     });
 
-    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth");
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
 
     const [merged, target, unrelated] = await Promise.all([
       db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } }),
@@ -2044,7 +2044,7 @@ describe("mergeBoothIntoAnotherBooth", () => {
   it("clears the moved sections' booth description when the target has none of its own", async () => {
     const { version, sourceSection } = await makeTwoBooths();
 
-    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth");
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
 
     const merged = await db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } });
     expect(merged.boothDescription).toBeNull();
@@ -2065,7 +2065,7 @@ describe("mergeBoothIntoAnotherBooth", () => {
       data: { includeInProposal: false, summarizeOnProposal: true, excludedFromTotals: true },
     });
 
-    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth");
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
 
     const merged = await db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } });
     expect(merged.includeInProposal).toBe(false);
@@ -2076,7 +2076,7 @@ describe("mergeBoothIntoAnotherBooth", () => {
   it("keeps the moved section's own line items intact", async () => {
     const { version, item } = await makeTwoBooths();
 
-    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth");
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
 
     const stillThere = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
     expect(stillThere.description).toBe("PVC sheet");
@@ -2086,15 +2086,15 @@ describe("mergeBoothIntoAnotherBooth", () => {
     const { version } = await makeTwoBooths();
 
     await expect(
-      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Camera Booth"),
-    ).rejects.toThrow(/different booth/);
+      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Camera Booth" }),
+    ).rejects.toThrow(/different component/);
   });
 
   it("rejects merging into a target groupLabel that doesn't exist on this version", async () => {
     const { version } = await makeTwoBooths();
 
     await expect(
-      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Nonexistent Booth"),
+      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Nonexistent Booth" }),
     ).rejects.toThrow(/not found/);
   });
 
@@ -2103,8 +2103,62 @@ describe("mergeBoothIntoAnotherBooth", () => {
     await lockEstimateVersion(version.id);
 
     await expect(
-      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", "Section 203 - Booth"),
+      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" }),
     ).rejects.toThrow(/locked/);
+  });
+
+  it("promotes a standalone (never-grouped) target section into a real booth, keyed by its own id", async () => {
+    const { version, sourceSection } = await makeTwoBooths();
+    await db.estimateSection.update({ where: { id: sourceSection.id }, data: { buildType: "RENTAL" } });
+    const standalone = await addSection(version.id, {
+      name: "Large Simulators",
+      sectionType: "CATEGORY",
+      groupLabel: null,
+    });
+
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { sectionId: standalone.id });
+
+    const [merged, target] = await Promise.all([
+      db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } }),
+      db.estimateSection.findUniqueOrThrow({ where: { id: standalone.id } }),
+    ]);
+    // Promoted target's new groupLabel is its own opaque id -- never shown,
+    // just a stable shared key -- but its heading must stay "Large
+    // Simulators" (via boothDescription), not regress to that id.
+    expect(target.groupLabel).toBe(standalone.id);
+    expect(target.boothDescription).toBe("Large Simulators");
+    expect(merged.groupLabel).toBe(standalone.id);
+    expect(merged.boothDescription).toBe("Large Simulators");
+    // Without inheriting a real buildType here, the promoted target's own
+    // line items would silently stop rendering as their own H2 group
+    // under the merged booth (boothGroupsByCategoryForEditing skips any
+    // section with a null buildType) -- confirmed live on the real bug
+    // this fixes.
+    expect(target.buildType).toBe("RENTAL");
+  });
+
+  it("leaves a standalone target's own buildType alone if it already has one", async () => {
+    const { version, sourceSection } = await makeTwoBooths();
+    await db.estimateSection.update({ where: { id: sourceSection.id }, data: { buildType: "RENTAL" } });
+    const standalone = await addSection(version.id, {
+      name: "Large Simulators",
+      sectionType: "CATEGORY",
+      groupLabel: null,
+      buildType: "PURCHASE",
+    });
+
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { sectionId: standalone.id });
+
+    const target = await db.estimateSection.findUniqueOrThrow({ where: { id: standalone.id } });
+    expect(target.buildType).toBe("PURCHASE");
+  });
+
+  it("rejects merging into a standalone target sectionId that doesn't exist on this version", async () => {
+    const { version } = await makeTwoBooths();
+
+    await expect(
+      mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { sectionId: "nonexistent-id" }),
+    ).rejects.toThrow(/not found/);
   });
 });
 

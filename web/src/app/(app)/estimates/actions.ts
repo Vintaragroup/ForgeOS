@@ -48,6 +48,7 @@ import {
   updateSectionOmittedFromProposal,
   updateSectionProposalSummary,
   updateSectionProposalVisibility,
+  type SectionScope,
 } from "@/lib/estimate-service";
 import {
   suggestBoothDescription,
@@ -510,9 +511,14 @@ export async function moveBoothToCategoryAction(
 export async function mergeBoothAction(estimateId: string, versionId: string, groupLabel: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
-  const targetGroupLabel = String(formData.get("targetGroupLabel") ?? "").trim();
-  if (!targetGroupLabel) throw new Error("Choose a booth to merge into.");
-  await mergeBoothIntoAnotherBooth(versionId, groupLabel, targetGroupLabel);
+  const raw = String(formData.get("targetGroupLabel") ?? "").trim();
+  if (!raw) throw new Error("Choose a component to merge into.");
+  // Encoded by BoothActionsMenu's own <option value>: "group:<groupLabel>"
+  // for a real booth, "section:<sectionId>" for a standalone section (no
+  // groupLabel of its own yet) -- see mergeBoothIntoAnotherBooth's header
+  // comment for why a standalone one is a valid target at all.
+  const target: SectionScope = raw.startsWith("section:") ? { sectionId: raw.slice("section:".length) } : { groupLabel: raw.slice("group:".length) };
+  await mergeBoothIntoAnotherBooth(versionId, groupLabel, target);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

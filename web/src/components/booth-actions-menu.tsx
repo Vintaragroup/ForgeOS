@@ -110,7 +110,7 @@ export function BoothActionsMenu({
               className="flex flex-col gap-1 border-t border-neutral-700 pt-3"
             >
               <label htmlFor="booth-merge-target" className="text-xs font-medium text-neutral-400">
-                Merge this entire booth into
+                Merge this entire component into
               </label>
               <select
                 id="booth-merge-target"
