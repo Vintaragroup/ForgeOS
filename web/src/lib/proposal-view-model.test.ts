@@ -21,7 +21,19 @@ function cat(name: string, key: string) {
   return { id: key, name, key, parentId: null, sortOrder: 0, isShowService: false, isLumpSum: false, deletedAt: null } as never;
 }
 
-function li(overrides: Partial<{ id: string; description: string; category: string | null; qty: number; unit: string | null; totalCost: number; isClientOwned: boolean; sortOrder: number }>) {
+function li(
+  overrides: Partial<{
+    id: string;
+    description: string;
+    category: string | null;
+    qty: number;
+    unit: string | null;
+    totalCost: number;
+    isClientOwned: boolean;
+    sortOrder: number;
+    subgroupLabel: string | null;
+  }>,
+) {
   return {
     id: overrides.id ?? "li1",
     description: overrides.description ?? "Item",
@@ -31,6 +43,7 @@ function li(overrides: Partial<{ id: string; description: string; category: stri
     unit: overrides.unit ?? "EA",
     totalCost: new Prisma.Decimal(overrides.totalCost ?? 100),
     sortOrder: overrides.sortOrder ?? 0,
+    subgroupLabel: overrides.subgroupLabel ?? null,
   };
 }
 
@@ -722,6 +735,96 @@ describe("groupBoothLineItems", () => {
     // label would just repeat it under every single row.
     expect(booth.elementGroups[0].items[0].boothLabel).toBeNull();
   });
+
+  it("H3: items sharing a subgroupLabel within one H2 land in one subgroups[] entry, ungrouped items stay in items unchanged", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Reception Type 1",
+        groupLabel: "RECEPTION",
+        lineItems: [
+          li({ id: "a", description: "Counter frame", totalCost: 100, subgroupLabel: "Counter" }),
+          li({ id: "b", description: "Counter graphic", totalCost: 50, subgroupLabel: "Counter" }),
+          li({ id: "c", description: "Standalone stool", totalCost: 25 }),
+        ],
+      },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+    const [group] = booth.elementGroups;
+
+    expect(group.items.map((li) => li.description)).toEqual(["Standalone stool"]);
+    expect(group.subgroups).toHaveLength(1);
+    expect(group.subgroups[0].subgroupLabel).toBe("Counter");
+    expect(group.subgroups[0].items.map((li) => li.description)).toEqual(["Counter frame", "Counter graphic"]);
+    expect(group.subgroups[0].subtotal).toBe(150);
+    expect(group.subtotal).toBe(175); // 150 (Counter) + 25 (ungrouped) -- H3 never changes the H2 total
+  });
+
+  it("H3: two different subgroup labels in the same H2 produce two separate subgroups[] entries, in first-seen order", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Reception Type 1",
+        groupLabel: "RECEPTION",
+        lineItems: [
+          li({ id: "a", description: "Header graphic", totalCost: 60, subgroupLabel: "Header Graphic", sortOrder: 1 }),
+          li({ id: "b", description: "Counter frame", totalCost: 100, subgroupLabel: "Counter", sortOrder: 0 }),
+        ],
+      },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+    const [group] = booth.elementGroups;
+
+    expect(group.items).toHaveLength(0);
+    expect(group.subgroups.map((sg) => sg.subgroupLabel)).toEqual(["Counter", "Header Graphic"]);
+  });
+
+  it("H3: an H2 with no H3-tagged items produces an empty subgroups[] -- backward-compat baseline", () => {
+    const sections: ProposalViewSection[] = [
+      { name: "BeMatrix", groupLabel: "SECTION 211", lineItems: [li({ id: "a", totalCost: 100 })] },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+
+    expect(booth.elementGroups[0].subgroups).toEqual([]);
+    expect(booth.elementGroups[0].items).toHaveLength(1);
+  });
+
+  it("H3: an H2 whose items are ALL subgroup-tagged still surfaces (zero ungrouped items is not the same as zero content)", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Reception Type 1",
+        groupLabel: "RECEPTION",
+        lineItems: [li({ id: "a", description: "Counter frame", totalCost: 100, subgroupLabel: "Counter" })],
+      },
+    ];
+
+    const groups = groupBoothLineItems(sections);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].elementGroups[0].items).toEqual([]);
+    expect(groups[0].elementGroups[0].subgroups[0].items).toHaveLength(1);
+  });
+
+  it("H3: identical description+unit in DIFFERENT subgroups of the same H2 stay separate rows, not merged into one", () => {
+    const sections: ProposalViewSection[] = [
+      {
+        name: "Reception Type 1",
+        groupLabel: "RECEPTION",
+        lineItems: [
+          li({ id: "a", description: "Laminate panel", totalCost: 100, subgroupLabel: "Counter" }),
+          li({ id: "b", description: "Laminate panel", totalCost: 100, subgroupLabel: "Header" }),
+        ],
+      },
+    ];
+
+    const [booth] = groupBoothLineItems(sections);
+    const [group] = booth.elementGroups;
+
+    expect(group.subgroups).toHaveLength(2);
+    expect(group.subgroups[0].items).toHaveLength(1);
+    expect(group.subgroups[1].items).toHaveLength(1);
+  });
 });
 
 describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-through", () => {
@@ -880,6 +983,35 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
     const [booth] = groupBoothLineItemsForEditing(sections);
 
     expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Graphics", "Wall Structure"]);
+  });
+
+  it("H3: raw, unmerged rows split into ungrouped items[] and subgroups[] the same way the read-only PDF version does", () => {
+    const sections = [
+      {
+        id: "s1",
+        name: "Reception Type 1",
+        groupLabel: "RECEPTION",
+        description: null,
+        pendingDescription: null,
+        boothDescription: null,
+        boothPendingDescription: null,
+        lineItems: [
+          li({ id: "a", description: "Counter frame", totalCost: 100, subgroupLabel: "Counter" }),
+          li({ id: "b", description: "Counter frame", totalCost: 100, subgroupLabel: "Counter" }), // same description -- must NOT merge, unlike groupBoothLineItems
+          li({ id: "c", description: "Standalone stool", totalCost: 25 }),
+        ],
+      },
+    ];
+
+    const [booth] = groupBoothLineItemsForEditing(sections);
+    const [group] = booth.elementGroups;
+
+    expect(group.items.map((li) => li.id)).toEqual(["c"]);
+    expect(group.subgroups).toHaveLength(1);
+    expect(group.subgroups[0].subgroupLabel).toBe("Counter");
+    expect(group.subgroups[0].items.map((li) => li.id)).toEqual(["a", "b"]);
+    expect(group.subgroups[0].subtotal).toBe(200);
+    expect(group.subtotal).toBe(225);
   });
 });
 

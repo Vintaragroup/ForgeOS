@@ -1442,6 +1442,19 @@ model LineItem {
   // confidently resolved -- the PDF buckets those into "Other" at render
   // time rather than guessing a category into the database.
   category      String?
+  // H3 -- an optional, free-text sub-breakdown of this item within its own
+  // H2 component (e.g. four "Reception Type" H2s, each broken into named
+  // H3s like "Counter", "Header Graphic"). Same "no model of its own"
+  // pattern as EstimateSection.groupLabel's own H1: an H3 group is just
+  // every LineItem sharing this exact string within one sectionId. Null
+  // means "ungrouped" -- renders with zero change from before this field
+  // existed. Canonicalized case-insensitively against other
+  // subgroupLabels already used within the same section on write (see
+  // resolveCanonicalSubgroupLabel in estimate-service.ts), the same way
+  // resolveOrCreateTargetSection already canonicalizes groupLabel, so
+  // retyping an existing H3's name with different casing joins it instead
+  // of silently fragmenting into a near-duplicate group.
+  subgroupLabel String?
   // Order within `category`'s proposal-facing group (drag-and-drop on the
   // estimate page's category board, estimates/actions.ts's
   // reorderCategoryLineItemsAction) -- unrelated to EstimateSection's own

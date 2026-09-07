@@ -218,6 +218,29 @@ const styles = StyleSheet.create({
     color: BRAND.black,
   },
   elementTypeHeaderTotal: { flexShrink: 0, fontSize: 7.5, fontWeight: 700, color: BRAND.black },
+  // H3 -- one visual tier lighter than elementTypeSection/elementTypeHeaderText
+  // above (smaller, unbolded, no background fill), matching the existing
+  // H1 -> H2 step-down. Only rendered for a group that actually uses H3
+  // subgroups -- see ElementTypeGroup.subgroups' own comment.
+  subgroupSection: { marginLeft: 10, marginBottom: 6 },
+  subgroupHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    marginBottom: 2,
+  },
+  subgroupHeaderText: {
+    flex: 1,
+    marginRight: 8,
+    fontSize: 7,
+    fontWeight: 600,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+    color: "#555",
+  },
+  subgroupHeaderTotal: { flexShrink: 0, fontSize: 7, fontWeight: 600, color: "#555" },
   tableHeaderRow: {
     flexDirection: "row",
     borderBottomWidth: 1,
@@ -725,6 +748,29 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   : isServiceStyle
                     ? renderServiceBody(group.items, categoryName, hidePrice)
                     : renderBody(group.items, categoryName, hidePrice))}
+              {/* H3 -- see ElementTypeGroup.subgroups' own comment. Empty
+                  for a group that's never used H3, so this renders nothing
+                  extra for every existing booth/component. Governed by the
+                  same summarizeOnProposal skip as the ungrouped items
+                  above -- an H3 subgroup has no summarize/hide of its own
+                  (v1 scope), it's fully governed by its H1/H2 ancestors. */}
+              {!booth.summarizeOnProposal &&
+                !group.summarizeOnProposal &&
+                group.subgroups.map((subgroup) => (
+                  <View key={subgroup.subgroupLabel} style={styles.subgroupSection} wrap={false}>
+                    <View style={styles.subgroupHeaderRow}>
+                      <Text style={styles.subgroupHeaderText}>{subgroup.subgroupLabel}</Text>
+                      <Text style={styles.subgroupHeaderTotal}>
+                        {hidePrice ? "" : amountContent(subgroup.subtotal, sellForCategory(subgroup.subtotal, categoryName), data.showCost)}
+                      </Text>
+                    </View>
+                    {isSummary
+                      ? renderSummaryBody(subgroup.items)
+                      : isServiceStyle
+                        ? renderServiceBody(subgroup.items, categoryName, hidePrice)
+                        : renderBody(subgroup.items, categoryName, hidePrice)}
+                  </View>
+                ))}
             </View>
           ))}
         </View>

@@ -931,6 +931,34 @@ export async function moveLineItemsToSection(estimateVersionId: string, lineItem
   );
 }
 
+// Renames an H3 subgroup -- every LineItem sharing oldLabel within this
+// one section (see LineItem.subgroupLabel's own schema comment for why
+// this is a plain updateMany-by-shared-string, the same pattern
+// updateBoothDescription already uses for H1, just scoped by sectionId
+// instead of groupLabel). Resolving newLabel through the same
+// canonicalization used on write means renaming onto an EXISTING
+// different H3 label in this section merges the two groups into one --
+// no separate merge tool needed, the label itself is the shared key.
+// opportunityId ownership check -- same discipline as deleteLineItem's
+// header comment.
+export async function renameLineItemSubgroup(
+  opportunityId: string,
+  sectionId: string,
+  oldLabel: string,
+  newLabel: string,
+) {
+  const section = await db.estimateSection.findFirstOrThrow({
+    where: { id: sectionId, estimateVersion: { estimate: { opportunityId } } },
+  });
+  await assertUnlocked(section.estimateVersionId);
+  const resolvedNewLabel = await resolveCanonicalSubgroupLabel(sectionId, newLabel, undefined, oldLabel);
+  if (!resolvedNewLabel) throw new Error("New subgroup name is required.");
+  await db.lineItem.updateMany({
+    where: { sectionId, subgroupLabel: oldLabel },
+    data: { subgroupLabel: resolvedNewLabel },
+  });
+}
+
 // Resolves the (booth, group name) an estimator typed in the "Move to
 // group" bar into a real target sectionId -- reuses an existing H2 under
 // that booth (or project-wide, when groupLabel is null) if the name
@@ -1239,6 +1267,20 @@ export async function moveSectionToGroup(
 // left blank -- which looks identical to every other booth's H1 on
 // screen -- could never appear as a merge target at all (confirmed live:
 // exactly this on a real production estimate, "Large Simulators").
+//
+// The source's own H1 identity is NOT discarded here -- its own heading
+// becomes a brand-new H2 inside the target booth (named after whatever
+// the source's own H1 was showing), and each of the source's own H2
+// children becomes an H3 subgroup underneath that new H2, keyed by that
+// child's own name. Before H3 existed, this used to flatten every one of
+// the source's own H2 sections directly onto the target as plain
+// siblings, discarding "these used to belong together as one booth"
+// entirely (the data was safe -- every item and section survived -- but
+// the grouping was gone, and reported back exactly that way: "the H1 I'm
+// merging should keep all its sub H2 items in their own group, the H1
+// should become an H2, and each section should become an H3"). See
+// LineItem.subgroupLabel's own schema comment for the general H3
+// mechanism this reuses.
 export async function mergeBoothIntoAnotherBooth(estimateVersionId: string, sourceGroupLabel: string, target: SectionScope) {
   await assertUnlocked(estimateVersionId);
   if ("groupLabel" in target && sourceGroupLabel === target.groupLabel) {
@@ -1270,6 +1312,12 @@ export async function mergeBoothIntoAnotherBooth(estimateVersionId: string, sour
   if (targetSection.groupLabel === sourceGroupLabel) {
     throw new Error("Choose a different component to merge into.");
   }
+
+  const sourceSections = await db.estimateSection.findMany({
+    where: { estimateVersionId, groupLabel: sourceGroupLabel },
+    select: { id: true, name: true, boothDescription: true, lineItems: { select: { id: true } } },
+  });
+  if (sourceSections.length === 0) throw new Error("Source component has no sections to merge.");
 
   const resolvedGroupLabel = targetSection.groupLabel ?? targetSection.id;
   // A standalone section's own heading falls back to its plain `name`
@@ -1304,14 +1352,59 @@ export async function mergeBoothIntoAnotherBooth(estimateVersionId: string, sour
   // if the target already had its own buildType (an already-real booth
   // merge, where sections legitimately keep independently-tagged
   // buildTypes -- see sharedFields' own comment above for why that stays
-  // per-section rather than forced uniform).
+  // per-section rather than forced uniform). Also doubles as the brand-new
+  // wrapper H2's own buildType below -- same "new H2 joining an existing
+  // booth inherits it" reasoning resolveOrCreateTargetSection already uses.
   const targetBuildType = targetSection.buildType ?? (await resolveBoothBuildType(estimateVersionId, sourceGroupLabel));
 
+  // The wrapper H2's own name -- the source's own approved H1 heading if
+  // it had one, else its raw groupLabel, same "prefer a real, non-null
+  // value" convention as resolvedBoothDescription above. Read off
+  // whichever source section has one; every section sharing a groupLabel
+  // is supposed to carry an identical boothDescription (the same
+  // read-side backstop groupBoothLineItems' own boothDescriptionText
+  // documents).
+  const wrapperName = sourceSections.find((s) => s.boothDescription)?.boothDescription ?? sourceGroupLabel;
+
+  // Case-insensitive, first-seen-wins canonicalization across the
+  // source's own section names -- same reasoning as
+  // resolveCanonicalSubgroupLabel, just computed locally in memory since
+  // every H3 tag this produces is going into a section that doesn't exist
+  // in the database yet (nothing to query against). Two source sections
+  // sharing a name (case-insensitive) land in the same H3 subgroup, not
+  // two near-duplicate ones.
+  const canonicalSubgroupLabelByLower = new Map<string, string>();
+  for (const section of sourceSections) {
+    const lower = section.name.trim().toLowerCase();
+    if (!canonicalSubgroupLabelByLower.has(lower)) canonicalSubgroupLabelByLower.set(lower, section.name);
+  }
+
+  // Created as its own call, not inside the $transaction array below --
+  // every subsequent write needs this row's real id, and Prisma's array-
+  // form $transaction can't reference an id produced by an earlier
+  // operation in the same array. A crash between this and the transaction
+  // below would leave an empty, orphaned wrapper H2 -- recoverable by hand
+  // (delete it), not meaningfully worse than the non-transactional
+  // sequential read+write this function (and others in this file, e.g.
+  // addGroupPromotingSection) already does elsewhere.
+  const wrapper = await db.estimateSection.create({
+    data: { estimateVersionId, name: wrapperName, sectionType: "COMPONENT", buildType: targetBuildType, ...sharedFields },
+  });
+
   await db.$transaction([
-    db.estimateSection.updateMany({
-      where: { estimateVersionId, groupLabel: sourceGroupLabel },
-      data: sharedFields,
-    }),
+    // One updateMany per source section (not per item) -- every item in
+    // one source section shares that section's own name as its new H3 tag.
+    ...sourceSections.map((section) =>
+      db.lineItem.updateMany({
+        where: { sectionId: section.id },
+        data: { sectionId: wrapper.id, subgroupLabel: canonicalSubgroupLabelByLower.get(section.name.trim().toLowerCase())! },
+      }),
+    ),
+    // Every source section is empty now that its items moved onto the
+    // wrapper -- same cleanup deleteEmptySection does one at a time, done
+    // here in bulk since every one of them is guaranteed empty by
+    // construction (no need for that function's own emptiness check).
+    db.estimateSection.deleteMany({ where: { id: { in: sourceSections.map((s) => s.id) } } }),
     // Only needed when the target was standalone (no groupLabel of its
     // own yet) -- an already-real booth's other sections already carry
     // resolvedGroupLabel and these same field values.
@@ -1479,6 +1572,48 @@ async function recordLineItemAudit(
 // opportunity-access.ts's assertVersionBelongsToEstimate) -- sectionId
 // alone doesn't prove it belongs to that version, the same cross-
 // resource gap deleteLineItem's header comment describes.
+// H3 canonicalization -- same idea as resolveOrCreateTargetSection's own
+// groupLabel canonicalization above, much smaller since there's no row to
+// find-or-create: an H3 subgroup is just LineItem.subgroupLabel, a plain
+// string shared by every item within one section (see that field's own
+// schema comment), so "resolving" it just means preferring whatever
+// casing is already stored for a case-insensitive match within this same
+// section over whatever the caller just typed -- without this, "Counter"
+// and "counter" would silently become two different H3 groups instead of
+// one, the exact trap groupLabel's own canonicalization exists to avoid.
+// The two excludes below both exist for the same reason: whatever rows
+// are ABOUT to be overwritten with this new label must not be allowed to
+// match themselves and "canonicalize" the new value right back to their
+// own old one, or fixing a subgroup's casing (on a single item via
+// updateLineItem, or the whole group via renameLineItemSubgroup) would be
+// a silent no-op. excludeLineItemId covers the single-row case
+// (updateLineItem's own call below); excludeCurrentLabel covers the
+// whole-group case (renameLineItemSubgroup's own call), since a rename's
+// own about-to-be-renamed rows are identified by their CURRENT label, not
+// one row's id.
+async function resolveCanonicalSubgroupLabel(
+  sectionId: string,
+  subgroupLabel: string | null,
+  excludeLineItemId?: string,
+  excludeCurrentLabel?: string,
+): Promise<string | null> {
+  if (!subgroupLabel) return null;
+  const existing = await db.lineItem.findFirst({
+    where: {
+      sectionId,
+      subgroupLabel: { equals: subgroupLabel, mode: "insensitive" },
+      ...(excludeLineItemId ? { id: { not: excludeLineItemId } } : {}),
+      // A separate AND-ed condition, not merged into the subgroupLabel
+      // filter above -- Prisma would otherwise let the second `subgroupLabel:`
+      // key silently overwrite the first, dropping the case-insensitive
+      // equals entirely.
+      ...(excludeCurrentLabel ? { AND: [{ subgroupLabel: { not: excludeCurrentLabel } }] } : {}),
+    },
+    select: { subgroupLabel: true },
+  });
+  return existing?.subgroupLabel ?? subgroupLabel;
+}
+
 export async function addLineItem(
   estimateVersionId: string,
   sectionId: string,
@@ -1490,6 +1625,8 @@ export async function addLineItem(
     // here since a manually added line item's category is whatever the
     // estimator picked in the form, which may be left unset.
     category?: string | null;
+    // H3 -- see LineItem.subgroupLabel's own schema comment.
+    subgroupLabel?: string | null;
     // A real $0 by design (client already owns/supplies it) vs. simply not
     // yet priced -- see line-item-category.ts's inferIsClientOwned.
     isClientOwned?: boolean;
@@ -1510,6 +1647,7 @@ export async function addLineItem(
 ) {
   const section = await db.estimateSection.findFirstOrThrow({ where: { id: sectionId, estimateVersionId } });
   await assertUnlocked(section.estimateVersionId);
+  const subgroupLabel = await resolveCanonicalSubgroupLabel(sectionId, data.subgroupLabel ?? null);
 
   const created = await db.lineItem.create({
     data: {
@@ -1518,6 +1656,7 @@ export async function addLineItem(
       description: data.description,
       department: data.department ?? null,
       category: data.category ?? null,
+      subgroupLabel,
       isClientOwned: data.isClientOwned ?? false,
       usageTag: data.usageTag ?? null,
       qty: new Prisma.Decimal(data.qty),
@@ -1558,6 +1697,10 @@ export async function addLineItemsBulk(
     description: string;
     department?: string | null;
     category?: string | null;
+    // H3 -- see LineItem.subgroupLabel's own schema comment. Undefined
+    // for every existing caller (document/AI-sourced imports don't derive
+    // one) -- only present when a future caller genuinely knows it.
+    subgroupLabel?: string | null;
     isClientOwned?: boolean;
     usageTag?: LineItemUsageTag | null;
     qty: DecimalInput;
@@ -1601,13 +1744,22 @@ export async function addLineItemsBulk(
   if (items.length === 0) return [];
 
   const isDraft = options?.isDraft ?? true;
+  // Resolved up front, not inside the $transaction below -- Prisma's
+  // array-form $transaction can't run an interactive read between two of
+  // its own writes, and no current caller actually sets subgroupLabel
+  // (see its own comment above) so this is a no-op lookup today, but kept
+  // correct for whenever one does rather than silently skipping
+  // canonicalization for this one entry point.
+  const resolvedSubgroupLabels = await Promise.all(
+    items.map((item) => resolveCanonicalSubgroupLabel(sectionId, item.subgroupLabel ?? null)),
+  );
   // Prisma's array form of $transaction resolves in the same order as
   // the input array -- returned directly instead of a findMany() re-query
   // afterward, since a caller (commitProposedVendorSectionAction) needs
   // each created row to line up index-for-index with its own input item,
   // which an unordered-by-default findMany can't guarantee.
   const created = await db.$transaction(
-    items.map((item) =>
+    items.map((item, i) =>
       db.lineItem.create({
         data: {
           sectionId,
@@ -1615,6 +1767,7 @@ export async function addLineItemsBulk(
           description: item.description,
           department: item.department ?? null,
           category: item.category ?? null,
+          subgroupLabel: resolvedSubgroupLabels[i],
           isClientOwned: item.isClientOwned ?? false,
           usageTag: item.usageTag ?? null,
           qty: new Prisma.Decimal(item.qty),
@@ -1658,6 +1811,8 @@ export async function updateLineItem(
     lineType?: LineItemType;
     department?: string | null;
     category?: string | null;
+    // H3 -- see LineItem.subgroupLabel's own schema comment.
+    subgroupLabel?: string | null;
     isClientOwned?: boolean;
     usageTag?: LineItemUsageTag | null;
     qty?: DecimalInput;
@@ -1700,12 +1855,17 @@ export async function updateLineItem(
 
   const qty = data.qty ?? existing.qty;
   const unitCost = data.unitCost ?? existing.unitCost;
+  const subgroupLabel =
+    data.subgroupLabel !== undefined
+      ? await resolveCanonicalSubgroupLabel(existing.sectionId, data.subgroupLabel, existing.id)
+      : existing.subgroupLabel;
 
   const resolved = {
     description: data.description ?? existing.description,
     lineType: data.lineType ?? existing.lineType,
     department: data.department !== undefined ? data.department : existing.department,
     category: data.category !== undefined ? data.category : existing.category,
+    subgroupLabel,
     isClientOwned: data.isClientOwned ?? existing.isClientOwned,
     usageTag: data.usageTag !== undefined ? data.usageTag : existing.usageTag,
     qty: new Prisma.Decimal(qty),
@@ -1923,6 +2083,7 @@ interface LineItemDeleteSnapshot {
   lineType: LineItemType;
   department: string | null;
   category: string | null;
+  subgroupLabel: string | null;
   isClientOwned: boolean;
   usageTag: LineItemUsageTag | null;
   qty: string;
@@ -1950,6 +2111,7 @@ function buildLineItemDeleteSnapshot(item: {
   lineType: LineItemType;
   department: string | null;
   category: string | null;
+  subgroupLabel: string | null;
   isClientOwned: boolean;
   usageTag: LineItemUsageTag | null;
   qty: Decimal;
@@ -1970,6 +2132,7 @@ function buildLineItemDeleteSnapshot(item: {
     lineType: item.lineType,
     department: item.department,
     category: item.category,
+    subgroupLabel: item.subgroupLabel,
     isClientOwned: item.isClientOwned,
     usageTag: item.usageTag,
     qty: item.qty.toString(),
@@ -2101,6 +2264,7 @@ export async function restoreLineItem(opportunityId: string, auditLogId: string,
       description: entry.description,
       department: snapshot.department ?? null,
       category: snapshot.category ?? null,
+      subgroupLabel: snapshot.subgroupLabel ?? null,
       isClientOwned: snapshot.isClientOwned ?? false,
       usageTag: snapshot.usageTag ?? null,
       qty: new Prisma.Decimal(snapshot.qty!),

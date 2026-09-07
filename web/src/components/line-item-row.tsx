@@ -26,6 +26,8 @@ export function LineItemRow({
   department,
   lineType,
   category,
+  subgroupLabel,
+  existingSubgroupLabels = [],
   qty,
   unit,
   unitCost,
@@ -60,6 +62,14 @@ export function LineItemRow({
   department: string;
   lineType: string;
   category: string;
+  // H3 -- "" means ungrouped, same convention as category/department
+  // above. See LineItem.subgroupLabel's own schema comment.
+  subgroupLabel: string;
+  // This section's own existing subgroup labels (excluding this row's
+  // own current one, so it's not suggested against itself), for the wide
+  // edit form's <datalist> below -- same "suggest, don't constrain"
+  // convention as the "Add section" Group field.
+  existingSubgroupLabels?: string[];
   qty: string;
   unit: string;
   unitCost: string;
@@ -132,6 +142,7 @@ export function LineItemRow({
         <td className="px-2 py-1">
           <input type="hidden" name="ids" value={id} />
           <input type="hidden" name={`category__${id}`} value={category} />
+          <input type="hidden" name={`subgroupLabel__${id}`} value={subgroupLabel} />
           <input type="hidden" name={`usageTag__${id}`} value={usageTag} />
           <input type="hidden" name={`isClientOwned__${id}`} value={String(isClientOwned)} />
           <input type="hidden" name={`includeInProposal__${id}`} value={String(includeInProposal)} />
@@ -218,6 +229,20 @@ export function LineItemRow({
               defaultDepartment={department}
               defaultUnitCost={unitCost}
             />
+            <div className="col-span-2 sm:order-3 sm:w-36">
+              <Field
+                label="Subgroup (optional)"
+                name="subgroupLabel"
+                defaultValue={subgroupLabel}
+                placeholder="e.g. Header Graphic"
+                list={`existing-subgroup-labels-row-${id}`}
+              />
+              <datalist id={`existing-subgroup-labels-row-${id}`}>
+                {existingSubgroupLabels.map((label) => (
+                  <option key={label} value={label} />
+                ))}
+              </datalist>
+            </div>
             <QuantityOrAreaFields defaultQty={qty} defaultUnit={unit} />
             <div className="sm:order-9 sm:w-36">
               <SelectField label="Usage" name="usageTag" defaultValue={usageTag} options={usageTagOptions} />
@@ -293,6 +318,15 @@ export function LineItemRow({
         {usageTag && (
           <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">
             {usageTagOptions.find((o) => o.value === usageTag)?.label ?? usageTag}
+          </span>
+        )}
+        {/* Only meaningful where this row can show up alongside items from
+            OTHER H3 subgroups (or none) in one flat list -- inside the H2
+            editor block's own per-subgroup table this is redundant with
+            that table's own heading, but harmless either way. */}
+        {subgroupLabel && (
+          <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600" title="H3 subgroup">
+            {subgroupLabel}
           </span>
         )}
         {bidPackageName && (

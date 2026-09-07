@@ -54,6 +54,7 @@ import {
   moveSectionProposalOrderAction,
   moveSectionToGroupAction,
   recordCostActualAction,
+  renameLineItemSubgroupAction,
   restoreLineItemAction,
   setCategoryMarginOverrideAction,
   suggestBoothDescriptionAction,
@@ -1214,7 +1215,12 @@ function LineItemsTable({
         </tr>
       </thead>
       <tbody>
-        {lineItems.map((li, index) => {
+        {(() => {
+          // Deduped across every item this table is currently showing --
+          // "existing" here means "already used somewhere nearby," a
+          // suggestion aid for the datalist below, not a scoping rule.
+          const existingSubgroupLabels = [...new Set(lineItems.map((x) => x.subgroupLabel).filter((s): s is string => !!s))];
+          return lineItems.map((li, index) => {
           const deleteWithIds = deleteLineItemAction.bind(null, estimateId, li.id);
           const confirmWithIds = confirmDraftLineItemAction.bind(null, estimateId, li.id);
           const updateWithIds = updateLineItemAction.bind(null, estimateId, version.id, li.id);
@@ -1256,6 +1262,8 @@ function LineItemsTable({
               department={li.department ?? ""}
               lineType={li.lineType}
               category={li.category ?? ""}
+              subgroupLabel={li.subgroupLabel ?? ""}
+              existingSubgroupLabels={existingSubgroupLabels.filter((s) => s !== li.subgroupLabel)}
               qty={li.qty.toString()}
               unit={li.unit ?? ""}
               unitCost={li.unitCost.toString()}
@@ -1283,7 +1291,8 @@ function LineItemsTable({
               toggleProposalVisibilityAction={toggleProposalVisibilityWithIds}
             />
           );
-        })}
+          });
+        })()}
       </tbody>
     </table>
   );
@@ -3533,6 +3542,71 @@ function CategoryTabContent({
                         categoryOptions={categoryOptions}
                       />
                     </div>
+                    {/* H3 -- see ElementTypeGroup.subgroups' own comment.
+                        Empty for a group that's never used H3, so nothing
+                        extra renders for every existing component. One
+                        visual tier lighter than this H2's own bg-neutral-100
+                        header, matching the H1 -> H2 step-down above. */}
+                    {group.subgroups.map((subgroup) => (
+                      <div key={subgroup.subgroupLabel} className="mt-2 overflow-hidden rounded-md border border-neutral-200">
+                        <CollapsibleGroup
+                          headerClassName="flex flex-wrap items-center justify-between gap-2 bg-neutral-50 px-3 py-1.5"
+                          chevronClassName="text-neutral-400 hover:text-neutral-900"
+                          bodyClassName="flex flex-col gap-2 p-2"
+                          title={
+                            <span className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+                              {subgroup.subgroupLabel}
+                            </span>
+                          }
+                          actions={
+                            <div className="flex items-center gap-3">
+                              <div className="text-xs text-neutral-500">
+                                <span className="text-neutral-400">Cost {money(subgroup.subtotal)}</span>
+                                <span className="mx-1.5">&rarr;</span>
+                                <span className="font-medium">{money(sell(subgroup.subtotal))}</span>
+                              </div>
+                              {!version.isLocked && group.sectionIds[0] && (
+                                <form
+                                  action={renameLineItemSubgroupAction.bind(
+                                    null,
+                                    estimateId,
+                                    version.id,
+                                    group.sectionIds[0],
+                                    subgroup.subgroupLabel,
+                                  )}
+                                  className="flex items-center gap-1"
+                                >
+                                  <input
+                                    type="text"
+                                    name="subgroupLabel"
+                                    defaultValue={subgroup.subgroupLabel}
+                                    className="w-32 rounded border border-neutral-300 px-1.5 py-0.5 text-xs text-neutral-700 outline-none focus:border-neutral-500"
+                                  />
+                                  <button
+                                    type="submit"
+                                    className="rounded border border-neutral-300 px-1.5 py-0.5 text-xs text-neutral-600 hover:bg-white"
+                                    title="Rename this subgroup (renaming onto an existing subgroup merges them)"
+                                  >
+                                    Rename
+                                  </button>
+                                </form>
+                              )}
+                            </div>
+                          }
+                        >
+                          <div className="overflow-x-auto rounded-md border border-neutral-200">
+                            <LineItemsTable
+                              lineItems={subgroup.items}
+                              version={version}
+                              estimateId={estimateId}
+                              opportunityId={opportunityId}
+                              laborRates={laborRates}
+                              categoryOptions={categoryOptions}
+                            />
+                          </div>
+                        </CollapsibleGroup>
+                      </div>
+                    ))}
                     {!version.isLocked && (
                       <div className="mt-2">
                         {/* sectionIds is almost always length 1 (see RawElementTypeGroup's
@@ -3545,6 +3619,7 @@ function CategoryTabContent({
                           laborRates={laborRates}
                           categoryOptions={categoryOptions}
                           defaultCategory={bucket.category.name}
+                          existingSubgroupLabels={group.subgroups.map((sg) => sg.subgroupLabel)}
                         />
                       </div>
                     )}
@@ -4136,6 +4211,7 @@ function AddLineItemForm({
   laborRates = [],
   categoryOptions,
   defaultCategory = "",
+  existingSubgroupLabels = [],
 }: {
   estimateId: string;
   versionId: string;
@@ -4149,8 +4225,16 @@ function AddLineItemForm({
   // Labor, not fall through to auto-detect the way the old flat
   // per-section form always did.
   defaultCategory?: string;
+  // H3 -- this section's own existing subgroup labels (group.subgroups'
+  // own values, when the caller has them), suggested via a <datalist> so
+  // retyping an existing H3's name autocompletes instead of inviting a
+  // stray-casing near-duplicate. Empty for every caller that doesn't
+  // already have this section's subgroups on hand -- the Subgroup field
+  // still works fine without suggestions, it just won't autocomplete.
+  existingSubgroupLabels?: string[];
 }) {
   const addLineItemWithIds = addLineItemAction.bind(null, estimateId, versionId, sectionId);
+  const subgroupDatalistId = `existing-subgroup-labels-${sectionId}`;
   // Zero-JS disclosure (native <details>/<summary>, same pattern as
   // CollapsibleSection) -- collapsed by default to an icon-only trigger so
   // every group gets one small "add" affordance instead of a permanently
@@ -4177,6 +4261,14 @@ function AddLineItemForm({
           <SelectField label="Type" name="lineType" defaultValue="MATERIAL" options={LINE_TYPE_OPTIONS} />
         </div>
         <LaborRateLineItemFields categoryOptions={categoryOptions} laborRates={laborRates} defaultCategory={defaultCategory} />
+        <div className="col-span-2 sm:order-3 sm:w-36">
+          <Field label="Subgroup (optional)" name="subgroupLabel" placeholder="e.g. Header Graphic" list={subgroupDatalistId} />
+          <datalist id={subgroupDatalistId}>
+            {existingSubgroupLabels.map((label) => (
+              <option key={label} value={label} />
+            ))}
+          </datalist>
+        </div>
         <QuantityOrAreaFields defaultQty="1" />
         <div className="sm:order-9 sm:w-36">
           <SelectField label="Usage" name="usageTag" defaultValue="" options={LINE_ITEM_USAGE_TAG_OPTIONS} />

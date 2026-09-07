@@ -28,6 +28,7 @@ import {
   moveLineItemWithinSection,
   moveSectionOrder,
   moveSectionToGroup,
+  renameLineItemSubgroup,
   moveElementGroupOrder,
   moveSectionProposalOrder,
   recomputeVersionTotals,
@@ -735,6 +736,8 @@ export async function addLineItemAction(
   // line-item-category.ts. Only fetches categories when actually needed
   // (most edits pick an explicit category from the dropdown).
   const category = emptyToNull(formData.get("category")) ?? inferCategoryFromDescription(description, await fetchActiveCategories());
+  // H3 -- see LineItem.subgroupLabel's own schema comment.
+  const subgroupLabel = emptyToNull(formData.get("subgroupLabel"));
   // The checkbox is an explicit override; unchecked, fall back to the same
   // description heuristic import paths use -- see line-item-category.ts.
   const isClientOwned = formData.get("isClientOwned") === "on" || inferIsClientOwned(description);
@@ -758,6 +761,7 @@ export async function addLineItemAction(
       description,
       department,
       category,
+      subgroupLabel,
       isClientOwned,
       usageTag,
       qty,
@@ -796,6 +800,10 @@ export async function updateLineItemAction(
   // the category back to "— auto-detect —" during an edit behaves the
   // same way it would have at creation time.
   const category = emptyToNull(formData.get("category")) ?? inferCategoryFromDescription(description, await fetchActiveCategories());
+  // H3 -- see LineItem.subgroupLabel's own schema comment. Unlike category
+  // above, blank here just means "no subgroup" -- there's no inference
+  // fallback to re-run.
+  const subgroupLabel = emptyToNull(formData.get("subgroupLabel"));
   const isClientOwned = formData.get("isClientOwned") === "on" || inferIsClientOwned(description);
   const usageTag = emptyToNull(formData.get("usageTag")) as LineItemUsageTag | null;
   const unit = emptyToNull(formData.get("unit"));
@@ -822,6 +830,7 @@ export async function updateLineItemAction(
       lineType,
       department,
       category,
+      subgroupLabel,
       isClientOwned,
       usageTag,
       qty,
@@ -861,6 +870,7 @@ export async function bulkUpdateLineItemsAction(estimateId: string, versionId: s
     const lineType = String(formData.get(`lineType__${id}`)) as LineItemType;
     const department = emptyToNull(formData.get(`department__${id}`));
     const category = emptyToNull(formData.get(`category__${id}`));
+    const subgroupLabel = emptyToNull(formData.get(`subgroupLabel__${id}`));
     const isClientOwned = formData.get(`isClientOwned__${id}`) === "true";
     const usageTag = emptyToNull(formData.get(`usageTag__${id}`)) as LineItemUsageTag | null;
     const unit = emptyToNull(formData.get(`unit__${id}`));
@@ -874,12 +884,28 @@ export async function bulkUpdateLineItemsAction(estimateId: string, versionId: s
     await updateLineItem(
       opportunityId,
       id,
-      { description, lineType, department, category, isClientOwned, usageTag, qty, unit, unitCost, includeInProposal },
+      { description, lineType, department, category, subgroupLabel, isClientOwned, usageTag, qty, unit, unitCost, includeInProposal },
       user.id,
     );
   }
 
   await recomputeVersionTotals(versionId);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function renameLineItemSubgroupAction(
+  estimateId: string,
+  versionId: string,
+  sectionId: string,
+  oldLabel: string,
+  formData: FormData,
+) {
+  const opportunityId = await estimateOpportunityId(estimateId);
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const newLabel = String(formData.get("subgroupLabel") ?? "").trim();
+  if (!newLabel) throw new Error("Subgroup name is required.");
+  await renameLineItemSubgroup(opportunityId, sectionId, oldLabel, newLabel);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

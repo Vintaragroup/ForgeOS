@@ -35,6 +35,11 @@ export interface ProposalViewLineItem {
   // undefined means visible (true), so every existing caller/test
   // fixture that predates this field keeps rendering exactly as before.
   includeInProposal?: boolean;
+  // H3 -- see LineItem.subgroupLabel's own schema comment. Optional/
+  // undefined-or-null both mean "ungrouped," so every existing caller/
+  // test fixture that predates this field keeps rendering exactly as
+  // before -- see groupBoothLineItems' own UNGROUPED sentinel.
+  subgroupLabel?: string | null;
 }
 
 export interface ProposalViewSection {
@@ -476,9 +481,28 @@ export function isMappedElementType(sectionName: string): boolean {
   return sectionName.trim().toLowerCase() in ELEMENT_TYPE_MAP;
 }
 
+// H3 -- a named sub-breakdown of an H2 element group's own items, see
+// LineItem.subgroupLabel's own schema comment. Deliberately NOT itself
+// summarize/hide/reorder-able (unlike BoothGroup/ElementTypeGroup) -- an
+// H3 group's visibility is entirely governed by its H2/H1 ancestors; see
+// this plan's own "not in scope" note for why that's deliberate for v1.
+export interface SubgroupGroup {
+  subgroupLabel: string;
+  items: AggregatedLineItem[];
+  subtotal: number;
+}
+
 export interface ElementTypeGroup {
   elementType: string;
+  // Only this group's UNGROUPED items (no subgroupLabel) -- renders
+  // exactly as before H3 existed. Every item with a subgroupLabel is in
+  // `subgroups` below instead, never both.
   items: AggregatedLineItem[];
+  // This group's H3 sub-breakdowns, in first-seen/sortOrder order. Empty
+  // for a group that's never used H3 -- the common case, and the whole
+  // reason `items` above stays ungrouped-only rather than nesting
+  // everything a level deeper unconditionally.
+  subgroups: SubgroupGroup[];
   subtotal: number;
   // Always-shown body text for this one element group -- see
   // EstimateSection.elementSummary's own schema comment. Null until an
@@ -528,8 +552,21 @@ export interface BoothGroup {
 // AI-proposed scope item) has no booth to group by and isn't part of
 // this "Custom Rental" build-out view at all; the caller renders those
 // separately, unchanged, via aggregateByCategory as before.
+// Sentinel bucket key for an item with no subgroupLabel -- distinct from
+// any real subgroup label a user could type (same "prefixed sentinel"
+// idea as aggregateByCategory's own standaloneSummaryScope), so its
+// bucket can be pulled out as ElementTypeGroup.items below while every
+// other bucket becomes one SubgroupGroup.
+const UNGROUPED_SUBGROUP = "__ungrouped__";
+
 export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup[] {
-  const byBooth = new Map<string, Map<string, Map<string, AggregatedLineItem>>>();
+  // One level deeper than before H3 existed: boothLabel -> elementType ->
+  // subgroupKey (UNGROUPED_SUBGROUP or a real subgroupLabel) -> merged
+  // item. Splitting on subgroupKey here (not after merging) keeps two
+  // items with identical description+unit in DIFFERENT H3 subgroups from
+  // merging into one row the way they would if only booth+elementType
+  // scoped the merge key.
+  const byBooth = new Map<string, Map<string, Map<string, Map<string, AggregatedLineItem>>>>();
   // A booth's PDF position -- the min proposalSortOrder among every
   // section contributing to it here, matching moveSectionProposalOrder's
   // own "moves as one unit" convention for a booth backed by more than
@@ -541,6 +578,12 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // a moved group kept rendering in its old position there even though the
   // editing view already reflected the move correctly).
   const elementSortOrder = new Map<string, number>();
+  // Same convention one level deeper still, keyed
+  // `${boothLabel}::${elementType}::${subgroupKey}` -- an H3 subgroup's
+  // own display order is simply the order its items were first seen in,
+  // there's no separate reorder tool for it (v1 scope), so this is the
+  // only ordering signal it has.
+  const subgroupSortOrder = new Map<string, number>();
   // The booth's own approved H1 heading override -- prefers a real,
   // non-null value over whichever section is simply encountered first
   // (mirroring groupBoothLineItemsForEditing's own identical fix): every
@@ -619,14 +662,22 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
       byElementType = new Map();
       byBooth.set(boothLabel, byElementType);
     }
-    let bucket = byElementType.get(elementType);
-    if (!bucket) {
-      bucket = new Map();
-      byElementType.set(elementType, bucket);
+    let bySubgroup = byElementType.get(elementType);
+    if (!bySubgroup) {
+      bySubgroup = new Map();
+      byElementType.set(elementType, bySubgroup);
     }
 
     for (const li of section.lineItems) {
       if (li.includeInProposal === false) continue;
+      const subgroupKey = li.subgroupLabel ?? UNGROUPED_SUBGROUP;
+      const subgroupSortKey = `${boothLabel}::${elementType}::${subgroupKey}`;
+      subgroupSortOrder.set(subgroupSortKey, Math.min(subgroupSortOrder.get(subgroupSortKey) ?? Infinity, li.sortOrder));
+      let bucket = bySubgroup.get(subgroupKey);
+      if (!bucket) {
+        bucket = new Map();
+        bySubgroup.set(subgroupKey, bucket);
+      }
       // Same reasoning as aggregateByCategory's own key: a compound
       // assembly is a unique physical structure, keyed by its own id so
       // two assemblies with identical spec text never silently merge.
@@ -679,12 +730,26 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
             (elementSortOrder.get(`${boothLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${boothLabel}::${b}`) ?? 0) ||
             elementTypeRank(a) - elementTypeRank(b),
         )
-        .map(([elementType, bucket]) => {
-          const items = [...bucket.values()].sort((a, b) => a.sortOrder - b.sortOrder);
+        .map(([elementType, bySubgroup]) => {
+          const ungrouped = bySubgroup.get(UNGROUPED_SUBGROUP);
+          const items = ungrouped ? [...ungrouped.values()].sort((a, b) => a.sortOrder - b.sortOrder) : [];
+          const subgroups = [...bySubgroup.entries()]
+            .filter(([subgroupKey]) => subgroupKey !== UNGROUPED_SUBGROUP)
+            .sort(
+              ([a], [b]) =>
+                (subgroupSortOrder.get(`${boothLabel}::${elementType}::${a}`) ?? 0) -
+                (subgroupSortOrder.get(`${boothLabel}::${elementType}::${b}`) ?? 0),
+            )
+            .map(([subgroupLabel, bucket]) => {
+              const subgroupItems = [...bucket.values()].sort((a, b) => a.sortOrder - b.sortOrder);
+              return { subgroupLabel, items: subgroupItems, subtotal: bucketSubtotal(subgroupItems) };
+            })
+            .filter((sg) => sg.items.length > 0);
           return {
             elementType,
             items,
-            subtotal: bucketSubtotal(items),
+            subgroups,
+            subtotal: bucketSubtotal(items) + subgroups.reduce((sum, sg) => sum + sg.subtotal, 0),
             elementSummary: elementSummaryText.get(`${boothLabel}::${elementType}`) ?? null,
             summarizeOnProposal: elementSummarize.get(`${boothLabel}::${elementType}`) ?? false,
           };
@@ -695,8 +760,10 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
         // draft (excluded upstream by the PDF route's own isDraft:
         // false query), leaving an empty header with a $0.00 subtotal
         // and nothing under it. Confirmed live as exactly the "groups
-        // but no details" report this filter fixes.
-        .filter((g) => g.items.length > 0);
+        // but no details" report this filter fixes. Checks subgroups too
+        // now -- an element group can be all-H3-tagged, zero ungrouped
+        // items, and still have real content to show.
+        .filter((g) => g.items.length > 0 || g.subgroups.length > 0);
       if (elementGroups.length === 0) return null;
       const subtotal = elementGroups.reduce((sum, g) => sum + g.subtotal, 0);
       return {
@@ -871,9 +938,20 @@ export function standaloneSummaryGroupsByCategory(
   return result;
 }
 
+// Editing-surface counterpart to SubgroupGroup above -- every raw item
+// stays its own row, same reasoning as RawElementTypeGroup's own comment.
+export interface RawSubgroup<T> {
+  subgroupLabel: string;
+  items: T[];
+  subtotal: number;
+}
+
 export interface RawElementTypeGroup<T> {
   elementType: string;
+  // Only this group's UNGROUPED items -- see ElementTypeGroup.items' own
+  // comment, identical reasoning here.
   items: T[];
+  subgroups: RawSubgroup<T>[];
   subtotal: number;
   // The section(s) this bucket's items came from -- almost always exactly
   // one (a bucket is keyed by (boothLabel, elementType), and normally only
@@ -926,7 +1004,12 @@ export interface RawBoothGroup<T> {
 // passes straight through unchanged; this only ever needs `totalCost` (a
 // Decimal, for subtotal math) and `sortOrder` (for display order) off it.
 interface EditableSectionBucket<T> {
-  items: T[];
+  // Every raw item contributing to this (boothLabel, elementType) bucket,
+  // split by H3 subgroupLabel at push time (see groupBoothLineItems' own
+  // identical UNGROUPED_SUBGROUP convention) -- keyed by subgroupKey so
+  // an item's subgroup membership is known without re-reading it off T
+  // after the fact.
+  bySubgroup: Map<string, T[]>;
   sectionIds: string[];
   // description/pendingDescription of the bucket's first (and, in the
   // overwhelmingly common case, only) contributing section -- see
@@ -935,7 +1018,7 @@ interface EditableSectionBucket<T> {
   pendingDescription: string | null;
 }
 
-export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Decimal; sortOrder: number }>(
+export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Decimal; sortOrder: number; subgroupLabel?: string | null }>(
   sections: {
     id: string;
     name: string;
@@ -967,6 +1050,9 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
   // section happens to have items in, not a different row per category --
   // so one plain, category-agnostic sortOrder is the correct model here.
   const elementSortOrder = new Map<string, number>();
+  // Same convention one level deeper still as groupBoothLineItems' own
+  // subgroupSortOrder -- see that comment.
+  const subgroupSortOrder = new Map<string, number>();
 
   for (const section of sections) {
     if (!section.groupLabel) continue;
@@ -1001,10 +1087,17 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     }
     let bucket = byElementType.get(elementType);
     if (!bucket) {
-      bucket = { items: [], sectionIds: [], description: section.description, pendingDescription: section.pendingDescription };
+      bucket = { bySubgroup: new Map(), sectionIds: [], description: section.description, pendingDescription: section.pendingDescription };
       byElementType.set(elementType, bucket);
     }
-    bucket.items.push(...section.lineItems);
+    for (const li of section.lineItems) {
+      const subgroupKey = li.subgroupLabel ?? UNGROUPED_SUBGROUP;
+      const subgroupSortKey = `${boothLabel}::${elementType}::${subgroupKey}`;
+      subgroupSortOrder.set(subgroupSortKey, Math.min(subgroupSortOrder.get(subgroupSortKey) ?? Infinity, li.sortOrder));
+      const items = bucket.bySubgroup.get(subgroupKey);
+      if (items) items.push(li);
+      else bucket.bySubgroup.set(subgroupKey, [li]);
+    }
     bucket.sectionIds.push(section.id);
   }
 
@@ -1026,11 +1119,25 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
             elementTypeRank(a) - elementTypeRank(b),
         )
         .map(([elementType, bucket]) => {
-          const sorted = [...bucket.items].sort((a, b) => a.sortOrder - b.sortOrder);
-          const subtotal = sorted.reduce((sum, li) => sum + li.totalCost.toNumber(), 0);
+          const ungrouped = bucket.bySubgroup.get(UNGROUPED_SUBGROUP) ?? [];
+          const items = [...ungrouped].sort((a, b) => a.sortOrder - b.sortOrder);
+          const subgroups = [...bucket.bySubgroup.entries()]
+            .filter(([subgroupKey]) => subgroupKey !== UNGROUPED_SUBGROUP)
+            .sort(
+              ([a], [b]) =>
+                (subgroupSortOrder.get(`${boothLabel}::${elementType}::${a}`) ?? 0) -
+                (subgroupSortOrder.get(`${boothLabel}::${elementType}::${b}`) ?? 0),
+            )
+            .map(([subgroupLabel, subgroupItems]) => {
+              const sorted = [...subgroupItems].sort((a, b) => a.sortOrder - b.sortOrder);
+              return { subgroupLabel, items: sorted, subtotal: sorted.reduce((sum, li) => sum + li.totalCost.toNumber(), 0) };
+            });
+          const subtotal =
+            items.reduce((sum, li) => sum + li.totalCost.toNumber(), 0) + subgroups.reduce((sum, sg) => sum + sg.subtotal, 0);
           return {
             elementType,
-            items: sorted,
+            items,
+            subgroups,
             subtotal,
             sectionIds: bucket.sectionIds,
             description: bucket.description,
@@ -1045,8 +1152,9 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
         })
         // Same reasoning as groupBoothLineItems' own filter above -- an
         // all-draft section still creates an (elementType, bucket) entry
-        // before any items are known to survive.
-        .filter((g) => g.items.length > 0);
+        // before any items are known to survive. Checks subgroups too --
+        // see that function's own identical comment.
+        .filter((g) => g.items.length > 0 || g.subgroups.length > 0);
       if (elementGroups.length === 0) return null;
       const subtotal = elementGroups.reduce((sum, g) => sum + g.subtotal, 0);
       const boothDesc = boothDescriptions.get(boothLabel) ?? { description: null, pendingDescription: null };

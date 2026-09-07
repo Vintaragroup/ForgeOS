@@ -43,6 +43,7 @@ import {
   recategorizeLineItems,
   recomputeVersionTotals,
   removeLineItemFromBidPackage,
+  renameLineItemSubgroup,
   resolveBoothBuildType,
   resolveOrCreateTargetSection,
   restoreLineItem,
@@ -918,6 +919,207 @@ describe("restoreLineItem", () => {
     });
 
     await expect(restoreLineItem(estimate.opportunityId, oldStyleLog.id)).rejects.toThrow(/predates the restore feature/);
+  });
+});
+
+describe("H3 subgroup labels", () => {
+  it("joins an existing subgroup's stored casing instead of creating a differently-cased near-duplicate", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Counter frame",
+      qty: 1,
+      unitCost: 100,
+      subgroupLabel: "Counter",
+    });
+
+    const second = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Counter graphic",
+      qty: 1,
+      unitCost: 50,
+      subgroupLabel: "counter", // different casing, same section
+    });
+
+    expect(second.subgroupLabel).toBe("Counter");
+  });
+
+  it("uses a genuinely new subgroup label verbatim when nothing in the section matches yet", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+
+    const item = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Counter frame",
+      qty: 1,
+      unitCost: 100,
+      subgroupLabel: "Counter",
+    });
+
+    expect(item.subgroupLabel).toBe("Counter");
+  });
+
+  it("canonicalizes on update too, scoped to the item's own section", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const sectionA = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    const sectionB = await addSection(version.id, { name: "Reception Type 2", sectionType: "COMPONENT" });
+    await addLineItem(version.id, sectionA.id, {
+      lineType: "MATERIAL",
+      description: "Counter frame",
+      qty: 1,
+      unitCost: 100,
+      subgroupLabel: "Counter",
+    });
+    // Same label text in a DIFFERENT section -- canonicalization must not
+    // reach across sections, an H3 group is scoped to one H2 only.
+    const itemInOtherSection = await addLineItem(version.id, sectionB.id, {
+      lineType: "MATERIAL",
+      description: "Counter frame",
+      qty: 1,
+      unitCost: 100,
+      subgroupLabel: "counter",
+    });
+    expect(itemInOtherSection.subgroupLabel).toBe("counter"); // no match in sectionB, used verbatim
+
+    const updated = await updateLineItem(estimate.opportunityId, itemInOtherSection.id, { subgroupLabel: "COUNTER" });
+    // Still no other item in sectionB to canonicalize against (itself is
+    // the only match, which resolveCanonicalSubgroupLabel excludes from
+    // being useful since it's about to be overwritten anyway) -- verbatim.
+    expect(updated.subgroupLabel).toBe("COUNTER");
+  });
+
+  it("renameLineItemSubgroup relabels every item sharing the old label within one section", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    const a = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Counter frame",
+      qty: 1,
+      unitCost: 100,
+      subgroupLabel: "Counter",
+    });
+    const b = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Counter graphic",
+      qty: 1,
+      unitCost: 50,
+      subgroupLabel: "Counter",
+    });
+
+    await renameLineItemSubgroup(estimate.opportunityId, section.id, "Counter", "Reception Desk");
+
+    const [rowA, rowB] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: a.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: b.id } }),
+    ]);
+    expect(rowA.subgroupLabel).toBe("Reception Desk");
+    expect(rowB.subgroupLabel).toBe("Reception Desk");
+  });
+
+  it("renaming a subgroup onto a different casing of its OWN current label actually changes the casing, not a silent no-op", async () => {
+    // Without excluding the about-to-be-renamed rows' own current label
+    // from the canonicalization lookup, "Counter" -> "counter" would
+    // match those same rows (still holding "Counter" at lookup time) and
+    // resolve right back to "Counter" -- fixing a subgroup's casing would
+    // have been impossible via this action.
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    const item = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Counter frame",
+      qty: 1,
+      unitCost: 100,
+      subgroupLabel: "Counter",
+    });
+
+    await renameLineItemSubgroup(estimate.opportunityId, section.id, "Counter", "counter");
+
+    const row = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(row.subgroupLabel).toBe("counter");
+  });
+
+  it("renaming onto an existing different subgroup label merges the two groups", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    const a = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Counter frame",
+      qty: 1,
+      unitCost: 100,
+      subgroupLabel: "Counter",
+    });
+    await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Header graphic",
+      qty: 1,
+      unitCost: 50,
+      subgroupLabel: "Header",
+    });
+
+    await renameLineItemSubgroup(estimate.opportunityId, section.id, "Counter", "Header");
+
+    const rowA = await db.lineItem.findUniqueOrThrow({ where: { id: a.id } });
+    expect(rowA.subgroupLabel).toBe("Header");
+    const remainingLabels = new Set((await db.lineItem.findMany({ where: { sectionId: section.id } })).map((li) => li.subgroupLabel));
+    expect(remainingLabels).toEqual(new Set(["Header"]));
+  });
+
+  it("scopes renameLineItemSubgroup to one section -- a same-named subgroup elsewhere is untouched", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const sectionA = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    const sectionB = await addSection(version.id, { name: "Reception Type 2", sectionType: "COMPONENT" });
+    await addLineItem(version.id, sectionA.id, { lineType: "MATERIAL", description: "A", qty: 1, unitCost: 1, subgroupLabel: "Counter" });
+    const itemB = await addLineItem(version.id, sectionB.id, {
+      lineType: "MATERIAL",
+      description: "B",
+      qty: 1,
+      unitCost: 1,
+      subgroupLabel: "Counter",
+    });
+
+    await renameLineItemSubgroup(estimate.opportunityId, sectionA.id, "Counter", "Reception Desk");
+
+    const rowB = await db.lineItem.findUniqueOrThrow({ where: { id: itemB.id } });
+    expect(rowB.subgroupLabel).toBe("Counter"); // untouched -- different section
+  });
+
+  it("rejects renaming a subgroup on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    await addLineItem(version.id, section.id, { lineType: "MATERIAL", description: "A", qty: 1, unitCost: 1, subgroupLabel: "Counter" });
+    await lockEstimateVersion(version.id);
+
+    await expect(renameLineItemSubgroup(estimate.opportunityId, section.id, "Counter", "Reception Desk")).rejects.toThrow(/locked/);
+  });
+
+  it("survives a delete + restore round trip", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    const item = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "Counter frame",
+      qty: 1,
+      unitCost: 100,
+      subgroupLabel: "Counter",
+    });
+
+    await deleteLineItem(estimate.opportunityId, item.id);
+    const deleteLog = await db.lineItemAuditLog.findFirstOrThrow({
+      where: { estimateVersionId: version.id, action: "DELETE" },
+    });
+    const restored = await restoreLineItem(estimate.opportunityId, deleteLog.id);
+
+    expect(restored.subgroupLabel).toBe("Counter");
   });
 });
 
@@ -2015,7 +2217,7 @@ describe("mergeBoothIntoAnotherBooth", () => {
     return { version, sourceSection, targetSection, unrelatedSection, item };
   }
 
-  it("moves every section sharing the source groupLabel onto the target, adopting the target's booth description", async () => {
+  it("wraps the source's own heading into a new H2 inside the target, adopting the target's booth-level fields", async () => {
     const { version, sourceSection, targetSection, unrelatedSection } = await makeTwoBooths();
     await db.estimateSection.update({
       where: { id: targetSection.id },
@@ -2024,42 +2226,64 @@ describe("mergeBoothIntoAnotherBooth", () => {
 
     await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
 
-    const [merged, target, unrelated] = await Promise.all([
-      db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } }),
+    // The source's own section row is gone -- its identity survives as
+    // the new wrapper H2 below, not as a flattened sibling.
+    await expect(db.estimateSection.findUnique({ where: { id: sourceSection.id } })).resolves.toBeNull();
+
+    const [wrapper, target, unrelated] = await Promise.all([
+      db.estimateSection.findFirstOrThrow({ where: { estimateVersionId: version.id, groupLabel: "Section 203 - Booth", id: { not: targetSection.id } } }),
       db.estimateSection.findUniqueOrThrow({ where: { id: targetSection.id } }),
       db.estimateSection.findUniqueOrThrow({ where: { id: unrelatedSection.id } }),
     ]);
-    expect(merged.groupLabel).toBe("Section 203 - Booth");
-    // The incoming section's own description ("The camera booth") must not
-    // win just because it happens to sort before the target's row -- every
-    // section sharing a groupLabel has to carry the SAME booth-level values,
-    // and the target's is the one the user actually approved for this booth.
-    expect(merged.boothDescription).toBe("Large LED Display Wall");
-    expect(merged.boothPendingDescription).toBe("New AI text");
+    // The wrapper's own H2 name is the source's own approved heading --
+    // its identity, preserved, not discarded.
+    expect(wrapper.name).toBe("The camera booth");
+    expect(wrapper.groupLabel).toBe("Section 203 - Booth");
+    // Booth-LEVEL fields (the target H1's own heading) still come from the
+    // target, same "every section in a booth shares identical booth-level
+    // fields" invariant as before -- only the wrapper's own H2 `name`
+    // (an H2-level field) carries the source's identity.
+    expect(wrapper.boothDescription).toBe("Large LED Display Wall");
+    expect(wrapper.boothPendingDescription).toBe("New AI text");
     expect(target.groupLabel).toBe("Section 203 - Booth");
     expect(target.boothDescription).toBe("Large LED Display Wall");
     expect(unrelated.groupLabel).toBe("Section 231 - Booth");
   });
 
-  it("clears the moved sections' booth description when the target has none of its own", async () => {
-    const { version, sourceSection } = await makeTwoBooths();
+  it("falls back to the source's raw groupLabel as the wrapper's H2 name when the source had no boothDescription of its own", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    await addSection(version.id, { name: "Booth Build", sectionType: "CATEGORY", groupLabel: "Section 203 - Camera Booth" });
+    await addSection(version.id, { name: "Booth Build", sectionType: "CATEGORY", groupLabel: "Section 203 - Booth" });
 
     await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
 
-    const merged = await db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } });
-    expect(merged.boothDescription).toBeNull();
-    expect(merged.boothPendingDescription).toBeNull();
+    const wrapper = await db.estimateSection.findFirstOrThrow({
+      where: { estimateVersionId: version.id, groupLabel: "Section 203 - Booth", name: { not: "Booth Build" } },
+    });
+    expect(wrapper.name).toBe("Section 203 - Camera Booth");
   });
 
-  it("adopts the target's includeInProposal/summarizeOnProposal/excludedFromTotals on every moved section", async () => {
+  it("clears the wrapper's booth description when the target has none of its own", async () => {
+    const { version, targetSection } = await makeTwoBooths();
+
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
+
+    const wrapper = await db.estimateSection.findFirstOrThrow({
+      where: { estimateVersionId: version.id, groupLabel: "Section 203 - Booth", id: { not: targetSection.id } },
+    });
+    expect(wrapper.boothDescription).toBeNull();
+    expect(wrapper.boothPendingDescription).toBeNull();
+    // The wrapper's own H2 name is unaffected either way -- it's not a
+    // booth-level field.
+    expect(wrapper.name).toBe("The camera booth");
+  });
+
+  it("adopts the target's includeInProposal/summarizeOnProposal/excludedFromTotals on the new wrapper", async () => {
     // Same reasoning as the boothDescription test above, for the other
-    // three whole-booth fields -- left as the incoming sections' own
-    // values, a merged booth could end up with some of its own sections
-    // hidden/summarized/excluded and others not, which is exactly the
-    // "some tools drop, summary gets stuck" inconsistency this whole
-    // group of fixes addresses. The target's values are the ones that
+    // three whole-booth fields -- the target's values are the ones that
     // survive, same as boothDescription.
-    const { version, sourceSection, targetSection } = await makeTwoBooths();
+    const { version, targetSection } = await makeTwoBooths();
     await db.estimateSection.update({
       where: { id: targetSection.id },
       data: { includeInProposal: false, summarizeOnProposal: true, excludedFromTotals: true },
@@ -2067,19 +2291,66 @@ describe("mergeBoothIntoAnotherBooth", () => {
 
     await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
 
-    const merged = await db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } });
-    expect(merged.includeInProposal).toBe(false);
-    expect(merged.summarizeOnProposal).toBe(true);
-    expect(merged.excludedFromTotals).toBe(true);
+    const wrapper = await db.estimateSection.findFirstOrThrow({
+      where: { estimateVersionId: version.id, groupLabel: "Section 203 - Booth", id: { not: targetSection.id } },
+    });
+    expect(wrapper.includeInProposal).toBe(false);
+    expect(wrapper.summarizeOnProposal).toBe(true);
+    expect(wrapper.excludedFromTotals).toBe(true);
   });
 
-  it("keeps the moved section's own line items intact", async () => {
+  it("keeps the source's own line items intact, now tagged with an H3 subgroup named after their original H2", async () => {
     const { version, item } = await makeTwoBooths();
 
     await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
 
     const stillThere = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
     expect(stillThere.description).toBe("PVC sheet");
+    expect(stillThere.subgroupLabel).toBe("Booth Build"); // the source section's own name
+  });
+
+  it("gives each of the source's own H2 sections its own H3 subgroup under one shared wrapper H2", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const structure = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY", groupLabel: "SECTION 211" });
+    const graphics = await addSection(version.id, { name: "Graphics", sectionType: "CATEGORY", groupLabel: "SECTION 211" });
+    const structureItem = await addLineItem(version.id, structure.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 100 });
+    const graphicsItem = await addLineItem(version.id, graphics.id, { lineType: "MATERIAL", description: "Panel", qty: 1, unitCost: 50 });
+    const target = await addSection(version.id, { name: "Anything", sectionType: "CATEGORY", groupLabel: "SECTION 231" });
+
+    await mergeBoothIntoAnotherBooth(version.id, "SECTION 211", { groupLabel: "SECTION 231" });
+
+    const [rowA, rowB] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: structureItem.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: graphicsItem.id } }),
+    ]);
+    expect(rowA.subgroupLabel).toBe("Structure");
+    expect(rowB.subgroupLabel).toBe("Graphics");
+    expect(rowA.sectionId).toBe(rowB.sectionId); // same wrapper H2
+    expect(rowA.sectionId).not.toBe(target.id); // not dumped directly onto the target's own existing H2
+    await expect(db.estimateSection.findUnique({ where: { id: structure.id } })).resolves.toBeNull();
+    await expect(db.estimateSection.findUnique({ where: { id: graphics.id } })).resolves.toBeNull();
+  });
+
+  it("merges two of the source's own H2 sections sharing a name (case-insensitive) into one H3 subgroup", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const a = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY", groupLabel: "SECTION 211" });
+    const b = await addSection(version.id, { name: "structure", sectionType: "CATEGORY", groupLabel: "SECTION 211" });
+    const itemA = await addLineItem(version.id, a.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 100 });
+    const itemB = await addLineItem(version.id, b.id, { lineType: "MATERIAL", description: "Post", qty: 1, unitCost: 50 });
+    await addSection(version.id, { name: "Anything", sectionType: "CATEGORY", groupLabel: "SECTION 231" });
+
+    await mergeBoothIntoAnotherBooth(version.id, "SECTION 211", { groupLabel: "SECTION 231" });
+
+    const [rowA, rowB] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: itemA.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: itemB.id } }),
+    ]);
+    // First-seen casing wins, same convention as resolveCanonicalSubgroupLabel.
+    expect(rowA.subgroupLabel).toBe("Structure");
+    expect(rowB.subgroupLabel).toBe("Structure");
+    expect(rowA.sectionId).toBe(rowB.sectionId);
   });
 
   it("rejects merging a booth into itself", async () => {
@@ -2108,7 +2379,7 @@ describe("mergeBoothIntoAnotherBooth", () => {
   });
 
   it("promotes a standalone (never-grouped) target section into a real booth, keyed by its own id", async () => {
-    const { version, sourceSection } = await makeTwoBooths();
+    const { version, sourceSection, item } = await makeTwoBooths();
     await db.estimateSection.update({ where: { id: sourceSection.id }, data: { buildType: "RENTAL" } });
     const standalone = await addSection(version.id, {
       name: "Large Simulators",
@@ -2118,23 +2389,30 @@ describe("mergeBoothIntoAnotherBooth", () => {
 
     await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { sectionId: standalone.id });
 
-    const [merged, target] = await Promise.all([
-      db.estimateSection.findUniqueOrThrow({ where: { id: sourceSection.id } }),
+    const [target, wrapper, movedItem] = await Promise.all([
       db.estimateSection.findUniqueOrThrow({ where: { id: standalone.id } }),
+      db.estimateSection.findFirstOrThrow({ where: { estimateVersionId: version.id, groupLabel: standalone.id, id: { not: standalone.id } } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: item.id } }),
     ]);
     // Promoted target's new groupLabel is its own opaque id -- never shown,
     // just a stable shared key -- but its heading must stay "Large
     // Simulators" (via boothDescription), not regress to that id.
     expect(target.groupLabel).toBe(standalone.id);
     expect(target.boothDescription).toBe("Large Simulators");
-    expect(merged.groupLabel).toBe(standalone.id);
-    expect(merged.boothDescription).toBe("Large Simulators");
+    // The wrapper H2 (the source's own former heading) joins the newly
+    // promoted booth alongside the target's own single section.
+    expect(wrapper.groupLabel).toBe(standalone.id);
+    expect(wrapper.boothDescription).toBe("Large Simulators");
+    expect(wrapper.name).toBe("The camera booth");
+    expect(movedItem.sectionId).toBe(wrapper.id);
+    expect(movedItem.subgroupLabel).toBe("Booth Build");
     // Without inheriting a real buildType here, the promoted target's own
     // line items would silently stop rendering as their own H2 group
     // under the merged booth (boothGroupsByCategoryForEditing skips any
     // section with a null buildType) -- confirmed live on the real bug
     // this fixes.
     expect(target.buildType).toBe("RENTAL");
+    expect(wrapper.buildType).toBe("RENTAL");
   });
 
   it("leaves a standalone target's own buildType alone if it already has one", async () => {
