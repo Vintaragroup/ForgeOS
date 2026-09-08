@@ -450,16 +450,31 @@ async function reclassifyForConsistency(
 // matches the old whole-document guard's own scope exactly (see this
 // function's callers).
 export async function loadDuplicateCandidates(estimateVersionId: string): Promise<ExistingLineItemCandidate[]> {
-  const existing = await db.lineItem.findMany({
-    where: { section: { estimateVersionId, optionId: null } },
-    select: {
-      id: true,
-      description: true,
-      qty: true,
-      unit: true,
-      section: { select: { groupLabel: true, name: true } },
-    },
-  });
+  const [existing, sections] = await Promise.all([
+    db.lineItem.findMany({
+      where: { section: { estimateVersionId, optionId: null } },
+      select: {
+        id: true,
+        description: true,
+        qty: true,
+        unit: true,
+        section: { select: { id: true, groupLabel: true, name: true } },
+      },
+    }),
+    // EstimateSection.groupLabel is overloaded: a fresh Excel import (see
+    // module-cost-estimate-import-service.ts etc.) sets it to the source
+    // file's own sheet/booth name, but estimate-service.ts's booth-merge
+    // feature (mergeBoothIntoAnotherBooth) REUSES the same field to link
+    // a merged child section back to its H1 wrapper section's own id --
+    // confirmed live against a real production estimate, where several
+    // merged sections' groupLabel had become another section's id rather
+    // than the module name it used to be. Every section id in this
+    // version is fetched so groupKey below can detect that case and fall
+    // back to null (never a wrong-but-plausible-looking key) instead of
+    // trusting a corrupted "sheet name".
+    db.estimateSection.findMany({ where: { estimateVersionId }, select: { id: true } }),
+  ]);
+  const sectionIds = new Set(sections.map((s) => s.id));
   return existing.map((li) => ({
     id: li.id,
     // Strips QTY_ESTIMATED_SUFFIX back off before comparison -- see that
@@ -474,6 +489,7 @@ export async function loadDuplicateCandidates(estimateVersionId: string): Promis
     // only needs plausibility context for the AI prompt, not precision.
     qty: li.qty != null ? Number(li.qty) : null,
     unit: li.unit,
+    groupKey: li.section.groupLabel && !sectionIds.has(li.section.groupLabel) ? li.section.groupLabel : null,
   }));
 }
 
@@ -493,10 +509,15 @@ export async function buildProposedLineItemMatchesCache(
 ): Promise<{ estimateVersionId: string; matches: LineItemDuplicateMatch[] } | undefined> {
   if (!versionId || items.length === 0) return undefined;
   const candidates = await loadDuplicateCandidates(versionId);
+  // No per-row grouping concept for scope/drawing text -- goes straight
+  // to findExactDuplicates's own description-only fallback pass. Tier 2
+  // (the AI call below) is what actually carries most of the
+  // disambiguation weight for this pipeline anyway.
   const proposedForCheck: ProposedItemForDuplicateCheck[] = items.map((item) => ({
     description: item.description,
     qty: item.qty,
     unit: item.unit,
+    groupKey: null,
   }));
   const matches = await matchProposedLineItemsAgainstExisting(proposedForCheck, candidates, opportunityId, documentId, userId);
   return { estimateVersionId: versionId, matches };
@@ -526,9 +547,14 @@ export interface ProposedItemDuplicateStatus {
 // ProposedSpreadsheetLineItem so both review tables can share this.
 // qty/unit are nullable -- ParsedDesignCostRow/ParsedModuleCostRow (the
 // deterministic Excel parsers' own row shapes) have no unit field at
-// all, and findExactDuplicates only ever reads description anyway.
+// all, and findExactDuplicates only ever reads description (and
+// groupKey, when set) anyway. groupKey is optional -- omitted (or null)
+// for the scope/drawing Propose card, which has no per-row grouping
+// concept; the deterministic Excel import-preview card passes the
+// source file's own sheet/booth name per row so findExactDuplicates can
+// use its narrower first pass -- see that function's own comment.
 export async function resolveDuplicateStatusForReview(
-  items: { description: string; qty: number | null; unit: string | null }[],
+  items: { description: string; qty: number | null; unit: string | null; groupKey?: string | null }[],
   estimateVersionId: string,
   // Only pass the cache's own matches when its stored estimateVersionId
   // still equals estimateVersionId above -- a stale cache for a
@@ -541,6 +567,7 @@ export async function resolveDuplicateStatusForReview(
     description: item.description,
     qty: item.qty,
     unit: item.unit,
+    groupKey: item.groupKey ?? null,
   }));
   const exactMatches = findExactDuplicates(proposedForCheck, candidates);
 
@@ -619,6 +646,7 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
     description: item.description,
     qty: item.qty,
     unit: item.unit,
+    groupKey: null,
   }));
   const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
 

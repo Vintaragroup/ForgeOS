@@ -319,6 +319,14 @@ export async function previewPricingImport(
 // promotes a section into a booth group, never demotes or hides one.
 const BOOTH_ITEM_PATTERN = /^Section\s+\d+/i;
 
+// Extracted so both commitPricingImport's own sectioning grouping AND its
+// duplicate-detection groupKey (see that function's own comment) derive
+// a row's booth the exact same way -- previously inlined only in the
+// former.
+export function resolveBoothLabel(row: ParsedPricingRow): string | null {
+  return row.item && BOOTH_ITEM_PATTERN.test(row.item) ? row.item : null;
+}
+
 // Friendly sub-section labels for the category codes actually observed in
 // real Super Bowl pricing schedules -- anything else falls back to the
 // raw category string rather than guess at a naming convention we haven't
@@ -400,10 +408,17 @@ export async function commitPricingImport(
   // safety here means "only the genuinely new rows land," not "refuse
   // to run."
   const duplicateCandidates = await loadDuplicateCandidates(estimateVersionId);
+  // groupKey = the row's own booth (when it has one) -- confirmed live
+  // this matters the same way it does for module-cost-estimate: a real
+  // schedule collapses ~185 rows into ~15 booths, and a generic category
+  // line (e.g. a flat "Show Services" fee) can legitimately repeat once
+  // per booth. See findExactDuplicates's own comment for the two-pass
+  // matching this feeds.
   const proposedForDuplicateCheck: ProposedItemForDuplicateCheck[] = preview.rows.map((row) => ({
     description: row.description,
     qty: row.qty,
     unit: row.unit || null,
+    groupKey: resolveBoothLabel(row),
   }));
   const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
   const rows = preview.rows.filter((_, i) => !exactDuplicates.has(i));
@@ -414,7 +429,7 @@ export async function commitPricingImport(
   const categories = await db.category.findMany({ where: { deletedAt: null } });
 
   const groupKey = (row: ParsedPricingRow) => {
-    const boothLabel = row.item && BOOTH_ITEM_PATTERN.test(row.item) ? row.item : null;
+    const boothLabel = resolveBoothLabel(row);
     return { boothLabel, category: row.category, key: `${boothLabel ?? ""}\u0000${row.category}` };
   };
 

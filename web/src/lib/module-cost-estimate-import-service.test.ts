@@ -250,4 +250,57 @@ describe("commitModuleCostEstimateImport", () => {
     // recovery, not a coincidental count match.
     expect(after.filter((li) => li.description === deleted.description)).toHaveLength(1);
   });
+
+  // The real production case this groupKey pass exists for: "Aluminum
+  // sheet" appears in this exact real Chicago file under BOTH "FS -
+  // Hitting Bay Wall" and "SS - Lounge Structure" -- description alone
+  // can never tell those two rows apart, but each one's own module sheet
+  // (which becomes its section's groupLabel on commit) can. Deleting
+  // just ONE of the two and re-committing must bring back only that one,
+  // not both and not neither.
+  it("recovers a single deleted row even when its description is shared by another row in a DIFFERENT module sheet, using the sheet name to disambiguate", async () => {
+    const { opportunity, document } = await makeDocumentFrom(CHICAGO_PATH, "Chicago ABCA.xlsx");
+    await db.category.createMany({
+      data: [
+        { name: "Structure", key: "structure" },
+        { name: "Custom Build", key: "custom_build" },
+      ],
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitModuleCostEstimateImport(version.id, document.id);
+    const aluminumRows = await db.lineItem.findMany({
+      where: { section: { estimateVersionId: version.id }, description: "Aluminum sheet" },
+      include: { section: { select: { groupLabel: true } } },
+    });
+    // Sanity: this real fixture really does have this row under two
+    // distinct sheets -- if this ever stops being true (fixture edited),
+    // this test needs a different real row, not a synthetic one.
+    expect(aluminumRows).toHaveLength(2);
+    expect(new Set(aluminumRows.map((r) => r.section.groupLabel)).size).toBe(2);
+
+    const [toDelete, toKeep] = aluminumRows;
+    await db.lineItem.delete({ where: { id: toDelete.id } });
+
+    // Not asserting an exact rowsImported count here -- this large real
+    // fixture has its own OTHER ambiguous repeats unrelated to this test
+    // (53 descriptions repeat across 2+ sheets in this one file; see the
+    // sibling "silently excludes" test's own comment on why some rows
+    // stay genuinely unresolvable), so a full re-commit legitimately
+    // brings back more than just this one deliberately-deleted row.
+    // What this test isolates instead: THIS specific row, by its own
+    // description AND sheet, is recovered correctly -- the surviving
+    // original sibling is left completely untouched (same id, not
+    // re-created), proving groupKey correctly told the two apart rather
+    // than guessing.
+    await commitModuleCostEstimateImport(version.id, document.id);
+
+    const after = await db.lineItem.findMany({
+      where: { section: { estimateVersionId: version.id }, description: "Aluminum sheet" },
+    });
+    expect(after).toHaveLength(2);
+    expect(after.some((li) => li.id === toKeep.id)).toBe(true);
+    expect(after.some((li) => li.id === toDelete.id)).toBe(false); // recreated with a new id, not literally restored
+  });
 });

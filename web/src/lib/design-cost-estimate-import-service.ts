@@ -360,10 +360,17 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
   // "propose" step here to cache an AI call at, so this stays Tier 1
   // only). Silently excludes a detected duplicate instead of throwing.
   const duplicateCandidates = await loadDuplicateCandidates(estimateVersionId);
+  // groupKey = this file's own booth -- every row in a Design Cost
+  // Estimate workbook is the same one booth (unlike module-cost-estimate's
+  // many sheets per file), so this mainly protects against a DIFFERENT
+  // booth's committed row sharing a generic part description (e.g. a
+  // common BeMatrix part number/size used across several booths), not
+  // within-file repeats -- see findExactDuplicates's own comment.
   const proposedForDuplicateCheck: ProposedItemForDuplicateCheck[] = preview.rows.map((row) => ({
     description: row.description,
     qty: row.qty,
     unit: null,
+    groupKey: preview.boothLabel,
   }));
   const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
   const rows = preview.rows.filter((_, i) => !exactDuplicates.has(i));

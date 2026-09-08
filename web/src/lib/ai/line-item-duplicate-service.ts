@@ -49,6 +49,20 @@ export interface ProposedItemForDuplicateCheck {
   description: string;
   qty: number | null;
   unit: string | null;
+  // A finer-grained scope than the whole estimate version -- the source
+  // file's own sheet/module/booth name, when the pipeline has one (e.g.
+  // module-cost-estimate's row.sheetName, design-cost-estimate's
+  // preview.boothLabel). Real production data has entire files where the
+  // SAME generic description ("Mixed Hardware", "Shop Supplies") repeats
+  // once per module by design -- description alone can never
+  // disambiguate those, but they're never ambiguous once you also know
+  // which module each one belongs to. See findExactDuplicates's own
+  // comment for how this is used as a first, narrower pass before
+  // falling back to the plain description-only check. null for callers
+  // with no such concept (scope/drawing text has no per-row grouping) --
+  // those go straight to the description-only fallback, unchanged from
+  // before this field existed.
+  groupKey: string | null;
 }
 
 export interface ExistingLineItemCandidate {
@@ -60,6 +74,17 @@ export interface ExistingLineItemCandidate {
   sectionLabel: string | null;
   qty: number | null;
   unit: string | null;
+  // The candidate's own side of ProposedItemForDuplicateCheck.groupKey
+  // above -- see that field's own comment. Sourced from
+  // EstimateSection.groupLabel by loadDuplicateCandidates in
+  // scope-line-item-service.ts, which is ALSO reused (overloaded, not
+  // this file's doing) by the booth-merge feature to link a merged
+  // child section back to its H1 wrapper -- loadDuplicateCandidates
+  // detects that case and passes null here instead of a corrupted
+  // "sheet name" that's actually another section's own id, so a merged
+  // section degrades to the description-only fallback rather than ever
+  // matching on a wrong signal.
+  groupKey: string | null;
 }
 
 // Parallel-indexed to the proposedItems array a caller passed in -- see
@@ -145,32 +170,95 @@ export function normalizeDescriptionForMatch(description: string): string {
     .replace(/[.,;:!?]+$/, "");
 }
 
+function normalizeGroupKey(groupKey: string): string {
+  return groupKey.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function buildAmbiguityIndex(
+  candidates: ExistingLineItemCandidate[],
+  keyFor: (c: ExistingLineItemCandidate) => string | null,
+): Map<string, ExistingLineItemCandidate[]> {
+  const byKey = new Map<string, ExistingLineItemCandidate[]>();
+  for (const candidate of candidates) {
+    const key = keyFor(candidate);
+    if (key === null) continue;
+    byKey.set(key, [...(byKey.get(key) ?? []), candidate]);
+  }
+  return byKey;
+}
+
 // A proposed item and a candidate sharing the exact same normalized
 // description is matched with certainty, no AI judgment call needed --
 // this is what makes the identical-document-recommit case (the
 // production incident the old whole-document guard used to catch) safe
-// with zero AI dependency. Deliberately only matches when a normalized
-// description maps to EXACTLY one candidate: if the same normalized text
-// is (legitimately) shared by 2+ existing line items already, picking
-// one would be a guess, so those proposed items fall through to Tier 2
-// instead -- same "don't force it" posture as
-// vendor-match-ai-service.ts's own findPositionCodeMatches.
+// with zero AI dependency.
+//
+// Two passes, tried in order for each proposed item, both under the same
+// "exactly one candidate" rule -- if the same key is (legitimately)
+// shared by 2+ candidates, picking one would be a guess, so that pass
+// moves on rather than forcing it (same "don't force it" posture as
+// vendor-match-ai-service.ts's own findPositionCodeMatches):
+//
+// Pass 1 (narrower, tried first when the proposed item has a groupKey):
+// description + groupKey together. Confirmed necessary against a real
+// production file where 32 module sheets each independently call for
+// the same generic "Mixed Hardware"/"Shop Supplies" allowance -- by
+// description alone by, only 63 of 309 real rows re-matched their own
+// already-committed row on re-import; the module name each one actually
+// belongs to disambiguates the rest.
+//
+// Pass 2 (fallback, tried when pass 1 didn't resolve an item -- this is
+// the original, pre-groupKey behavior, just scoped more carefully): plain
+// description match. The candidate pool depends on whether the PROPOSED
+// item itself has a groupKey:
+//   - No groupKey (scope/drawing text has no per-row grouping concept):
+//     matches against the FULL candidate pool, unchanged from before
+//     groupKey existed -- still needs to catch a candidate that came from
+//     a different pipeline entirely.
+//   - Has a groupKey: matches ONLY against candidates whose own groupKey
+//     is null (unknown module -- a merged section, or a pipeline that
+//     never set one). Deliberately NEVER matches a candidate that has a
+//     real, different groupKey here, even if it's now the only
+//     description match left -- confirmed live this matters: delete just
+//     ONE of two same-description siblings from two different modules,
+//     and the surviving sibling becomes description-unique. Without this
+//     restriction, pass 2 would wrongly claim the survivor as a match for
+//     the OTHER module's still-missing row instead of recognizing it's
+//     genuinely absent.
 export function findExactDuplicates(
   proposedItems: ProposedItemForDuplicateCheck[],
   candidates: ExistingLineItemCandidate[],
 ): Map<number, ExistingLineItemCandidate> {
-  const byNormalized = new Map<string, ExistingLineItemCandidate[]>();
-  for (const candidate of candidates) {
-    const key = normalizeDescriptionForMatch(candidate.description);
-    if (!key) continue;
-    byNormalized.set(key, [...(byNormalized.get(key) ?? []), candidate]);
-  }
+  const byDescriptionAndGroup = buildAmbiguityIndex(candidates, (c) => {
+    if (c.groupKey === null) return null;
+    const desc = normalizeDescriptionForMatch(c.description);
+    if (!desc) return null;
+    return `${desc} ${normalizeGroupKey(c.groupKey)}`;
+  });
+  const byDescriptionOnlyFullPool = buildAmbiguityIndex(candidates, (c) => normalizeDescriptionForMatch(c.description) || null);
+  const byDescriptionOnlyNoGroup = buildAmbiguityIndex(
+    candidates.filter((c) => c.groupKey === null),
+    (c) => normalizeDescriptionForMatch(c.description) || null,
+  );
 
   const result = new Map<number, ExistingLineItemCandidate>();
   proposedItems.forEach((item, i) => {
-    const key = normalizeDescriptionForMatch(item.description);
-    if (!key) return;
-    const matches = byNormalized.get(key);
+    const desc = normalizeDescriptionForMatch(item.description);
+    if (!desc) return;
+
+    if (item.groupKey !== null) {
+      const key = `${desc} ${normalizeGroupKey(item.groupKey)}`;
+      const groupMatches = byDescriptionAndGroup.get(key);
+      if (groupMatches && groupMatches.length === 1) {
+        result.set(i, groupMatches[0]);
+        return;
+      }
+      const fallbackMatches = byDescriptionOnlyNoGroup.get(desc);
+      if (fallbackMatches && fallbackMatches.length === 1) result.set(i, fallbackMatches[0]);
+      return;
+    }
+
+    const matches = byDescriptionOnlyFullPool.get(desc);
     if (matches && matches.length === 1) result.set(i, matches[0]);
   });
   return result;

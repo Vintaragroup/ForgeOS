@@ -200,10 +200,16 @@ async function buildSpreadsheetMatchesCache(
 ): Promise<{ estimateVersionId: string; matches: LineItemDuplicateMatch[] } | undefined> {
   if (!versionId || rows.length === 0) return undefined;
   const candidates = await loadDuplicateCandidates(versionId);
+  // groupKey = the row's own sheet -- same reasoning as
+  // module-cost-estimate-import-service.ts's identical use (a generic
+  // allowance/label can legitimately repeat once per sheet); this
+  // pipeline's own Tier 2 AI pass already covers most ambiguity Tier 1
+  // misses, so this is a smaller marginal improvement here than there.
   const proposedForCheck: ProposedItemForDuplicateCheck[] = rows.map((row) => ({
     description: row.description,
     qty: row.qty,
     unit: row.unit,
+    groupKey: row.sheetName,
   }));
   const matches = await matchProposedLineItemsAgainstExisting(proposedForCheck, candidates, opportunityId, documentId, userId);
   return { estimateVersionId: versionId, matches };
@@ -355,6 +361,7 @@ export async function commitAiProposedImport(
     description: row.description,
     qty: row.qty,
     unit: row.unit,
+    groupKey: row.sheetName,
   }));
   const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
 

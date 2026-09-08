@@ -371,10 +371,17 @@ export async function commitModuleCostEstimateImport(estimateVersionId: string, 
   // "propose" step here to cache an AI call at, so this stays Tier 1
   // only). Silently excludes a detected duplicate instead of throwing.
   const duplicateCandidates = await loadDuplicateCandidates(estimateVersionId);
+  // groupKey = the row's own module/element sheet -- confirmed live
+  // against a real production file where 32 sheets each independently
+  // call for the same generic "Mixed Hardware"/"Shop Supplies" allowance
+  // (description alone only recovered 63 of 309 rows on re-import; the
+  // sheet name recovers most of the rest). See findExactDuplicates's own
+  // comment for the two-pass matching this feeds.
   const proposedForDuplicateCheck: ProposedItemForDuplicateCheck[] = preview.rows.map((row) => ({
     description: row.description,
     qty: row.qty,
     unit: null,
+    groupKey: row.sheetName,
   }));
   const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
   const rows = preview.rows.filter((_, i) => !exactDuplicates.has(i));

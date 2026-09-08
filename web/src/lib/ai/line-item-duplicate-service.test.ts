@@ -11,8 +11,13 @@ import {
   type RawLineItemDuplicateMatch,
 } from "@/lib/ai/line-item-duplicate-service";
 
-function proposed(description: string, qty: number | null = null, unit: string | null = null): ProposedItemForDuplicateCheck {
-  return { description, qty, unit };
+function proposed(
+  description: string,
+  qty: number | null = null,
+  unit: string | null = null,
+  groupKey: string | null = null,
+): ProposedItemForDuplicateCheck {
+  return { description, qty, unit, groupKey };
 }
 
 function candidate(
@@ -21,8 +26,9 @@ function candidate(
   sectionLabel: string | null = null,
   qty: number | null = null,
   unit: string | null = null,
+  groupKey: string | null = null,
 ): ExistingLineItemCandidate {
-  return { id, description, sectionLabel, qty, unit };
+  return { id, description, sectionLabel, qty, unit, groupKey };
 }
 
 describe("normalizeDescriptionForMatch", () => {
@@ -81,6 +87,86 @@ describe("findExactDuplicates", () => {
 
   it("returns nothing when there are no candidates", () => {
     expect(findExactDuplicates([proposed("Sleeper Floor")], []).size).toBe(0);
+  });
+
+  // groupKey pass -- real production case: a generic description (e.g. a
+  // flat "Mixed Hardware" allowance) legitimately repeats once per
+  // module/booth, ambiguous by description alone but disambiguated once
+  // each side's own module/sheet/booth is also known.
+  describe("groupKey (module/sheet/booth) disambiguation", () => {
+    it("resolves a description shared by 2+ candidates once their groupKey also matches uniquely", () => {
+      const items = [proposed("Mixed Hardware", null, null, "Module A"), proposed("Mixed Hardware", null, null, "Module B")];
+      const candidates = [
+        candidate("li-1", "Mixed Hardware", null, null, null, "Module A"),
+        candidate("li-2", "Mixed Hardware", null, null, null, "Module B"),
+      ];
+
+      const result = findExactDuplicates(items, candidates);
+
+      expect(result.get(0)).toEqual(candidates[0]);
+      expect(result.get(1)).toEqual(candidates[1]);
+    });
+
+    it("still refuses to guess when description AND groupKey are both shared by 2+ candidates", () => {
+      const items = [proposed("Mixed Hardware", null, null, "Module A")];
+      const candidates = [
+        candidate("li-1", "Mixed Hardware", null, null, null, "Module A"),
+        candidate("li-2", "Mixed Hardware", null, null, null, "Module A"),
+      ];
+
+      expect(findExactDuplicates(items, candidates).size).toBe(0);
+    });
+
+    it("falls back to the description-only pass when the proposed item has no groupKey", () => {
+      const items = [proposed("Sleeper Floor Required")]; // groupKey defaults to null
+      const candidates = [candidate("li-1", "Sleeper Floor Required", null, null, null, "Module A")];
+
+      const result = findExactDuplicates(items, candidates);
+
+      expect(result.get(0)).toEqual(candidates[0]);
+    });
+
+    it("never claims a candidate that belongs to a DIFFERENT known groupKey, even once it's the only description match left", () => {
+      // Real production case this guards against: two identically-worded
+      // rows in two different modules, one gets deleted -- the survivor
+      // must NOT be silently claimed as a match for the deleted row's own
+      // (different) module on re-import; that row is genuinely missing
+      // and must be re-added, not treated as already there.
+      const items = [proposed("Sleeper Floor Required", null, null, "Module Z")];
+      const candidates = [candidate("li-1", "Sleeper Floor Required", null, null, null, "Module A")];
+
+      expect(findExactDuplicates(items, candidates).size).toBe(0);
+    });
+
+    it("never regresses an existing description-only match -- a candidate with no groupKey is still found by the fallback pass", () => {
+      const items = [proposed("Sleeper Floor Required", null, null, "Module A")];
+      const candidates = [candidate("li-1", "Sleeper Floor Required")]; // groupKey null (merged section, or a pipeline that never set one)
+
+      const result = findExactDuplicates(items, candidates);
+
+      expect(result.get(0)).toEqual(candidates[0]);
+    });
+
+    it("does not let a proposed item with a groupKey match a DIFFERENT known groupKey's candidate, but still matches a groupKey-less one in the same pool", () => {
+      const items = [proposed("Sleeper Floor Required", null, null, "Module A")];
+      const candidates = [
+        candidate("li-1", "Sleeper Floor Required", null, null, null, "Module B"), // different known module -- must not match
+        candidate("li-2", "Sleeper Floor Required"), // unknown module (null) -- safe fallback target
+      ];
+
+      const result = findExactDuplicates(items, candidates);
+
+      expect(result.get(0)).toEqual(candidates[1]);
+    });
+
+    it("normalizes groupKey the same way description is normalized (case/whitespace-insensitive)", () => {
+      const items = [proposed("Mixed Hardware", null, null, "  Module A  ")];
+      const candidates = [candidate("li-1", "Mixed Hardware", null, null, null, "module a")];
+
+      const result = findExactDuplicates(items, candidates);
+
+      expect(result.get(0)).toEqual(candidates[0]);
+    });
   });
 });
 
