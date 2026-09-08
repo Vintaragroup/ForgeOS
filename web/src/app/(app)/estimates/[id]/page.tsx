@@ -1814,6 +1814,7 @@ function LineItemsTab({
                   marginOverrideByCategoryId={marginOverrideByCategoryId}
                   categorySummaryByCategoryId={categorySummaryByCategoryId}
                   sectionCategoryDescriptionByKey={sectionCategoryDescriptionByKey}
+                  sectionDisplayNameById={sectionDisplayNameById}
                 />,
               ]),
             )}
@@ -2791,6 +2792,12 @@ function PrimaryCategoryTabContent({
   marginOverrideByCategoryId: Map<string, Prisma.Decimal>;
   categorySummaryByCategoryId: Map<string, { summary: string | null; pendingSummary: string | null }>;
   sectionCategoryDescriptionByKey: Map<string, { description: string | null; pendingDescription: string | null }>;
+  // sectionId -> its own current display heading (an approved per-category
+  // override, when one exists) -- see MoveToGroupBar's own identical map
+  // for the exact bug this fixes: a merge-target dropdown built from raw
+  // EstimateSection.name alone shows an estimator's own already-renamed
+  // group under its stale, pre-rename label.
+  sectionDisplayNameById: Map<string, string>;
 }) {
   if (!tab.hasMethodSplit) {
     return (
@@ -2843,6 +2850,7 @@ function CategoryTabContent({
   marginOverrideByCategoryId,
   categorySummaryByCategoryId,
   sectionCategoryDescriptionByKey,
+  sectionDisplayNameById,
 }: {
   bucket: RawCategoryBucket<SectionLineItem>;
   version: VersionWithSections;
@@ -2866,6 +2874,11 @@ function CategoryTabContent({
   // Per-(section, category) H1 heading override -- see
   // EstimateSectionCategoryDescription's own schema comment.
   sectionCategoryDescriptionByKey: Map<string, { description: string | null; pendingDescription: string | null }>;
+  // sectionId -> its own current display heading -- see
+  // PrimaryCategoryTabContent's own identical prop comment for why
+  // mergeSectionTargetOptions below needs this instead of raw
+  // EstimateSection.name.
+  sectionDisplayNameById: Map<string, string>;
 }) {
   const hasBoothGroups = !!boothGroups && boothGroups.length > 0;
   const flatSectionGroups = hasBoothGroups ? bucket.sectionGroups.filter((g) => !g.groupLabel) : bucket.sectionGroups;
@@ -2964,15 +2977,25 @@ function CategoryTabContent({
   // one booth) -- see mergeSectionIntoAnotherSection's own header comment
   // for the identical "anywhere" convention its H1-level counterpart
   // already uses. Labeled with booth context (booth heading + this
-  // section's own name) since, unlike allBoothLabels' own options, plain
-  // element-type names alone (e.g. two different booths each having their
-  // own "Structure") would otherwise be ambiguous across the whole
-  // version. Filtered down to "every OTHER group" per H2 at render time
-  // below (excluding that group's own sectionIds).
-  const mergeSectionTargetOptions = version.sections.map((s) => ({
-    value: s.id,
-    label: s.groupLabel ? `${boothDisplayLabelByGroupLabel.get(s.groupLabel) ?? s.groupLabel} — ${s.name}` : s.name,
-  }));
+  // section's own current display name) since, unlike allBoothLabels' own
+  // options, plain element-type names alone (e.g. two different booths
+  // each having their own "Structure") would otherwise be ambiguous
+  // across the whole version. sectionDisplayNameById (not raw s.name) for
+  // the section's own half -- same MoveToGroupBar bug this reuses that
+  // map to avoid: confirmed live on a real production estimate ("Full
+  // Swing PGA Show Orlando"), an H2 renamed via the heading editor to
+  // "Main Large Simulator" still showed here under its raw, pre-rename
+  // name ("Large Simulators" -- confusingly identical to its own booth's
+  // heading), making it unrecognizable in this exact dropdown even though
+  // it was technically present. Filtered down to "every OTHER group" per
+  // H2 at render time below (excluding that group's own sectionIds).
+  const mergeSectionTargetOptions = version.sections.map((s) => {
+    const displayName = sectionDisplayNameById.get(s.id) ?? s.description ?? s.name;
+    return {
+      value: s.id,
+      label: s.groupLabel ? `${boothDisplayLabelByGroupLabel.get(s.groupLabel) ?? s.groupLabel} — ${displayName}` : displayName,
+    };
+  });
 
   // Grosses up at THIS bucket's own resolved category's margin (its
   // override if set, else the document target) -- not one global
