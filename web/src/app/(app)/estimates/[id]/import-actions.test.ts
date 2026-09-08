@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { createSession } from "@/lib/auth";
 import { uploadDocument } from "@/lib/document-service";
 import { createEstimateVersion } from "@/lib/estimate-service";
+import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 import { resetMockCookies } from "@/test/setup";
-import { commitImportAction, deleteAndReimportAction } from "./import-actions";
+import { commitImportAction, commitScopeItemsAction, commitSelectedScopeItemsAction, deleteAndReimportAction } from "./import-actions";
 
 // Same real fixture pricing-import-service.test.ts already uses for its
 // own "refuses a second import" coverage of commitPricingImport itself --
@@ -33,6 +35,27 @@ async function makeDocument() {
 
 async function makeAdmin() {
   return db.user.create({ data: { name: "Admin", email: `${Math.random()}@test.com`, systemRole: "ADMIN" } });
+}
+
+async function makeProposedScopeDocument(proposed: ProposedLineItem[]) {
+  const company = await db.company.create({ data: { name: "Test Co" } });
+  const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+  const document = await db.document.create({
+    data: {
+      opportunityId: opportunity.id,
+      filename: "Scope of Work.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      sizeBytes: 100,
+      storageKey: "test-key",
+      documentType: "SCOPE_OF_WORK",
+      extractionStatus: "COMPLETE",
+      extractedText: "some scope text",
+      proposedLineItems: proposed as unknown as Prisma.InputJsonValue,
+    },
+  });
+  const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+  const version = await createEstimateVersion(estimate.id, 0);
+  return { opportunity, document, estimate, version };
 }
 
 beforeEach(() => {
@@ -130,5 +153,74 @@ describe("deleteAndReimportAction", () => {
     // proves the delete step actually ran before the re-import, not just
     // a no-op commit on top of the untouched originals.
     expect(finalItems.every((li) => !firstImportIds.has(li.id))).toBe(true);
+  });
+});
+
+describe("commitScopeItemsAction", () => {
+  it("redirects back to the propose view with the message, instead of throwing, on a business-rule rejection", async () => {
+    // Regression: this action previously had NO try/catch at all --
+    // commitScopeLineItems's own "click Propose items first" rejection
+    // (or any other) propagated straight out uncaught, same class of bug
+    // commitImportAction's own try/catch already fixed for the pricing-
+    // import path (see that describe block's own comment).
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const document = await db.document.create({
+      data: {
+        opportunityId: opportunity.id,
+        filename: "Scope of Work.docx",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 100,
+        storageKey: "test-key",
+        documentType: "SCOPE_OF_WORK",
+        extractionStatus: "COMPLETE",
+        extractedText: "some scope text",
+      },
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const rejection = (await commitScopeItemsAction(estimate.id, version.id, document.id).catch(
+      (err: unknown) => err,
+    )) as { digest?: string };
+    expect(rejection.digest).toContain("commitScopeError=");
+    expect(rejection.digest).toContain(encodeURIComponent("Propose items first"));
+    expect(rejection.digest).toContain(`proposeDocumentId=${document.id}`);
+  });
+});
+
+describe("commitSelectedScopeItemsAction", () => {
+  it("returns a plain rowsImported result and forwards indices correctly, committing only the explicitly selected rows", async () => {
+    const admin = await makeAdmin();
+    await createSession(admin.id);
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "Booth walls",
+        qty: 1,
+        qtyIsExplicit: true,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+      },
+      {
+        description: "Graphics production",
+        qty: 1,
+        qtyIsExplicit: true,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Countertops & Cable Management",
+        sourceQuote: "some scope text",
+      },
+    ];
+    const { document, estimate, version } = await makeProposedScopeDocument(proposed);
+
+    const result = await commitSelectedScopeItemsAction(estimate.id, version.id, document.id, [0]);
+
+    expect(result).toEqual({ rowsImported: 1 });
+    const items = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+    expect(items.map((i) => i.description)).toEqual(["Booth walls"]);
   });
 });

@@ -36,27 +36,34 @@ async function alreadyCommitted(estimateVersionId: string, documentId: string): 
   return !!existing;
 }
 
-// Shared by the text-scope and drawing loops below -- same skip/propose/
-// commit shape, differing only in which propose function actually reads
-// the document (extracted text vs. vision page images) and the "kind"
-// label attached to a successful import.
+// Shared by the text-scope and drawing loops below -- same propose/commit
+// shape, differing only in which propose function actually reads the
+// document (extracted text vs. vision page images) and the "kind" label
+// attached to a successful import.
+//
+// No longer skips a document that already has SOME committed line items
+// (the old alreadyCommitted pre-check did, unconditionally) -- that used
+// to hard-block ever re-processing a partially-committed document through
+// this one-click path, which is exactly the recovery scenario duplicate
+// detection exists for (see line-item-duplicate-service.ts's own header
+// comment). commitScopeLineItems is called with no selectedIndices here
+// (this is a non-UI caller), so it already applies its own safe default
+// -- silently excluding whatever fresh Tier 1 and cached Tier 2 flag as
+// an existing duplicate -- rather than either blindly re-inserting
+// everything or refusing to run at all.
 async function proposeAndCommit(
   estimateVersionId: string,
   opportunityId: string,
   userId: string | null,
   docs: Document[],
   kind: "scope" | "drawing",
-  proposeFn: (documentId: string, opportunityId: string, userId: string | null) => Promise<unknown>,
+  proposeFn: (documentId: string, opportunityId: string, userId: string | null, versionId: string | null) => Promise<unknown>,
   imported: BuildEstimateResult["imported"],
   skipped: BuildEstimateResult["skipped"],
 ) {
   for (const doc of docs) {
     if (doc.extractionStatus !== "COMPLETE") {
       skipped.push({ filename: doc.filename, reason: "Not analyzed yet -- click Analyze on the Opportunity page first." });
-      continue;
-    }
-    if (await alreadyCommitted(estimateVersionId, doc.id)) {
-      skipped.push({ filename: doc.filename, reason: "Already imported into this estimate." });
       continue;
     }
     try {
@@ -68,7 +75,7 @@ async function proposeAndCommit(
       // is genuinely the document's own -- not a redundant re-trust of
       // unchecked input.
       if (!doc.proposedLineItems) {
-        await proposeFn(doc.id, opportunityId, userId);
+        await proposeFn(doc.id, opportunityId, userId, estimateVersionId);
       }
       const result = await commitScopeLineItems(estimateVersionId, doc.id);
       imported.push({ filename: doc.filename, kind, rowsImported: result.rowsImported });

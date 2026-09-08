@@ -69,7 +69,15 @@ describe("buildEstimateFromAllDocuments", () => {
     expect(result.skipped[0].reason).toMatch(/Not analyzed yet/);
   });
 
-  it("commits an already-proposed scope document without re-proposing, and skips a document already committed", async () => {
+  // A document that already has SOME committed line items is no longer
+  // hard-skipped outright (the old behavior) -- it's re-processed through
+  // commitScopeLineItems like any other, whose own fresh Tier 1 recompute
+  // silently excludes whatever's an exact duplicate of what's already
+  // there. This is the real recovery scenario duplicate detection exists
+  // for: re-running "Build from all documents" now safely picks up any
+  // genuinely missing items instead of refusing to touch an
+  // already-partially-committed document at all.
+  it("commits an already-proposed scope document without re-proposing, and re-processes (with zero rows landing) a document whose cached proposal is an exact duplicate of what's already committed", async () => {
     const opportunity = await makeOpportunity();
     const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
     const version = await createEstimateVersion(estimate.id, 0);
@@ -129,14 +137,42 @@ describe("buildEstimateFromAllDocuments", () => {
         isDraft: true,
       },
     });
+    // A cached proposal exactly matching what's already committed --
+    // proves this document is genuinely re-processed (not blindly
+    // re-inserted, not hard-skipped) with no OpenAI call needed, since
+    // the cache means proposeFn is never invoked and Tier 1 alone
+    // resolves the duplicate.
+    const alreadyProposed: ProposedLineItem[] = [
+      {
+        description: "Already-imported row",
+        qty: 1,
+        qtyIsExplicit: true,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+      },
+    ];
+    await db.document.update({
+      where: { id: alreadyCommittedDoc.id },
+      data: { proposedLineItems: alreadyProposed as unknown as Prisma.InputJsonValue },
+    });
 
     const result = await buildEstimateFromAllDocuments(version.id, opportunity.id, null);
 
-    expect(result.imported).toEqual([{ filename: "RFP.docx", kind: "scope", rowsImported: 1 }]);
-    expect(result.skipped).toEqual([{ filename: "Already committed.docx", reason: "Already imported into this estimate." }]);
+    expect(result.imported).toEqual([
+      { filename: "RFP.docx", kind: "scope", rowsImported: 1 },
+      { filename: "Already committed.docx", kind: "scope", rowsImported: 0 },
+    ]);
+    expect(result.skipped).toEqual([]);
 
     const committedLineItem = await db.lineItem.findFirstOrThrow({ where: { documentId: document.id } });
     expect(committedLineItem.description).toBe("Booth structure fabrication (qty estimated -- verify)");
+
+    // Tier 1 excluded the duplicate -- the pre-existing row is still the
+    // only one for this document, nothing was re-inserted.
+    const alreadyCommittedRows = await db.lineItem.count({ where: { documentId: alreadyCommittedDoc.id } });
+    expect(alreadyCommittedRows).toBe(1);
   });
 
   it("merges two documents that both propose items under the same category into one shared section, not two", async () => {

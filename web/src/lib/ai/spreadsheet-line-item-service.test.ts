@@ -170,7 +170,12 @@ describe("commitAiProposedImport", () => {
     }
   });
 
-  it("refuses a second commit of the same document into the same version", async () => {
+  // Replaces this suite's old "refuses a second commit" guard test -- see
+  // scope-line-item-service.test.ts's identical replacement for the full
+  // rationale (the same production incident, now caught by fresh Tier 1
+  // exact-match detection instead of an unconditional whole-document
+  // block).
+  it("silently excludes exact-duplicate rows on a second commit of the same document, instead of throwing or re-inserting them", async () => {
     const { opportunity, document } = await makeDocument();
     await db.category.createMany({ data: [{ name: "Audio/Visual", key: "audio_visual" }, { name: "Labor", key: "labor" }] });
     await db.document.update({
@@ -180,9 +185,62 @@ describe("commitAiProposedImport", () => {
     const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
     const version = await createEstimateVersion(estimate.id, 0);
 
+    const first = await commitAiProposedImport(version.id, document.id);
+    expect(first.rowsImported).toBe(2);
+
+    // No selectedIndices given -- safe default applies, no OpenAI call
+    // needed since Tier 1 alone resolves both rows deterministically.
+    const second = await commitAiProposedImport(version.id, document.id);
+    expect(second.rowsImported).toBe(0);
+
+    const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
+    expect(lineItemCount).toBe(2);
+  });
+
+  it("re-adds a flagged duplicate when its index is explicitly passed back in -- proves a human can override the default", async () => {
+    const { opportunity, document } = await makeDocument();
+    await db.category.createMany({ data: [{ name: "Audio/Visual", key: "audio_visual" }, { name: "Labor", key: "labor" }] });
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: [FAKE_PROPOSAL[0]] as unknown as Prisma.InputJsonValue },
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitAiProposedImport(version.id, document.id);
+    // Explicitly re-selecting index 0 (the only proposed row) forces it
+    // back in despite it being an exact duplicate -- never silently
+    // overridden.
+    const second = await commitAiProposedImport(version.id, document.id, {}, [0]);
+    expect(second.rowsImported).toBe(1);
+
+    const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
+    expect(lineItemCount).toBe(2);
+  });
+
+  it("commits only the genuinely new row when a re-scan mixes one exact duplicate with one new row, with no explicit selection", async () => {
+    const { opportunity, document } = await makeDocument();
+    await db.category.createMany({ data: [{ name: "Audio/Visual", key: "audio_visual" }, { name: "Labor", key: "labor" }] });
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: [FAKE_PROPOSAL[0]] as unknown as Prisma.InputJsonValue },
+    });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
     await commitAiProposedImport(version.id, document.id);
 
-    await expect(commitAiProposedImport(version.id, document.id)).rejects.toThrow(/already been imported/);
+    // A re-scan proposes the same row again alongside one genuinely new
+    // one.
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: FAKE_PROPOSAL as unknown as Prisma.InputJsonValue },
+    });
+
+    const second = await commitAiProposedImport(version.id, document.id);
+    expect(second.rowsImported).toBe(1);
+
+    const items = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+    expect(items.some((i) => i.description.includes("Rigging labor"))).toBe(true);
   });
 
   it("keeps two sheets' rows in separate sections even when they share a category -- groupLabel, not category alone, drives sectioning", async () => {

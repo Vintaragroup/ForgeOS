@@ -418,6 +418,15 @@ enum AiFeature {
   // reusing the same numbered-candidate-checklist pattern: this classifies
   // dates onto a FIXED milestone list, not open-ended gap-finding.
   TIMELINE_MILESTONES
+  // Matches a newly AI-proposed line item (from a document scan) against
+  // an estimate's already-existing LineItems, so a re-scan of the same or
+  // a different document proposes only what's genuinely missing instead
+  // of blindly re-inserting everything -- see
+  // line-item-duplicate-service.ts's own header comment. Same "one joint
+  // AI call over both full lists" shape as VENDOR_LINE_MATCH, just
+  // comparing proposed items against existing estimate line items instead
+  // of a vendor quote against them.
+  LINE_ITEM_DUPLICATE_MATCH
 }
 
 // One row per OpenAI call, for case-based model routing's cost/token
@@ -534,6 +543,23 @@ model Document {
   // through. Cached here so re-opening the Estimate's proposal preview
   // doesn't re-run the OpenAI call on every page load.
   proposedLineItems Json?
+
+  // Cached result of matching proposedLineItems above against whatever
+  // LineItems already existed in the target estimate version at Propose
+  // time -- see line-item-duplicate-service.ts's own header comment.
+  // Shape: { estimateVersionId: string, matches: LineItemDuplicateMatch[] }
+  // (parallel-indexed to proposedLineItems), used ONLY to pre-select which
+  // rows the review UI defaults to committing. Never trusted at commit
+  // time as the actual duplicate guard -- commitScopeLineItems/
+  // commitAiProposedImport always recompute the cheap, deterministic tier
+  // of that check fresh against the REAL target version's current
+  // LineItems, since a document's proposal is reusable across an
+  // Opportunity's several project-estimates and the version current when
+  // this was cached can differ from the one current at commit time. A
+  // stored estimateVersionId that no longer matches the commit target
+  // just means this cache is ignored (fresh recheck still applies), not
+  // that anything is unsafe.
+  proposedLineItemMatches Json?
 
   // Parallel to proposedLineItems above, but a distinct shape (includes
   // unitPrice/totalPrice) -- populated only for a VENDOR_QUOTE document

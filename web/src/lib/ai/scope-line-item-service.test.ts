@@ -26,6 +26,7 @@ afterEach(async () => {
   await db.company.deleteMany();
   await db.rentalItem.deleteMany();
   await db.material.deleteMany();
+  await db.category.deleteMany();
 });
 
 afterAll(async () => {
@@ -89,7 +90,51 @@ describe("commitScopeLineItems", () => {
     await expect(commitScopeLineItems(version.id, document.id)).rejects.toThrow(/Propose items first/);
   });
 
-  it("refuses a second commit of the same document into the same version, rather than duplicating every section and item", async () => {
+  // Replaces this suite's old "refuses a second commit" guard test -- the
+  // real production incident (a Super Bowl 2026 estimate had this same
+  // document's proposed items committed twice, with the AI regenerating
+  // different category names each run so the duplicate sections didn't
+  // even line up) is now caught by fresh Tier 1 exact-match detection
+  // instead of an unconditional whole-document block, so a genuine
+  // re-commit silently excludes only what's actually already there
+  // instead of throwing. See line-item-duplicate-service.ts's own header
+  // comment for the two-tier design this exercises.
+  it("silently excludes an exact-duplicate item on a second commit of the same document, instead of throwing or re-inserting it", async () => {
+    const document = await makeAnalyzedDocument("some scope text");
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "Booth walls",
+        qty: 1,
+        qtyIsExplicit: false,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const first = await commitScopeLineItems(version.id, document.id);
+    expect(first.rowsImported).toBe(1);
+
+    // No selectedIndices given -- safe default applies, no OpenAI call
+    // needed since Tier 1 alone resolves this deterministically.
+    const second = await commitScopeLineItems(version.id, document.id);
+    expect(second.rowsImported).toBe(0);
+
+    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
+    expect(sections).toHaveLength(1);
+    const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
+    expect(lineItemCount).toBe(1);
+  });
+
+  it("re-adds a flagged duplicate when its index is explicitly passed back in -- proves a human can override the default", async () => {
     const document = await makeAnalyzedDocument("some scope text");
     const proposed: ProposedLineItem[] = [
       {
@@ -111,17 +156,62 @@ describe("commitScopeLineItems", () => {
     const version = await createEstimateVersion(estimate.id, 0);
 
     await commitScopeLineItems(version.id, document.id);
-    await expect(commitScopeLineItems(version.id, document.id)).rejects.toThrow(/already been committed/);
+    // Explicitly re-selecting index 0 (the only proposed item) forces it
+    // back in despite it being an exact duplicate -- never silently
+    // overridden.
+    const second = await commitScopeLineItems(version.id, document.id, [0]);
+    expect(second.rowsImported).toBe(1);
 
-    // The real bug this guards against: a real Super Bowl 2026 estimate
-    // had this same document's proposed items committed twice before this
-    // check existed -- and worse, the AI regenerated different category
-    // names on the second run, so the duplicate sections didn't even line
-    // up under the same names as the first commit.
-    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
-    expect(sections).toHaveLength(1);
     const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
-    expect(lineItemCount).toBe(1);
+    expect(lineItemCount).toBe(2);
+  });
+
+  it("commits only the genuinely new item when a re-scan mixes one exact duplicate with one new item, with no explicit selection", async () => {
+    const document = await makeAnalyzedDocument("some scope text");
+    const firstBatch: ProposedLineItem[] = [
+      {
+        description: "Booth walls",
+        qty: 1,
+        qtyIsExplicit: true,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: firstBatch as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+    await commitScopeLineItems(version.id, document.id);
+
+    // A re-scan (e.g. of a different, overlapping document) proposes the
+    // same "Booth walls" item again alongside one genuinely new item.
+    const secondBatch: ProposedLineItem[] = [
+      { ...firstBatch[0] },
+      {
+        description: "Graphics production",
+        qty: 1,
+        qtyIsExplicit: true,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Countertops & Cable Management",
+        sourceQuote: "some scope text",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: secondBatch as unknown as Prisma.InputJsonValue },
+    });
+
+    const second = await commitScopeLineItems(version.id, document.id);
+    expect(second.rowsImported).toBe(1);
+
+    const items = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+    expect(items.map((i) => i.description).sort()).toEqual(["Booth walls", "Graphics production"]);
   });
 
   it("groups proposed items into sections by category, seeds a catalog-matched rate, and flags an inferred quantity in the description", async () => {

@@ -20,6 +20,13 @@ import { addLineItemsBulk, addOption, findOrCreateSection } from "@/lib/estimate
 import { getDocumentBytes } from "@/lib/document-service";
 import { serializeWorkbookForPrompt } from "@/lib/xlsx-utils";
 import { resolveLineItemCategory } from "@/lib/line-item-category";
+import { loadDuplicateCandidates, QTY_ESTIMATED_SUFFIX } from "@/lib/ai/scope-line-item-service";
+import {
+  findExactDuplicates,
+  matchProposedLineItemsAgainstExisting,
+  type LineItemDuplicateMatch,
+  type ProposedItemForDuplicateCheck,
+} from "@/lib/ai/line-item-duplicate-service";
 
 export interface ProposedSpreadsheetLineItem {
   description: string;
@@ -178,6 +185,30 @@ export function findAlternateGroups(rows: ProposedSpreadsheetLineItem[]): Altern
 // alternateGroupLabel rows at all needs no change from a caller.
 export type SheetDestination = { target: "base" } | { target: "option"; optionName: string };
 
+// Mirrors scope-line-item-service.ts's own buildProposedLineItemMatchesCache,
+// just against ProposedSpreadsheetLineItem's differently-shaped rows
+// instead of ProposedLineItem -- see that function's own comment for the
+// full rationale. Not reused directly since ProposedSpreadsheetLineItem
+// has no lineType field, so it isn't structurally assignable to
+// ProposedLineItem.
+async function buildSpreadsheetMatchesCache(
+  rows: ProposedSpreadsheetLineItem[],
+  versionId: string | null,
+  opportunityId: string,
+  documentId: string,
+  userId: string | null,
+): Promise<{ estimateVersionId: string; matches: LineItemDuplicateMatch[] } | undefined> {
+  if (!versionId || rows.length === 0) return undefined;
+  const candidates = await loadDuplicateCandidates(versionId);
+  const proposedForCheck: ProposedItemForDuplicateCheck[] = rows.map((row) => ({
+    description: row.description,
+    qty: row.qty,
+    unit: row.unit,
+  }));
+  const matches = await matchProposedLineItemsAgainstExisting(proposedForCheck, candidates, opportunityId, documentId, userId);
+  return { estimateVersionId: versionId, matches };
+}
+
 // opportunityId ownership check -- see design-cost-estimate-import-
 // service.ts's previewDesignCostEstimateImport for the identical
 // rationale (same pipeline family, same gap class this closes). Caches
@@ -188,10 +219,22 @@ export type SheetDestination = { target: "base" } | { target: "option"; optionNa
 // spreadsheet never also gets "Propose items" run on it). Read first, so
 // repeated "Preview import" clicks don't re-spend tokens; only a genuinely
 // new document (or an explicit re-run) calls OpenAI again.
+//
+// versionId is optional, same reason as proposeLineItemsFromScope's own
+// identical parameter -- when given, this also builds and caches a Tier
+// 2 duplicate-match hint onto proposedLineItemMatches (see
+// line-item-duplicate-service.ts's own header comment) for the review
+// UI's default selection. Only computed on a genuinely fresh AI
+// proposal, not on the cached-rows early return below -- Tier 2 here is
+// a UI convenience only, and commitAiProposedImport's own fresh Tier 1
+// recompute at commit time remains the real safety net regardless of
+// whether this cache is present, absent, or stale for a different
+// version.
 export async function previewAiProposedImport(
   documentId: string,
   opportunityId: string,
   userId: string | null = null,
+  versionId: string | null = null,
 ): Promise<AiProposedImportPreview> {
   const { document, bytes } = await getDocumentBytes(documentId);
   if (document.opportunityId !== opportunityId) {
@@ -241,9 +284,14 @@ export async function previewAiProposedImport(
   if (!content) throw new Error("OpenAI returned an empty response.");
   const parsed = JSON.parse(content) as { items: ProposedSpreadsheetLineItem[] };
 
+  const matchesCache = await buildSpreadsheetMatchesCache(parsed.items, versionId, opportunityId, documentId, userId);
+
   await db.document.update({
     where: { id: documentId },
-    data: { proposedLineItems: parsed.items as unknown as Prisma.InputJsonValue },
+    data: {
+      proposedLineItems: parsed.items as unknown as Prisma.InputJsonValue,
+      ...(matchesCache ? { proposedLineItemMatches: matchesCache as unknown as Prisma.InputJsonValue } : {}),
+    },
   });
 
   return {
@@ -273,10 +321,19 @@ export async function previewAiProposedImport(
 // isDraft is still implied true for every row with no exception --
 // addLineItemsBulk's own default -- AI-derived pricing needs human
 // confirmation MORE than a deterministic import does, never less.
+//
+// selectedIndices is optional and, when given, indexes into preview.rows
+// (there's no separate project-filtering pass here the way
+// commitScopeLineItems has, so this pipeline's index space is simply the
+// row's own position in preview.rows) -- same contract as
+// commitScopeLineItems's own identical parameter: omitted falls back to
+// a safe default (every row minus fresh Tier 1 exact duplicates and
+// cached high-confidence Tier 2 matches), given trusts it exactly as-is.
 export async function commitAiProposedImport(
   estimateVersionId: string,
   documentId: string,
   sheetDestinations: Record<string, SheetDestination> = {},
+  selectedIndices?: number[],
 ) {
   const version = await db.estimateVersion.findUniqueOrThrow({
     where: { id: estimateVersionId },
@@ -287,14 +344,50 @@ export async function commitAiProposedImport(
     throw new Error(`No line items could be proposed from "${preview.filename}".`);
   }
 
-  const alreadyImported = await db.lineItem.findFirst({
-    where: { documentId, section: { estimateVersionId, optionId: null } },
+  // Tier 1 (free, deterministic) always recomputed fresh here against the
+  // REAL commit target's current line items -- never just trusted from
+  // whatever was cached at Preview time. See
+  // line-item-duplicate-service.ts's own header comment, and
+  // scope-line-item-service.ts's commitScopeLineItems for the identical
+  // pattern this mirrors.
+  const duplicateCandidates = await loadDuplicateCandidates(estimateVersionId);
+  const proposedForDuplicateCheck: ProposedItemForDuplicateCheck[] = preview.rows.map((row) => ({
+    description: row.description,
+    qty: row.qty,
+    unit: row.unit,
+  }));
+  const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
+
+  // The Tier 2 cache is only trusted when its own stored estimateVersionId
+  // still matches the REAL commit target -- a mismatch just means this
+  // cache is stale/inapplicable, not that anything is unsafe (fresh Tier
+  // 1 above still fully applies regardless).
+  const { proposedLineItemMatches } = await db.document.findUniqueOrThrow({
+    where: { id: documentId },
+    select: { proposedLineItemMatches: true },
   });
-  if (alreadyImported) {
-    throw new Error(
-      `"${preview.filename}" has already been imported into this estimate. Delete its existing line items first if you want to re-import.`,
-    );
-  }
+  const cached = proposedLineItemMatches as unknown as
+    | { estimateVersionId: string; matches: LineItemDuplicateMatch[] }
+    | null;
+  const cachedMatches = cached?.estimateVersionId === estimateVersionId ? cached.matches : null;
+
+  const defaultExcludedIndices = new Set<number>();
+  preview.rows.forEach((_, index) => {
+    if (exactDuplicates.has(index)) {
+      defaultExcludedIndices.add(index);
+      return;
+    }
+    if (cachedMatches?.[index]?.confidence === "high") {
+      defaultExcludedIndices.add(index);
+    }
+  });
+
+  const selectedRowIndices =
+    selectedIndices !== undefined
+      ? new Set(selectedIndices)
+      : new Set(preview.rows.map((_, index) => index).filter((idx) => !defaultExcludedIndices.has(idx)));
+
+  const rows = preview.rows.filter((_, index) => selectedRowIndices.has(index));
 
   const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
   const existingSectionCount = await db.estimateSection.count({ where: { estimateVersionId, optionId: null } });
@@ -312,7 +405,7 @@ export async function commitAiProposedImport(
   const groupKey = (row: ProposedSpreadsheetLineItem) => `${row.sheetName} ${row.category}`;
   const seenKeys = new Set<string>();
   const groups: { sheetName: string; category: string }[] = [];
-  for (const row of preview.rows) {
+  for (const row of rows) {
     const key = groupKey(row);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -333,12 +426,12 @@ export async function commitAiProposedImport(
       optionId,
     });
 
-    const rowsForGroup = preview.rows.filter((r) => groupKey(r) === `${group.sheetName} ${group.category}`);
+    const rowsForGroup = rows.filter((r) => groupKey(r) === `${group.sheetName} ${group.category}`);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,
       rowsForGroup.map((row) => {
-        const description = row.qtyIsExplicit ? row.description : `${row.description} (qty estimated -- verify)`;
+        const description = row.qtyIsExplicit ? row.description : `${row.description}${QTY_ESTIMATED_SUFFIX}`;
         const unit = row.unit || null;
         const resolvedCategory = resolveLineItemCategory({ explicit: row.category, description: row.description }, liveCategories);
         return {
@@ -369,5 +462,5 @@ export async function commitAiProposedImport(
     created.push({ section, count: lineItems.length });
   }
 
-  return { filename: preview.filename, sectionsCreated: created.length, rowsImported: preview.rows.length };
+  return { filename: preview.filename, sectionsCreated: created.length, rowsImported: rows.length };
 }

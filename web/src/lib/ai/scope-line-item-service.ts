@@ -37,6 +37,13 @@ import {
   mapScopeCategoryToCanonical,
   resolveCategoryNameFromKey,
 } from "@/lib/line-item-category";
+import {
+  findExactDuplicates,
+  matchProposedLineItemsAgainstExisting,
+  type ExistingLineItemCandidate,
+  type LineItemDuplicateMatch,
+  type ProposedItemForDuplicateCheck,
+} from "@/lib/ai/line-item-duplicate-service";
 
 // Fixed vocabulary, not free text -- re-running "Propose items" on the
 // exact same document used to produce a different taxonomy every time
@@ -59,6 +66,19 @@ export const SCOPE_CATEGORIES = [
 ] as const;
 
 export type ScopeCategory = (typeof SCOPE_CATEGORIES)[number];
+
+// Appended to a committed LineItem's own description when its quantity
+// wasn't explicit in the source (see commitScopeLineItems's per-item
+// description below; spreadsheet-line-item-service.ts's commitAiProposedImport
+// does the identical thing for its own rows). Shared as a constant, not
+// duplicated as a literal in each file, specifically so
+// loadDuplicateCandidates below can strip it back off -- otherwise a
+// fresh re-proposal's own raw description (never carries this suffix)
+// would never exact-match a previously-committed item that DOES, since
+// the appended text always differs. Both this constant and the stripping
+// live together in this one file since scope-line-item-service.ts is
+// where the suffix's own text is authored.
+export const QTY_ESTIMATED_SUFFIX = " (qty estimated -- verify)";
 
 // estimateId is optional, same reason as document-summary-service.ts's
 // KeyDateFact/CitedText -- undefined (an older cached proposal, from
@@ -272,7 +292,20 @@ const MAX_INPUT_CHARS = 150_000;
 // opportunity's document with this caller's classification. See
 // pricing-import-service.ts's previewPricingImport for the same
 // rationale on the read-only sibling of this pipeline.
-export async function proposeLineItemsFromScope(documentId: string, opportunityId: string, userId: string | null = null) {
+export async function proposeLineItemsFromScope(
+  documentId: string,
+  opportunityId: string,
+  userId: string | null = null,
+  // Optional: which version this proposal is FOR, so a fresh Tier 2
+  // duplicate-match cache can be built against that version's real
+  // current line items and stored onto proposedLineItemMatches below --
+  // see line-item-duplicate-service.ts's own header comment. Omitted by
+  // callers with no particular version in view (this file's own
+  // regression tests, an older client) -- proposedLineItemMatches is
+  // simply left untouched in that case; commitScopeLineItems's own fresh
+  // Tier 1 recompute remains the real safety net regardless.
+  versionId: string | null = null,
+) {
   const document = await db.document.findFirstOrThrow({ where: { id: documentId, opportunityId } });
   if (!document.extractedText) {
     throw new Error(`"${document.filename}" hasn't been analyzed yet -- click Analyze on it first.`);
@@ -354,9 +387,23 @@ export async function proposeLineItemsFromScope(documentId: string, opportunityI
       ? await reclassifyForConsistency(client, document, truncatedText, items, projectContext, projectNames, userId)
       : items;
 
+  const matchesCache = await buildProposedLineItemMatchesCache(
+    finalItems,
+    versionId,
+    document.opportunityId,
+    documentId,
+    userId,
+  );
+
   return db.document.update({
     where: { id: documentId },
-    data: { proposedLineItems: finalItems as unknown as Prisma.InputJsonValue },
+    data: {
+      proposedLineItems: finalItems as unknown as Prisma.InputJsonValue,
+      // Omitted entirely (not set to null) when there's no versionId or
+      // nothing was proposed -- leaves any previously cached value alone
+      // rather than clobbering it with an empty one.
+      ...(matchesCache ? { proposedLineItemMatches: matchesCache as unknown as Prisma.InputJsonValue } : {}),
+    },
   });
 }
 
@@ -397,6 +444,112 @@ async function reclassifyForConsistency(
   return flagUncertainClassifications(items, parsed.classifications, projectContext);
 }
 
+// Shared by the Propose-time caching call (below) and commitScopeLineItems's
+// own fresh Tier 1 recompute -- both need the same "every current LineItem
+// in this version, outside any Option" candidate pool. optionId: null
+// matches the old whole-document guard's own scope exactly (see this
+// function's callers).
+export async function loadDuplicateCandidates(estimateVersionId: string): Promise<ExistingLineItemCandidate[]> {
+  const existing = await db.lineItem.findMany({
+    where: { section: { estimateVersionId, optionId: null } },
+    select: {
+      id: true,
+      description: true,
+      qty: true,
+      unit: true,
+      section: { select: { groupLabel: true, name: true } },
+    },
+  });
+  return existing.map((li) => ({
+    id: li.id,
+    // Strips QTY_ESTIMATED_SUFFIX back off before comparison -- see that
+    // constant's own comment for why: a fresh proposal's raw description
+    // never carries it, so leaving it on here would silently break exact
+    // matching for every non-explicit-quantity item, the common case.
+    description: li.description.endsWith(QTY_ESTIMATED_SUFFIX)
+      ? li.description.slice(0, -QTY_ESTIMATED_SUFFIX.length)
+      : li.description,
+    sectionLabel: li.section.groupLabel ?? li.section.name,
+    // LineItem.qty is a Prisma Decimal -- ExistingLineItemCandidate.qty
+    // only needs plausibility context for the AI prompt, not precision.
+    qty: li.qty != null ? Number(li.qty) : null,
+    unit: li.unit,
+  }));
+}
+
+// Builds the Tier 2 cache payload for Document.proposedLineItemMatches --
+// used by proposeLineItemsFromScope and proposeLineItemsFromDrawing right
+// after a fresh proposal is generated. Purely a UI/default-selection
+// convenience (see this file's own line-item-duplicate-service.ts import
+// header comment) -- returns undefined (caller then leaves
+// proposedLineItemMatches untouched) when there's no version context to
+// match against yet, or nothing was proposed to check in the first place.
+export async function buildProposedLineItemMatchesCache(
+  items: ProposedLineItem[],
+  versionId: string | null,
+  opportunityId: string,
+  documentId: string,
+  userId: string | null,
+): Promise<{ estimateVersionId: string; matches: LineItemDuplicateMatch[] } | undefined> {
+  if (!versionId || items.length === 0) return undefined;
+  const candidates = await loadDuplicateCandidates(versionId);
+  const proposedForCheck: ProposedItemForDuplicateCheck[] = items.map((item) => ({
+    description: item.description,
+    qty: item.qty,
+    unit: item.unit,
+  }));
+  const matches = await matchProposedLineItemsAgainstExisting(proposedForCheck, candidates, opportunityId, documentId, userId);
+  return { estimateVersionId: versionId, matches };
+}
+
+export interface ProposedItemDuplicateStatus {
+  match: LineItemDuplicateMatch;
+  // Whether this index is part of the safe default selection -- the same
+  // rule commitScopeLineItems applies internally when selectedIndices is
+  // omitted (exclude a fresh Tier 1 exact match or a cached
+  // high-confidence Tier 2 match, include everything else).
+  selected: boolean;
+}
+
+// Read-only counterpart to commitScopeLineItems's own default-selection
+// logic, for the review UI (estimates/[id]/page.tsx) to render a
+// confidence badge per proposed row and seed MatchSelectionProvider's
+// starting checkbox state -- never writes anything, just the same
+// LineItem lookup loadDuplicateCandidates always does. Kept as its own
+// simpler function rather than sharing commitScopeLineItems's internals:
+// this operates on the RAW, unfiltered proposedLineItems array (the same
+// index space the review UI's checkboxes, selectedIndices, and cached
+// Tier 2 matches all use), while commitScopeLineItems's own computation
+// happens after its own project-filtering step and works in
+// originalIndex terms. items only needs description/qty/unit -- accepts
+// anything structurally compatible with ProposedLineItem or
+// ProposedSpreadsheetLineItem so both review tables can share this.
+export async function resolveDuplicateStatusForReview(
+  items: { description: string; qty: number; unit: string }[],
+  estimateVersionId: string,
+  // Only pass the cache's own matches when its stored estimateVersionId
+  // still equals estimateVersionId above -- a stale cache for a
+  // different version should be treated the same as no cache at all.
+  cachedMatches: LineItemDuplicateMatch[] | null,
+): Promise<ProposedItemDuplicateStatus[]> {
+  if (items.length === 0) return [];
+  const candidates = await loadDuplicateCandidates(estimateVersionId);
+  const proposedForCheck: ProposedItemForDuplicateCheck[] = items.map((item) => ({
+    description: item.description,
+    qty: item.qty,
+    unit: item.unit,
+  }));
+  const exactMatches = findExactDuplicates(proposedForCheck, candidates);
+
+  return items.map((_, index) => {
+    const exact = exactMatches.get(index);
+    const match: LineItemDuplicateMatch = exact
+      ? { existingLineItemId: exact.id, confidence: "high", reasoning: "Exact match against an existing line item's description." }
+      : (cachedMatches?.[index] ?? { existingLineItemId: null, confidence: null, reasoning: null });
+    return { match, selected: match.confidence !== "high" };
+  });
+}
+
 // Creates one EstimateSection per distinct category (mirroring
 // pricing-import-service.ts's commitPricingImport) and bulk-inserts every
 // proposed item as an isDraft LineItem, seeding a catalog-matched unitCost
@@ -405,7 +558,19 @@ async function reclassifyForConsistency(
 // text -- LineItem has no separate field for "this quantity is a
 // placeholder," and burying that caveat only in a preview table that
 // disappears after commit would let it silently get treated as real.
-export async function commitScopeLineItems(estimateVersionId: string, documentId: string) {
+//
+// selectedIndices is optional and, when given, indexes into the RAW
+// document.proposedLineItems array (before this function's own project
+// filtering below) -- the same index space the review UI's checkboxes and
+// the cached Tier 2 matches both use. Omitted (every non-UI caller: the
+// plain-form fallback, buildEstimateFromAllDocuments, every existing
+// test) -- falls back to a safe default: every item minus whatever fresh
+// Tier 1 (recomputed here, not trusted from any cache) and cached
+// high-confidence Tier 2 matches flag as an already-existing duplicate.
+// Given explicitly (the review-table UI path) -- trusted exactly as
+// given, never silently overridden, so a human can deliberately commit a
+// flagged "duplicate" anyway.
+export async function commitScopeLineItems(estimateVersionId: string, documentId: string, selectedIndices?: number[]) {
   const version = await db.estimateVersion.findUniqueOrThrow({
     where: { id: estimateVersionId },
     include: { estimate: { select: { opportunityId: true } } },
@@ -417,33 +582,71 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
     where: { id: documentId, opportunityId: version.estimate.opportunityId },
   });
   const allItems = (document.proposedLineItems as unknown as ProposedLineItem[] | null) ?? [];
+  if (allItems.length === 0) {
+    throw new Error(`No proposed line items for "${document.filename}" -- click Propose items first.`);
+  }
+
+  // originalIndex is tracked through project-filtering below so the
+  // duplicate-selection logic that follows (selectedIndices, the cached
+  // Tier 2 matches) can be resolved against the SAME index space the
+  // review UI uses -- indices into the raw, unfiltered proposedLineItems
+  // array, not this post-filter list.
+  const allItemsWithIndex = allItems.map((item, originalIndex) => ({ ...item, originalIndex }));
   // Drops items tagged to a DIFFERENT project's estimate before anything
   // gets written -- a shared/untagged document's proposal is generated
   // once (see proposeLineItemsFromScope) and cached on the Document, so
   // committing it into each of an opportunity's estimates must filter to
   // that estimate's own items every time, the same way filterBulletsForEstimate
   // already does for scope-summary bullets.
-  const items = filterBulletsForEstimate(allItems, version.estimateId);
-  if (allItems.length === 0) {
-    throw new Error(`No proposed line items for "${document.filename}" -- click Propose items first.`);
-  }
-  if (items.length === 0) {
+  const itemsWithIndex = filterBulletsForEstimate(allItemsWithIndex, version.estimateId);
+  if (itemsWithIndex.length === 0) {
     throw new Error(`"${document.filename}"'s proposed items all belong to a different project in this Opportunity -- nothing to commit here.`);
   }
 
-  // Same reasoning as commitPricingImport's identical check -- a second
-  // click created a full second set of sections/items for a real job,
-  // with different (AI-regenerated) category names each time, before this
-  // check existed. A re-commit must go through deleting the old rows
-  // first, not by re-clicking Commit.
-  const alreadyImported = await db.lineItem.findFirst({
-    where: { documentId, section: { estimateVersionId, optionId: null } },
+  // Tier 1 (free, deterministic) is always recomputed fresh here against
+  // the REAL commit target's current line items -- never just trusted
+  // from whatever was cached at Propose time (see
+  // line-item-duplicate-service.ts's own header comment for why: Propose
+  // is document/opportunity-scoped, and the version current now can
+  // differ from whichever version was current when Propose last ran).
+  // This alone is what replaces the old whole-document guard's safety
+  // guarantee for the identical-document-recommit case.
+  const duplicateCandidates = await loadDuplicateCandidates(estimateVersionId);
+  const proposedForDuplicateCheck: ProposedItemForDuplicateCheck[] = itemsWithIndex.map((item) => ({
+    description: item.description,
+    qty: item.qty,
+    unit: item.unit,
+  }));
+  const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
+
+  // The Tier 2 cache is only trusted when its own stored estimateVersionId
+  // still matches the REAL commit target -- a mismatch just means this
+  // cache is stale/inapplicable (fresh Tier 1 above still fully applies),
+  // not that anything is unsafe.
+  const cached = document.proposedLineItemMatches as unknown as
+    | { estimateVersionId: string; matches: LineItemDuplicateMatch[] }
+    | null;
+  const cachedMatches = cached?.estimateVersionId === estimateVersionId ? cached.matches : null;
+
+  const defaultExcludedOriginalIndices = new Set<number>();
+  itemsWithIndex.forEach((item, localIndex) => {
+    if (exactDuplicates.has(localIndex)) {
+      defaultExcludedOriginalIndices.add(item.originalIndex);
+      return;
+    }
+    if (cachedMatches?.[item.originalIndex]?.confidence === "high") {
+      defaultExcludedOriginalIndices.add(item.originalIndex);
+    }
   });
-  if (alreadyImported) {
-    throw new Error(
-      `"${document.filename}"'s proposed items have already been committed to this estimate. Delete the existing line items first if you want to re-commit.`,
-    );
-  }
+
+  const selectedOriginalIndices =
+    selectedIndices !== undefined
+      ? new Set(selectedIndices)
+      : new Set(
+          itemsWithIndex.map((item) => item.originalIndex).filter((idx) => !defaultExcludedOriginalIndices.has(idx)),
+        );
+
+  const items = itemsWithIndex.filter((item) => selectedOriginalIndices.has(item.originalIndex));
 
   const catalog = await loadCatalogForMatching();
   const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
@@ -489,7 +692,7 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
       section.id,
       itemsForCategory.map((item) => {
         const catalogMatch = matchDescription(item.description, catalog);
-        const description = item.qtyIsExplicit ? item.description : `${item.description} (qty estimated -- verify)`;
+        const description = item.qtyIsExplicit ? item.description : `${item.description}${QTY_ESTIMATED_SUFFIX}`;
         const unit = item.unit || null;
         const unitCost = catalogMatch?.unitCost ?? 0;
         // A compound "Complete X Build" assembly line wins outright (see

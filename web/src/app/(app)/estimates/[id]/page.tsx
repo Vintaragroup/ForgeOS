@@ -92,6 +92,7 @@ import { InternalCostRow } from "@/components/internal-cost-row";
 import {
   buildFullEstimateFromDocumentsAction,
   commitImportAction,
+  commitSelectedScopeItemsAction,
   deleteAndReimportAction,
   commitScopeItemsAction,
   confirmAllDraftLineItemsAction,
@@ -119,7 +120,8 @@ import { laborRateOptionLabel } from "@/lib/labor-rate";
 import { LaborRateLineItemFields, type LaborRateOption } from "@/components/labor-rate-line-item-picker";
 import { QuantityOrAreaFields } from "@/components/quantity-or-area-fields";
 import { LineItemRow } from "@/components/line-item-row";
-import type { ProposedLineItem } from "@/lib/ai/scope-line-item-service";
+import { resolveDuplicateStatusForReview, type ProposedLineItem } from "@/lib/ai/scope-line-item-service";
+import type { LineItemDuplicateMatch } from "@/lib/ai/line-item-duplicate-service";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 import { getProjectContext } from "@/lib/ai/scope-document-context";
 import { citationHref, linkifyMentions } from "@/lib/citation";
@@ -167,6 +169,7 @@ import { MatchSelectionProvider } from "@/components/match-selection";
 import { MatchRowCheckbox } from "@/components/match-row-checkbox";
 import { MatchGroupCheckbox } from "@/components/match-group-checkbox";
 import { ApplySelectedMatchesBar } from "@/components/apply-selected-matches-bar";
+import { CommitSelectedLineItemsBar } from "@/components/commit-selected-line-items-bar";
 import { money } from "@/lib/money";
 
 const SECTION_TYPE_OPTIONS = [
@@ -227,6 +230,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     enrichApplied: enrichAppliedParam,
     commitImportError: commitImportErrorParam,
     canDeleteAndReimport: canDeleteAndReimportParam,
+    commitScopeError: commitScopeErrorParam,
   } = await props.searchParams;
   const importDocumentId = Array.isArray(importDocumentIdParam) ? importDocumentIdParam[0] : importDocumentIdParam;
   // commitImportAction's own error-redirect (see its comment) -- a
@@ -240,6 +244,10 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   // the "Delete & re-import" button so it's never offered for a
   // rejection deleting nothing and retrying wouldn't actually fix.
   const canDeleteAndReimport = (Array.isArray(canDeleteAndReimportParam) ? canDeleteAndReimportParam[0] : canDeleteAndReimportParam) === "1";
+  // commitScopeItemsAction's own error-redirect (see its comment) -- same
+  // "land back here as a message instead of crashing to Next's generic
+  // error screen" shape commitImportError already established.
+  const commitScopeError = Array.isArray(commitScopeErrorParam) ? commitScopeErrorParam[0] : commitScopeErrorParam;
   const reconcileDocumentId = Array.isArray(reconcileDocumentIdParam) ? reconcileDocumentIdParam[0] : reconcileDocumentIdParam;
   const proposeDocumentId = Array.isArray(proposeDocumentIdParam) ? proposeDocumentIdParam[0] : proposeDocumentIdParam;
   const buildResultRaw = Array.isArray(buildResultParam) ? buildResultParam[0] : buildResultParam;
@@ -647,6 +655,28 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const proposedItems = (proposeDocument?.proposedLineItems as unknown as ProposedLineItem[] | null) ?? null;
   const proposeCatalog = proposedItems && proposedItems.length > 0 ? await loadCatalogForMatching() : [];
 
+  // Duplicate-detection status per proposed row -- see
+  // line-item-duplicate-service.ts's own header comment. Only meaningful
+  // once there's a real version to compare against; the cached Tier 2
+  // matches are only trusted when their own stored estimateVersionId
+  // still matches currentVersion (a mismatch just means that cache is
+  // stale, not unsafe -- fresh Tier 1 inside resolveDuplicateStatusForReview
+  // still applies regardless).
+  const proposedItemMatchesCache = proposeDocument?.proposedLineItemMatches as unknown as
+    | { estimateVersionId: string; matches: LineItemDuplicateMatch[] }
+    | null;
+  const duplicateStatus =
+    currentVersion && proposedItems && proposedItems.length > 0
+      ? await resolveDuplicateStatusForReview(
+          proposedItems,
+          currentVersion.id,
+          proposedItemMatchesCache?.estimateVersionId === currentVersion.id ? proposedItemMatchesCache.matches : null,
+        )
+      : null;
+  const defaultSelectedProposedIndices = duplicateStatus
+    ? duplicateStatus.flatMap((status, i) => (status.selected ? [i] : []))
+    : (proposedItems?.map((_, i) => i) ?? []);
+
   // Same data the Project Brief already shows on the Opportunity page,
   // surfaced here too -- whoever's pricing and signing off on THIS
   // estimate shouldn't have to go find the Opportunity tab to see that a
@@ -878,6 +908,10 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     proposeDocument={proposeDocument ?? null}
                     proposedItems={proposedItems}
                     proposeCatalog={proposeCatalog}
+                    duplicateStatus={duplicateStatus}
+                    defaultSelectedProposedIndices={defaultSelectedProposedIndices}
+                    commitScopeError={commitScopeError}
+                    commitSelectedScopeItemsAction={commitSelectedScopeItemsAction}
                     estimateNameById={estimateNameById}
                     cadDocuments={cadDocuments}
                     reconcilePullSheetAction={reconcilePullSheetWithId}
@@ -4420,6 +4454,10 @@ function DocumentsTab({
   proposeDocument,
   proposedItems,
   proposeCatalog,
+  duplicateStatus,
+  defaultSelectedProposedIndices,
+  commitScopeError,
+  commitSelectedScopeItemsAction,
   estimateNameById,
   cadDocuments,
   reconcilePullSheetAction,
@@ -4458,6 +4496,15 @@ function DocumentsTab({
   proposeDocument: { id: string; filename: string } | null;
   proposedItems: ProposedLineItem[] | null;
   proposeCatalog: Awaited<ReturnType<typeof loadCatalogForMatching>>;
+  duplicateStatus: Awaited<ReturnType<typeof resolveDuplicateStatusForReview>> | null;
+  defaultSelectedProposedIndices: number[];
+  commitScopeError: string | undefined;
+  commitSelectedScopeItemsAction: (
+    estimateId: string,
+    versionId: string,
+    documentId: string,
+    selectedIndices: number[],
+  ) => Promise<{ rowsImported: number }>;
   estimateNameById: Map<string, string>;
   cadDocuments: { id: string; filename: string }[];
   reconcilePullSheetAction: (formData: FormData) => void | Promise<void>;
@@ -4869,6 +4916,11 @@ function DocumentsTab({
             <span className="italic">(qty estimated — verify)</span> had no explicit quantity in the document at
             all. Verify every row against the source before relying on it.
           </p>
+          {commitScopeError && (
+            <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {commitScopeError}
+            </p>
+          )}
           {scopeDocuments.length === 0 ? (
             <Notice
               message="No analyzed documents yet -- click Analyze on a document from the Opportunity page first."
@@ -4885,6 +4937,13 @@ function DocumentsTab({
                   options={scopeDocuments.map((d) => ({ value: d.id, label: d.filename }))}
                 />
               </div>
+              {/* Lets a fresh proposal cache a Tier 2 duplicate-match hint
+                  against the version actually current right now -- see
+                  proposeLineItemsFromScope's own versionId parameter
+                  comment. Omitted (no currentVersion yet) simply means no
+                  Tier 2 UI hinting; commitScopeLineItems's own fresh Tier 1
+                  recompute at commit time is unaffected either way. */}
+              {currentVersion && <input type="hidden" name="versionId" value={currentVersion.id} />}
               <SubmitButton pendingText="Proposing…" variant="secondary">
                 Propose items
               </SubmitButton>
@@ -4903,70 +4962,111 @@ function DocumentsTab({
                 <span className="font-medium">{proposedItems.length}</span> proposed line items in{" "}
                 <span className="font-medium">{proposeDocument.filename}</span> — AI-drafted, verify before
                 committing.
+                {duplicateStatus && defaultSelectedProposedIndices.length < proposedItems.length && (
+                  <>
+                    {" "}
+                    <span className="text-amber-700">
+                      {proposedItems.length - defaultSelectedProposedIndices.length} row
+                      {proposedItems.length - defaultSelectedProposedIndices.length === 1 ? "" : "s"} below already
+                      match an existing line item — pre-unchecked, review before including them.
+                    </span>
+                  </>
+                )}
               </p>
-              <div className="mb-4 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-neutral-50">
-                    <tr className="text-left text-neutral-500">
-                      <th className="px-2 py-1.5 font-normal">Category</th>
-                      <th className="px-2 py-1.5 font-normal">Description</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Unit</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Qty</th>
-                      <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
-                      {estimateNameById.size > 0 && <th className="px-2 py-1.5 font-normal">Project</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {proposedItems.map((item, i) => {
-                      const catalogMatch = matchDescription(item.description, proposeCatalog);
-                      return (
-                        <tr key={i} className="border-t border-neutral-100">
-                          <td className="px-2 py-1 text-neutral-500">{item.category}</td>
-                          <td className="max-w-[24rem] truncate px-2 py-1" title={item.sourceQuote}>
-                            {item.description}
-                          </td>
-                          <td className="px-2 py-1 text-right">{item.unit}</td>
-                          <td className="px-2 py-1 text-right">
-                            {item.qty}
-                            {!item.qtyIsExplicit && (
-                              <span className="ml-1 text-amber-600" title="Not stated in the source -- a placeholder, not a real quantity.">
-                                *
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-2 py-1 text-right">
-                            {catalogMatch ? (
-                              <span
-                                className="text-brand-navy"
-                                title={`Matched to ${catalogMatch.source} catalog: "${catalogMatch.name}" -- verify before relying on it.`}
-                              >
-                                ${catalogMatch.unitCost.toFixed(2)}
-                              </span>
-                            ) : (
-                              <span className="text-neutral-400">—</span>
-                            )}
-                          </td>
-                          {estimateNameById.size > 0 && (
-                            <td className="px-2 py-1 text-neutral-500">
-                              {item.estimateId ? (estimateNameById.get(item.estimateId) ?? "Unknown estimate") : "Shared"}
-                              {item.classificationUncertain && (
+              <MatchSelectionProvider initialSelected={defaultSelectedProposedIndices}>
+                <div className="mb-4 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-neutral-50">
+                      <tr className="text-left text-neutral-500">
+                        <th className="w-8 px-2 py-1.5 font-normal" />
+                        <th className="px-2 py-1.5 font-normal">Category</th>
+                        <th className="px-2 py-1.5 font-normal">Description</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Unit</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Qty</th>
+                        <th className="px-2 py-1.5 text-right font-normal">Suggested rate</th>
+                        {estimateNameById.size > 0 && <th className="px-2 py-1.5 font-normal">Project</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {proposedItems.map((item, i) => {
+                        const catalogMatch = matchDescription(item.description, proposeCatalog);
+                        const status = duplicateStatus?.[i] ?? null;
+                        return (
+                          <tr key={i} className="border-t border-neutral-100">
+                            <td className="py-2 pl-2 align-top">
+                              <MatchRowCheckbox index={i} />
+                            </td>
+                            <td className="px-2 py-1 text-neutral-500">{item.category}</td>
+                            <td className="max-w-[24rem] truncate px-2 py-1" title={item.sourceQuote}>
+                              {status?.match.confidence && (
                                 <span
-                                  className="ml-1 text-amber-600"
-                                  title="A second, independent AI pass disagreed with this classification -- verify carefully before committing."
+                                  className={`mr-1.5 rounded px-1.5 py-0.5 text-xs ${CONFIDENCE_BADGE_CLASS[status.match.confidence] ?? ""}`}
+                                  title={status.match.reasoning ?? undefined}
                                 >
-                                  ⚠
+                                  {status.match.confidence} match
+                                </span>
+                              )}
+                              {item.description}
+                            </td>
+                            <td className="px-2 py-1 text-right">{item.unit}</td>
+                            <td className="px-2 py-1 text-right">
+                              {item.qty}
+                              {!item.qtyIsExplicit && (
+                                <span className="ml-1 text-amber-600" title="Not stated in the source -- a placeholder, not a real quantity.">
+                                  *
                                 </span>
                               )}
                             </td>
-                          )}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            <td className="px-2 py-1 text-right">
+                              {catalogMatch ? (
+                                <span
+                                  className="text-brand-navy"
+                                  title={`Matched to ${catalogMatch.source} catalog: "${catalogMatch.name}" -- verify before relying on it.`}
+                                >
+                                  ${catalogMatch.unitCost.toFixed(2)}
+                                </span>
+                              ) : (
+                                <span className="text-neutral-400">—</span>
+                              )}
+                            </td>
+                            {estimateNameById.size > 0 && (
+                              <td className="px-2 py-1 text-neutral-500">
+                                {item.estimateId ? (estimateNameById.get(item.estimateId) ?? "Unknown estimate") : "Shared"}
+                                {item.classificationUncertain && (
+                                  <span
+                                    className="ml-1 text-amber-600"
+                                    title="A second, independent AI pass disagreed with this classification -- verify carefully before committing."
+                                  >
+                                    ⚠
+                                  </span>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {currentVersion && (
+                  <CommitSelectedLineItemsBar
+                    commitSelected={commitSelectedScopeItemsAction.bind(null, estimateId, currentVersion.id, proposeDocument.id)}
+                    estimateId={estimateId}
+                  />
+                )}
+              </MatchSelectionProvider>
+              {/* Plain-form fallback (no-JS parity, same dual-button
+                  convention the vendor-match UI already uses) -- commits
+                  commitScopeLineItems's own safe default with no
+                  selectedIndices given. */}
               <form action={commitScopeItemsAction.bind(null, estimateId, currentVersion.id, proposeDocument.id)}>
-                <Button>Commit {proposedItems.length} draft line items</Button>
+                <Button>
+                  Commit {defaultSelectedProposedIndices.length} recommended draft line item
+                  {defaultSelectedProposedIndices.length === 1 ? "" : "s"}
+                  {duplicateStatus && defaultSelectedProposedIndices.length < proposedItems.length
+                    ? ` (excludes ${proposedItems.length - defaultSelectedProposedIndices.length} likely duplicate${proposedItems.length - defaultSelectedProposedIndices.length === 1 ? "" : "s"})`
+                    : ""}
+                </Button>
               </form>
             </div>
           )}

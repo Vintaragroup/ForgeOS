@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { RateLimitError } from "openai";
 import { commitPricingImport } from "@/lib/pricing-import-service";
-import type { SheetDestination } from "@/lib/ai/spreadsheet-line-item-service";
+import { commitAiProposedImport, type SheetDestination } from "@/lib/ai/spreadsheet-line-item-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
 import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service";
 import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
@@ -167,6 +167,15 @@ export async function proposeScopeItemsAction(estimateId: string, formData: Form
   const opportunityId = await estimateOpportunityId(estimateId);
   const documentId = String(formData.get("documentId") ?? "").trim();
   if (!documentId) throw new Error("Choose a document to propose items from");
+  // Which version this proposal is FOR, so a Tier 2 duplicate-match cache
+  // can be built against that version's real current line items (see
+  // proposeLineItemsFromScope's own parameter comment). Optional --
+  // omitted only if the page ever renders this form without a
+  // currentVersion in view, in which case duplicate detection simply
+  // falls back to commitScopeLineItems's own fresh Tier 1 recompute at
+  // commit time with no Tier 2 UI hinting.
+  const versionId = String(formData.get("versionId") ?? "").trim() || null;
+  if (versionId) await assertVersionBelongsToEstimate(estimateId, versionId);
 
   try {
     // Same dispatch shape as analyze-document.ts -- a DRAWING has no
@@ -179,9 +188,9 @@ export async function proposeScopeItemsAction(estimateId: string, formData: Form
       select: { documentType: true },
     });
     if (documentType === "DRAWING") {
-      await proposeLineItemsFromDrawing(documentId, opportunityId, user.id);
+      await proposeLineItemsFromDrawing(documentId, opportunityId, user.id, versionId);
     } else {
-      await proposeLineItemsFromScope(documentId, opportunityId, user.id);
+      await proposeLineItemsFromScope(documentId, opportunityId, user.id, versionId);
     }
   } catch (err) {
     if (err instanceof AiNotConfiguredError) {
@@ -193,6 +202,16 @@ export async function proposeScopeItemsAction(estimateId: string, formData: Form
   redirect(`/estimates/${estimateId}?tab=documents&proposeDocumentId=${documentId}`);
 }
 
+// Plain-form fallback (no-JS parity, same dual-button convention the
+// vendor-match UI already uses) -- commits commitScopeLineItems's own
+// safe default: no selectedIndices given, so it silently excludes
+// whatever fresh Tier 1 and cached Tier 2 flag as an existing duplicate.
+// Now wrapped in try/catch (previously had none at all -- a real
+// pre-existing gap: any thrown error, including a business-rule
+// rejection, crashed straight to Next's generic error screen instead of
+// showing a message the user could act on, same class of bug
+// commitImportAction's own try/catch already fixed for the pricing-import
+// path).
 export async function commitScopeItemsAction(
   estimateId: string,
   versionId: string,
@@ -200,9 +219,61 @@ export async function commitScopeItemsAction(
 ) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
-  await commitScopeLineItems(versionId, documentId);
+  try {
+    await commitScopeLineItems(versionId, documentId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Commit failed.";
+    redirect(
+      `/estimates/${estimateId}?tab=documents&proposeDocumentId=${documentId}&commitScopeError=${encodeURIComponent(message)}`,
+    );
+  }
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}?tab=documents`);
+}
+
+// Direct-call action (see applySelectedVendorMatchesAction's own header
+// comment for why -- the checked row indices live in
+// MatchSelectionProvider's client state, not real form fields), invoked
+// from CommitSelectedLineItemsBar. Lets a reviewer hand-pick an arbitrary
+// subset of proposed rows -- including deliberately re-including a
+// flagged duplicate -- and commit exactly those in one action, instead of
+// being limited to "everything" or "everything except the safe default
+// exclusions."
+//
+// Returns a plain result instead of calling redirect() -- same reasoning
+// as applySelectedVendorMatchesAction: the client component necessarily
+// wraps this direct call in a try/catch to show a real error, and
+// redirect()'s thrown control-flow exception can't be caught. The caller
+// builds its own navigation URL and calls router.push once this resolves.
+export async function commitSelectedScopeItemsAction(
+  estimateId: string,
+  versionId: string,
+  documentId: string,
+  selectedIndices: number[],
+): Promise<{ rowsImported: number }> {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const result = await commitScopeLineItems(versionId, documentId, selectedIndices);
+  revalidatePath(`/estimates/${estimateId}`);
+  return { rowsImported: result.rowsImported };
+}
+
+// Spreadsheet-pipeline counterpart to commitSelectedScopeItemsAction above
+// -- same direct-call/plain-result shape, calling commitAiProposedImport
+// directly rather than through commitPricingImport's dispatch (which
+// always passes no selectedIndices, i.e. always the safe default).
+export async function commitSelectedAiProposedItemsAction(
+  estimateId: string,
+  versionId: string,
+  documentId: string,
+  selectedIndices: number[],
+  sheetDestinations: Record<string, SheetDestination>,
+): Promise<{ rowsImported: number }> {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const result = await commitAiProposedImport(versionId, documentId, sheetDestinations, selectedIndices);
+  revalidatePath(`/estimates/${estimateId}`);
+  return { rowsImported: result.rowsImported };
 }
 
 // Read-only advisory check, unlike every other action in this file --

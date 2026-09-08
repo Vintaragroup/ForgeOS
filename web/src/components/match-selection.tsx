@@ -27,8 +27,24 @@ interface MatchSelectionContextValue {
 
 const MatchSelectionContext = createContext<MatchSelectionContextValue | null>(null);
 
-export function MatchSelectionProvider({ children }: { children: ReactNode }) {
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+export function MatchSelectionProvider({
+  children,
+  // Seeds the starting selection instead of always beginning empty --
+  // the line-item duplicate-detection review table (estimates/[id]/page.tsx)
+  // uses this to default to "every proposed row except the ones already
+  // flagged as a likely duplicate," so a reviewer only has to opt IN to
+  // committing something the app already suspects exists. Read only once,
+  // on mount (a React lazy-initializer, not an effect) -- this provider
+  // is remounted (not re-rendered with new props) whenever the underlying
+  // review table changes documents, same lifecycle assumption the two
+  // existing bid-package call sites already rely on for their own default
+  // empty selection.
+  initialSelected,
+}: {
+  children: ReactNode;
+  initialSelected?: number[];
+}) {
+  const [selected, setSelected] = useState<Set<number>>(() => new Set(initialSelected ?? []));
 
   const toggle = useCallback((index: number) => {
     setSelected((prev) => {

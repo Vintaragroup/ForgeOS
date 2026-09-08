@@ -15,7 +15,12 @@ import { getDocumentBytes } from "@/lib/document-service";
 import { pageImages } from "@/lib/ai/drawing-summary-service";
 import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
-import { SCOPE_CATEGORIES, type ProposedLineItem, type ScopeCategory } from "@/lib/ai/scope-line-item-service";
+import {
+  buildProposedLineItemMatchesCache,
+  SCOPE_CATEGORIES,
+  type ProposedLineItem,
+  type ScopeCategory,
+} from "@/lib/ai/scope-line-item-service";
 
 type DrawingLineItemFromAI = {
   description: string;
@@ -91,7 +96,15 @@ category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closes
 // opportunityId ownership check -- see scope-line-item-service.ts's
 // proposeLineItemsFromScope for the full rationale (same pipeline, same
 // cost-bearing-AI-call-plus-write-back shape).
-export async function proposeLineItemsFromDrawing(documentId: string, opportunityId: string, userId: string | null = null) {
+export async function proposeLineItemsFromDrawing(
+  documentId: string,
+  opportunityId: string,
+  userId: string | null = null,
+  // See proposeLineItemsFromScope's own identical parameter comment --
+  // this shares commitScopeLineItems as its commit function, so the same
+  // Tier 2 caching applies here too.
+  versionId: string | null = null,
+) {
   const { document, bytes } = await getDocumentBytes(documentId);
   if (document.opportunityId !== opportunityId) {
     throw new Error("This document doesn't belong to this opportunity.");
@@ -159,8 +172,13 @@ export async function proposeLineItemsFromDrawing(documentId: string, opportunit
     estimateId: document.estimateId ?? null,
   }));
 
+  const matchesCache = await buildProposedLineItemMatchesCache(items, versionId, document.opportunityId, documentId, userId);
+
   return db.document.update({
     where: { id: documentId },
-    data: { proposedLineItems: items as unknown as Prisma.InputJsonValue },
+    data: {
+      proposedLineItems: items as unknown as Prisma.InputJsonValue,
+      ...(matchesCache ? { proposedLineItemMatches: matchesCache as unknown as Prisma.InputJsonValue } : {}),
+    },
   });
 }
