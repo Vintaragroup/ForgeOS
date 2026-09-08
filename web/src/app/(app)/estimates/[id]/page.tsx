@@ -112,7 +112,7 @@ import { PDF_MIME } from "@/lib/ai/text-extraction";
 import type { BuildEstimateResult } from "@/lib/ai/estimate-synthesis-service";
 import type { CoverageGap } from "@/lib/ai/scope-coverage-service";
 import { computeMarginGrossUp, computeOptionTotal, resolveLineItemMarginPct } from "@/lib/estimate-service";
-import { previewPricingImport } from "@/lib/pricing-import-service";
+import { previewPricingImport, resolveBoothLabel } from "@/lib/pricing-import-service";
 import { findAlternateGroups } from "@/lib/ai/spreadsheet-line-item-service";
 import { loadCatalogForMatching, matchDescription } from "@/lib/catalog-match-service";
 import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
@@ -657,13 +657,28 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   // call at). ai-proposed gets its real cached Tier 2 hint too, now that
   // previewPricingImport actually threads a versionId down to it.
   // vendor-quote (PDF, not Excel) is out of scope for this pass.
+  //
+  // groupKey is threaded through per kind so this PREVIEW computation
+  // matches what commitPricingImport/commitDesignCostEstimateImport/
+  // commitModuleCostEstimateImport actually do at Commit time -- see
+  // findExactDuplicates's own comment for why this matters (a generic
+  // description repeating once per module/booth is otherwise ambiguous
+  // by description alone). Missing this was a real bug: the Commit
+  // button's own count was already correct, but this preview badge
+  // computation silently fell back to description-only matching and
+  // under-reported duplicates until it was caught live against
+  // production data.
   const importDuplicateItems =
     importPreview && !(importPreview instanceof Error) && currentVersion
-      ? importPreview.kind === "design-cost-estimate" || importPreview.kind === "module-cost-estimate"
-        ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: null }))
-        : importPreview.kind === "pricing-schedule" || importPreview.kind === "ai-proposed"
-          ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: r.unit }))
-          : null
+      ? importPreview.kind === "design-cost-estimate"
+        ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: null, groupKey: importPreview.boothLabel }))
+        : importPreview.kind === "module-cost-estimate"
+          ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: null, groupKey: r.sheetName }))
+          : importPreview.kind === "pricing-schedule"
+            ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: r.unit, groupKey: resolveBoothLabel(r) }))
+            : importPreview.kind === "ai-proposed"
+              ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: r.unit, groupKey: r.sheetName }))
+              : null
       : null;
   const importDuplicateCachedMatches =
     importPreview && !(importPreview instanceof Error) && importPreview.kind === "ai-proposed" && currentVersion
