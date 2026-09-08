@@ -22,6 +22,7 @@ import {
   deleteLineItem,
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
+  mergeSectionIntoAnotherSection,
   moveFlatSectionProposalOrder,
   moveLineItemsToCategory,
   moveLineItemsToSection,
@@ -520,6 +521,20 @@ export async function mergeBoothAction(estimateId: string, versionId: string, gr
   // comment for why a standalone one is a valid target at all.
   const target: SectionScope = raw.startsWith("section:") ? { sectionId: raw.slice("section:".length) } : { groupLabel: raw.slice("group:".length) };
   await mergeBoothIntoAnotherBooth(versionId, groupLabel, target);
+  revalidatePath(`/estimates/${estimateId}`);
+}
+
+export async function mergeSectionAction(
+  estimateId: string,
+  versionId: string,
+  sourceSectionId: string,
+  formData: FormData,
+) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const targetSectionId = String(formData.get("targetSectionId") ?? "").trim();
+  if (!targetSectionId) throw new Error("Choose a group to merge into.");
+  await mergeSectionIntoAnotherSection(versionId, sourceSectionId, targetSectionId);
   revalidatePath(`/estimates/${estimateId}`);
 }
 

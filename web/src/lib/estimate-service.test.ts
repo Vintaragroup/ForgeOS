@@ -31,6 +31,7 @@ import {
   deleteLineItemsByDocument,
   lockEstimateVersion,
   mergeBoothIntoAnotherBooth,
+  mergeSectionIntoAnotherSection,
   moveElementGroupOrder,
   moveFlatSectionProposalOrder,
   moveLineItemsToCategory,
@@ -2437,6 +2438,130 @@ describe("mergeBoothIntoAnotherBooth", () => {
     await expect(
       mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { sectionId: "nonexistent-id" }),
     ).rejects.toThrow(/not found/);
+  });
+});
+
+describe("mergeSectionIntoAnotherSection", () => {
+  it("moves the source's own line items onto the target, tagged with an H3 subgroup named after the source", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "Header Graphic", sectionType: "COMPONENT" });
+    const target = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    const item = await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Backlit panel", qty: 1, unitCost: 200 });
+
+    await mergeSectionIntoAnotherSection(version.id, source.id, target.id);
+
+    const row = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(row.sectionId).toBe(target.id);
+    expect(row.subgroupLabel).toBe("Header Graphic");
+  });
+
+  it("merges across two different booths, not just within the same one", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "Structure", sectionType: "CATEGORY", groupLabel: "BOOTH-A", buildType: "RENTAL" });
+    const target = await addSection(version.id, { name: "Furniture", sectionType: "CATEGORY", groupLabel: "BOOTH-B", buildType: "RENTAL" });
+    const item = await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Frame", qty: 1, unitCost: 300 });
+
+    await mergeSectionIntoAnotherSection(version.id, source.id, target.id);
+
+    const row = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(row.sectionId).toBe(target.id);
+    expect(row.subgroupLabel).toBe("Structure");
+  });
+
+  it("deletes the now-empty source section", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "Header Graphic", sectionType: "COMPONENT" });
+    const target = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Backlit panel", qty: 1, unitCost: 200 });
+
+    await mergeSectionIntoAnotherSection(version.id, source.id, target.id);
+
+    await expect(db.estimateSection.findUnique({ where: { id: source.id } })).resolves.toBeNull();
+  });
+
+  it("canonicalizes onto an existing subgroup in the target rather than creating a differently-cased duplicate", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "counter", sectionType: "COMPONENT" }); // lowercase
+    const target = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    await addLineItem(version.id, target.id, { lineType: "MATERIAL", description: "Existing counter item", qty: 1, unitCost: 50, subgroupLabel: "Counter" });
+    const item = await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "New counter part", qty: 1, unitCost: 75 });
+
+    await mergeSectionIntoAnotherSection(version.id, source.id, target.id);
+
+    const row = await db.lineItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(row.subgroupLabel).toBe("Counter"); // joins the target's already-stored casing
+  });
+
+  it("moves several line items from the source, all sharing the one new subgroup", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "Header Graphic", sectionType: "COMPONENT" });
+    const target = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    const itemA = await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Panel A", qty: 1, unitCost: 100 });
+    const itemB = await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Panel B", qty: 1, unitCost: 100 });
+
+    await mergeSectionIntoAnotherSection(version.id, source.id, target.id);
+
+    const [rowA, rowB] = await Promise.all([
+      db.lineItem.findUniqueOrThrow({ where: { id: itemA.id } }),
+      db.lineItem.findUniqueOrThrow({ where: { id: itemB.id } }),
+    ]);
+    expect(rowA.sectionId).toBe(target.id);
+    expect(rowB.sectionId).toBe(target.id);
+    expect(rowA.subgroupLabel).toBe("Header Graphic");
+    expect(rowB.subgroupLabel).toBe("Header Graphic");
+  });
+
+  it("re-points the source's own per-category heading override onto the target instead of failing on delete", async () => {
+    // Same FK-restrict issue moveSectionToGroup's own identical test
+    // covers -- deleteEmptySection would otherwise fail outright
+    // (estimate_section_category_descriptions_sectionId_fkey) the moment
+    // the source ever had an approved per-category heading.
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "Header Graphic", sectionType: "COMPONENT" });
+    const target = await addSection(version.id, { name: "Reception Type 1", sectionType: "COMPONENT" });
+    await addLineItem(version.id, source.id, { lineType: "MATERIAL", description: "Panel", qty: 1, unitCost: 100 });
+    const category = await db.category.create({ data: { name: "Test Category", key: `test-category-${Date.now()}` } });
+    await db.estimateSectionCategoryDescription.create({
+      data: { sectionId: source.id, categoryId: category.id, description: "Approved heading" },
+    });
+
+    const result = await mergeSectionIntoAnotherSection(version.id, source.id, target.id);
+    expect(result.id).toBe(target.id);
+
+    const override = await db.estimateSectionCategoryDescription.findFirst({ where: { categoryId: category.id } });
+    expect(override?.sectionId).toBe(target.id);
+  });
+
+  it("rejects merging a group into itself", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "Structure", sectionType: "COMPONENT" });
+
+    await expect(mergeSectionIntoAnotherSection(version.id, section.id, section.id)).rejects.toThrow(/different group/);
+  });
+
+  it("rejects a target sectionId that doesn't exist on this version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "Structure", sectionType: "COMPONENT" });
+
+    await expect(mergeSectionIntoAnotherSection(version.id, source.id, "nonexistent-id")).rejects.toThrow(/not found/);
+  });
+
+  it("rejects merging on a locked version", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const source = await addSection(version.id, { name: "Structure", sectionType: "COMPONENT" });
+    const target = await addSection(version.id, { name: "Furniture", sectionType: "COMPONENT" });
+    await lockEstimateVersion(version.id);
+
+    await expect(mergeSectionIntoAnotherSection(version.id, source.id, target.id)).rejects.toThrow(/locked/);
   });
 });
 

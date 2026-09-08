@@ -1222,6 +1222,76 @@ export async function moveSectionToGroup(
   return target;
 }
 
+// Merges one entire H2 group into another, anywhere on this version --
+// deliberately NOT restricted to the same booth, same "anywhere" convention
+// mergeBoothIntoAnotherBooth's own H1-level merge tool already uses one
+// tier up (MoveToGroupBar's own per-item move stays same-booth-only; this
+// is the whole-group counterpart to THAT tool, not to this one). Every one
+// of the source's own line items moves onto the target, tagged with a new
+// H3 subgroup named after the source's own heading -- see
+// LineItem.subgroupLabel's own schema comment for why this is the same
+// "no model of its own" pattern rather than a real nested row. Mirrors
+// mergeBoothIntoAnotherBooth's own "the source's identity isn't discarded,
+// it becomes the next tier down" design, one level down: an H1 merge turns
+// the source into a new H2 with H3 children; this turns an H2 merge into a
+// new H3 directly, H3 being the bottom tier (see LineItem.subgroupLabel's
+// own comment on why this session scoped H3 as the last one -- no H4).
+export async function mergeSectionIntoAnotherSection(
+  estimateVersionId: string,
+  sourceSectionId: string,
+  targetSectionId: string,
+) {
+  await assertUnlocked(estimateVersionId);
+  if (sourceSectionId === targetSectionId) {
+    throw new Error("Choose a different group to merge into.");
+  }
+  // Re-verified against the DB rather than trusted from the caller-supplied
+  // identifiers alone -- same ownership discipline as every other
+  // caller-supplied-identifier check in this file.
+  const [source, target] = await Promise.all([
+    db.estimateSection.findFirst({ where: { id: sourceSectionId, estimateVersionId }, select: { id: true, name: true } }),
+    db.estimateSection.findFirst({ where: { id: targetSectionId, estimateVersionId }, select: { id: true } }),
+  ]);
+  if (!source) throw new Error("Source group not found on this estimate version.");
+  if (!target) throw new Error("Target group not found on this estimate version.");
+
+  const resolvedSubgroupLabel = await resolveCanonicalSubgroupLabel(targetSectionId, source.name);
+  await db.lineItem.updateMany({
+    where: { sectionId: sourceSectionId },
+    data: { sectionId: targetSectionId, subgroupLabel: resolvedSubgroupLabel },
+  });
+
+  // Same FK-restrict issue moveSectionToGroup's own identical block
+  // documents in full -- deleteEmptySection below would fail outright the
+  // moment the source ever had an approved per-category heading, since
+  // that FK is ON DELETE RESTRICT, not CASCADE. The source becomes an H3
+  // subgroup now, which has no per-category-heading concept of its own
+  // (H3 is a plain LineItem tag, not a real section -- see this function's
+  // own header comment), so there's nothing analogous to backfill onto the
+  // target the way moveSectionToGroup backfills description/elementSummary
+  // -- that H2-level state simply doesn't carry down a tier.
+  const sourceOverrides = await db.estimateSectionCategoryDescription.findMany({ where: { sectionId: sourceSectionId } });
+  if (sourceOverrides.length > 0) {
+    const targetCategoryIds = new Set(
+      (
+        await db.estimateSectionCategoryDescription.findMany({
+          where: { sectionId: targetSectionId },
+          select: { categoryId: true },
+        })
+      ).map((r) => r.categoryId),
+    );
+    await Promise.all(
+      sourceOverrides.map((override) =>
+        targetCategoryIds.has(override.categoryId)
+          ? db.estimateSectionCategoryDescription.delete({ where: { id: override.id } })
+          : db.estimateSectionCategoryDescription.update({ where: { id: override.id }, data: { sectionId: targetSectionId } }),
+      ),
+    );
+  }
+  await deleteEmptySection(estimateVersionId, sourceSectionId);
+  return target;
+}
+
 // Merges an entire booth into a different existing one -- every
 // EstimateSection sharing sourceGroupLabel takes on targetGroupLabel
 // instead. For the case surfaced live: an import (or a manually

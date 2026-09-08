@@ -52,6 +52,7 @@ import {
   moveFlatSectionProposalOrderAction,
   moveLineItemAction,
   moveSectionProposalOrderAction,
+  mergeSectionAction,
   moveSectionToGroupAction,
   recordCostActualAction,
   renameLineItemSubgroupAction,
@@ -146,6 +147,7 @@ import { MoveToGroupBar } from "@/components/move-to-group-bar";
 import { CollapsibleGroup } from "@/components/collapsible-group";
 import { LocalTimestamp } from "@/components/local-timestamp";
 import { BoothActionsMenu } from "@/components/booth-actions-menu";
+import { ElementGroupActionsMenu } from "@/components/element-group-actions-menu";
 import { SectionMoveMenu } from "@/components/section-move-menu";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import {
@@ -2956,6 +2958,21 @@ function CategoryTabContent({
       .filter((s) => !s.groupLabel)
       .map((s) => ({ value: `section:${s.id}`, groupLabel: null as string | null, label: s.description ?? s.name })),
   ];
+  // Every real H2 group on this version, any booth or standalone -- the
+  // "Merge this entire group into" target list, one level down from
+  // mergeTargetOptions above. Deliberately every section (not scoped to
+  // one booth) -- see mergeSectionIntoAnotherSection's own header comment
+  // for the identical "anywhere" convention its H1-level counterpart
+  // already uses. Labeled with booth context (booth heading + this
+  // section's own name) since, unlike allBoothLabels' own options, plain
+  // element-type names alone (e.g. two different booths each having their
+  // own "Structure") would otherwise be ambiguous across the whole
+  // version. Filtered down to "every OTHER group" per H2 at render time
+  // below (excluding that group's own sectionIds).
+  const mergeSectionTargetOptions = version.sections.map((s) => ({
+    value: s.id,
+    label: s.groupLabel ? `${boothDisplayLabelByGroupLabel.get(s.groupLabel) ?? s.groupLabel} — ${s.name}` : s.name,
+  }));
 
   // Grosses up at THIS bucket's own resolved category's margin (its
   // override if set, else the document target) -- not one global
@@ -3524,6 +3541,21 @@ function CategoryTabContent({
                                 {elementOmitted ? "Show on proposal" : "Bury (keep cost)"}
                               </button>
                             </form>
+                            {/* Whole-group reparent into a DIFFERENT H2,
+                                anywhere on this version -- see
+                                mergeSectionIntoAnotherSection's own header
+                                comment for what happens to this group's own
+                                items (they become an H3 subgroup under the
+                                target) and why this is deliberately not
+                                restricted to the same booth. Tucked behind a
+                                kebab, same reasoning as BoothActionsMenu's
+                                own H1-level merge tool. */}
+                            <ElementGroupActionsMenu
+                              mergeAction={mergeSectionAction.bind(null, estimateId, version.id, group.sectionIds[0])}
+                              targetGroupOptions={mergeSectionTargetOptions.filter(
+                                (opt) => !group.sectionIds.includes(opt.value),
+                              )}
+                            />
                           </>
                         )}
                         {!version.isLocked && (
@@ -3873,6 +3905,20 @@ function CategoryTabContent({
                     opposite order from each other, one real, visible
                     inconsistency in an otherwise-identical header. */}
                 <SectionMoveMenu moveAction={moveSectionToGroupAction.bind(null, estimateId, version.id, group.sectionId)} />
+                {/* Whole-group merge into a DIFFERENT H2, anywhere on this
+                    version -- see mergeSectionIntoAnotherSection's own
+                    header comment. A standalone/untagged section renders
+                    with the same H1 treatment as a real booth (this
+                    block's own header comment above), but it IS just a
+                    single H2 underneath -- so it's a valid merge SOURCE
+                    the same way it's already a valid merge TARGET for a
+                    real booth's own H1-level merge tool (see
+                    mergeTargetOptions' own "section:<id>" case). */}
+                <ElementGroupActionsMenu
+                  mergeAction={mergeSectionAction.bind(null, estimateId, version.id, group.sectionId)}
+                  targetGroupOptions={mergeSectionTargetOptions.filter((opt) => opt.value !== group.sectionId)}
+                  theme="dark"
+                />
                 {/* +Group -- for a section that isn't part of a fully-
                     tagged booth yet (this section's own groupLabel is
                     real but untagged, or there's no groupLabel at all).
