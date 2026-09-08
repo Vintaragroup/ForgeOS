@@ -324,7 +324,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const versionSummaries = await db.estimateVersion.findMany({
     where: { estimateId: estimate.id },
     orderBy: { versionNumber: "desc" },
-    select: { id: true, versionNumber: true, isCurrent: true, isLocked: true, grandTotal: true },
+    select: {
+      id: true,
+      versionNumber: true,
+      isCurrent: true,
+      isLocked: true,
+      grandTotal: true,
+      isApproved: true,
+      approvedById: true,
+      approvedBy: { select: { name: true } },
+    },
   });
 
   const currentVersionId = versionSummaries.find((v) => v.isCurrent)?.id ?? versionSummaries[0]?.id;
@@ -1015,7 +1024,20 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
 // grows with every revision an estimate goes through -- see this file's own
 // versionSummaries query below.
 type VersionSummary = Prisma.EstimateVersionGetPayload<{
-  select: { id: true; versionNumber: true; isCurrent: true; isLocked: true; grandTotal: true };
+  select: {
+    id: true;
+    versionNumber: true;
+    isCurrent: true;
+    isLocked: true;
+    grandTotal: true;
+    // Cheap scalars, not a full sub-fetch -- see approveEstimateVersion's
+    // own "same approver on every later version" comment for why
+    // ProposalApprovalTab needs these to know who's required to approve
+    // the current version.
+    isApproved: true;
+    approvedById: true;
+    approvedBy: { select: { name: true } };
+  };
 }>;
 
 // The always-visible header/summary -- title, lock status, totals -- kept
@@ -5967,6 +5989,15 @@ function ProposalApprovalTab({
   const approveVersionWithIds = approveVersionAction.bind(null, estimateId, version.id);
   const generateProposalWithIds = generateProposalAction.bind(null, estimateId, version.id);
   const createChangeOrderWithIds = createChangeOrderAction.bind(null, estimateId, version.id);
+  // Same "same approver on every later version" rule approveEstimateVersion
+  // itself enforces server-side -- computed here too so the form doesn't
+  // even offer a choice that would just be rejected on submit. The most
+  // recent PRIOR approved version of this estimate (if any); null on a
+  // brand-new estimate's very first approval, which has no prior approver
+  // to match and stays open to anyone on the users list.
+  const priorApproval = [...olderVersions]
+    .filter((v) => v.isApproved && v.approvedById)
+    .sort((a, b) => b.versionNumber - a.versionNumber)[0];
 
   return (
     <div className="flex flex-col gap-6">
@@ -5986,6 +6017,22 @@ function ProposalApprovalTab({
                     actionHref="/admin/users/new"
                     actionLabel="Add a user"
                   />
+                ) : priorApproval ? (
+                  // Locked to the estimate's own approver of record -- no
+                  // picker, so this form can't even attempt the submission
+                  // approveEstimateVersion would reject anyway. See that
+                  // function's own header comment for why a revision after
+                  // changes must come back to the same person, not whoever
+                  // happens to be looking at this tab.
+                  <form action={approveVersionWithIds} className="flex items-end gap-3">
+                    <input type="hidden" name="approvedById" value={priorApproval.approvedById!} />
+                    <p className="text-sm text-neutral-600">
+                      This estimate was approved by{" "}
+                      <span className="font-medium text-neutral-900">{priorApproval.approvedBy?.name ?? "unknown"}</span>{" "}
+                      (version {priorApproval.versionNumber}) -- only they can approve this version.
+                    </p>
+                    <Button variant="secondary">Approve as {priorApproval.approvedBy?.name ?? "them"}</Button>
+                  </form>
                 ) : (
                   <form action={approveVersionWithIds} className="flex items-end gap-3">
                     <div className="w-56">

@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { addLineItem, addSection, createEstimateVersion, lockEstimateVersion } from "@/lib/estimate-service";
+import { addLineItem, addSection, createEstimateVersion, createNewVersionFromLocked, lockEstimateVersion } from "@/lib/estimate-service";
 import {
   approveEstimateVersion,
   generateProposal,
@@ -27,7 +27,7 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
-async function makeLockedVersion() {
+async function makeLockedVersion(label = "Structure") {
   const company = await db.company.create({ data: { name: "Test Co" } });
   const opportunity = await db.opportunity.create({
     data: { companyId: company.id, showName: "Test Show" },
@@ -38,7 +38,9 @@ async function makeLockedVersion() {
   // sendProposal (proposal-service.ts) hard-blocks on an unresolved
   // category (see category-audit.ts), so this fixture needs a real,
   // matching Category row -- forgeos_test has no seeded categories.
-  const category = await db.category.create({ data: { name: "Structure", key: "structure" } });
+  // Category.name/key are both unique, so a test calling this fixture more
+  // than once for two genuinely unrelated estimates needs a distinct label.
+  const category = await db.category.create({ data: { name: label, key: label.toLowerCase() } });
   await addLineItem(version.id, section.id, {
     lineType: "MATERIAL",
     description: "Plywood",
@@ -77,6 +79,49 @@ describe("approveEstimateVersion", () => {
     expect(revoked.isApproved).toBe(false);
     expect(revoked.approvedById).toBeNull();
     expect(revoked.approvedAt).toBeNull();
+  });
+
+  it("rejects a different person approving a later version of the same estimate", async () => {
+    const { version: v1, user: originalApprover } = await makeLockedVersion();
+    await approveEstimateVersion(v1.id, originalApprover.id);
+    const v2 = await createNewVersionFromLocked(v1.id);
+    await lockEstimateVersion(v2.id);
+    const someoneElse = await db.user.create({ data: { name: "A Different Person", email: `diff-${Date.now()}@example.com` } });
+
+    await expect(approveEstimateVersion(v2.id, someoneElse.id)).rejects.toThrow(/only they can approve/);
+    await expect(approveEstimateVersion(v2.id, someoneElse.id)).rejects.toThrow(/Test Approver/);
+  });
+
+  it("allows the same original approver to approve a later version of the same estimate", async () => {
+    const { version: v1, user: originalApprover } = await makeLockedVersion();
+    await approveEstimateVersion(v1.id, originalApprover.id);
+    const v2 = await createNewVersionFromLocked(v1.id);
+    await lockEstimateVersion(v2.id);
+
+    const approved = await approveEstimateVersion(v2.id, originalApprover.id);
+    expect(approved.isApproved).toBe(true);
+    expect(approved.approvedById).toBe(originalApprover.id);
+  });
+
+  it("imposes no restriction on the very first approval of a brand-new estimate", async () => {
+    // makeLockedVersion's own "approves a locked version" test above
+    // already covers this implicitly, but spelled out explicitly here:
+    // there's no PRIOR approved version to match against yet, so any
+    // authorized user can make that first call.
+    const { version, user } = await makeLockedVersion();
+    await expect(approveEstimateVersion(version.id, user.id)).resolves.toMatchObject({ approvedById: user.id });
+  });
+
+  it("does not restrict approval on an unrelated estimate that happens to share nothing but a different approver", async () => {
+    const { version: v1, user: approverA } = await makeLockedVersion();
+    await approveEstimateVersion(v1.id, approverA.id);
+
+    // A second, wholly unrelated estimate -- not a new version of v1's
+    // estimate -- must not be affected by v1's own approver.
+    const { version: unrelatedVersion, user: approverB } = await makeLockedVersion("Furniture");
+    await expect(approveEstimateVersion(unrelatedVersion.id, approverB.id)).resolves.toMatchObject({
+      approvedById: approverB.id,
+    });
   });
 });
 

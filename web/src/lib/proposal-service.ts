@@ -20,8 +20,28 @@ async function assertLocked(estimateVersionId: string) {
 // replaces the manual/paper signature process inferred in
 // workflow-map.md. Requires the version to already be locked (finalized
 // pricing) before it can be approved.
+//
+// Once an estimate has ANY approved version, every later version must be
+// approved by that same person -- a revision after changes isn't a fresh
+// decision by whoever happens to be in the tool that day, it's the
+// original approver re-confirming their own number. Enforced here, not
+// just suggested in the UI: rejects outright rather than silently letting
+// a different name get recorded. The very first approval on a brand-new
+// estimate has no prior approver to match, so anyone authorized to work
+// the estimate can make that first call.
 export async function approveEstimateVersion(estimateVersionId: string, approvedById: string) {
-  await assertLocked(estimateVersionId);
+  const version = await assertLocked(estimateVersionId);
+  const priorApproval = await db.estimateVersion.findFirst({
+    where: { estimateId: version.estimateId, isApproved: true, id: { not: estimateVersionId } },
+    orderBy: { versionNumber: "desc" },
+    select: { versionNumber: true, approvedById: true, approvedBy: { select: { name: true } } },
+  });
+  if (priorApproval && priorApproval.approvedById !== approvedById) {
+    throw new Error(
+      `This estimate was previously approved by ${priorApproval.approvedBy?.name ?? "someone else"} ` +
+        `(version ${priorApproval.versionNumber}) -- only they can approve a later version of it.`,
+    );
+  }
   return db.estimateVersion.update({
     where: { id: estimateVersionId },
     data: { isApproved: true, approvedAt: new Date(), approvedById },

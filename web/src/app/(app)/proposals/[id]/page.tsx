@@ -7,6 +7,7 @@ import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { sendProposalAction, signProposalAction } from "../actions";
 import { extractBranding, extractPaymentMethodNote } from "@/lib/proposal-branding";
 import { taxRateLabel, TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
+import { truncateProposalSummary } from "@/lib/proposal-summary-limits";
 import { BRAND, BRAND_ADDRESS_LINES } from "@/lib/brand";
 import {
   aggregateByCategory,
@@ -124,6 +125,18 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   if (!(await canAccessOpportunity(user, proposal.estimateVersion.estimate.opportunityId))) notFound();
 
   const version = proposal.estimateVersion;
+  // Top tier of the three-level Proposal PDF copy system -- see
+  // EstimateCategorySummary's own schema comment. Sequential, not part of
+  // the Promise.all above, since version.id is only known once `proposal`
+  // resolves -- same as proposals/[id]/pdf/route.ts's identical fetch, kept
+  // in sync so this page shows exactly what the real PDF shows.
+  const categorySummaryRows = await db.estimateCategorySummary.findMany({
+    where: { estimateVersionId: version.id },
+    include: { category: { select: { name: true } } },
+  });
+  const categorySummaries = new Map(
+    categorySummaryRows.filter((r) => r.summary).map((r) => [r.category.name, r.summary!]),
+  );
   const opportunity = version.estimate.opportunity;
   const sendWithId = sendProposalAction.bind(null, proposal.id);
   const signWithId = signProposalAction.bind(null, proposal.id);
@@ -225,6 +238,15 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                       </span>
                       <span className="text-[10px] font-semibold text-white">{moneyFromNumber(booth.subtotal)}</span>
                     </div>
+                    {/* Middle tier -- see EstimateSection.boothSummary's own
+                        schema comment. Always shown when written, same as
+                        proposal-pdf.tsx's own booth.boothSummary block --
+                        this page previously never rendered it at all. */}
+                    {booth.boothSummary && (
+                      <p className="mb-1.5 px-2 text-xs leading-relaxed text-neutral-600">
+                        {truncateProposalSummary(booth.boothSummary)}
+                      </p>
+                    )}
                     <div className="ml-3 flex flex-col gap-2">
                       {booth.elementGroups.map((group) => (
                         <div key={group.elementType}>
@@ -236,6 +258,13 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                               {moneyFromNumber(group.subtotal)}
                             </span>
                           </div>
+                          {/* Bottom tier -- same "always shown" reasoning as
+                              boothSummary above. */}
+                          {group.elementSummary && (
+                            <p className="mb-1.5 px-2 text-xs leading-relaxed text-neutral-600">
+                              {truncateProposalSummary(group.elementSummary)}
+                            </p>
+                          )}
                           {/* Summarize -- see EstimateSection.summarizeOnProposal's
                               own schema comment. Either the whole booth or just
                               this one group being summarized skips the itemized
@@ -297,6 +326,14 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                   </div>
                   <span className="text-xs font-semibold text-white">{moneyFromNumber(visibleTotal)}</span>
                 </div>
+                {/* Top tier -- see EstimateCategorySummary's own schema
+                    comment. Same "always shown" reasoning as boothSummary/
+                    elementSummary above. */}
+                {categorySummaries.get(categoryName) && (
+                  <p className="mb-1.5 px-2 text-xs leading-relaxed text-neutral-600">
+                    {truncateProposalSummary(categorySummaries.get(categoryName)!)}
+                  </p>
+                )}
                 {isServiceStyle ? <ServiceTable items={visibleOwnItems} /> : <CategoryTable items={visibleOwnItems} />}
                 {visibleChildren.length > 0 && (
                   <div className="ml-3 flex flex-col gap-3">

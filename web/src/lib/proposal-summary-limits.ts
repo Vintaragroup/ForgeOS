@@ -19,3 +19,15 @@
 // within "a few sentences" (roughly 120-150 words) with a large safety
 // margin below that failure threshold.
 export const MAX_PROPOSAL_SUMMARY_LENGTH = 800;
+
+// Shared by every client-facing renderer of a booth/element/category
+// summary (proposal-pdf.tsx and the web proposal page) -- the authoritative
+// safety net for the wrap={false} overflow bug documented above: estimate-
+// service.ts rejects a new summary over the cap at write time, but that
+// can't retroactively fix one already stored before this cap existed.
+// Truncating here guarantees no renderer can ever show an oversized
+// header+summary block regardless of what's actually in the database.
+export function truncateProposalSummary(text: string): string {
+  if (text.length <= MAX_PROPOSAL_SUMMARY_LENGTH) return text;
+  return `${text.slice(0, MAX_PROPOSAL_SUMMARY_LENGTH).trimEnd()}…`;
+}
