@@ -524,8 +524,11 @@ export interface ProposedItemDuplicateStatus {
 // originalIndex terms. items only needs description/qty/unit -- accepts
 // anything structurally compatible with ProposedLineItem or
 // ProposedSpreadsheetLineItem so both review tables can share this.
+// qty/unit are nullable -- ParsedDesignCostRow/ParsedModuleCostRow (the
+// deterministic Excel parsers' own row shapes) have no unit field at
+// all, and findExactDuplicates only ever reads description anyway.
 export async function resolveDuplicateStatusForReview(
-  items: { description: string; qty: number; unit: string }[],
+  items: { description: string; qty: number | null; unit: string | null }[],
   estimateVersionId: string,
   // Only pass the cache's own matches when its stored estimateVersionId
   // still equals estimateVersionId above -- a stale cache for a

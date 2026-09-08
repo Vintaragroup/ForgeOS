@@ -611,7 +611,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const canImport = !!currentVersion && !currentVersion.isLocked;
   const importPreview =
     canImport && importDocumentId
-      ? await previewPricingImport(importDocumentId, estimate.opportunityId, user.id).catch((err: Error) => err)
+      ? await previewPricingImport(importDocumentId, estimate.opportunityId, user.id, currentVersion?.id ?? null).catch(
+          (err: Error) => err,
+        )
       : null;
 
   const reconciliation =
@@ -646,6 +648,41 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             ),
           )
       : [];
+
+  // Duplicate-detection status per import-preview row -- read-only, see
+  // resolveDuplicateStatusForReview's own comment. Tier 1 only (no cached
+  // matches) for the three deterministic kinds -- see
+  // pricing-import-service.ts's own commitPricingImport comment on why
+  // these never run Tier 2 (no separate "propose" step to cache an AI
+  // call at). ai-proposed gets its real cached Tier 2 hint too, now that
+  // previewPricingImport actually threads a versionId down to it.
+  // vendor-quote (PDF, not Excel) is out of scope for this pass.
+  const importDuplicateItems =
+    importPreview && !(importPreview instanceof Error) && currentVersion
+      ? importPreview.kind === "design-cost-estimate" || importPreview.kind === "module-cost-estimate"
+        ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: null }))
+        : importPreview.kind === "pricing-schedule" || importPreview.kind === "ai-proposed"
+          ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: r.unit }))
+          : null
+      : null;
+  const importDuplicateCachedMatches =
+    importPreview && !(importPreview instanceof Error) && importPreview.kind === "ai-proposed" && currentVersion
+      ? await db.document
+          .findUnique({ where: { id: importPreview.documentId }, select: { proposedLineItemMatches: true } })
+          .then((d) => {
+            const cache = d?.proposedLineItemMatches as unknown as
+              | { estimateVersionId: string; matches: LineItemDuplicateMatch[] }
+              | null;
+            return cache?.estimateVersionId === currentVersion.id ? cache.matches : null;
+          })
+      : null;
+  const importDuplicateStatus =
+    importDuplicateItems && currentVersion
+      ? await resolveDuplicateStatusForReview(importDuplicateItems, currentVersion.id, importDuplicateCachedMatches)
+      : null;
+  const importDuplicateExcludedCount = importDuplicateStatus
+    ? importDuplicateStatus.filter((s) => !s.selected).length
+    : 0;
 
   // proposedLineItems is computed once (see the "Propose items" button,
   // scope-line-item-service.ts) and cached on the Document -- reading it
@@ -897,6 +934,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     previewImportAction={previewImportWithId}
                     importDocumentId={importDocumentId}
                     importPreview={importPreview}
+                    importDuplicateStatus={importDuplicateStatus}
+                    importDuplicateExcludedCount={importDuplicateExcludedCount}
                     commitImportError={commitImportError}
                     canDeleteAndReimport={canDeleteAndReimport}
                     deleteAndReimportAction={deleteAndReimportAction}
@@ -4443,6 +4482,8 @@ function DocumentsTab({
   previewImportAction,
   importDocumentId,
   importPreview,
+  importDuplicateStatus,
+  importDuplicateExcludedCount,
   commitImportError,
   canDeleteAndReimport,
   deleteAndReimportAction,
@@ -4480,6 +4521,8 @@ function DocumentsTab({
   previewImportAction: (formData: FormData) => void | Promise<void>;
   importDocumentId: string | undefined;
   importPreview: Awaited<ReturnType<typeof previewPricingImport>> | Error | null;
+  importDuplicateStatus: Awaited<ReturnType<typeof resolveDuplicateStatusForReview>> | null;
+  importDuplicateExcludedCount: number;
   commitImportError: string | undefined;
   canDeleteAndReimport: boolean;
   deleteAndReimportAction: (
@@ -4662,6 +4705,16 @@ function DocumentsTab({
                 )}{" "}
                 in <span className="font-medium">{importPreview.filename}</span>
                 {"sheetName" in importPreview && ` (${importPreview.sheetName})`}.
+                {importDuplicateStatus && importDuplicateExcludedCount > 0 && (
+                  <>
+                    {" "}
+                    <span className="text-amber-700">
+                      {importDuplicateExcludedCount} row{importDuplicateExcludedCount === 1 ? "" : "s"} below
+                      already match{importDuplicateExcludedCount === 1 ? "es" : ""} an existing line item —
+                      excluded automatically, review before committing anyway.
+                    </span>
+                  </>
+                )}
               </p>
 
               {importPreview.kind === "vendor-quote" && (
@@ -4707,10 +4760,18 @@ function DocumentsTab({
                       </tr>
                     </thead>
                     <tbody>
-                      {importPreview.rows.map((row) => (
+                      {importPreview.rows.map((row, i) => (
                         <tr key={row.rowNumber} className="border-t border-neutral-100">
                           <td className="px-2 py-1 text-neutral-500">{row.category}</td>
                           <td className="max-w-[24rem] truncate px-2 py-1" title={row.description}>
+                            {importDuplicateStatus?.[i]?.match.confidence && (
+                              <span
+                                className={`mr-1.5 rounded px-1.5 py-0.5 text-xs ${CONFIDENCE_BADGE_CLASS[importDuplicateStatus[i].match.confidence!] ?? ""}`}
+                                title={importDuplicateStatus[i].match.reasoning ?? undefined}
+                              >
+                                {importDuplicateStatus[i].match.confidence} match
+                              </span>
+                            )}
                             {row.description.split("\n")[0]}
                           </td>
                           <td className="px-2 py-1 text-right">{row.qty}</td>
@@ -4743,6 +4804,14 @@ function DocumentsTab({
                         <tr key={i} className="border-t border-neutral-100">
                           <td className="px-2 py-1 text-neutral-500">{row.category}</td>
                           <td className="max-w-[24rem] truncate px-2 py-1" title={row.sourceQuote}>
+                            {importDuplicateStatus?.[i]?.match.confidence && (
+                              <span
+                                className={`mr-1.5 rounded px-1.5 py-0.5 text-xs ${CONFIDENCE_BADGE_CLASS[importDuplicateStatus[i].match.confidence!] ?? ""}`}
+                                title={importDuplicateStatus[i].match.reasoning ?? undefined}
+                              >
+                                {importDuplicateStatus[i].match.confidence} match
+                              </span>
+                            )}
                             {row.description}
                           </td>
                           <td className="px-2 py-1 text-right">{row.unit}</td>
@@ -4782,6 +4851,14 @@ function DocumentsTab({
                         <tr key={i} className="border-t border-neutral-100">
                           <td className="px-2 py-1 text-neutral-500">{row.category ?? "—"}</td>
                           <td className="max-w-[24rem] truncate px-2 py-1" title={row.sourceQuote}>
+                            {importDuplicateStatus?.[i]?.match.confidence && (
+                              <span
+                                className={`mr-1.5 rounded px-1.5 py-0.5 text-xs ${CONFIDENCE_BADGE_CLASS[importDuplicateStatus[i].match.confidence!] ?? ""}`}
+                                title={importDuplicateStatus[i].match.reasoning ?? undefined}
+                              >
+                                {importDuplicateStatus[i].match.confidence} match
+                              </span>
+                            )}
                             {row.description}
                           </td>
                           <td className="px-2 py-1 text-right">{row.qty}</td>
@@ -4829,10 +4906,18 @@ function DocumentsTab({
                       </tr>
                     </thead>
                     <tbody>
-                      {importPreview.rows.map((row) => (
+                      {importPreview.rows.map((row, i) => (
                         <tr key={row.rowNumber} className="border-t border-neutral-100">
                           <td className="px-2 py-1 text-neutral-500">{row.category}</td>
                           <td className="max-w-[24rem] truncate px-2 py-1" title={row.description}>
+                            {importDuplicateStatus?.[i]?.match.confidence && (
+                              <span
+                                className={`mr-1.5 rounded px-1.5 py-0.5 text-xs ${CONFIDENCE_BADGE_CLASS[importDuplicateStatus[i].match.confidence!] ?? ""}`}
+                                title={importDuplicateStatus[i].match.reasoning ?? undefined}
+                              >
+                                {importDuplicateStatus[i].match.confidence} match
+                              </span>
+                            )}
                             {row.description.split("\n")[0]}
                           </td>
                           <td className="px-2 py-1 text-right">{row.unit}</td>
@@ -4896,7 +4981,11 @@ function DocumentsTab({
                     </div>
                   ))}
                 <Button>
-                  Commit {importPreview.rows.length} draft line items
+                  Commit {importPreview.rows.length - importDuplicateExcludedCount} draft line item
+                  {importPreview.rows.length - importDuplicateExcludedCount === 1 ? "" : "s"}
+                  {importDuplicateExcludedCount > 0
+                    ? ` (excludes ${importDuplicateExcludedCount} likely duplicate${importDuplicateExcludedCount === 1 ? "" : "s"})`
+                    : ""}
                 </Button>
               </form>
             </div>

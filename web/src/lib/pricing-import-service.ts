@@ -15,12 +15,13 @@
 import ExcelJS from "exceljs";
 import { getDocumentBytes } from "@/lib/document-service";
 import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
-import { AlreadyImportedError } from "@/lib/import-errors";
 import { db } from "@/lib/db";
 import { cellText } from "@/lib/xlsx-utils";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
 import { loadCatalogForMatching, matchDescription, type CatalogMatch } from "@/lib/catalog-match-service";
 import { inferIsClientOwned, resolveComposedCategory } from "@/lib/line-item-category";
+import { loadDuplicateCandidates } from "@/lib/ai/scope-line-item-service";
+import { findExactDuplicates, type ProposedItemForDuplicateCheck } from "@/lib/ai/line-item-duplicate-service";
 import {
   commitDesignCostEstimateImport,
   findDesignCostEstimateSheet,
@@ -167,6 +168,16 @@ export async function previewPricingImport(
   documentId: string,
   opportunityId: string,
   userId: string | null = null,
+  // Threaded through to previewAiProposedImport's own identical param
+  // below (the only one of the four dispatched preview functions that
+  // does anything with it -- design-cost-estimate/module-cost-estimate
+  // cache nothing and don't accept one). Lets a fresh AI-fallback
+  // proposal cache its Tier 2 duplicate-match hint against the version
+  // actually being viewed -- see proposeLineItemsFromScope's own
+  // versionId parameter comment for the full rationale. Previously
+  // nothing upstream of previewAiProposedImport ever supplied this, so
+  // that caching never actually ran despite the plumbing existing.
+  versionId: string | null = null,
 ): Promise<
   | PricingImportPreview
   | DesignCostEstimatePreview
@@ -221,7 +232,7 @@ export async function previewPricingImport(
     // dead-ending the estimate on a format nobody's hand-written a parser
     // for yet. Always tried last: deterministic parsing stays preferred
     // wherever a shape is actually known.
-    return previewAiProposedImport(documentId, opportunityId, userId);
+    return previewAiProposedImport(documentId, opportunityId, userId, versionId);
   }
   const { sheet, headerRowNumber, columns } = found;
 
@@ -374,18 +385,28 @@ export async function commitPricingImport(
     throw new Error(`No line items found in "${preview.filename}".`);
   }
 
-  // Not just a nicety -- this ran twice on the exact same document for a
-  // real job before this check existed, silently doubling every section
-  // and line item (and the dollar total, once confirmed). Nothing here
-  // reconciles an existing import against a changed source file; a
-  // re-import must go through deleting the old rows first, deliberately,
-  // not by re-clicking the same button.
-  const alreadyImported = await db.lineItem.findFirst({
-    where: { documentId, section: { estimateVersionId, optionId: null } },
-  });
-  if (alreadyImported) {
-    throw new AlreadyImportedError(preview.filename);
-  }
+  // Fresh Tier 1 (free, deterministic) exact-description match against
+  // the REAL commit target's current line items -- replaces the old
+  // whole-document "already imported" guard, which used to block
+  // re-importing the exact same file a second time and did nothing for
+  // a different file covering overlapping scope. See
+  // line-item-duplicate-service.ts's own header comment for the full
+  // two-tier design (this deterministic parser only uses Tier 1 -- no
+  // separate "propose" step exists here to cache an AI call at, so
+  // Tier 2 would mean a real OpenAI call on every single commit).
+  // Silently excludes a detected duplicate rather than throwing -- this
+  // ran twice on the exact same document for a real job before the old
+  // guard existed, silently doubling every section and line item, so
+  // safety here means "only the genuinely new rows land," not "refuse
+  // to run."
+  const duplicateCandidates = await loadDuplicateCandidates(estimateVersionId);
+  const proposedForDuplicateCheck: ProposedItemForDuplicateCheck[] = preview.rows.map((row) => ({
+    description: row.description,
+    qty: row.qty,
+    unit: row.unit || null,
+  }));
+  const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
+  const rows = preview.rows.filter((_, i) => !exactDuplicates.has(i));
 
   const existingSectionCount = await db.estimateSection.count({
     where: { estimateVersionId, optionId: null },
@@ -399,7 +420,7 @@ export async function commitPricingImport(
 
   const seenKeys = new Set<string>();
   const groups: { boothLabel: string | null; category: string }[] = [];
-  for (const row of preview.rows) {
+  for (const row of rows) {
     const { boothLabel, category, key } = groupKey(row);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -420,7 +441,7 @@ export async function commitPricingImport(
       groupLabel: group.boothLabel,
     });
 
-    const rowsForGroup = preview.rows.filter((r) => groupKey(r).key === `${group.boothLabel ?? ""}\u0000${group.category}`);
+    const rowsForGroup = rows.filter((r) => groupKey(r).key === `${group.boothLabel ?? ""}\u0000${group.category}`);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,
@@ -453,5 +474,5 @@ export async function commitPricingImport(
     created.push({ section, count: lineItems.length });
   }
 
-  return { filename: preview.filename, sectionsCreated: created.length, rowsImported: preview.rows.length };
+  return { filename: preview.filename, sectionsCreated: created.length, rowsImported: rows.length };
 }

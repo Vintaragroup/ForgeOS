@@ -36,6 +36,8 @@ import {
   inferCategoryFromDescription,
   resolveCategoryNameFromKey,
 } from "@/lib/line-item-category";
+import { loadDuplicateCandidates } from "@/lib/ai/scope-line-item-service";
+import { findExactDuplicates, type ProposedItemForDuplicateCheck } from "@/lib/ai/line-item-duplicate-service";
 
 type SubTable = "sheet-goods" | "other-items" | "labor";
 
@@ -361,19 +363,26 @@ export async function commitModuleCostEstimateImport(estimateVersionId: string, 
     throw new Error(`No line items found in "${preview.filename}".`);
   }
 
-  const alreadyImported = await db.lineItem.findFirst({
-    where: { documentId, section: { estimateVersionId, optionId: null } },
-  });
-  if (alreadyImported) {
-    throw new Error(
-      `"${preview.filename}" has already been imported into this estimate. Delete its existing line items first if you want to re-import.`,
-    );
-  }
+  // Fresh Tier 1 (free, deterministic) exact-description match against
+  // the REAL commit target's current line items -- replaces the old
+  // whole-document "already imported" guard the same way
+  // pricing-import-service.ts's own commitPricingImport does; see that
+  // function's identical comment for the full rationale (no separate
+  // "propose" step here to cache an AI call at, so this stays Tier 1
+  // only). Silently excludes a detected duplicate instead of throwing.
+  const duplicateCandidates = await loadDuplicateCandidates(estimateVersionId);
+  const proposedForDuplicateCheck: ProposedItemForDuplicateCheck[] = preview.rows.map((row) => ({
+    description: row.description,
+    qty: row.qty,
+    unit: null,
+  }));
+  const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
+  const rows = preview.rows.filter((_, i) => !exactDuplicates.has(i));
 
   const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
   const existingSectionCount = await db.estimateSection.count({ where: { estimateVersionId, optionId: null } });
 
-  const rowsWithCategory = preview.rows.map((row) => ({
+  const rowsWithCategory = rows.map((row) => ({
     row,
     category: resolveModuleRowCategory(row, liveCategories),
   }));
@@ -417,5 +426,5 @@ export async function commitModuleCostEstimateImport(estimateVersionId: string, 
     created.push({ section, count: lineItems.length });
   }
 
-  return { filename: preview.filename, sectionsCreated: created.length, rowsImported: preview.rows.length };
+  return { filename: preview.filename, sectionsCreated: created.length, rowsImported: rows.length };
 }

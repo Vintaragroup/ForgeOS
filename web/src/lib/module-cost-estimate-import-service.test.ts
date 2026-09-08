@@ -190,14 +190,64 @@ describe("commitModuleCostEstimateImport", () => {
     expect(bematrixItem?.category).toBe("Structure");
   });
 
-  it("refuses a second commit of the same document into the same version", async () => {
+  // Replaces this suite's old "refuses a second commit" guard test -- see
+  // pricing-import-service.test.ts's identical replacement for the full
+  // rationale: fresh Tier 1 exact-match detection now silently excludes
+  // an exact duplicate instead of blocking the whole re-commit.
+  //
+  // Doesn't assert an exact post-exclusion count: a real module-cost
+  // workbook can legitimately repeat the exact same description across
+  // genuinely distinct rows (this suite's own sibling test already notes
+  // three otherwise-identical "PURCHASE SQ FT (basic)" rows that stay
+  // distinguishable only because description combines two real cells --
+  // when it still collides, findExactDuplicates's "exactly one
+  // candidate" ambiguity rule correctly refuses to auto-match rather
+  // than guess). What must hold regardless: strictly fewer rows land the
+  // second time, and nothing is ever lost or over-counted.
+  it("silently excludes every unambiguous row on a second commit of the same document, instead of throwing or re-inserting them", async () => {
     const { opportunity, document } = await makeDocumentFrom(CHICAGO_PATH, "Chicago ABCA.xlsx");
     await db.category.createMany({ data: [{ name: "Labor", key: "labor" }, { name: "Custom Build", key: "custom_build" }] });
     const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
     const version = await createEstimateVersion(estimate.id, 0);
 
-    await commitModuleCostEstimateImport(version.id, document.id);
+    const first = await commitModuleCostEstimateImport(version.id, document.id);
+    expect(first.rowsImported).toBeGreaterThan(0);
 
-    await expect(commitModuleCostEstimateImport(version.id, document.id)).rejects.toThrow(/already been imported/);
+    const second = await commitModuleCostEstimateImport(version.id, document.id);
+    expect(second.rowsImported).toBeLessThan(first.rowsImported);
+
+    const lineItems = await db.lineItem.findMany({ where: { documentId: document.id } });
+    expect(lineItems.length).toBe(first.rowsImported + second.rowsImported);
+  });
+
+  it("re-adds a specific row a reviewer previously deleted, when re-committing the same document after a partial cleanup", async () => {
+    const { opportunity, document } = await makeDocumentFrom(CHICAGO_PATH, "Chicago ABCA.xlsx");
+    await db.category.createMany({ data: [{ name: "Labor", key: "labor" }, { name: "Custom Build", key: "custom_build" }] });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const first = await commitModuleCostEstimateImport(version.id, document.id);
+    const before = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+    expect(before).toHaveLength(first.rowsImported);
+
+    // Pick a row whose description is unique among the committed set --
+    // Tier 1 only auto-recognizes an unambiguous description.
+    const byDescription = new Map<string, (typeof before)[number][]>();
+    for (const li of before) {
+      byDescription.set(li.description, [...(byDescription.get(li.description) ?? []), li]);
+    }
+    const uniqueRows = [...byDescription.values()].filter((group) => group.length === 1).map((group) => group[0]);
+    expect(uniqueRows.length).toBeGreaterThan(0); // sanity: the fixture has at least one unambiguous row
+    const deleted = uniqueRows[0];
+    await db.lineItem.delete({ where: { id: deleted.id } });
+
+    const second = await commitModuleCostEstimateImport(version.id, document.id);
+    expect(second.rowsImported).toBeGreaterThan(0);
+
+    const after = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+    expect(after.length).toBe(first.rowsImported - 1 + second.rowsImported);
+    // The deleted row's own description is present again -- genuine
+    // recovery, not a coincidental count match.
+    expect(after.filter((li) => li.description === deleted.description)).toHaveLength(1);
   });
 });

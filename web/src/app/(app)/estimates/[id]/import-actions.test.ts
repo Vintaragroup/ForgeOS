@@ -79,46 +79,36 @@ afterAll(async () => {
 });
 
 describe("commitImportAction", () => {
-  it("redirects back to the import view with the message, instead of throwing, when the document was already imported", async () => {
-    // Regression: commitPricingImport's own "already been imported" guard
-    // (pricing-import-service.test.ts's own coverage) used to propagate
-    // straight out of this server action uncaught -- Next.js treats an
-    // action that throws as an unhandled render error and replaces the
-    // whole page with its generic error screen. Confirmed live: a
-    // production user re-clicked "Import line items" on a document
-    // already committed to this estimate and landed on a dead-end error
-    // page instead of a message they could act on.
+  // Replaces this describe block's old "redirects back to the import view
+  // with the message, instead of throwing, when the document was already
+  // imported" test -- commitPricingImport's own flat-schedule "already
+  // been imported" guard (pricing-import-service.test.ts's own coverage)
+  // is gone, replaced by fresh Tier 1 exact-match detection that silently
+  // excludes a duplicate instead of throwing, so a second import of the
+  // same document now succeeds normally through this action rather than
+  // redirecting with an error.
+  it("succeeds normally (redirecting to the plain documents tab, no error) on a second import of the same document, committing zero new rows", async () => {
     const admin = await makeAdmin();
     await createSession(admin.id);
     const { document, estimate, version } = await makeDocument();
 
     // First import succeeds and commits real rows -- still redirects
     // (Next's real redirect() throws even on the success path), so it's
-    // awaited via .catch() the same way the second, failing call is below.
+    // awaited via .catch() the same way the second call is below.
     await commitImportAction(estimate.id, version.id, document.id, new FormData()).catch(() => {});
     const firstImportCount = await db.lineItem.count({ where: { documentId: document.id } });
     expect(firstImportCount).toBeGreaterThan(0);
 
-    // Second import of the exact same document hits the guard -- this
-    // must redirect with the error message, not throw the raw Error.
-    // Next.js's real redirect() throws an object carrying the target URL
-    // as `digest` (see bid-package-actions.test.ts's own comment on this
-    // same pattern), so a caught redirect is what "handled, not crashed"
-    // looks like from a test's perspective.
-    const rejection = (await commitImportAction(estimate.id, version.id, document.id, new FormData()).catch(
+    const secondRedirect = (await commitImportAction(estimate.id, version.id, document.id, new FormData()).catch(
       (err: unknown) => err,
     )) as { digest?: string };
-    expect(rejection.digest).toContain("commitImportError=");
-    expect(rejection.digest).toContain(encodeURIComponent("has already been imported"));
-    expect(rejection.digest).toContain(`importDocumentId=${document.id}`);
-    // AlreadyImportedError specifically -- this is what gates page.tsx's
-    // "Delete & re-import" button (see commitImportAction's own comment on
-    // why "no rows found" and similar rejections must NOT set this).
-    expect(rejection.digest).toContain("canDeleteAndReimport=1");
+    // A plain success redirect (?tab=documents, no commitImportError param)
+    // -- not the old error-redirect this test used to assert.
+    expect(secondRedirect.digest).toContain(`/estimates/${estimate.id}?tab=documents`);
+    expect(secondRedirect.digest).not.toContain("commitImportError=");
 
-    // The guard rejects before touching the DB again -- no duplicate rows.
-    const finalCount = await db.lineItem.count({ where: { documentId: document.id } });
-    expect(finalCount).toBe(firstImportCount);
+    const secondImportCount = await db.lineItem.count({ where: { documentId: document.id } });
+    expect(secondImportCount).toBe(firstImportCount); // nothing duplicated
   });
 });
 

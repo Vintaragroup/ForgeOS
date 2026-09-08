@@ -196,7 +196,7 @@ describe("previewDesignCostEstimateImport", () => {
 });
 
 describe("commitDesignCostEstimateImport", () => {
-  it("commits Section 211 as isDraft LineItems, stamps documentId/buildName, and is idempotent against a second commit", async () => {
+  it("commits Section 211 as isDraft LineItems and stamps documentId/buildName", async () => {
     const { opportunity, document } = await makeDocumentFrom(SECTION_211_PATH, "Section 211.xlsx");
     const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
     const version = await createEstimateVersion(estimate.id, 0);
@@ -211,8 +211,76 @@ describe("commitDesignCostEstimateImport", () => {
 
     const updatedDoc = await db.document.findUniqueOrThrow({ where: { id: document.id } });
     expect(updatedDoc.buildName).toBe("A.6.3.0");
+  });
 
-    await expect(commitDesignCostEstimateImport(version.id, document.id)).rejects.toThrow(/already been imported/);
+  // Replaces this suite's old "is idempotent against a second commit"
+  // assertion (which used to require throwing) -- see
+  // pricing-import-service.test.ts's identical replacement for the full
+  // rationale: fresh Tier 1 exact-match detection now silently excludes
+  // an exact duplicate instead of blocking the whole re-commit.
+  //
+  // Doesn't assert an exact post-exclusion count: this real workbook
+  // legitimately repeats the exact same description across a handful of
+  // genuinely distinct rows (e.g. two identical "614 x 2418mm post" rows
+  // with nothing else to distinguish them) -- findExactDuplicates's own
+  // "exactly one candidate" ambiguity rule correctly refuses to
+  // auto-match those rather than guessing which existing row a given
+  // repeat corresponds to, so they land again on a second commit while
+  // every unambiguous row does not. What must hold regardless: strictly
+  // fewer rows land the second time, and nothing is ever lost or
+  // over-counted.
+  it("silently excludes every unambiguous row on a second commit of the same document, instead of throwing or re-inserting them", async () => {
+    const { opportunity, document } = await makeDocumentFrom(SECTION_211_PATH, "Section 211.xlsx");
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const first = await commitDesignCostEstimateImport(version.id, document.id);
+    expect(first.rowsImported).toBeGreaterThan(0);
+
+    const second = await commitDesignCostEstimateImport(version.id, document.id);
+    expect(second.rowsImported).toBeGreaterThan(0); // the fixture's own ambiguous repeats
+    expect(second.rowsImported).toBeLessThan(first.rowsImported); // every unambiguous row was excluded
+
+    const lineItems = await db.lineItem.findMany({ where: { documentId: document.id } });
+    expect(lineItems.length).toBe(first.rowsImported + second.rowsImported);
+  });
+
+  // Doesn't assert an exact recovered count -- this real workbook's own
+  // inherently-ambiguous repeats (see the sibling "silently excludes"
+  // test's own comment) re-land on EVERY commit regardless of what was
+  // deliberately deleted, since Tier 1 can never safely tell two
+  // identically-worded siblings apart. What this proves instead: the two
+  // SPECIFIC rows a reviewer deleted are genuinely recognizable and come
+  // back by name, and the accounting never loses or double-counts a row.
+  it("re-adds a specific row a reviewer previously deleted, when re-committing the same document after a partial cleanup", async () => {
+    const { opportunity, document } = await makeDocumentFrom(SECTION_211_PATH, "Section 211.xlsx");
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const first = await commitDesignCostEstimateImport(version.id, document.id);
+    const before = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+    expect(before).toHaveLength(first.rowsImported);
+
+    // Pick a row whose description is unique among the committed set --
+    // Tier 1 only auto-recognizes an unambiguous description, so this
+    // test needs a row Tier 1 can actually recognize when it comes back.
+    const byDescription = new Map<string, (typeof before)[number][]>();
+    for (const li of before) {
+      byDescription.set(li.description, [...(byDescription.get(li.description) ?? []), li]);
+    }
+    const uniqueRows = [...byDescription.values()].filter((group) => group.length === 1).map((group) => group[0]);
+    expect(uniqueRows.length).toBeGreaterThan(0); // sanity: the fixture has at least one unambiguous row
+    const deleted = uniqueRows[0];
+    await db.lineItem.delete({ where: { id: deleted.id } });
+
+    const second = await commitDesignCostEstimateImport(version.id, document.id);
+    expect(second.rowsImported).toBeGreaterThan(0);
+
+    const after = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+    expect(after.length).toBe(first.rowsImported - 1 + second.rowsImported);
+    // The deleted row's own description is present again -- genuine
+    // recovery, not a coincidental count match.
+    expect(after.filter((li) => li.description === deleted.description)).toHaveLength(1);
   });
 
   it("stamps a real hardware Part Number onto the committed LineItem's positionCode", async () => {

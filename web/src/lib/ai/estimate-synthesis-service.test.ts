@@ -17,6 +17,23 @@ const CLIENT_TEMPLATE_PATH = path.resolve(
   "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Exhibit 1 - SBLXI - Financial Proposal Schedule Temporary Booth Build.xlsx",
 );
 
+// A real, structurally distinct Design Cost Estimate booth workbook --
+// same fixture design-cost-estimate-import-service.test.ts's own Section
+// 211 coverage uses. Needed as a stand-in "real vendor workbook" in
+// tests below: reusing CLIENT_TEMPLATE_PATH's own bytes for that would
+// make findClientPricingTemplateSheet misdetect the stand-in AS the
+// client template it's supposed to be distinct from -- confirmed live
+// that even Arena-template.xlsx (a different real fixture) still matches
+// that same detector, since it's the blank version of the identical
+// client-provided template Exhibit 1 fills in. A Design Cost Estimate
+// workbook has no Category/Description/Unit/Qty flat header at all, so
+// it can't collide with that detector the way any flat-schedule-shaped
+// file does.
+const VENDOR_WORKBOOK_PATH = path.resolve(
+  import.meta.dirname,
+  "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build/Vendor-pricing-engineering/Archive/SUPER BOWL A 6.3.0 SECTION 211 - Estimate - A.6.3.0.xlsx",
+);
+
 async function makeClientTemplateDocument(opportunityId: string) {
   const bytes = await readFile(CLIENT_TEMPLATE_PATH);
   const file = new File([bytes], "Exhibit 1.xlsx", {
@@ -279,21 +296,25 @@ describe("buildEstimateFromAllDocuments", () => {
     const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
     const version = await createEstimateVersion(estimate.id, 0);
 
-    // Stands in for a real commitPricingImport run -- alreadyCommitted only
-    // checks for an existing LineItem against this documentId, so a
-    // manually-seeded row is equivalent and avoids needing a real xlsx
-    // fixture here, same shortcut the "already committed" test above uses.
-    const pricingDoc = await db.document.create({
-      data: {
-        opportunityId: opportunity.id,
-        filename: "SUPER BOWL A 6.8.2 SECTION 428.xlsx",
-        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        sizeBytes: 100,
-        storageKey: "test-key-xlsx",
-        documentType: "PRICING_SCHEDULE",
-        extractionStatus: "COMPLETE",
-      },
+    // Needs REAL, parseable bytes now (not just a seeded LineItem against a
+    // fake storageKey) -- the pricingDocs loop below no longer hard-skips a
+    // document just because it already contributed a line item, so it will
+    // genuinely try to re-commit this one via commitPricingImport, which
+    // reads the document's real bytes. Reuses the same client-template
+    // fixture makeClientTemplateDocument uploads elsewhere in this file,
+    // just under the filename this test needs (the committedPricingStems
+    // check below only cares about the filename stem matching the drawing,
+    // not this file's real content).
+    const pricingBytes = await readFile(CLIENT_TEMPLATE_PATH);
+    const pricingDoc = await uploadDocument(opportunity.id, {
+      file: new File([pricingBytes], "SUPER BOWL A 6.8.2 SECTION 428.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+      documentType: "PRICING_SCHEDULE",
     });
+    // A real LineItem already exists for this document -- this is what
+    // committedPricingStems' own alreadyCommitted() check reads to decide
+    // this pricing schedule already covers the matching drawing's scope.
     const section = await db.estimateSection.create({
       data: { estimateVersionId: version.id, name: "Structure", sectionType: "CATEGORY", sortOrder: 0 },
     });
@@ -339,12 +360,14 @@ describe("buildEstimateFromAllDocuments", () => {
 
     const result = await buildEstimateFromAllDocuments(version.id, opportunity.id, null);
 
-    expect(result.imported).toHaveLength(0);
+    // The pricing schedule itself is genuinely re-processed now (no longer
+    // hard-skipped) -- its own real rows don't match the one fake seeded
+    // LineItem's description, so they land as new, unrelated to this
+    // test's own assertion (the drawing skip below).
+    expect(result.imported).toEqual([
+      { filename: "SUPER BOWL A 6.8.2 SECTION 428.xlsx", kind: "pricing", rowsImported: expect.any(Number) },
+    ]);
     expect(result.skipped).toEqual([
-      // The seeded-already-committed xlsx itself, via the ordinary
-      // pricingDocs loop -- unrelated to this test's own assertion, just
-      // the existing "already imported" behavior firing as normal.
-      { filename: "SUPER BOWL A 6.8.2 SECTION 428.xlsx", reason: "Already imported into this estimate." },
       {
         filename: "SUPER BOWL A 6.8.2 SECTION 428.pdf",
         reason:
@@ -374,18 +397,19 @@ describe("buildEstimateFromAllDocuments", () => {
     const version = await createEstimateVersion(estimate.id, 0);
 
     // Stands in for a real, already-committed per-booth vendor workbook --
-    // buildProposals/the skip check here only reads positionCode, so a
-    // seeded row is equivalent to a real commitDesignCostEstimateImport
-    // run, same shortcut this file's other tests already use.
-    const vendorDoc = await db.document.create({
-      data: {
-        opportunityId: opportunity.id,
-        filename: "SUPER BOWL A 6.3.0 SECTION 203.xlsx",
-        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        sizeBytes: 100,
-        storageKey: "test-key-vendor",
-        documentType: "PRICING_SCHEDULE",
-      },
+    // the hasGranularVendorSource check just above reads this seeded
+    // row's own positionCode directly (never re-parses this document's
+    // real bytes to make THAT determination), but the pricingDocs loop
+    // below no longer hard-skips a document just because it already
+    // contributed a line item, so it needs real, parseable (and
+    // non-client-template-shaped -- see ARENA_TEMPLATE_PATH's own
+    // comment) bytes to survive being genuinely re-processed.
+    const vendorBytes = await readFile(VENDOR_WORKBOOK_PATH);
+    const vendorDoc = await uploadDocument(opportunity.id, {
+      file: new File([vendorBytes], "SUPER BOWL A 6.3.0 SECTION 203.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+      documentType: "PRICING_SCHEDULE",
     });
     const section = await db.estimateSection.create({
       data: { estimateVersionId: version.id, name: "Structure", sectionType: "CATEGORY", sortOrder: 0 },
@@ -406,12 +430,14 @@ describe("buildEstimateFromAllDocuments", () => {
     const clientTemplateDoc = await makeClientTemplateDocument(opportunity.id);
     const result = await buildEstimateFromAllDocuments(version.id, opportunity.id, null);
 
-    expect(result.imported).toHaveLength(0);
+    // vendorDoc is genuinely re-processed now (no longer hard-skipped) --
+    // its own real rows don't match the one fake seeded LineItem's
+    // description, so they land as new, unrelated to this test's own
+    // assertion (the client-template skip below).
+    expect(result.imported).toEqual([
+      { filename: "SUPER BOWL A 6.3.0 SECTION 203.xlsx", kind: "pricing", rowsImported: expect.any(Number) },
+    ]);
     expect(result.skipped).toEqual([
-      // vendorDoc itself, via the ordinary "already has a committed row"
-      // check -- unrelated to this test's own assertion, since it stands
-      // in for a real already-imported vendor workbook.
-      { filename: "SUPER BOWL A 6.3.0 SECTION 203.xlsx", reason: "Already imported into this estimate." },
       {
         filename: "Exhibit 1.xlsx",
         reason:

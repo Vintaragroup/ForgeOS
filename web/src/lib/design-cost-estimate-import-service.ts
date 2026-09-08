@@ -24,6 +24,8 @@ import {
   mapDesignCostCategoryToCanonical,
   resolveCategoryNameFromKey,
 } from "@/lib/line-item-category";
+import { loadDuplicateCandidates } from "@/lib/ai/scope-line-item-service";
+import { findExactDuplicates, type ProposedItemForDuplicateCheck } from "@/lib/ai/line-item-duplicate-service";
 
 const TITLE_SCAN_ROWS = 10; // "DESIGN COST ESTIMATE" + "Build Name:" always appear in the first few rows
 const HEADER_SCAN_ROWS = 35; // the item-table header (row 30 in every real file seen) comes after a longer disclaimer block than pricing-import-service.ts's own sheets
@@ -350,14 +352,21 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
     throw new Error(`No line items found in "${preview.filename}".`);
   }
 
-  const alreadyImported = await db.lineItem.findFirst({
-    where: { documentId, section: { estimateVersionId, optionId: null } },
-  });
-  if (alreadyImported) {
-    throw new Error(
-      `"${preview.filename}" has already been imported into this estimate. Delete its existing line items first if you want to re-import.`,
-    );
-  }
+  // Fresh Tier 1 (free, deterministic) exact-description match against
+  // the REAL commit target's current line items -- replaces the old
+  // whole-document "already imported" guard the same way
+  // pricing-import-service.ts's own commitPricingImport does; see that
+  // function's identical comment for the full rationale (no separate
+  // "propose" step here to cache an AI call at, so this stays Tier 1
+  // only). Silently excludes a detected duplicate instead of throwing.
+  const duplicateCandidates = await loadDuplicateCandidates(estimateVersionId);
+  const proposedForDuplicateCheck: ProposedItemForDuplicateCheck[] = preview.rows.map((row) => ({
+    description: row.description,
+    qty: row.qty,
+    unit: null,
+  }));
+  const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
+  const rows = preview.rows.filter((_, i) => !exactDuplicates.has(i));
 
   // Persists the Build Name onto the Document row itself so the mirror
   // check in page.tsx can compare it against sibling documents without
@@ -372,7 +381,7 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
   const groupKey = (row: ParsedDesignCostRow) => `${preview.boothLabel ?? ""} ${row.category}`;
   const seenKeys = new Set<string>();
   const groups: { category: string }[] = [];
-  for (const row of preview.rows) {
+  for (const row of rows) {
     const key = groupKey(row);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -389,7 +398,7 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
       groupLabel: preview.boothLabel,
     });
 
-    const rowsForGroup = preview.rows.filter((r) => groupKey(r) === `${preview.boothLabel ?? ""} ${group.category}`);
+    const rowsForGroup = rows.filter((r) => groupKey(r) === `${preview.boothLabel ?? ""} ${group.category}`);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,
@@ -439,5 +448,5 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
     created.push({ section, count: lineItems.length });
   }
 
-  return { filename: preview.filename, sectionsCreated: created.length, rowsImported: preview.rows.length };
+  return { filename: preview.filename, sectionsCreated: created.length, rowsImported: rows.length };
 }

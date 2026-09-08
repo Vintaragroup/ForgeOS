@@ -144,10 +144,14 @@ export async function buildEstimateFromAllDocuments(
   }
 
   for (const doc of pricingDocs) {
-    if (await alreadyCommitted(estimateVersionId, doc.id)) {
-      skipped.push({ filename: doc.filename, reason: "Already imported into this estimate." });
-      continue;
-    }
+    // No longer hard-skipped outright just because it already contributed
+    // SOME line items -- same reason proposeAndCommit's own identical
+    // skip was removed above: commitPricingImport (and everything it
+    // dispatches to) now safely excludes an exact duplicate on its own
+    // rather than either refusing to run or blindly re-inserting
+    // everything, so re-running this one-click action can pick up
+    // whatever's genuinely missing from an already-partially-committed
+    // pricing document instead of ignoring it entirely.
     if (hasGranularVendorSource && doc.mimeType === XLSX_MIME) {
       const { bytes } = await getDocumentBytes(doc.id);
       const workbook = new ExcelJS.Workbook();

@@ -253,21 +253,51 @@ describe("commitPricingImport", () => {
     expect(doorItems.every((li) => li.isDraft)).toBe(true);
   });
 
-  it("refuses a second import of the same document into the same version, rather than duplicating every section and item", async () => {
+  // Replaces this suite's old "refuses a second import" guard test -- see
+  // scope-line-item-service.test.ts's identical replacement for the full
+  // rationale (the same production incident -- a real Super Bowl 2026
+  // estimate had this exact document imported twice, doubling all 162
+  // rows to 324 -- is now caught by fresh Tier 1 exact-match detection
+  // instead of an unconditional whole-document block, so a genuine
+  // re-import silently excludes only what's actually already there).
+  it("silently excludes every row on a second import of the same document, instead of throwing or re-inserting them", async () => {
+    const { opportunity, document } = await makeDocument();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const first = await commitPricingImport(version.id, document.id);
+    expect(first.rowsImported).toBe(162);
+
+    const second = await commitPricingImport(version.id, document.id);
+    expect(second.rowsImported).toBe(0);
+
+    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
+    expect(sections).toHaveLength(36);
+    const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
+    expect(lineItemCount).toBe(162);
+  });
+
+  it("re-adds only the rows a reviewer previously deleted, when re-importing the same document after a partial cleanup -- the actual recovery scenario this feature exists for", async () => {
     const { opportunity, document } = await makeDocument();
     const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
     const version = await createEstimateVersion(estimate.id, 0);
 
     await commitPricingImport(version.id, document.id);
-    await expect(commitPricingImport(version.id, document.id)).rejects.toThrow(/already been imported/);
+    const before = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+    expect(before).toHaveLength(162);
 
-    // The real bug this guards against: a real Super Bowl 2026 estimate
-    // had this exact document imported twice before this check existed,
-    // doubling all 162 rows to 324.
-    const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
-    expect(sections).toHaveLength(36);
-    const lineItemCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
-    expect(lineItemCount).toBe(162);
+    // A reviewer deletes a few rows they didn't want -- Tier 1 no longer
+    // sees a match for those specific descriptions, so re-running the
+    // same import brings back exactly the ones that are genuinely
+    // missing again, not the other 159 that are still there.
+    const toDelete = before.slice(0, 3);
+    await db.lineItem.deleteMany({ where: { id: { in: toDelete.map((li) => li.id) } } });
+
+    const second = await commitPricingImport(version.id, document.id);
+    expect(second.rowsImported).toBe(3);
+
+    const afterCount = await db.lineItem.count({ where: { section: { estimateVersionId: version.id } } });
+    expect(afterCount).toBe(162);
   });
 
   it("rejects committing a document that belongs to a different opportunity than the target estimate", async () => {
