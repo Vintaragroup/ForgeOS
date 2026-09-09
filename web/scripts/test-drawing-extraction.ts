@@ -1,20 +1,59 @@
 // Standalone, read-only test harness for the drawing-line-item extraction
 // pipeline (proposeLineItemsFromDrawing's core logic) -- runs the exact
-// same pageImages rendering, system prompt, schema, and model against a
-// local file, with no DB/Document/Opportunity involved. Use this to sanity-
-// check a new CAD/design-takeoff PDF's extraction quality before trusting
-// it on a live estimate: does it render every page (pageImages now reports
+// same pageImages rendering, system prompt, and schema against a local
+// file, with no DB/Document/Opportunity involved. Use this to sanity-check
+// a new CAD/design-takeoff PDF's extraction quality before trusting it on a
+// live estimate: does it render every page (pageImages now reports
 // totalPages so truncation is visible), and does the proposed item list
 // look reasonably complete against the real sheets.
 //
-// Run with: npx tsx scripts/test-drawing-extraction.ts <path-to-drawing.pdf>
+// Also doubles as a model-comparison harness: pass a second argument to
+// route the exact same prompt/schema/images through OpenRouter instead of
+// OpenAI directly, so a different vision model's extraction quality can be
+// A/B'd against the real pipeline's own output with zero risk to
+// proposeLineItemsFromDrawing itself (this script never touches it). Real
+// motivation: FootJoy 2027's design takeoff showed real run-to-run
+// inconsistency out of gpt-4o at temperature 0.2 (13-18 items across
+// identical re-runs, one sheet's real detail dropped to zero every time) --
+// worth knowing whether that's model-specific before spending more effort
+// on prompt tuning against a single provider.
+//
+// Run with:
+//   npx tsx scripts/test-drawing-extraction.ts <path-to-drawing.pdf>
+//   npx tsx scripts/test-drawing-extraction.ts <path-to-drawing.pdf> <openrouter-model-id>
+// The second form needs OPENROUTER_API_KEY set (openrouter.ai/keys) --
+// model IDs look like "google/gemini-2.5-pro" or "anthropic/claude-sonnet-4.5",
+// see openrouter.ai/models for the full list and per-model pricing.
 import "dotenv/config";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import OpenAI from "openai";
 import { pageImages } from "../src/lib/ai/drawing-summary-service";
 import { ADVANCED_MODEL, getOpenAiClient } from "../src/lib/ai/openai-client";
 import { SYSTEM_PROMPT } from "../src/lib/ai/drawing-line-item-service";
 import { SCOPE_CATEGORIES } from "../src/lib/ai/scope-line-item-service";
+
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+
+function resolveClientAndModel(openRouterModelId: string | undefined): { client: OpenAI; model: string; provider: string } {
+  if (!openRouterModelId) {
+    return { client: getOpenAiClient(), model: ADVANCED_MODEL, provider: "openai" };
+  }
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not set -- add it to .env to use an OpenRouter model id.");
+  }
+  const client = new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: OPENROUTER_BASE_URL,
+    // OpenRouter's own optional attribution headers -- not required for
+    // requests to succeed, only for showing up in their public rankings.
+    defaultHeaders: {
+      "HTTP-Referer": "https://forge-os-green.vercel.app",
+      "X-Title": "ForgeOS drawing-extraction test",
+    },
+  });
+  return { client, model: openRouterModelId, provider: "openrouter" };
+}
 
 const DRAWING_LINE_ITEM_SCHEMA = {
   name: "drawing_line_items",
@@ -64,8 +103,9 @@ const EXT_TO_MIME: Record<string, string> = {
 
 async function main() {
   const filePath = process.argv[2];
+  const openRouterModelId = process.argv[3];
   if (!filePath) {
-    console.error("Usage: npx tsx scripts/test-drawing-extraction.ts <path-to-drawing.pdf>");
+    console.error("Usage: npx tsx scripts/test-drawing-extraction.ts <path-to-drawing.pdf> [openrouter-model-id]");
     process.exit(1);
   }
 
@@ -88,9 +128,10 @@ async function main() {
     return;
   }
 
-  const client = getOpenAiClient();
+  const { client, model, provider } = resolveClientAndModel(openRouterModelId);
+  console.log(`Using ${provider}:${model}.`);
   const completion = await client.chat.completions.create({
-    model: ADVANCED_MODEL,
+    model,
     temperature: 0.2,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
