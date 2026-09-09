@@ -1,19 +1,23 @@
 // Sibling to scope-line-item-service.ts the same way drawing-summary-
 // service.ts is a sibling to document-summary-service.ts -- a genuinely
-// different input pipeline (vision page images, not extracted text), not
-// a variant of the text-based proposer. Closes a real gap: DRAWING
-// documents were excluded from every line-item path (see
-// estimate-synthesis-service.ts's old DRAWING exclusion) because
-// proposeLineItemsFromScope requires document.extractedText, which a
-// drawing never has -- so renderings, the most reliably single-project-
-// tagged documents in a real RFP package, contributed zero line items no
-// matter what.
+// different input pipeline (vision page images, plus each page's own
+// extracted text when pageImages finds one -- see that file's header
+// comment), not a variant of the text-based proposer. Document.extractedText
+// itself is still never populated for a DRAWING (that field is
+// document-summary-service.ts's own stored, merged-across-pages text, a
+// different thing from pageImages' fresh per-request per-page text), so
+// this stays its own pipeline. Closes a real gap: DRAWING documents were
+// excluded from every line-item path (see estimate-synthesis-service.ts's
+// old DRAWING exclusion) because proposeLineItemsFromScope requires
+// Document.extractedText -- so renderings, the most reliably
+// single-project-tagged documents in a real RFP package, contributed zero
+// line items no matter what.
 
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { pageImages } from "@/lib/ai/drawing-summary-service";
-import { getDrawingAiClient, DRAWING_REASONING_BUDGET } from "@/lib/ai/drawing-ai-client";
+import { getDrawingAiClient, DRAWING_REASONING_BUDGET, buildPageContentParts } from "@/lib/ai/drawing-ai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import {
   buildProposedLineItemMatchesCache,
@@ -34,10 +38,13 @@ type DrawingLineItemFromAI = {
 
 // No quote field requested from the model at all -- same accepted
 // trust-reduction precedent as drawing-summary-service.ts's own schema
-// (scopeSummary/riskFlags there have no quote either): there's no
-// extracted-text layer to verify a "quote" against, so asking for one
-// would just invite a fabricated-looking string. pageNumber is model-
-// reported and trusted directly, same as that file's keyDates/scopeSummary.
+// (scopeSummary/riskFlags there have no quote either): a per-page text
+// block is now given to the model (see buildPageContentParts), but nothing
+// here re-verifies a claimed quote against it the way
+// document-summary-service.ts's locateQuotePage does for a real text
+// document, so asking for one would still just invite a fabricated-looking
+// string. pageNumber is model-reported and trusted directly, same as that
+// file's keyDates/scopeSummary.
 const DRAWING_LINE_ITEM_SCHEMA = {
   name: "drawing_line_items",
   strict: true,
@@ -73,7 +80,9 @@ const DRAWING_LINE_ITEM_SCHEMA = {
   },
 } as const;
 
-export const SYSTEM_PROMPT = `You are looking at page images of a fabrication/construction drawing or CAD export for an event/exhibit contractor. Propose a list of distinct, biddable line items a contractor would need to price to build what's shown -- the granularity a real pricing schedule would use (e.g. "Booth structure fabrication", "Countertop fabrication", "Rigging/truss installation"), grounded in what's actually labeled or dimensioned on the sheets, not a generic paraphrase of "a booth drawing."
+export const SYSTEM_PROMPT = `You are looking at pages of a fabrication/construction drawing or CAD export for an event/exhibit contractor. Propose a list of distinct, biddable line items a contractor would need to price to build what's shown -- the granularity a real pricing schedule would use (e.g. "Booth structure fabrication", "Countertop fabrication", "Rigging/truss installation"), grounded in what's actually labeled or dimensioned on the sheets, not a generic paraphrase of "a booth drawing."
+
+Each page is given to you twice: first as its real extracted PDF text (when the export tool embedded one -- exact labels, dimensions, and callouts, character-for-character as printed), then as a rendered image of that same page. When real text is present for a page, treat it as the authoritative source for exact wording and numbers -- it can't be misread the way a visual scan can, and it's your best tool for catching every distinct component on a dense sheet rather than only the most visually prominent one. Use the image to see how those labels relate to what they're pointing at. A page whose text line says none was extracted has no text layer at all (an AutoCAD SHX-annotation table, or a scanned page) -- read the image alone for that one.
 
 For each item:
 - description: name the item at that same biddable granularity, but for a custom-fabricated item -- a built structure, graphic, finish, or design element made specifically for this job rather than an off-the-shelf catalog product or rental -- preserve the sheet's own specifying language inside the name: the exact material, finish, dimension, or design detail as labeled or called out (e.g. "single-sided Chinese birch," not a generic paraphrase like "plywood"). That original wording is often the actual spec a shop floor builds from, and a paraphrase can silently lose it. For a standard catalog/rental/labor item, a concise generic name is fine and preferred -- this only matters for items nothing off-the-shelf will satisfy.
@@ -115,7 +124,7 @@ export async function proposeLineItemsFromDrawing(
   // instead of OpenAI direct -- scoped to this pipeline only.
   const { client, model, viaOpenRouter } = getDrawingAiClient();
 
-  const { images, totalPages } = await pageImages(document.mimeType, bytes);
+  const { images, totalPages, pageTexts } = await pageImages(document.mimeType, bytes);
   if (totalPages > images.length) {
     // No schema/UI channel to surface this to the estimator reviewing the
     // proposed items yet (unlike summarizeDrawing's riskFlags, which
@@ -154,7 +163,7 @@ export async function proposeLineItemsFromDrawing(
             type: "text",
             text: `Drawing: ${document.filename} (${images.length} page image${images.length === 1 ? "" : "s"})`,
           },
-          ...images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+          ...buildPageContentParts(images, pageTexts),
         ],
       },
     ],

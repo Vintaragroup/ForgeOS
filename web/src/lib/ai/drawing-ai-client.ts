@@ -72,3 +72,33 @@ export const DRAWING_REASONING_BUDGET = {
   max_tokens: 32000,
   reasoning: { max_tokens: 24000 },
 } as const;
+
+// Shared by summarizeDrawing and proposeLineItemsFromDrawing -- interleaves
+// each page's real extracted text (when pageImages found one) directly
+// before that page's own image, rather than one block of text followed by
+// one block of images, so the model never has to cross-reference which
+// text belongs to which image itself. Confirmed live (FootJoy 2027 design
+// takeoff) that these CAD exports often DO carry a full, accurate text
+// layer despite looking purely visual -- see drawing-summary-service.ts's
+// own header comment for the fuller rationale. A page with pageTexts[i]
+// === "" (no text layer at all -- an AutoCAD SHX-annotation table, or a
+// scanned page) still gets an explicit line saying so, so the model
+// doesn't have to guess whether the omission means "nothing was there" or
+// "extraction silently failed."
+export function buildPageContentParts(
+  images: string[],
+  pageTexts: string[],
+): ({ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } })[] {
+  return images.flatMap((url, i) => {
+    const text = pageTexts[i];
+    return [
+      {
+        type: "text" as const,
+        text: text
+          ? `Page ${i + 1} extracted text (real PDF text layer, exact as printed -- treat as authoritative for exact wording/numbers):\n${text}`
+          : `Page ${i + 1}: no extracted text layer available for this page -- read the image below directly.`,
+      },
+      { type: "image_url" as const, image_url: { url } },
+    ];
+  });
+}

@@ -52,7 +52,7 @@ describe("pageImages", () => {
     "rasterizes a real multi-page CAD PDF into one data URL per page, and reports the real totalPages under the default cap",
     async () => {
       const bytes = await readFile(REAL_CAD_PDF);
-      const { images, totalPages } = await pageImages(PDF_MIME, bytes);
+      const { images, totalPages, pageTexts } = await pageImages(PDF_MIME, bytes);
 
       // This fixture has 11 real pages, comfortably under MAX_DRAWING_PAGES
       // (20) -- nothing truncated, images.length matches totalPages exactly.
@@ -60,6 +60,16 @@ describe("pageImages", () => {
       expect(images).toHaveLength(11);
       for (const image of images) {
         expect(image).toMatch(/^data:image\/png;base64,/);
+      }
+
+      // This fixture (an email thread about LED tile pricing, despite its
+      // "CAD" filename) has a real, substantial text layer on every page --
+      // confirms pageTexts is genuinely populated from the PDF's own text,
+      // parallel-indexed to images, not just a same-length array of blanks.
+      expect(pageTexts).toHaveLength(11);
+      expect(pageTexts[0]).toContain("Craig Wells");
+      for (const text of pageTexts) {
+        expect(text.length).toBeGreaterThan(0);
       }
     },
     30_000, // rasterizing 11 pages at scale 2 is real, non-trivial canvas work -- default 5s timeout isn't enough
@@ -69,10 +79,13 @@ describe("pageImages", () => {
     "caps at the given maxPages and still reports the real totalPages, so a caller can detect truncation",
     async () => {
       const bytes = await readFile(REAL_CAD_PDF);
-      const { images, totalPages } = await pageImages(PDF_MIME, bytes, 3);
+      const { images, totalPages, pageTexts } = await pageImages(PDF_MIME, bytes, 3);
 
       expect(images).toHaveLength(3);
       expect(totalPages).toBe(11);
+      // pageTexts stays capped to the same 3 pages as images -- extractPdfPageTexts
+      // itself has no maxPages concept, so pageImages must slice it down to match.
+      expect(pageTexts).toHaveLength(3);
       for (const image of images) {
         expect(image).toMatch(/^data:image\/png;base64,/);
       }
@@ -80,13 +93,17 @@ describe("pageImages", () => {
     30_000,
   );
 
-  it("passes a raw image straight through as one page, no rasterization", async () => {
+  it("passes a raw image straight through as one page, no rasterization, with no text layer", async () => {
     const bytes = await readFile(REAL_PNG);
-    const { images, totalPages } = await pageImages("image/png", bytes);
+    const { images, totalPages, pageTexts } = await pageImages("image/png", bytes);
 
     expect(images).toHaveLength(1);
     expect(totalPages).toBe(1);
     expect(images[0]).toBe(`data:image/png;base64,${bytes.toString("base64")}`);
+    // A raw image has no PDF text layer at all -- "" is the same
+    // "vision only for this page" signal a text-extraction failure or a
+    // genuinely text-free PDF page falls back to.
+    expect(pageTexts).toEqual([""]);
   });
 
   it("throws for a mime type it doesn't know how to turn into page images", async () => {

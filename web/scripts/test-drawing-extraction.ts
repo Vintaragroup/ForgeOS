@@ -30,6 +30,7 @@ import path from "node:path";
 import OpenAI from "openai";
 import { pageImages } from "../src/lib/ai/drawing-summary-service";
 import { ADVANCED_MODEL, getOpenAiClient } from "../src/lib/ai/openai-client";
+import { DRAWING_REASONING_BUDGET, buildPageContentParts } from "../src/lib/ai/drawing-ai-client";
 import { SYSTEM_PROMPT } from "../src/lib/ai/drawing-line-item-service";
 import { SCOPE_CATEGORIES } from "../src/lib/ai/scope-line-item-service";
 
@@ -118,11 +119,13 @@ async function main() {
   const bytes = await readFile(filePath);
   console.log(`Loaded ${bytes.length} bytes from ${path.basename(filePath)}.`);
 
-  const { images, totalPages } = await pageImages(mimeType, bytes);
+  const { images, totalPages, pageTexts } = await pageImages(mimeType, bytes);
   console.log(`Rendered ${images.length} of ${totalPages} page image(s).`);
   if (totalPages > images.length) {
     console.log(`WARNING: ${totalPages - images.length} page(s) truncated by MAX_DRAWING_PAGES -- set AI_DRAWING_MAX_PAGES higher to include them.`);
   }
+  const pagesWithText = pageTexts.filter((t) => t.length > 0).length;
+  console.log(`${pagesWithText} of ${pageTexts.length} page(s) have a real extracted text layer.`);
   if (images.length === 0) {
     console.log("Nothing to analyze -- exiting.");
     return;
@@ -130,29 +133,24 @@ async function main() {
 
   const { client, model, provider } = resolveClientAndModel(openRouterModelId);
   console.log(`Using ${provider}:${model}.`);
-  // Reasoning-model budget -- a real gap found live: Gemini 2.5 Pro via
-  // OpenRouter burned 5,435 reasoning tokens on just 2 page images before
-  // ever writing the JSON content. With no explicit budget, the full
-  // 11-page FootJoy run exhausted its token allowance mid-reasoning and
-  // returned completely empty content -- a paid call ($0.011) with nothing
-  // usable, not a quality problem but a silent truncation one. max_tokens
-  // and reasoning.max_tokens are both generous headroom (scaled off that
-  // 2-page measurement for ~11 pages of real visual density), not tuned
-  // minimums -- OpenAI's own SDK types don't know about OpenRouter's
-  // reasoning field, hence the cast; a non-reasoning model (gpt-4o) simply
-  // ignores it.
+  // Reasoning-model budget from drawing-ai-client.ts -- reused here rather
+  // than re-declared, exactly to avoid the class of bug this script itself
+  // had until this fix: max_tokens (32000, OVER gpt-4o's real 16384
+  // completion-token cap) used to be applied unconditionally, unlike the
+  // real pipeline's own provider === "openrouter" gate, so this script
+  // 400'd on plain OpenAI runs the moment reasoning-budget support was
+  // added -- confirmed live.
   const completion = await client.chat.completions.create({
     model,
     temperature: 0.2,
-    max_tokens: 32000,
-    ...(provider === "openrouter" ? ({ reasoning: { max_tokens: 24000 } } as Record<string, unknown>) : {}),
+    ...(provider === "openrouter" ? (DRAWING_REASONING_BUDGET as unknown as Record<string, unknown>) : {}),
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       {
         role: "user",
         content: [
           { type: "text", text: `Drawing: ${path.basename(filePath)} (${images.length} page images)` },
-          ...images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+          ...buildPageContentParts(images, pageTexts),
         ],
       },
     ],

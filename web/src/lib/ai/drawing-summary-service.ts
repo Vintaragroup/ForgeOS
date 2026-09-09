@@ -1,20 +1,28 @@
-// Companion to document-summary-service.ts for DRAWING documents --
-// CAD-exported PDFs and raw photographed/scanned drawings carry their
-// content as vector geometry or a picture, not extractable text, so the
-// input pipeline and prompt here are genuinely different (rasterize-or-
-// pass-through images, vision content parts) rather than a variant of the
-// text summarizer. Reuses that file's DocumentSummary/CitedText/
-// KeyDateFact/KeyDateType shapes one-directionally, so ProjectBriefCard
-// (opportunities/[id]/page.tsx) needs zero changes to render either kind.
+// Companion to document-summary-service.ts for DRAWING documents -- a
+// CAD-exported PDF or raw photographed/scanned drawing carries its content
+// as vector geometry or a picture rather than a document meant to be read
+// top-to-bottom, so the input pipeline and prompt here are genuinely
+// different (page images, vision content parts) rather than a variant of
+// the text summarizer. That does NOT mean no extractable text exists,
+// though -- confirmed live (FootJoy 2027 design takeoff, Sept 2026) that a
+// real CAD export can carry a full, accurate embedded text layer for every
+// dimension/material label despite looking purely visual. pageImages below
+// now returns that text alongside each image (ground truth when present,
+// vision-only fallback when a page genuinely has none -- an AutoCAD
+// SHX-annotation table or a scanned page), rather than assuming a drawing
+// never has one. Reuses document-summary-service.ts's DocumentSummary/
+// CitedText/KeyDateFact/KeyDateType shapes one-directionally, so
+// ProjectBriefCard (opportunities/[id]/page.tsx) needs zero changes to
+// render either kind.
 
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { getDocumentProxy, renderPageAsImage } from "unpdf";
-import { getDrawingAiClient, DRAWING_REASONING_BUDGET } from "@/lib/ai/drawing-ai-client";
+import { getDrawingAiClient, DRAWING_REASONING_BUDGET, buildPageContentParts } from "@/lib/ai/drawing-ai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import type { DocumentSummary, KeyDateType } from "@/lib/ai/document-summary-service";
-import { PDF_MIME } from "@/lib/ai/text-extraction";
+import { PDF_MIME, extractPdfPageTexts } from "@/lib/ai/text-extraction";
 import { ensureCanvasFontsRegistered } from "@/lib/canvas-fonts";
 
 const IMAGE_MIMES = ["image/png", "image/jpeg", "image/jpg"];
@@ -108,7 +116,9 @@ const DRAWING_SCHEMA = {
   },
 } as const;
 
-const SYSTEM_PROMPT = `You are looking at page images of a fabrication/construction drawing or CAD export for an event/exhibit contractor. Extract only what's visibly labeled or dimensioned on the sheets -- never infer a dimension, material, or date that isn't actually printed or drawn. If nothing relevant is present, use null or an empty array.
+const SYSTEM_PROMPT = `You are looking at pages of a fabrication/construction drawing or CAD export for an event/exhibit contractor. Extract only what's visibly labeled or dimensioned on the sheets -- never infer a dimension, material, or date that isn't actually printed or drawn. If nothing relevant is present, use null or an empty array.
+
+Each page is given to you twice: first as its real extracted PDF text (when the export tool embedded one -- exact labels, dimensions, and callouts, character-for-character as printed), then as a rendered image of that same page. When real text is present for a page, treat it as the authoritative source for exact wording and numbers -- it can't be misread the way a visual scan can. Use the image to see how those labels relate to what they're pointing at, and to catch anything the text didn't capture. A page whose text line says none was extracted has no text layer at all (an AutoCAD SHX-annotation table, or a scanned page) -- read the image alone for that one.
 
 scopeSummary: specific, sheet-grounded facts a bidder needs to price the work -- dimensions, materials called out, construction/assembly methods, finish notes. Not a generic description of "a booth drawing."
 riskFlags: anything a reviewer should double-check before bidding -- structural/load callouts, code/compliance notes, ADA clearances, an engineer's stamp, or a revision marked "hold"/"not for construction."
@@ -127,13 +137,22 @@ For every item, report pageNumber: the 1-indexed position of the image (in the o
 // twice before either instance was noticed. maxPages defaults to the
 // module cap but is an explicit parameter so a test can force a small cap
 // deterministically instead of stubbing the env var + resetting the module.
+// pageTexts is parallel-indexed to images: each entry is that page's real
+// extracted PDF text (see this file's header comment), or "" when the page
+// has none -- reuses text-extraction.ts's extractPdfPageTexts rather than
+// a second unpdf call, same real text every other document type already
+// trusts.
 export async function pageImages(
   mimeType: string,
   bytes: Buffer,
   maxPages: number = MAX_DRAWING_PAGES,
-): Promise<{ images: string[]; totalPages: number }> {
+): Promise<{ images: string[]; totalPages: number; pageTexts: string[] }> {
   if (IMAGE_MIMES.includes(mimeType)) {
-    return { images: [`data:${mimeType};base64,${bytes.toString("base64")}`], totalPages: 1 };
+    // A raw image (not a PDF) has no text layer at all -- "" here is the
+    // same "vision only for this page" signal the PDF branch uses when
+    // extraction comes back empty, not a special case callers need to
+    // branch on separately.
+    return { images: [`data:${mimeType};base64,${bytes.toString("base64")}`], totalPages: 1, pageTexts: [""] };
   }
   if (mimeType === PDF_MIME) {
     // Same missing-glyph gap as document-view-service.ts's highlighted-
@@ -155,7 +174,18 @@ export async function pageImages(
         }),
       );
     }
-    return { images, totalPages: pdf.numPages };
+    // Best-effort: a text-extraction failure (corrupt/unusual PDF
+    // structure) shouldn't take down the whole vision analysis -- every
+    // page just falls back to "" (image-only), same as a page that
+    // genuinely has no text layer at all.
+    let pageTexts: string[];
+    try {
+      pageTexts = (await extractPdfPageTexts(bytes)).slice(0, pageCount).map((t) => t.trim());
+    } catch {
+      pageTexts = [];
+    }
+    while (pageTexts.length < pageCount) pageTexts.push("");
+    return { images, totalPages: pdf.numPages, pageTexts };
   }
   throw new Error(`Unsupported file type for drawing analysis: ${mimeType}`);
 }
@@ -197,7 +227,7 @@ export async function summarizeDrawing(documentId: string, userId: string | null
   await db.document.update({ where: { id: documentId }, data: { extractionStatus: "PROCESSING" } });
 
   try {
-    const { images, totalPages } = await pageImages(document.mimeType, bytes);
+    const { images, totalPages, pageTexts } = await pageImages(document.mimeType, bytes);
     if (images.length === 0) {
       // A genuinely empty PDF -- not an API/parse failure, a real
       // "nothing to analyze here" outcome that re-analyzing will never
@@ -228,7 +258,7 @@ export async function summarizeDrawing(documentId: string, userId: string | null
               type: "text",
               text: `Drawing: ${document.filename} (${images.length} page image${images.length === 1 ? "" : "s"})`,
             },
-            ...images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+            ...buildPageContentParts(images, pageTexts),
           ],
         },
       ],
