@@ -130,9 +130,22 @@ async function main() {
 
   const { client, model, provider } = resolveClientAndModel(openRouterModelId);
   console.log(`Using ${provider}:${model}.`);
+  // Reasoning-model budget -- a real gap found live: Gemini 2.5 Pro via
+  // OpenRouter burned 5,435 reasoning tokens on just 2 page images before
+  // ever writing the JSON content. With no explicit budget, the full
+  // 11-page FootJoy run exhausted its token allowance mid-reasoning and
+  // returned completely empty content -- a paid call ($0.011) with nothing
+  // usable, not a quality problem but a silent truncation one. max_tokens
+  // and reasoning.max_tokens are both generous headroom (scaled off that
+  // 2-page measurement for ~11 pages of real visual density), not tuned
+  // minimums -- OpenAI's own SDK types don't know about OpenRouter's
+  // reasoning field, hence the cast; a non-reasoning model (gpt-4o) simply
+  // ignores it.
   const completion = await client.chat.completions.create({
     model,
     temperature: 0.2,
+    max_tokens: 32000,
+    ...(provider === "openrouter" ? ({ reasoning: { max_tokens: 24000 } } as Record<string, unknown>) : {}),
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       {

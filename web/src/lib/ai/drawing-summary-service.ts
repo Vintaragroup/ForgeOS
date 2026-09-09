@@ -11,7 +11,7 @@ import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { getDocumentProxy, renderPageAsImage } from "unpdf";
-import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { getDrawingAiClient, DRAWING_REASONING_BUDGET } from "@/lib/ai/drawing-ai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import type { DocumentSummary, KeyDateType } from "@/lib/ai/document-summary-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
@@ -189,8 +189,10 @@ export async function summarizeDrawing(documentId: string, userId: string | null
   const { document, bytes } = loaded;
 
   // Checked before any DB write, same posture as summarizeDocument -- a
-  // missing key leaves the document PENDING/retryable, not stuck.
-  const client = getOpenAiClient();
+  // missing key leaves the document PENDING/retryable, not stuck. See
+  // drawing-ai-client.ts's own header for why this can be OpenRouter
+  // instead of OpenAI direct -- scoped to this pipeline only.
+  const { client, model, viaOpenRouter } = getDrawingAiClient();
 
   await db.document.update({ where: { id: documentId }, data: { extractionStatus: "PROCESSING" } });
 
@@ -204,7 +206,7 @@ export async function summarizeDrawing(documentId: string, userId: string | null
     }
 
     const completion = await client.chat.completions.create({
-      model: ADVANCED_MODEL,
+      model,
       // Low, not zero -- exhaustive extraction, not creative writing, so
       // there's no upside to the API default's high randomness. This was
       // the one AI call in the app that never got this pinned when the
@@ -214,6 +216,9 @@ export async function summarizeDrawing(documentId: string, userId: string | null
       // re-run against the exact same page images going from 9 real
       // extracted facts to 0.
       temperature: 0.2,
+      // See drawing-ai-client.ts's own comment -- only relevant for an
+      // OpenRouter-routed reasoning model, inert otherwise.
+      ...(viaOpenRouter ? (DRAWING_REASONING_BUDGET as unknown as Record<string, unknown>) : {}),
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         {
@@ -233,14 +238,25 @@ export async function summarizeDrawing(documentId: string, userId: string | null
     await recordAiUsage({
       userId,
       feature: "DRAWING_SUMMARY",
-      model: ADVANCED_MODEL,
+      model,
       usage: completion.usage,
       documentId,
       opportunityId: document.opportunityId,
     });
 
     const content = completion.choices[0]?.message?.content;
-    if (!content) throw new Error("OpenAI returned an empty response.");
+    if (!content) {
+      // A reasoning model can burn its whole token budget on internal
+      // reasoning and never reach the actual JSON -- a real failure mode
+      // confirmed live via OpenRouter (see DRAWING_REASONING_BUDGET), not
+      // hypothetical. Distinct message so this doesn't read as a plain API
+      // hiccup when it's actually a budget-tuning problem.
+      throw new Error(
+        viaOpenRouter
+          ? `${model} returned an empty response (possibly exhausted its reasoning token budget) -- see DRAWING_REASONING_BUDGET in drawing-ai-client.ts.`
+          : "OpenAI returned an empty response.",
+      );
+    }
     const parsed = JSON.parse(content) as DrawingSummaryFromAI;
 
     const riskFlags = withEmptyQuote(parsed.riskFlags, document.estimateId);

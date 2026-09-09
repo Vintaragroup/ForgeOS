@@ -1,0 +1,74 @@
+// Model selection for the drawing-vision pipeline (summarizeDrawing,
+// proposeLineItemsFromDrawing) ONLY -- every other AI call in the app
+// (BASIC_MODEL/ADVANCED_MODEL uses in document-summary-service.ts,
+// scope-line-item-service.ts, scope-coverage-service.ts,
+// vendor-match-ai-service.ts, line-item-duplicate-service.ts, chat, etc.)
+// is untouched by this file and stays on OpenAI directly. This is a static
+// per-pipeline override, not a general "pick the best model per call"
+// router -- no such router exists in this app.
+//
+// Real, tested motivation (Full Swing / FootJoy sessions, Sept 2026):
+// gpt-4o's CAD-drawing extraction was measurably inconsistent on a real
+// 11-page design takeoff (8-18 proposed items across identical re-runs at
+// the same temperature, one sheet's real detail landing at zero every
+// single time). A/B'd against that exact file via
+// scripts/test-drawing-extraction.ts: Claude Sonnet 4.5 via OpenRouter
+// produced 53 well-grounded items with the missing sheet fully captured
+// and the sheet's own specifying language preserved faithfully (e.g. "grain
+// running horizontally", verbatim); Gemini 2.5 Pro produced 61 but drifted
+// slightly on exact wording and cost marginally more. No evidence either
+// model is better for any OTHER AI call in this app -- this override is
+// scoped to exactly the one pipeline it was tested against.
+//
+// AI_DRAWING_MODEL unset (the default) -- everything behaves exactly as it
+// did before this file existed: OpenAI direct, ADVANCED_MODEL (gpt-4o).
+// AI_DRAWING_MODEL set to an OpenRouter model id (e.g.
+// "anthropic/claude-sonnet-4.5", "google/gemini-2.5-pro") -- routes
+// through OpenRouter instead, requires OPENROUTER_API_KEY.
+import OpenAI from "openai";
+import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+
+let openRouterClient: OpenAI | null = null;
+
+export function getDrawingAiClient(): { client: OpenAI; model: string; viaOpenRouter: boolean } {
+  const overrideModel = process.env.AI_DRAWING_MODEL;
+  if (!overrideModel) {
+    return { client: getOpenAiClient(), model: ADVANCED_MODEL, viaOpenRouter: false };
+  }
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error(
+      "AI_DRAWING_MODEL is set but OPENROUTER_API_KEY is not -- add it to route drawing extraction through OpenRouter.",
+    );
+  }
+  if (!openRouterClient) {
+    openRouterClient = new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: OPENROUTER_BASE_URL,
+      // OpenRouter's own optional attribution headers -- not required for
+      // requests to succeed, only for showing up in their public rankings.
+      defaultHeaders: {
+        "HTTP-Referer": "https://forge-os-green.vercel.app",
+        "X-Title": "ForgeOS drawing extraction",
+      },
+    });
+  }
+  return { client: openRouterClient, model: overrideModel, viaOpenRouter: true };
+}
+
+// Generous, empirically-derived headroom (scripts/test-drawing-extraction.ts's
+// own A/B testing), not a tuned minimum -- a real 11-page CAD takeoff used
+// 7,654 of this 24,000 reasoning-token budget (32% utilization) after an
+// earlier, smaller/absent budget silently truncated that same document's
+// response to nothing: a paid call ($0.011) that returned zero usable
+// content, not a quality failure but a token-budget one. Only attached
+// when routed through OpenRouter -- gpt-4o direct isn't a reasoning model
+// and this would just be dead weight on that path. Applied uniformly to
+// whatever model AI_DRAWING_MODEL names (not every OpenRouter model is a
+// reasoning model, but an unrecognized `reasoning` field is inert for one
+// that isn't, so this doesn't need a per-model lookup table).
+export const DRAWING_REASONING_BUDGET = {
+  max_tokens: 32000,
+  reasoning: { max_tokens: 24000 },
+} as const;

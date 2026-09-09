@@ -13,7 +13,7 @@ import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { pageImages } from "@/lib/ai/drawing-summary-service";
-import { ADVANCED_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
+import { getDrawingAiClient, DRAWING_REASONING_BUDGET } from "@/lib/ai/drawing-ai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import {
   buildProposedLineItemMatchesCache,
@@ -110,9 +110,10 @@ export async function proposeLineItemsFromDrawing(
     throw new Error("This document doesn't belong to this opportunity.");
   }
 
-  // Throws AiNotConfiguredError before any DB write, same posture as
-  // proposeLineItemsFromScope.
-  const client = getOpenAiClient();
+  // Throws before any DB write, same posture as proposeLineItemsFromScope.
+  // See drawing-ai-client.ts's own header for why this can be OpenRouter
+  // instead of OpenAI direct -- scoped to this pipeline only.
+  const { client, model, viaOpenRouter } = getDrawingAiClient();
 
   const { images, totalPages } = await pageImages(document.mimeType, bytes);
   if (totalPages > images.length) {
@@ -139,8 +140,11 @@ export async function proposeLineItemsFromDrawing(
   }
 
   const completion = await client.chat.completions.create({
-    model: ADVANCED_MODEL, // vision extraction -- same bar as summarizeDrawing, not the text path's tiered choice
+    model, // vision extraction -- same bar as summarizeDrawing, not the text path's tiered choice
     temperature: 0.2,
+    // See drawing-ai-client.ts's own comment -- only relevant for an
+    // OpenRouter-routed reasoning model, inert otherwise.
+    ...(viaOpenRouter ? (DRAWING_REASONING_BUDGET as unknown as Record<string, unknown>) : {}),
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       {
@@ -160,14 +164,24 @@ export async function proposeLineItemsFromDrawing(
   await recordAiUsage({
     userId,
     feature: "DRAWING_LINE_ITEMS",
-    model: ADVANCED_MODEL,
+    model,
     usage: completion.usage,
     documentId,
     opportunityId: document.opportunityId,
   });
 
   const content = completion.choices[0]?.message?.content;
-  if (!content) throw new Error("OpenAI returned an empty response.");
+  if (!content) {
+    // A reasoning model can burn its whole token budget on internal
+    // reasoning and never reach the actual JSON -- a real failure mode
+    // confirmed live via OpenRouter (see DRAWING_REASONING_BUDGET), not
+    // hypothetical.
+    throw new Error(
+      viaOpenRouter
+        ? `${model} returned an empty response (possibly exhausted its reasoning token budget) -- see DRAWING_REASONING_BUDGET in drawing-ai-client.ts.`
+        : "OpenAI returned an empty response.",
+    );
+  }
   const parsed = JSON.parse(content) as { items: DrawingLineItemFromAI[] };
 
   // estimateId inherits the document's own manual tag directly -- same
