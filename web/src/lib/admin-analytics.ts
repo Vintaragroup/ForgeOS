@@ -106,3 +106,31 @@ export async function getAdminAnalytics() {
     },
   };
 }
+
+// SUPER_ADMIN-only (see src/app/(app)/page.tsx's own gating) -- a real
+// error message, not just the "Analysis failed" chip every user already
+// sees. Kept separate from getAdminAnalytics above (which both ADMIN and
+// SUPER_ADMIN see) rather than folded into it, since this is the one
+// piece of the dashboard the plain ADMIN role deliberately doesn't get:
+// see Document.analysisError's own schema comment for the incident that
+// motivated this (a failure that left zero trace anywhere until logging
+// was added at the source).
+export async function getRecentAnalysisFailures(limit = 10) {
+  return db.document.findMany({
+    where: { extractionStatus: "FAILED" },
+    // nulls: "last" -- a FAILED document from before analysisErrorAt
+    // existed has no timestamp at all; Postgres's DESC default (NULLS
+    // FIRST) would otherwise push those undated old failures ahead of
+    // genuinely recent ones.
+    orderBy: { analysisErrorAt: { sort: "desc", nulls: "last" } },
+    take: limit,
+    select: {
+      id: true,
+      filename: true,
+      analysisError: true,
+      analysisErrorAt: true,
+      opportunityId: true,
+      opportunity: { select: { showName: true, company: { select: { name: true } } } },
+    },
+  });
+}

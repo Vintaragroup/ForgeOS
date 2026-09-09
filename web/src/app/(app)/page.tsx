@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getDashboardData, type UpcomingDeadline } from "@/lib/dashboard";
-import { getAdminAnalytics } from "@/lib/admin-analytics";
+import { getAdminAnalytics, getRecentAnalysisFailures } from "@/lib/admin-analytics";
 import { getCurrentUser } from "@/lib/auth";
 import { recordDeadlineActionAction, routeDashboardQueryAction } from "./dashboard-actions";
 import { Button } from "@/components/ui";
@@ -96,6 +96,12 @@ export default async function DashboardPage() {
   const { pipeline, upcomingDeadlines, recentProposals, flaggedForReview } = await getDashboardData(user);
   const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
   const adminStats = isAdmin ? await getAdminAnalytics() : null;
+  // Stricter than isAdmin above -- a real error message (stack-adjacent
+  // detail from an AI provider call) is more internal than the aggregate
+  // counts plain ADMIN already sees, so this one section is SUPER_ADMIN
+  // only. See getRecentAnalysisFailures's own comment.
+  const isSuperAdmin = user.systemRole === "SUPER_ADMIN";
+  const analysisFailures = isSuperAdmin ? await getRecentAnalysisFailures() : null;
 
   const firstName = user.name.trim().split(/\s+/)[0] ?? user.name;
   const today = new Date();
@@ -292,6 +298,34 @@ export default async function DashboardPage() {
                     </div>
                   </div>
                   <span className="dash-chip dash-neutral">{fmtUsd(item.cost)}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {analysisFailures && analysisFailures.length > 0 && (
+          <div className="dash-section">
+            <div className="dash-section-head">
+              <h2 className="dash-section-title">FAILED ANALYSES</h2>
+            </div>
+            <div className="dash-card">
+              {analysisFailures.map((doc) => (
+                <Link
+                  key={doc.id}
+                  href={`/opportunities/${doc.opportunityId}?tab=documents`}
+                  className="dash-row"
+                >
+                  <div>
+                    <div className="dash-row-title">{doc.filename}</div>
+                    <div className="dash-row-sub">
+                      {doc.opportunity.company.name} — {doc.opportunity.showName}
+                      {doc.analysisError ? ` — ${doc.analysisError}` : " — no error message recorded"}
+                    </div>
+                  </div>
+                  <span className="dash-chip dash-critical">
+                    {doc.analysisErrorAt ? fmtDate(doc.analysisErrorAt) : "date unknown"}
+                  </span>
                 </Link>
               ))}
             </div>

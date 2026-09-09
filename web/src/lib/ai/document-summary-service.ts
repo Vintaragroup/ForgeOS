@@ -350,15 +350,19 @@ export async function summarizeDocument(documentId: string, userId: string | nul
     // regardless of whether a key is configured.
     const extraction = await extractDocumentText(document.documentType, document.mimeType, bytes, document.filename);
     loaded = { document, bytes, extraction };
-  } catch {
+  } catch (err) {
     // Same retry posture as the OpenAI-call catch below -- a storage
     // object that no longer exists for this Document row (confirmed real:
     // a stale row from before the Blob migration) previously crashed the
     // whole Server Action with an unhandled error instead of landing here,
     // leaving the document's extractionStatus exactly as it was (often
     // still COMPLETE from a prior run) with no visible sign the retry
-    // failed at all.
-    return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED" } });
+    // failed at all. Logged AND persisted to analysisError now -- a bare
+    // `catch {}` here used to discard the real cause entirely, leaving a
+    // real production "Analysis failed" with zero trace anywhere.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[summarizeDocument] document ${documentId}: ${message}`);
+    return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED", analysisError: message, analysisErrorAt: new Date() } });
   }
   const { document, bytes, extraction } = loaded;
 
@@ -480,7 +484,12 @@ export async function summarizeDocument(documentId: string, userId: string | nul
 
     const updated = await db.document.update({
       where: { id: documentId },
-      data: { extractionStatus: "COMPLETE", extractedSummary: summary as unknown as Prisma.InputJsonObject },
+      data: {
+        extractionStatus: "COMPLETE",
+        extractedSummary: summary as unknown as Prisma.InputJsonObject,
+        analysisError: null,
+        analysisErrorAt: null,
+      },
     });
 
     // Best-effort: an embedding-call failure here shouldn't undo an
@@ -497,12 +506,16 @@ export async function summarizeDocument(documentId: string, userId: string | nul
     });
 
     return updated;
-  } catch {
+  } catch (err) {
     // A transient/API failure is retryable by clicking Analyze again --
     // record it as FAILED rather than throwing, so the Server Action
     // completes normally and the UI reflects it via the status chip.
     // instrumentation.ts's onRequestError hook deliberately won't see
     // this: a per-document analysis failure isn't a request-level error.
-    return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED" } });
+    // Logged AND persisted to analysisError -- see the identical comment
+    // on this function's other catch block above.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[summarizeDocument] document ${documentId}: ${message}`);
+    return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED", analysisError: message, analysisErrorAt: new Date() } });
   }
 }

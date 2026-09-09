@@ -536,6 +536,21 @@ model Document {
   extractionStatus  ExtractionStatus @default(PENDING)
   extractedText     String?          @db.Text
   extractedSummary  Json?
+  // Real error message from the last failed analysis attempt (Analyze
+  // click -- summarizeDocument/summarizeDrawing), cleared back to null on
+  // the next successful analysis. Every FAILED-status write used to
+  // silently discard the actual cause (a bare `catch {}` with no logging
+  // at all) -- a real production incident (Sept 2026, Titleist PGA
+  // Orlando) left "Analysis failed" with zero trace anywhere, not even in
+  // Vercel's own runtime error tracking, since the catch swallowed the
+  // exception before it could surface as a request-level error. Surfaced
+  // to SUPER_ADMIN only on the dashboard (src/app/(app)/page.tsx) -- see
+  // getRecentAnalysisFailures in admin-analytics.ts. analysisErrorAt is
+  // WHEN that failure happened -- Document has no general updatedAt, and
+  // createdAt (upload time) would misrepresent a failure that happened on
+  // a much later retry.
+  analysisError   String?   @db.Text
+  analysisErrorAt DateTime?
   // AI-proposed, unpriced draft line items read from this document's
   // Scope of Work text -- separate from extractedSummary because it's a
   // distinct, explicitly-triggered operation (see scope-line-item-service.ts),

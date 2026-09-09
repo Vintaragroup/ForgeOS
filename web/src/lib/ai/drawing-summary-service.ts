@@ -284,13 +284,23 @@ export async function summarizeDrawing(documentId: string, userId: string | null
 
     return db.document.update({
       where: { id: documentId },
-      data: { extractionStatus: "COMPLETE", extractedSummary: summary as unknown as Prisma.InputJsonObject },
+      data: {
+        extractionStatus: "COMPLETE",
+        extractedSummary: summary as unknown as Prisma.InputJsonObject,
+        analysisError: null,
+        analysisErrorAt: null,
+      },
     });
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("Unsupported file type")) throw err; // programmer/config error, not retryable by clicking Analyze
     // Corrupt/unparseable PDF, a vision call failure, a malformed
     // response -- same FAILED/retryable posture as summarizeDocument's
-    // catch-all.
-    return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED" } });
+    // catch-all. Logged AND persisted to analysisError -- a real
+    // production incident (Sept 2026, Titleist PGA Orlando) left this
+    // completely untraceable, since the write here used to discard the
+    // real error before it could reach Vercel's own error tracking.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[summarizeDrawing] document ${documentId}: ${message}`);
+    return db.document.update({ where: { id: documentId }, data: { extractionStatus: "FAILED", analysisError: message, analysisErrorAt: new Date() } });
   }
 }
