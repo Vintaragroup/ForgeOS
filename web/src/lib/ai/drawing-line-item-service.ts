@@ -62,7 +62,8 @@ const DRAWING_LINE_ITEM_SCHEMA = {
             qty: { type: "number" },
             qtyIsExplicit: {
               type: "boolean",
-              description: "True only when qty was actually dimensioned/labeled on the sheet, not inferred or guessed.",
+              description:
+                "True when qty was actually dimensioned/labeled on the sheet, or when it's the count of named instances in a \"Left & Right\"-style element title (see system prompt) -- false when genuinely inferred or guessed.",
             },
             unit: { type: "string", description: "A sensible unit for this item -- EA, SQFT, LF, HR, LOT, etc." },
             lineType: { type: "string", enum: ["MATERIAL", "LABOR", "FEE"] },
@@ -86,8 +87,8 @@ Each page is given to you twice: first as its real extracted PDF text (when the 
 
 For each item:
 - description: name the item at that same biddable granularity, but for a custom-fabricated item -- a built structure, graphic, finish, or design element made specifically for this job rather than an off-the-shelf catalog product or rental -- preserve the sheet's own specifying language inside the name: the exact material, finish, dimension, or design detail as labeled or called out (e.g. "single-sided Chinese birch," not a generic paraphrase like "plywood"). That original wording is often the actual spec a shop floor builds from, and a paraphrase can silently lose it. For a standard catalog/rental/labor item, a concise generic name is fine and preferred -- this only matters for items nothing off-the-shelf will satisfy.
-- qty: the quantity actually dimensioned or labeled on the sheet if there is one (a count, square footage, linear footage, etc.). If nothing is stated, use 1 and set qtyIsExplicit to false -- 1 is a placeholder meaning "this item exists, quantity unknown," never a guess at a real number.
-- qtyIsExplicit: true ONLY when that qty value is actually printed on the sheet.
+- qty: the quantity actually dimensioned or labeled on the sheet if there is one (a count, square footage, linear footage, etc.). If nothing is stated, use 1 and set qtyIsExplicit to false -- 1 is a placeholder meaning "this item exists, quantity unknown," never a guess at a real number. A sheet or element titled for multiple named instances (e.g. "Left & Right Back Corner," "Left and Right Side Wall") IS an explicit quantity, even with no numeral printed -- that title is stating there are 2 of whatever the sheet shows, typically mirrored and identical apart from a logo or graphic. Propose qty 2 (or however many instances the title names) with qtyIsExplicit: true for those, not a bare qty 1 as if only one existed.
+- qtyIsExplicit: true when that qty value is actually printed on the sheet, OR when it's the count of named instances in a "Left & Right"-style element title as described above -- both are things the sheet itself states, just not always as a numeral.
 - unit: a sensible unit for this item (EA, SQFT, LF, HR, LOT) -- infer from context if the sheet doesn't state one.
 - lineType: MATERIAL for goods/fabrication, LABOR for installation/labor-only work, FEE for flat fees/rentals/services.
 - category: which section this item belongs to.
@@ -95,7 +96,11 @@ For each item:
 
 Only propose items that describe actual work or goods to be provided -- skip title blocks, revision notes, and general notes entirely. If a sheet has no concrete fabrication scope (e.g. it's purely a floor plan with no callouts), it can contribute nothing.
 
-category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closest fit rather than inventing a new name -- use "Other" only when nothing on the list is a reasonable match.`;
+category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closest fit rather than inventing a new name -- use "Other" only when nothing on the list is a reasonable match.
+
+Two categories are easy to misroute into a broader neighbor -- check these before defaulting elsewhere:
+- Audio/Visual: any screen, monitor, LED video wall/tile, touch screen, or other AV equipment -- even though it's electrically powered, it belongs here, not Electrical & Lighting (reserve that one for house power, task/accent lighting, and electrical hookups that aren't themselves a display or AV device).
+- Custom Build: a fixture built specifically to showcase or display a particular product (a product rail, a dedicated display stand or cabinet, a feature element) -- reserve Booth Structure & Walls for the booth's own walls, frame, and structural shell, not fixtures placed inside it that exist to show off a product.`;
 
 // Explicitly triggered (the Propose button, or buildEstimateFromAllDocuments),
 // never run automatically at Analyze time -- same posture scope-line-

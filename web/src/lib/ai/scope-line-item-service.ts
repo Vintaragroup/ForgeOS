@@ -52,11 +52,27 @@ import {
 // canonical form of every category name two real AI runs on the same
 // document actually produced. "Other" is the deliberate catch-all so a
 // genuinely novel scope item never gets force-fit into a wrong bucket.
+//
+// Audio/Visual and Custom Build added after a real confirmed gap
+// (Titleist PGA Orlando, Sept 2026): neither existed here even though
+// both are real, live canonical Category rows (see line-item-category.ts's
+// CUSTOM_BUILD_CATEGORY_KEY and the "audio_visual" key) that every OTHER
+// AI-proposal path (spreadsheet-line-item-service.ts, which reads the
+// live category list directly rather than using this fixed one) already
+// reaches fine -- this file's own hardcoded list was the one place they
+// were unreachable. Every screen/monitor/LED-video item was landing in
+// Electrical & Lighting (no closer option existed) and every custom
+// product-display fixture was landing in Other, both silently wrong at
+// commit time via mapScopeCategoryToCanonical -- see that function's own
+// SCOPE_CATEGORY_KEY_MAP for the mapping these two new values now resolve
+// through.
 export const SCOPE_CATEGORIES = [
   "Booth Structure & Walls",
   "Doors & Hardware",
   "Countertops & Cable Management",
   "Electrical & Lighting",
+  "Audio/Visual",
+  "Custom Build",
   "Fire & Life Safety",
   "Roof & Coverings",
   "Flooring & Platforms",
@@ -200,7 +216,11 @@ For each item:
 
 Only propose items that describe actual work or goods to be provided -- skip administrative, legal, or process clauses entirely. If the document has no concrete scope of deliverables${isTranscript ? " anywhere in it" : ""}, return an empty items array rather than inventing something.
 
-category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closest fit rather than inventing a new name -- use "Other" only when nothing on the list is a reasonable match. Always use this fixed list, even if a previous run on the same document used different wording.`;
+category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closest fit rather than inventing a new name -- use "Other" only when nothing on the list is a reasonable match. Always use this fixed list, even if a previous run on the same document used different wording.
+
+Two categories are easy to misroute into a broader neighbor -- check these before defaulting elsewhere:
+- Audio/Visual: any screen, monitor, LED video wall/tile, touch screen, or other AV equipment -- even though it's electrically powered, it belongs here, not Electrical & Lighting (reserve that one for house power, task/accent lighting, and electrical hookups that aren't themselves a display or AV device).
+- Custom Build: a fixture built specifically to showcase or display a particular product (a product rail, a dedicated display stand or cabinet, a feature element) -- reserve Booth Structure & Walls for the booth's own walls, frame, and structural shell, not fixtures placed inside it that exist to show off a product.`;
 
   if (projectNames.length === 0) return base;
 

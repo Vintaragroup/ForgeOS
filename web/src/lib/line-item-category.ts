@@ -203,6 +203,13 @@ const SCOPE_CATEGORY_KEY_MAP: Record<string, string> = {
   "doors & hardware": "structure",
   "countertops & cable management": "furniture",
   "electrical & lighting": CUSTOM_BUILD_CATEGORY_KEY,
+  // Both added alongside SCOPE_CATEGORIES' own two new values -- see that
+  // constant's own comment for the real gap this closes (a screen/monitor/
+  // LED-video item or a custom product-display fixture had no correct
+  // canonical home to resolve to before either existed as an AI-facing
+  // option).
+  "audio/visual": "audio_visual",
+  "custom build": CUSTOM_BUILD_CATEGORY_KEY,
   "fire & life safety": "structure",
   "roof & coverings": "structure",
   "flooring & platforms": "flooring",

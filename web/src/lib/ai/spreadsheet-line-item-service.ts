@@ -131,7 +131,7 @@ Real spreadsheets in this business take many shapes: a flat schedule, one sheet 
 - If a quantity truly isn't stated anywhere for a real priced item, use 1 and set qtyIsExplicit to false rather than guessing a number.
 - alternateGroupLabel: null for almost every item. Only set it when the spreadsheet itself gives you real evidence that this row's sheet is one of several mutually-exclusive alternatives for the same scope -- an explicit comparison sheet, "Option A/B" wording, or a note like "the only difference between these is...". Every row from every alternative sheet in that same choice must share the exact same label text. Do not set this just because two sheets look similar or cover related equipment -- only when the document itself frames them as a choice between alternatives.
 
-category must be exactly one of: ${categoryNames.join(", ")} when the item clearly fits one of those; otherwise use your own short, specific label rather than forcing a bad fit.
+category must be exactly one of: ${categoryNames.join(", ")} when the item clearly fits one of those; otherwise use your own short, specific label rather than forcing a bad fit. If an Audio/Visual category is offered, use it for screens/monitors/LED video/touch screens rather than Electrical & Lighting (reserve that for house power and task/accent lighting); if a Custom Build category is offered, use it for a fixture built to showcase a specific product rather than a generic structure category.
 
 If the sheet has no real priced content at all, return an empty items array rather than inventing something.`;
 }
