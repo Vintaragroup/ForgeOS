@@ -1461,6 +1461,32 @@ export async function mergeBoothIntoAnotherBooth(estimateVersionId: string, sour
     data: { estimateVersionId, name: wrapperName, sectionType: "COMPONENT", buildType: targetBuildType, ...sharedFields },
   });
 
+  // Same FK-restrict issue mergeSectionIntoAnotherSection's own identical
+  // block documents in full -- the deleteMany below would fail outright
+  // the moment any source section ever had an approved per-category
+  // heading, since that FK is ON DELETE RESTRICT, not CASCADE (confirmed
+  // live: merging "Reception" crashed here when one of its sections
+  // carried a real category-description override). Re-pointed onto the
+  // wrapper rather than dropped, since the wrapper is where this content
+  // now lives; EstimateSectionCategoryDescription's own
+  // @@unique([sectionId, categoryId]) means two source sections can't
+  // both land an override for the same category on the wrapper, so this
+  // keeps only the first one seen per category (same "first wins"
+  // convention as boothDescription/wrapperName above) and drops the rest.
+  const sourceOverrides = await db.estimateSectionCategoryDescription.findMany({
+    where: { sectionId: { in: sourceSections.map((s) => s.id) } },
+    orderBy: { createdAt: "asc" },
+  });
+  const overrideIdByCategory = new Map<string, string>();
+  const overrideIdsToDelete: string[] = [];
+  for (const override of sourceOverrides) {
+    if (overrideIdByCategory.has(override.categoryId)) {
+      overrideIdsToDelete.push(override.id);
+    } else {
+      overrideIdByCategory.set(override.categoryId, override.id);
+    }
+  }
+
   await db.$transaction([
     // One updateMany per source section (not per item) -- every item in
     // one source section shares that section's own name as its new H3 tag.
@@ -1470,6 +1496,17 @@ export async function mergeBoothIntoAnotherBooth(estimateVersionId: string, sour
         data: { sectionId: wrapper.id, subgroupLabel: canonicalSubgroupLabelByLower.get(section.name.trim().toLowerCase())! },
       }),
     ),
+    ...(overrideIdByCategory.size > 0
+      ? [
+          db.estimateSectionCategoryDescription.updateMany({
+            where: { id: { in: [...overrideIdByCategory.values()] } },
+            data: { sectionId: wrapper.id },
+          }),
+        ]
+      : []),
+    ...(overrideIdsToDelete.length > 0
+      ? [db.estimateSectionCategoryDescription.deleteMany({ where: { id: { in: overrideIdsToDelete } } })]
+      : []),
     // Every source section is empty now that its items moved onto the
     // wrapper -- same cleanup deleteEmptySection does one at a time, done
     // here in bulk since every one of them is guaranteed empty by

@@ -8,11 +8,13 @@ import {
   buildSystemPrompt,
   commitScopeLineItems,
   flagUncertainClassifications,
+  loadDuplicateCandidates,
   proposeLineItemsFromScope,
   SCOPE_CATEGORIES,
   type ProposedLineItem,
 } from "@/lib/ai/scope-line-item-service";
 import type { ProjectContext } from "@/lib/ai/scope-document-context";
+import { findExactDuplicates, type ProposedItemForDuplicateCheck } from "@/lib/ai/line-item-duplicate-service";
 
 afterEach(async () => {
   await db.lineItem.deleteMany();
@@ -627,5 +629,107 @@ describe("flagUncertainClassifications", () => {
     const result = flagUncertainClassifications([baseItem], [], context);
     expect(result[0].classificationUncertain).toBeUndefined();
     expect(result[0].estimateId).toBe("estimate-a");
+  });
+});
+
+describe("loadDuplicateCandidates", () => {
+  // Real production incident: mergeBoothIntoAnotherBooth re-points every
+  // merged child section's own groupLabel at its new H1 wrapper's id, so a
+  // naive "is this section's groupLabel actually another section's id"
+  // corruption check can't tell a merged child apart from genuinely
+  // corrupted data -- both look identical. Nulling the groupKey either way
+  // is safe in isolation, but once two sibling sheets under the same
+  // merged booth share a generic description ("Mixed Hardware", "Shop
+  // Supplies"), their candidates collapse into one ambiguous null-groupKey
+  // pool and Tier 1 can no longer tell them apart -- confirmed live: a
+  // re-import against an already-merged "Large Simulators" booth silently
+  // recreated ~99 duplicate rows this way. mergeBoothIntoAnotherBooth
+  // itself is what makes the fix possible: it always creates exactly one
+  // new wrapper section per distinct source sheet, named after that
+  // source's own resolved heading -- so that wrapper's own `name` is still
+  // a real per-sheet key even once its `groupLabel` no longer is.
+  it("recovers a real per-sheet groupKey from a merged child section's own name, instead of collapsing every sibling sheet's items into one null-groupKey pool", async () => {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const wrapper = await db.estimateSection.create({
+      data: { estimateVersionId: version.id, name: "Large Simulators", sectionType: "COMPONENT" },
+    });
+    // Two sibling sheets merged into the same booth -- exactly the shape
+    // mergeBoothIntoAnotherBooth produces: each sheet gets its own child
+    // section, own real name, but a shared groupLabel pointing at the
+    // wrapper.
+    const sheetA = await db.estimateSection.create({
+      data: {
+        estimateVersionId: version.id,
+        name: "04 Large Sim Front Left Structure",
+        sectionType: "CATEGORY",
+        groupLabel: wrapper.id,
+        buildType: "RENTAL",
+      },
+    });
+    const sheetB = await db.estimateSection.create({
+      data: {
+        estimateVersionId: version.id,
+        name: "05 Large Sim Back Left Structure",
+        sectionType: "CATEGORY",
+        groupLabel: wrapper.id,
+        buildType: "RENTAL",
+      },
+    });
+    // Same generic description on both sheets -- the exact ambiguity that
+    // broke Tier 1 in production.
+    await db.lineItem.create({
+      data: { sectionId: sheetA.id, lineType: "MATERIAL", description: "Mixed Hardware", qty: 100, unitCost: 1, totalCost: 100 },
+    });
+    await db.lineItem.create({
+      data: { sectionId: sheetB.id, lineType: "MATERIAL", description: "Mixed Hardware", qty: 100, unitCost: 1, totalCost: 100 },
+    });
+
+    const candidates = await loadDuplicateCandidates(version.id);
+    expect(candidates).toHaveLength(2);
+    const [candidateA, candidateB] = candidates;
+
+    // Neither collapses to null...
+    expect(candidateA.groupKey).not.toBeNull();
+    expect(candidateB.groupKey).not.toBeNull();
+    // ...and each recovers its own sheet's real name, not the shared wrapper id.
+    expect(candidateA.groupKey).toBe("04 Large Sim Front Left Structure");
+    expect(candidateB.groupKey).toBe("05 Large Sim Back Left Structure");
+
+    // End-to-end: a fresh import row for sheet B's own "Mixed Hardware"
+    // must match sheet B's existing candidate specifically, not bounce off
+    // an ambiguous match against both siblings (which is what null
+    // groupKeys on both sides would have produced) and get silently
+    // re-created as a third, duplicate row.
+    const proposedForSheetB: ProposedItemForDuplicateCheck[] = [
+      { description: "Mixed Hardware", qty: 100, unit: null, groupKey: "05 Large Sim Back Left Structure" },
+    ];
+    const matches = findExactDuplicates(proposedForSheetB, candidates);
+    expect(matches.get(0)?.id).toBe(candidateB.id);
+  });
+
+  it("still uses the raw groupLabel directly for a standalone (never-merged) section, unchanged from before", async () => {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const section = await db.estimateSection.create({
+      data: {
+        estimateVersionId: version.id,
+        name: "Structure",
+        sectionType: "CATEGORY",
+        groupLabel: "20 Netting Hard Support Large Front Left",
+      },
+    });
+    await db.lineItem.create({
+      data: { sectionId: section.id, lineType: "MATERIAL", description: "Mixed Hardware", qty: 200, unitCost: 1, totalCost: 200 },
+    });
+
+    const [candidate] = await loadDuplicateCandidates(version.id);
+    expect(candidate.groupKey).toBe("20 Netting Hard Support Large Front Left");
   });
 });

@@ -2265,6 +2265,47 @@ describe("mergeBoothIntoAnotherBooth", () => {
     expect(wrapper.name).toBe("Section 203 - Camera Booth");
   });
 
+  it("re-points a source section's own per-category heading override onto the new wrapper instead of failing the merge (Foreign key constraint on ON DELETE RESTRICT, confirmed live)", async () => {
+    const { version, sourceSection, item } = await makeTwoBooths();
+    const category = await makeCategory("Structure", "structure_booth_merge_test");
+    await db.lineItem.update({ where: { id: item.id }, data: { category: category.name } });
+    await db.estimateSectionCategoryDescription.create({
+      data: { sectionId: sourceSection.id, categoryId: category.id, description: "Approved per-category heading" },
+    });
+
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
+
+    const wrapper = await db.estimateSection.findFirstOrThrow({
+      where: { estimateVersionId: version.id, groupLabel: "Section 203 - Booth", name: "The camera booth" },
+    });
+    const overrides = await db.estimateSectionCategoryDescription.findMany({ where: { categoryId: category.id } });
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0]).toMatchObject({ sectionId: wrapper.id, description: "Approved per-category heading" });
+  });
+
+  it("keeps only the first source section's per-category override when two merging sections both have one for the same category, instead of colliding on the new wrapper's unique constraint", async () => {
+    const estimate = await makeEstimate();
+    const version = await createEstimateVersion(estimate.id, 0);
+    const category = await makeCategory("Structure", "structure_booth_merge_collision_test");
+    const sourceA = await addSection(version.id, { name: "BeMatrix", sectionType: "CATEGORY", groupLabel: "Section 203 - Camera Booth" });
+    const sourceB = await addSection(version.id, { name: "Slat Wall", sectionType: "CATEGORY", groupLabel: "Section 203 - Camera Booth" });
+    await addLineItem(version.id, sourceA.id, { lineType: "MATERIAL", description: "Post", qty: 1, unitCost: 10, category: category.name });
+    await addLineItem(version.id, sourceB.id, { lineType: "MATERIAL", description: "Panel", qty: 1, unitCost: 10, category: category.name });
+    await db.estimateSectionCategoryDescription.create({
+      data: { sectionId: sourceA.id, categoryId: category.id, description: "First section's heading" },
+    });
+    await db.estimateSectionCategoryDescription.create({
+      data: { sectionId: sourceB.id, categoryId: category.id, description: "Second section's heading" },
+    });
+    await addSection(version.id, { name: "Booth Build", sectionType: "CATEGORY", groupLabel: "Section 203 - Booth" });
+
+    await mergeBoothIntoAnotherBooth(version.id, "Section 203 - Camera Booth", { groupLabel: "Section 203 - Booth" });
+
+    const overrides = await db.estimateSectionCategoryDescription.findMany({ where: { categoryId: category.id } });
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0].description).toBe("First section's heading");
+  });
+
   it("clears the wrapper's booth description when the target has none of its own", async () => {
     const { version, targetSection } = await makeTwoBooths();
 

@@ -469,28 +469,51 @@ export async function loadDuplicateCandidates(estimateVersionId: string): Promis
     // confirmed live against a real production estimate, where several
     // merged sections' groupLabel had become another section's id rather
     // than the module name it used to be. Every section id in this
-    // version is fetched so groupKey below can detect that case and fall
-    // back to null (never a wrong-but-plausible-looking key) instead of
-    // trusting a corrupted "sheet name".
+    // version is fetched so groupKey below can detect that case and
+    // recover a real per-sheet key from the section's own name instead of
+    // trusting a corrupted "sheet name" as if it were still the raw one.
     db.estimateSection.findMany({ where: { estimateVersionId }, select: { id: true } }),
   ]);
   const sectionIds = new Set(sections.map((s) => s.id));
-  return existing.map((li) => ({
-    id: li.id,
-    // Strips QTY_ESTIMATED_SUFFIX back off before comparison -- see that
-    // constant's own comment for why: a fresh proposal's raw description
-    // never carries it, so leaving it on here would silently break exact
-    // matching for every non-explicit-quantity item, the common case.
-    description: li.description.endsWith(QTY_ESTIMATED_SUFFIX)
-      ? li.description.slice(0, -QTY_ESTIMATED_SUFFIX.length)
-      : li.description,
-    sectionLabel: li.section.groupLabel ?? li.section.name,
-    // LineItem.qty is a Prisma Decimal -- ExistingLineItemCandidate.qty
-    // only needs plausibility context for the AI prompt, not precision.
-    qty: li.qty != null ? Number(li.qty) : null,
-    unit: li.unit,
-    groupKey: li.section.groupLabel && !sectionIds.has(li.section.groupLabel) ? li.section.groupLabel : null,
-  }));
+  return existing.map((li) => {
+    // A merged child's own groupLabel now points at its H1 wrapper's id,
+    // not the sheet it actually came from -- but mergeBoothIntoAnotherBooth
+    // creates exactly one new wrapper H2 per distinct source booth, named
+    // after that source's own resolved heading (its raw sheet name, unless
+    // someone later approved a nicer one) -- see that function's own
+    // wrapperName comment. That wrapper's `name` is therefore still a real,
+    // stable per-sheet key even though groupLabel no longer is, so falling
+    // back to it here (rather than null) is what keeps Tier 1 matching
+    // sheets apart post-merge instead of collapsing every merged sheet's
+    // items into one ambiguous pool. Confirmed live: without this, a
+    // re-import against an already-merged booth (its own sections all
+    // sharing one real groupLabel) silently re-created ~99 duplicate rows,
+    // because shared generic descriptions ("Mixed Hardware", "Shop
+    // Supplies") became ambiguous the moment every merged sheet's own
+    // candidates shared one null groupKey. Still imperfect once a wrapper
+    // has been manually renamed away from its raw sheet name (Pass 1 then
+    // won't match a *fresh* import's own row.sheetName text), but even
+    // then this keeps sibling sheets' candidates apart from each other,
+    // which null never could.
+    const isMergedChild = li.section.groupLabel != null && sectionIds.has(li.section.groupLabel);
+    const groupKey = li.section.groupLabel && !isMergedChild ? li.section.groupLabel : isMergedChild ? li.section.name : null;
+    return {
+      id: li.id,
+      // Strips QTY_ESTIMATED_SUFFIX back off before comparison -- see that
+      // constant's own comment for why: a fresh proposal's raw description
+      // never carries it, so leaving it on here would silently break exact
+      // matching for every non-explicit-quantity item, the common case.
+      description: li.description.endsWith(QTY_ESTIMATED_SUFFIX)
+        ? li.description.slice(0, -QTY_ESTIMATED_SUFFIX.length)
+        : li.description,
+      sectionLabel: li.section.groupLabel ?? li.section.name,
+      // LineItem.qty is a Prisma Decimal -- ExistingLineItemCandidate.qty
+      // only needs plausibility context for the AI prompt, not precision.
+      qty: li.qty != null ? Number(li.qty) : null,
+      unit: li.unit,
+      groupKey,
+    };
+  });
 }
 
 // Builds the Tier 2 cache payload for Document.proposedLineItemMatches --
