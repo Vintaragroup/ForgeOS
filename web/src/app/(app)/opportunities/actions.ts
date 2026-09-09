@@ -20,6 +20,7 @@ import { parseFreeTextDate } from "@/lib/citation";
 import { statusRedirectPath } from "@/lib/action-status";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { NEW_COMPANY_VALUE } from "@/lib/opportunity-new-company";
 
 const DATE_FIELDS = new Set<ExtractableOpportunityField>(["shipDate", "eventStartDate", "eventEndDate"]);
 
@@ -29,9 +30,22 @@ const DATE_FIELDS = new Set<ExtractableOpportunityField>(["shipDate", "eventStar
 // a separate collaborator row would be redundant.
 export async function createOpportunity(formData: FormData) {
   const showName = String(formData.get("showName") ?? "").trim();
-  const companyId = String(formData.get("companyId") ?? "").trim();
+  let companyId = String(formData.get("companyId") ?? "").trim();
   if (!showName) throw new Error("Show name is required");
   if (!companyId) throw new Error("Company is required");
+
+  // "+ New client" (company-field-with-create.tsx) -- resolved to a real
+  // Company row before anything below reads companyId, so the rest of
+  // this function (tax-rate lookup, the Opportunity create itself) never
+  // needs to know which path was taken. Only `name` is collected here;
+  // billing address/industry/tax jurisdiction stay editable later on the
+  // company's own page, same as any other company.
+  if (companyId === NEW_COMPANY_VALUE) {
+    const newCompanyName = String(formData.get("newCompanyName") ?? "").trim();
+    if (!newCompanyName) throw new Error("New client name is required");
+    const company = await db.company.create({ data: { name: newCompanyName } });
+    companyId = company.id;
+  }
 
   const collaboratorIds = formData.getAll("collaboratorIds").map(String);
   const taxRateId = await resolveOpportunityTaxRateId(formData.get("taxRateId"), companyId);
@@ -66,6 +80,7 @@ export async function createOpportunity(formData: FormData) {
   });
 
   revalidatePath("/opportunities");
+  revalidatePath("/companies"); // no-op unless a new company was just created above
   redirect(`/opportunities/${opportunity.id}`);
 }
 

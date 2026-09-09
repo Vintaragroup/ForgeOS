@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { formatOpportunityLabel } from "@/lib/opportunity-name";
+import { NEW_COMPANY_VALUE } from "@/lib/opportunity-new-company";
 
 // Lives inside the same <form> as the Company select, Show name field,
 // and ProjectTypeFields' own booth number + event start date inputs --
@@ -26,7 +27,10 @@ export function OpportunityNamePreview({ companies }: { companies: { id: string;
     function update() {
       const data = new FormData(form as HTMLFormElement);
       const companyId = String(data.get("companyId") ?? "");
-      const companyName = companies.find((c) => c.id === companyId)?.name ?? "";
+      const companyName =
+        companyId === NEW_COMPANY_VALUE
+          ? String(data.get("newCompanyName") ?? "")
+          : (companies.find((c) => c.id === companyId)?.name ?? "");
       setLabel(
         formatOpportunityLabel({
           companyName,

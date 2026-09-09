@@ -2,9 +2,9 @@ import { db } from "@/lib/db";
 import { createOpportunity } from "../actions";
 import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
-import { EmptyState, LinkButton } from "@/components/ui";
 import { ProjectTypeFields } from "@/components/project-type-fields";
 import { OpportunityNamePreview } from "@/components/opportunity-name-preview";
+import { CompanyFieldWithCreate } from "@/components/company-field-with-create";
 
 // The company/user dropdowns must reflect live data, not a build-time
 // snapshot -- see opportunities/page.tsx's comment for the same reasoning.
@@ -17,29 +17,12 @@ export default async function NewOpportunityPage() {
     db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
   ]);
 
-  if (companies.length === 0) {
-    return (
-      <div>
-        <PageHeader title="New opportunity" backHref="/opportunities" backLabel="Opportunities" />
-        <EmptyState message="You need at least one company before creating an opportunity." />
-        <div className="mt-4">
-          <LinkButton href="/companies/new">Add a company</LinkButton>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div>
       <PageHeader title="New opportunity" backHref="/opportunities" backLabel="Opportunities" />
       <Card className="p-6">
         <form action={createOpportunity} className="flex flex-col gap-4">
-          <SelectField
-            label="Company"
-            name="companyId"
-            required
-            options={companies.map((c) => ({ value: c.id, label: c.name }))}
-          />
+          <CompanyFieldWithCreate companies={companies.map((c) => ({ id: c.id, name: c.name }))} />
           <Field label="Show name" name="showName" required />
           <OpportunityNamePreview companies={companies.map((c) => ({ id: c.id, name: c.name }))} />
           <ProjectTypeFields
