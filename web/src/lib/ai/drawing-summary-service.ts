@@ -19,13 +19,18 @@ import { ensureCanvasFontsRegistered } from "@/lib/canvas-fonts";
 
 const IMAGE_MIMES = ["image/png", "image/jpeg", "image/jpg"];
 
-// Bounds cost, not accuracy -- raised from 5 after a real 11-page CAD PDF
-// only had its first 5 pages analyzed and missed real, later-page facts.
-// Roughly doubles the realistic per-drawing vision-call cost ceiling
-// (~$0.013 at 4-5 images -> ~$0.025-0.03 at 10), worth it against missing
-// content entirely. Configurable so a package that genuinely needs more
-// sheets analyzed isn't hard-blocked.
-const MAX_DRAWING_PAGES = Number(process.env.AI_DRAWING_MAX_PAGES) || 10;
+// Bounds cost, not accuracy -- raised from 5 to 10 after a real 11-page CAD
+// PDF only had its first 5 pages analyzed and missed real, later-page facts,
+// then raised again to 20 after a SECOND real 11-page CAD design takeoff
+// (FootJoy PGA 2027) silently tripped the 10-page cap too -- two for two on
+// real takeoff packages landing at 11 pages says the realistic ceiling for
+// this document type is meaningfully above 10, not a one-off. Cost stays
+// trivial even doubled (~$0.05-0.06 at 20 images), worth it against missing
+// a whole sheet's content with zero indication anything was dropped.
+// Configurable so a package that genuinely needs more sheets analyzed isn't
+// hard-blocked, and pageImages now reports totalPages so a caller can at
+// least detect when this cap is still hit.
+const MAX_DRAWING_PAGES = Number(process.env.AI_DRAWING_MAX_PAGES) || 20;
 
 type DrawingItemFromAI = { text: string; pageNumber: number };
 type DrawingKeyDateFromAI = { label: string; date: string; dateType: KeyDateType; pageNumber: number };
@@ -116,9 +121,19 @@ For every item, report pageNumber: the 1-indexed position of the image (in the o
 // Exported for direct testing of the mime-branching logic -- this part
 // needs only unpdf, not OpenAI, so it can run for real in CI (see
 // drawing-summary-service.test.ts).
-export async function pageImages(mimeType: string, bytes: Buffer): Promise<string[]> {
+// totalPages lets a caller tell truncation apart from "this document
+// genuinely only has N pages" -- images.length alone can't distinguish
+// those, which is exactly how the cap silently ate a real sheet's content
+// twice before either instance was noticed. maxPages defaults to the
+// module cap but is an explicit parameter so a test can force a small cap
+// deterministically instead of stubbing the env var + resetting the module.
+export async function pageImages(
+  mimeType: string,
+  bytes: Buffer,
+  maxPages: number = MAX_DRAWING_PAGES,
+): Promise<{ images: string[]; totalPages: number }> {
   if (IMAGE_MIMES.includes(mimeType)) {
-    return [`data:${mimeType};base64,${bytes.toString("base64")}`];
+    return { images: [`data:${mimeType};base64,${bytes.toString("base64")}`], totalPages: 1 };
   }
   if (mimeType === PDF_MIME) {
     // Same missing-glyph gap as document-view-service.ts's highlighted-
@@ -129,7 +144,7 @@ export async function pageImages(mimeType: string, bytes: Buffer): Promise<strin
     // everything the drawing's own labels say, sheet by sheet.
     ensureCanvasFontsRegistered();
     const pdf = await getDocumentProxy(new Uint8Array(bytes));
-    const pageCount = Math.min(pdf.numPages, MAX_DRAWING_PAGES);
+    const pageCount = Math.min(pdf.numPages, maxPages);
     const images: string[] = [];
     for (let page = 1; page <= pageCount; page++) {
       images.push(
@@ -140,7 +155,7 @@ export async function pageImages(mimeType: string, bytes: Buffer): Promise<strin
         }),
       );
     }
-    return images;
+    return { images, totalPages: pdf.numPages };
   }
   throw new Error(`Unsupported file type for drawing analysis: ${mimeType}`);
 }
@@ -180,7 +195,7 @@ export async function summarizeDrawing(documentId: string, userId: string | null
   await db.document.update({ where: { id: documentId }, data: { extractionStatus: "PROCESSING" } });
 
   try {
-    const images = await pageImages(document.mimeType, bytes);
+    const { images, totalPages } = await pageImages(document.mimeType, bytes);
     if (images.length === 0) {
       // A genuinely empty PDF -- not an API/parse failure, a real
       // "nothing to analyze here" outcome that re-analyzing will never
@@ -228,13 +243,27 @@ export async function summarizeDrawing(documentId: string, userId: string | null
     if (!content) throw new Error("OpenAI returned an empty response.");
     const parsed = JSON.parse(content) as DrawingSummaryFromAI;
 
+    const riskFlags = withEmptyQuote(parsed.riskFlags, document.estimateId);
+    // Surfaced through the same riskFlags list ProjectBriefCard already
+    // renders -- no schema/UI change needed to make a real truncation
+    // visible to whoever's reviewing this document, instead of the silent
+    // drop this cap used to produce.
+    if (totalPages > images.length) {
+      riskFlags.push({
+        text: `Only pages 1-${images.length} of ${totalPages} were analyzed (AI_DRAWING_MAX_PAGES limit) -- review the remaining pages manually or re-run with a higher limit.`,
+        pageNumber: images.length,
+        sourceQuote: "",
+        estimateId: document.estimateId,
+      });
+    }
+
     const summary: DocumentSummary = {
       eventOrProjectName: parsed.eventOrProjectName,
       venue: parsed.venue,
       submissionDeadline: parsed.submissionDeadline,
       keyDates: withEmptyQuote(parsed.keyDates, document.estimateId),
       scopeSummary: withEmptyQuote(parsed.scopeSummary, document.estimateId),
-      riskFlags: withEmptyQuote(parsed.riskFlags, document.estimateId),
+      riskFlags,
     };
 
     return db.document.update({

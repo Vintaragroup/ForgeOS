@@ -114,7 +114,16 @@ export async function proposeLineItemsFromDrawing(
   // proposeLineItemsFromScope.
   const client = getOpenAiClient();
 
-  const images = await pageImages(document.mimeType, bytes);
+  const { images, totalPages } = await pageImages(document.mimeType, bytes);
+  if (totalPages > images.length) {
+    // No schema/UI channel to surface this to the estimator reviewing the
+    // proposed items yet (unlike summarizeDrawing's riskFlags, which
+    // already reaches ProjectBriefCard for free) -- at minimum this makes
+    // the truncation visible in server logs instead of purely silent.
+    console.warn(
+      `[proposeLineItemsFromDrawing] document ${documentId}: only analyzed ${images.length} of ${totalPages} pages (AI_DRAWING_MAX_PAGES limit).`,
+    );
+  }
   if (images.length === 0) {
     // A genuinely empty PDF -- nothing to propose, and re-running won't
     // change that. Same "real, not a failure" posture as

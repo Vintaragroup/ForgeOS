@@ -49,27 +49,43 @@ describe("summarizeDrawing", () => {
 
 describe("pageImages", () => {
   it(
-    "rasterizes a real multi-page CAD PDF into one data URL per page, capped at MAX_DRAWING_PAGES",
+    "rasterizes a real multi-page CAD PDF into one data URL per page, and reports the real totalPages under the default cap",
     async () => {
       const bytes = await readFile(REAL_CAD_PDF);
-      const images = await pageImages(PDF_MIME, bytes);
+      const { images, totalPages } = await pageImages(PDF_MIME, bytes);
 
-      // MAX_DRAWING_PAGES defaults to 10 -- this fixture has 11 real pages,
-      // so this also proves the cap is actually enforced, not just present.
-      expect(images.length).toBeGreaterThan(0);
-      expect(images.length).toBeLessThanOrEqual(10);
+      // This fixture has 11 real pages, comfortably under MAX_DRAWING_PAGES
+      // (20) -- nothing truncated, images.length matches totalPages exactly.
+      expect(totalPages).toBe(11);
+      expect(images).toHaveLength(11);
       for (const image of images) {
         expect(image).toMatch(/^data:image\/png;base64,/);
       }
     },
-    30_000, // rasterizing 10 pages at scale 2 is real, non-trivial canvas work -- default 5s timeout isn't enough
+    30_000, // rasterizing 11 pages at scale 2 is real, non-trivial canvas work -- default 5s timeout isn't enough
+  );
+
+  it(
+    "caps at the given maxPages and still reports the real totalPages, so a caller can detect truncation",
+    async () => {
+      const bytes = await readFile(REAL_CAD_PDF);
+      const { images, totalPages } = await pageImages(PDF_MIME, bytes, 3);
+
+      expect(images).toHaveLength(3);
+      expect(totalPages).toBe(11);
+      for (const image of images) {
+        expect(image).toMatch(/^data:image\/png;base64,/);
+      }
+    },
+    30_000,
   );
 
   it("passes a raw image straight through as one page, no rasterization", async () => {
     const bytes = await readFile(REAL_PNG);
-    const images = await pageImages("image/png", bytes);
+    const { images, totalPages } = await pageImages("image/png", bytes);
 
     expect(images).toHaveLength(1);
+    expect(totalPages).toBe(1);
     expect(images[0]).toBe(`data:image/png;base64,${bytes.toString("base64")}`);
   });
 
