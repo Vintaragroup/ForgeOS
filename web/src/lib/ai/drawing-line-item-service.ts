@@ -75,7 +75,8 @@ const DRAWING_LINE_ITEM_SCHEMA = {
             category: { type: "string", enum: SCOPE_CATEGORIES },
             pageNumber: {
               type: "integer",
-              description: "1-indexed position of the image (in the order provided) where this item was seen.",
+              description:
+                "The page number given in that page's 'Page N' label -- the document's real page number, not your position in the list (a page that failed to render may have been skipped, so these numbers can skip values).",
             },
           },
           required: ["description", "qty", "qtyIsExplicit", "unit", "lineType", "category", "pageNumber"],
@@ -97,7 +98,7 @@ For each item:
 - unit: a sensible unit for this item (EA, SQFT, LF, HR, LOT) -- infer from context if the sheet doesn't state one.
 - lineType: MATERIAL for goods/fabrication, LABOR for installation/labor-only work, FEE for flat fees/rentals/services.
 - category: which section this item belongs to.
-- pageNumber: the 1-indexed position of the image (in the order provided) where you saw it -- your actual position in the list you were given, not a guess.
+- pageNumber: the page number given in that page's "Page N" label -- the document's real page number, not your position in the list (a page that failed to render may have been skipped, so these numbers can skip values).
 
 Only propose items that describe actual work or goods to be provided -- skip title blocks, revision notes, and general notes entirely. If a sheet has no concrete fabrication scope (e.g. it's purely a floor plan with no callouts), it can contribute nothing.
 
@@ -134,24 +135,36 @@ export async function proposeLineItemsFromDrawing(
   // instead of OpenAI direct -- scoped to this pipeline only.
   const { client, model, viaOpenRouter } = getDrawingAiClient();
 
-  const { images, totalPages, pageTexts } = await pageImages(document.mimeType, bytes);
-  if (totalPages > images.length) {
+  const { images, totalPages, pageTexts, pageNumbers, blankPageNumbers } = await pageImages(document.mimeType, bytes);
+  const attempted = images.length + blankPageNumbers.length;
+  if (totalPages > attempted) {
     // No schema/UI channel to surface this to the estimator reviewing the
     // proposed items yet (unlike summarizeDrawing's riskFlags, which
     // already reaches ProjectBriefCard for free) -- at minimum this makes
     // the truncation visible in server logs instead of purely silent.
+    // attempted (not images.length) is the right comparand now that blank
+    // pages are excluded from images -- see drawing-summary-service.ts's
+    // pageImages for why.
     console.warn(
-      `[proposeLineItemsFromDrawing] document ${documentId}: only analyzed ${images.length} of ${totalPages} pages (AI_DRAWING_MAX_PAGES limit).`,
+      `[proposeLineItemsFromDrawing] document ${documentId}: only analyzed ${attempted} of ${totalPages} pages (AI_DRAWING_MAX_PAGES limit).`,
+    );
+  }
+  if (blankPageNumbers.length > 0) {
+    // Real incident (Titleist "Concept V1E" upload, Sept 2026) -- see
+    // isBlankPageImage's own header. Same "log only" posture as the
+    // truncation warning above, not a new schema field.
+    console.warn(
+      `[proposeLineItemsFromDrawing] document ${documentId}: page(s) ${blankPageNumbers.join(", ")} rendered blank (likely an undecodable embedded image, e.g. JPEG2000) -- excluded from analysis.`,
     );
   }
   if (images.length === 0) {
-    // A genuinely empty PDF -- nothing to propose, and re-running won't
-    // change that. Same "real, not a failure" posture as
-    // summarizeDrawing's UNSUPPORTED branch, but propose has no separate
-    // status field to flip -- an empty cached proposal is itself the
-    // correct signal (matches commitScopeLineItems's "click Propose
-    // items first" guard for a genuinely never-proposed document only
-    // when the cache is still null, not an empty array).
+    // A genuinely empty PDF, or every page rendered blank -- nothing to
+    // propose, and re-running won't change that. Same "real, not a
+    // failure" posture as summarizeDrawing's UNSUPPORTED branch, but
+    // propose has no separate status field to flip -- an empty cached
+    // proposal is itself the correct signal (matches commitScopeLineItems's
+    // "click Propose items first" guard for a genuinely never-proposed
+    // document only when the cache is still null, not an empty array).
     return db.document.update({
       where: { id: documentId },
       data: { proposedLineItems: [] as unknown as Prisma.InputJsonValue },
@@ -173,7 +186,7 @@ export async function proposeLineItemsFromDrawing(
             type: "text",
             text: `Drawing: ${document.filename} (${images.length} page image${images.length === 1 ? "" : "s"})`,
           },
-          ...buildPageContentParts(images, pageTexts),
+          ...buildPageContentParts(images, pageTexts, pageNumbers),
         ],
       },
     ],

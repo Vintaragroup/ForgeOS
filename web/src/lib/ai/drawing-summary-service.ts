@@ -29,6 +29,7 @@ import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import type { DocumentSummary, KeyDateType } from "@/lib/ai/document-summary-service";
 import { PDF_MIME, extractPdfPageTexts } from "@/lib/ai/text-extraction";
 import { ensureCanvasFontsRegistered } from "@/lib/canvas-fonts";
+import { isBlankPageImage } from "@/lib/ai/blank-page-detection";
 
 const IMAGE_MIMES = ["image/png", "image/jpeg", "image/jpg"];
 
@@ -78,7 +79,8 @@ const DRAWING_SCHEMA = {
             dateType: { type: "string", enum: ["DEADLINE", "MILESTONE", "INFORMATIONAL"] },
             pageNumber: {
               type: "integer",
-              description: "1-indexed position of the image (in the order provided) where this was seen.",
+              description:
+                "The page number given in that page's 'Page N' label -- the document's real page number, not your position in the list (a page that failed to render may have been skipped, so these numbers can skip values).",
             },
           },
           required: ["label", "date", "dateType", "pageNumber"],
@@ -95,7 +97,11 @@ const DRAWING_SCHEMA = {
               description:
                 "A specific dimension, material, construction method, or fabrication detail visibly labeled or dimensioned on the sheet -- not a generic paraphrase of the whole drawing.",
             },
-            pageNumber: { type: "integer", description: "1-indexed position of the image where this was seen." },
+            pageNumber: {
+              type: "integer",
+              description:
+                "The page number given in that page's 'Page N' label -- the document's real page number, not your position in the list (a page that failed to render may have been skipped, so these numbers can skip values).",
+            },
           },
           required: ["text", "pageNumber"],
         },
@@ -111,7 +117,11 @@ const DRAWING_SCHEMA = {
               description:
                 "A structural, load, code/compliance, or ADA-clearance callout worth a human's attention -- or an engineer's stamp / a revision marked hold or not-for-construction.",
             },
-            pageNumber: { type: "integer" },
+            pageNumber: {
+              type: "integer",
+              description:
+                "The page number given in that page's 'Page N' label -- the document's real page number, not your position in the list (a page that failed to render may have been skipped, so these numbers can skip values).",
+            },
           },
           required: ["text", "pageNumber"],
         },
@@ -131,7 +141,7 @@ keyDates: almost always empty -- only populate if an actual date is printed on t
 
 Extract every distinct dimension, material, price, and callout you can find on each sheet, not just the most prominent ones -- a second look at the same sheet should find just as much as the first. Err toward including a borderline item rather than omitting it.
 
-For every item, report pageNumber: the 1-indexed position of the image (in the order provided) where you saw it -- your actual position in the list you were given, not a guess.`;
+For every item, report pageNumber: the page number given in that page's "Page N" label -- the document's real page number, not your position in the list (a page that failed to render may have been skipped, so these numbers can skip values).`;
 
 // Exported for direct testing of the mime-branching logic -- this part
 // needs only unpdf, not OpenAI, so it can run for real in CI (see
@@ -147,17 +157,34 @@ For every item, report pageNumber: the 1-indexed position of the image (in the o
 // has none -- reuses text-extraction.ts's extractPdfPageTexts rather than
 // a second unpdf call, same real text every other document type already
 // trusts.
+// pageNumbers is ALSO parallel-indexed to images: the true 1-indexed
+// source-PDF page number for each entry. Required (not inferred from
+// array position) because blankPageNumbers below can exclude a page
+// mid-sequence -- images[i] is no longer implicitly page i+1 once that
+// can happen, and citing "page 3" from array position when the real page
+// was 4 would be a real correctness regression against the AI's own page
+// citations. blankPageNumbers is the 1-indexed list of pages that
+// rendered blank (see isBlankPageImage's own header for the real incident
+// this addresses) and were excluded from images/pageTexts/pageNumbers
+// entirely -- a caller derives "how many pages were attempted" as
+// images.length + blankPageNumbers.length rather than a separate field.
 export async function pageImages(
   mimeType: string,
   bytes: Buffer,
   maxPages: number = MAX_DRAWING_PAGES,
-): Promise<{ images: string[]; totalPages: number; pageTexts: string[] }> {
+): Promise<{ images: string[]; totalPages: number; pageTexts: string[]; pageNumbers: number[]; blankPageNumbers: number[] }> {
   if (IMAGE_MIMES.includes(mimeType)) {
     // A raw image (not a PDF) has no text layer at all -- "" here is the
     // same "vision only for this page" signal the PDF branch uses when
     // extraction comes back empty, not a special case callers need to
-    // branch on separately.
-    return { images: [`data:${mimeType};base64,${bytes.toString("base64")}`], totalPages: 1, pageTexts: [""] };
+    // branch on separately. Checked for blankness too -- a directly-
+    // uploaded scan can legitimately be blank the same way a rendered PDF
+    // page can.
+    const dataUrl = `data:${mimeType};base64,${bytes.toString("base64")}`;
+    if (await isBlankPageImage(dataUrl)) {
+      return { images: [], totalPages: 1, pageTexts: [], pageNumbers: [], blankPageNumbers: [1] };
+    }
+    return { images: [dataUrl], totalPages: 1, pageTexts: [""], pageNumbers: [1], blankPageNumbers: [] };
   }
   if (mimeType === PDF_MIME) {
     // Same missing-glyph gap as document-view-service.ts's highlighted-
@@ -176,13 +203,13 @@ export async function pageImages(
     // failure (corrupt/unusual PDF structure) shouldn't take down the whole
     // vision analysis -- every page just falls back to "" (image-only,
     // full-scale), same as a page that genuinely has no text layer at all.
-    let pageTexts: string[];
+    let allPageTexts: string[];
     try {
-      pageTexts = (await extractPdfPageTexts(bytes)).slice(0, pageCount).map((t) => t.trim());
+      allPageTexts = (await extractPdfPageTexts(bytes)).slice(0, pageCount).map((t) => t.trim());
     } catch {
-      pageTexts = [];
+      allPageTexts = [];
     }
-    while (pageTexts.length < pageCount) pageTexts.push("");
+    while (allPageTexts.length < pageCount) allPageTexts.push("");
 
     // Real incident (Titleist FootJoy re-upload, Sept 2026): a rasterization
     // run on a large (18.7MB, 11-page, embedded-font-subset) PDF died with a
@@ -207,21 +234,42 @@ export async function pageImages(
     // documented PDFDocumentProxy method -- confirmed present at runtime)
     // explicitly clears those caches; safe to call between renders (not
     // during one), which a completed loop iteration always is.
+    //
+    // Real incident (Titleist "Concept V1E" upload, Sept 2026): a 31-page
+    // drawing rendered every single page blank -- the source PDF's
+    // embedded images are all JPEG2000 (jpx) encoded, and @napi-rs/
+    // canvas's bundled PDF.js can't decode that format (logs "JpxError:
+    // OpenJPEG failed to initialize" and silently produces a blank canvas
+    // instead of throwing). isBlankPageImage catches this before a blank
+    // page can be sent to the vision AI -- see its own header for the
+    // full root-cause writeup and why pixel-uniformity (not byte-size
+    // alone) is the reliable signal.
     const images: string[] = [];
+    const pageTexts: string[] = [];
+    const pageNumbers: number[] = [];
+    const blankPageNumbers: number[] = [];
     for (let page = 1; page <= pageCount; page++) {
-      images.push(
-        await renderPageAsImage(pdf, page, {
-          toDataURL: true,
-          scale: 2, // native PDF DPI is often too low to read small dimension labels
-          canvasImport: () => import("@napi-rs/canvas"),
-        }),
-      );
+      const dataUrl = await renderPageAsImage(pdf, page, {
+        toDataURL: true,
+        scale: 2, // native PDF DPI is often too low to read small dimension labels
+        canvasImport: () => import("@napi-rs/canvas"),
+      });
       await pdf.cleanup();
+      if (await isBlankPageImage(dataUrl)) {
+        blankPageNumbers.push(page);
+        console.warn(
+          `[pageImages] page ${page}/${pageCount} rendered blank (likely an undecodable embedded image, e.g. JPEG2000) -- excluded from vision analysis`,
+        );
+      } else {
+        images.push(dataUrl);
+        pageTexts.push(allPageTexts[page - 1]);
+        pageNumbers.push(page);
+      }
       console.log(
         `[pageImages] rendered page ${page}/${pageCount}, rss=${(process.memoryUsage().rss / 1024 / 1024).toFixed(0)}MB`,
       );
     }
-    return { images, totalPages: pdf.numPages, pageTexts };
+    return { images, totalPages: pdf.numPages, pageTexts, pageNumbers, blankPageNumbers };
   }
   throw new Error(`Unsupported file type for drawing analysis: ${mimeType}`);
 }
@@ -263,12 +311,26 @@ export async function summarizeDrawing(documentId: string, userId: string | null
   await db.document.update({ where: { id: documentId }, data: { extractionStatus: "PROCESSING" } });
 
   try {
-    const { images, totalPages, pageTexts } = await pageImages(document.mimeType, bytes);
+    const { images, totalPages, pageTexts, pageNumbers, blankPageNumbers } = await pageImages(document.mimeType, bytes);
     if (images.length === 0) {
-      // A genuinely empty PDF -- not an API/parse failure, a real
-      // "nothing to analyze here" outcome that re-analyzing will never
-      // change, so UNSUPPORTED (not the retryable FAILED) is correct.
-      return db.document.update({ where: { id: documentId }, data: { extractionStatus: "UNSUPPORTED" } });
+      // A genuinely empty PDF, OR every rendered page came back blank
+      // (see isBlankPageImage's header for the real JPEG2000-decode
+      // incident this catches) -- either way, not an API/parse failure,
+      // a real "nothing to analyze here" outcome that re-analyzing won't
+      // change on its own, so UNSUPPORTED (not the retryable FAILED) is
+      // correct. Reused analysisError/analysisErrorAt here (previously
+      // FAILED-only) rather than a new field -- same nullable-reason-
+      // plus-timestamp shape, already cleared on the next successful
+      // analysis below, no migration needed. A blank-render reason is
+      // specific and actionable; a genuinely empty PDF gets a generic one.
+      const reason =
+        blankPageNumbers.length > 0
+          ? `All ${blankPageNumbers.length} rendered page${blankPageNumbers.length === 1 ? "" : "s"} came back blank -- likely an embedded image encoding (e.g. JPEG2000) this system can't decode. Re-export this drawing as a standard PDF/JPEG/PNG, or contact support.`
+          : "This PDF has no pages to render.";
+      return db.document.update({
+        where: { id: documentId },
+        data: { extractionStatus: "UNSUPPORTED", analysisError: reason, analysisErrorAt: new Date() },
+      });
     }
 
     const completion = await client.chat.completions.create({
@@ -294,7 +356,7 @@ export async function summarizeDrawing(documentId: string, userId: string | null
               type: "text",
               text: `Drawing: ${document.filename} (${images.length} page image${images.length === 1 ? "" : "s"})`,
             },
-            ...buildPageContentParts(images, pageTexts),
+            ...buildPageContentParts(images, pageTexts, pageNumbers),
           ],
         },
       ],
@@ -329,11 +391,29 @@ export async function summarizeDrawing(documentId: string, userId: string | null
     // Surfaced through the same riskFlags list ProjectBriefCard already
     // renders -- no schema/UI change needed to make a real truncation
     // visible to whoever's reviewing this document, instead of the silent
-    // drop this cap used to produce.
-    if (totalPages > images.length) {
+    // drop this cap used to produce. attempted (not images.length) is the
+    // right comparand against totalPages now that blank pages are
+    // excluded from images -- images.length alone would misfire this
+    // truncation notice whenever ANY page is blank-excluded, even when
+    // the page cap was never actually hit.
+    const attempted = images.length + blankPageNumbers.length;
+    if (totalPages > attempted) {
       riskFlags.push({
-        text: `Only pages 1-${images.length} of ${totalPages} were analyzed (AI_DRAWING_MAX_PAGES limit) -- review the remaining pages manually or re-run with a higher limit.`,
-        pageNumber: images.length,
+        text: `Only pages 1-${attempted} of ${totalPages} were analyzed (AI_DRAWING_MAX_PAGES limit) -- review the remaining pages manually or re-run with a higher limit.`,
+        pageNumber: attempted,
+        sourceQuote: "",
+        estimateId: document.estimateId,
+      });
+    }
+    // A partial failure (some pages blank, some real) shouldn't be a hard
+    // FAILED/UNSUPPORTED outcome -- the good pages still got analyzed --
+    // but it's real, actionable information a reviewer needs, so it goes
+    // through the same reused riskFlags surface as the truncation notice
+    // above rather than silently proceeding as if nothing was missed.
+    if (blankPageNumbers.length > 0) {
+      riskFlags.push({
+        text: `Page${blankPageNumbers.length === 1 ? "" : "s"} ${blankPageNumbers.join(", ")} could not be rendered (the page's embedded image uses an encoding this system can't decode, e.g. JPEG2000) and ${blankPageNumbers.length === 1 ? "was" : "were"} excluded from analysis -- review ${blankPageNumbers.length === 1 ? "it" : "them"} manually.`,
+        pageNumber: blankPageNumbers[0],
         sourceQuote: "",
         estimateId: document.estimateId,
       });

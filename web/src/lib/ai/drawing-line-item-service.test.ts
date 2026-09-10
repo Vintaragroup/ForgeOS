@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { PDFDocument } from "pdf-lib";
 import { db } from "@/lib/db";
 import { uploadDocument } from "@/lib/document-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
@@ -8,6 +9,17 @@ import { proposeLineItemsFromDrawing, SYSTEM_PROMPT } from "@/lib/ai/drawing-lin
 import { PDF_MIME } from "@/lib/ai/text-extraction";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
+
+// Same fixture-builder pattern as drawing-summary-service.test.ts -- a
+// deterministic, content-free PDF page reproduces the real "renders
+// successfully but the canvas has nothing on it" shape (see
+// blank-page-detection.ts's header for the real JPEG2000-decode incident
+// this covers) without needing a real JPX fixture file.
+async function buildBlankPdf(pageCount: number): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  for (let i = 0; i < pageCount; i++) doc.addPage([200, 200]); // no drawn content -- genuinely blank
+  return Buffer.from(await doc.save());
+}
 
 afterEach(async () => {
   await db.document.deleteMany();
@@ -19,11 +31,11 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
-async function makeDrawingDocument() {
+async function makeDrawingDocument(bytes?: Buffer) {
   const company = await db.company.create({ data: { name: "Test Co" } });
   const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
-  const bytes = await readFile(path.join(RFP_DIR, "1. SBLXI - Temporary Booth Build RFP Final.pdf"));
-  const file = new File([new Uint8Array(bytes)], "drawing.pdf", { type: PDF_MIME });
+  const pdfBytes = bytes ?? (await readFile(path.join(RFP_DIR, "1. SBLXI - Temporary Booth Build RFP Final.pdf")));
+  const file = new File([new Uint8Array(pdfBytes)], "drawing.pdf", { type: PDF_MIME });
   return uploadDocument(opportunity.id, { file, documentType: "DRAWING" });
 }
 
@@ -53,6 +65,26 @@ describe("proposeLineItemsFromDrawing", () => {
     await expect(proposeLineItemsFromDrawing(document.id, otherOpportunity.id)).rejects.toThrow(
       "This document doesn't belong to this opportunity.",
     );
+  });
+});
+
+describe("proposeLineItemsFromDrawing blank-page handling", () => {
+  // getDrawingAiClient() runs before pageImages() here too (same order as
+  // summarizeDrawing), so reaching the all-blank branch needs a key
+  // present -- a fake one is safe since that branch returns before any
+  // real API call.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("caches an empty proposal, not an error, when every page renders blank", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key-not-a-real-key");
+    const bytes = await buildBlankPdf(2);
+    const document = await makeDrawingDocument(bytes);
+
+    const result = await proposeLineItemsFromDrawing(document.id, document.opportunityId);
+
+    expect(result.proposedLineItems).toEqual([]);
   });
 });
 

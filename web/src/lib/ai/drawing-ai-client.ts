@@ -99,18 +99,26 @@ export const DRAWING_REQUEST_TIMEOUT_MS = 180_000;
 // scanned page) still gets an explicit line saying so, so the model
 // doesn't have to guess whether the omission means "nothing was there" or
 // "extraction silently failed."
+//
+// pageNumbers is REQUIRED, not inferred from array position -- since
+// pageImages can now exclude a blank/undecodable page mid-sequence (see
+// blank-page-detection.ts), images[i] is no longer implicitly page i+1.
+// Labeling each page with its true source page number keeps the model's
+// own pageNumber citations correct even when earlier pages were skipped.
 export function buildPageContentParts(
   images: string[],
   pageTexts: string[],
+  pageNumbers: number[],
 ): ({ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } })[] {
   return images.flatMap((url, i) => {
     const text = pageTexts[i];
+    const n = pageNumbers[i];
     return [
       {
         type: "text" as const,
         text: text
-          ? `Page ${i + 1} extracted text (real PDF text layer, exact as printed -- treat as authoritative for exact wording/numbers):\n${text}`
-          : `Page ${i + 1}: no extracted text layer available for this page -- read the image below directly.`,
+          ? `Page ${n} extracted text (real PDF text layer, exact as printed -- treat as authoritative for exact wording/numbers):\n${text}`
+          : `Page ${n}: no extracted text layer available for this page -- read the image below directly.`,
       },
       { type: "image_url" as const, image_url: { url } },
     ];

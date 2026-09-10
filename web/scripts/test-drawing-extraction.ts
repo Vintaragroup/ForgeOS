@@ -119,10 +119,14 @@ async function main() {
   const bytes = await readFile(filePath);
   console.log(`Loaded ${bytes.length} bytes from ${path.basename(filePath)}.`);
 
-  const { images, totalPages, pageTexts } = await pageImages(mimeType, bytes);
+  const { images, totalPages, pageTexts, pageNumbers, blankPageNumbers } = await pageImages(mimeType, bytes);
+  const attempted = images.length + blankPageNumbers.length;
   console.log(`Rendered ${images.length} of ${totalPages} page image(s).`);
-  if (totalPages > images.length) {
-    console.log(`WARNING: ${totalPages - images.length} page(s) truncated by MAX_DRAWING_PAGES -- set AI_DRAWING_MAX_PAGES higher to include them.`);
+  if (blankPageNumbers.length > 0) {
+    console.log(`WARNING: page(s) ${blankPageNumbers.join(", ")} rendered blank (likely an undecodable embedded image, e.g. JPEG2000) -- excluded.`);
+  }
+  if (totalPages > attempted) {
+    console.log(`WARNING: ${totalPages - attempted} page(s) truncated by MAX_DRAWING_PAGES -- set AI_DRAWING_MAX_PAGES higher to include them.`);
   }
   const pagesWithText = pageTexts.filter((t) => t.length > 0).length;
   console.log(`${pagesWithText} of ${pageTexts.length} page(s) have a real extracted text layer.`);
@@ -150,7 +154,7 @@ async function main() {
         role: "user",
         content: [
           { type: "text", text: `Drawing: ${path.basename(filePath)} (${images.length} page images)` },
-          ...buildPageContentParts(images, pageTexts),
+          ...buildPageContentParts(images, pageTexts, pageNumbers),
         ],
       },
     ],

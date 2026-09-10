@@ -1,11 +1,30 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { PDFDocument, rgb } from "pdf-lib";
 import { db } from "@/lib/db";
 import { uploadDocument } from "@/lib/document-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import { summarizeDrawing, pageImages } from "@/lib/ai/drawing-summary-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
+
+// Builds a small, deterministic multi-page PDF for exercising the blank-
+// page-detection path (see blank-page-detection.ts's own header for the
+// real incident this covers) without depending on a real JPEG2000 fixture
+// file. pdf-lib is a devDependency only, never imported by production
+// code -- a minimal valid PDF needs a hand-computed xref table, too
+// fragile to hand-roll and maintain as a raw byte literal.
+async function buildTestPdf(totalPages: number, blankPages: number[]): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  for (let i = 1; i <= totalPages; i++) {
+    const page = doc.addPage([200, 200]);
+    if (!blankPages.includes(i)) {
+      page.drawRectangle({ x: 20, y: 20, width: 160, height: 160, color: rgb(0, 0, 0) });
+      page.drawText(`Page ${i} content`, { x: 20, y: 100 });
+    }
+  }
+  return Buffer.from(await doc.save());
+}
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
 const REAL_CAD_PDF = path.resolve(
@@ -110,5 +129,67 @@ describe("pageImages", () => {
     await expect(pageImages("application/octet-stream", Buffer.from("x"))).rejects.toThrow(
       /Unsupported file type for drawing analysis/,
     );
+  });
+
+  // Regression coverage for the real incident this addresses (Titleist
+  // "Concept V1E", Sept 2026 -- see blank-page-detection.ts's header):
+  // every page of that 31-page drawing rendered blank because its
+  // embedded images were JPEG2000-encoded and @napi-rs/canvas's PDF.js
+  // can't decode that format. A synthetic PDF with a genuinely
+  // content-free page reproduces the same "renders successfully, but the
+  // canvas has nothing on it" shape without needing a real JPX fixture.
+  it("excludes a genuinely blank page mid-document, renumbering images/pageTexts/pageNumbers around it", async () => {
+    const bytes = await buildTestPdf(3, [2]);
+    const { images, pageTexts, pageNumbers, blankPageNumbers } = await pageImages(PDF_MIME, bytes);
+
+    // Page 2 is dropped entirely -- images/pageNumbers skip straight from
+    // page 1 to page 3, not [1, 2] as array position would otherwise imply.
+    expect(pageNumbers).toEqual([1, 3]);
+    expect(images).toHaveLength(2);
+    expect(pageTexts).toHaveLength(2);
+    expect(blankPageNumbers).toEqual([2]);
+  });
+
+  it("reports totalPages including blank pages, distinct from images.length", async () => {
+    const bytes = await buildTestPdf(3, [2]);
+    const { totalPages, images } = await pageImages(PDF_MIME, bytes);
+
+    expect(totalPages).toBe(3);
+    expect(images).toHaveLength(2);
+  });
+
+  it("returns images: [] and every page number in blankPageNumbers when the whole document is blank", async () => {
+    const bytes = await buildTestPdf(2, [1, 2]);
+    const { images, pageTexts, pageNumbers, blankPageNumbers, totalPages } = await pageImages(PDF_MIME, bytes);
+
+    expect(images).toEqual([]);
+    expect(pageTexts).toEqual([]);
+    expect(pageNumbers).toEqual([]);
+    expect(blankPageNumbers).toEqual([1, 2]);
+    expect(totalPages).toBe(2);
+  });
+});
+
+describe("summarizeDrawing blank-page handling", () => {
+  // getDrawingAiClient() constructs the OpenAI client before pageImages()
+  // ever runs (throwing AiNotConfiguredError first when no key is set --
+  // see the test above), so reaching the blank-page branch needs a key
+  // present. A fake one is safe here: this branch returns before any real
+  // API call (client.chat.completions.create) is ever made.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("writes UNSUPPORTED with a specific, persisted reason when every page renders blank", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key-not-a-real-key");
+    const bytes = await buildTestPdf(2, [1, 2]);
+    const document = await makeDrawingDocument("blank.pdf", PDF_MIME, bytes);
+
+    const result = await summarizeDrawing(document.id);
+
+    expect(result.extractionStatus).toBe("UNSUPPORTED");
+    expect(result.analysisError).toMatch(/blank/i);
+    expect(result.analysisError).toMatch(/JPEG2000/i);
+    expect(result.analysisErrorAt).not.toBeNull();
   });
 });

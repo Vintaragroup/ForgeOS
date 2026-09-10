@@ -545,10 +545,20 @@ model Document {
   // Vercel's own runtime error tracking, since the catch swallowed the
   // exception before it could surface as a request-level error. Surfaced
   // to SUPER_ADMIN only on the dashboard (src/app/(app)/page.tsx) -- see
-  // getRecentAnalysisFailures in admin-analytics.ts. analysisErrorAt is
-  // WHEN that failure happened -- Document has no general updatedAt, and
-  // createdAt (upload time) would misrepresent a failure that happened on
-  // a much later retry.
+  // getRecentAnalysisFailures in admin-analytics.ts (note: that query
+  // filters strictly on extractionStatus FAILED, so an UNSUPPORTED reason
+  // below won't surface there -- correct, since UNSUPPORTED is a real
+  // outcome, not a failure). analysisErrorAt is WHEN that failure
+  // happened -- Document has no general updatedAt, and createdAt (upload
+  // time) would misrepresent a failure that happened on a much later
+  // retry.
+  //
+  // Also written on a real UNSUPPORTED outcome, not just FAILED, as of
+  // the blank-page-detection fix (Sept 2026, Titleist "Concept V1E" --
+  // see blank-page-detection.ts) -- reuses this same nullable-reason-
+  // plus-timestamp shape rather than a new field, e.g. "All N rendered
+  // pages came back blank -- likely an embedded image encoding (e.g.
+  // JPEG2000) this system can't decode."
   analysisError   String?   @db.Text
   analysisErrorAt DateTime?
   // AI-proposed, unpriced draft line items read from this document's
