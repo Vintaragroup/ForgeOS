@@ -30,6 +30,7 @@ import {
   type ProposedLineItem,
   type ScopeCategory,
 } from "@/lib/ai/scope-line-item-service";
+import type { DocumentSummary } from "@/lib/ai/document-summary-service";
 
 type DrawingLineItemFromAI = {
   description: string;
@@ -40,6 +41,14 @@ type DrawingLineItemFromAI = {
   category: ScopeCategory;
   pageNumber: number;
 };
+
+// A scope-summary fact (from this SAME document's own summarizeDrawing
+// pass) the model could not map to any proposed item -- see
+// Document.proposedLineItemGaps' own schema comment for the real gap
+// this closes. reason is the model's own account of why, e.g. "covered
+// under the general frame-fabrication line above" is legitimate; a weak
+// or missing reason is itself a signal something was genuinely missed.
+type DrawingLineItemGapFromAI = { text: string; pageNumber: number | null; reason: string | null };
 
 // No quote field requested from the model at all -- same accepted
 // trust-reduction precedent as drawing-summary-service.ts's own schema
@@ -82,8 +91,27 @@ const DRAWING_LINE_ITEM_SCHEMA = {
           required: ["description", "qty", "qtyIsExplicit", "unit", "lineType", "category", "pageNumber"],
         },
       },
+      gaps: {
+        type: "array",
+        description:
+          "Facts from the 'already identified in this document's summary' checklist (see system prompt) that aren't reflected in items above. Empty array if no checklist was provided, or every fact is accounted for.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string", description: "The checklist fact, copied as given." },
+            pageNumber: { type: ["integer", "null"] },
+            reason: {
+              type: ["string", "null"],
+              description:
+                "Why this fact isn't its own line item -- e.g. already covered under a broader item, a note rather than biddable scope. Null only if genuinely unclear why it was missed.",
+            },
+          },
+          required: ["text", "pageNumber", "reason"],
+        },
+      },
     },
-    required: ["items"],
+    required: ["items", "gaps"],
   },
 } as const;
 
@@ -106,7 +134,9 @@ category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closes
 
 Two categories are easy to misroute into a broader neighbor -- check these before defaulting elsewhere:
 - Audio/Visual: any screen, monitor, LED video wall/tile, touch screen, or other AV equipment -- even though it's electrically powered, it belongs here, not Electrical & Lighting (reserve that one for house power, task/accent lighting, and electrical hookups that aren't themselves a display or AV device).
-- Custom Build: a fixture built specifically to showcase or display a particular product (a product rail, a dedicated display stand or cabinet, a feature element) -- reserve Booth Structure & Walls for the booth's own walls, frame, and structural shell, not fixtures placed inside it that exist to show off a product.`;
+- Custom Build: a fixture built specifically to showcase or display a particular product (a product rail, a dedicated display stand or cabinet, a feature element) -- reserve Booth Structure & Walls for the booth's own walls, frame, and structural shell, not fixtures placed inside it that exist to show off a product.
+
+You may also be given a checklist below labeled "Facts already identified in this document's summary" -- specific dimensions/materials/callouts a separate earlier pass over this SAME document already found. Cross-check your proposed items against every fact on that list: each one should either be clearly reflected in an item's description (directly, or as part of a broader item that covers it), or added to gaps with a real, specific reason it isn't its own biddable line -- never silently dropped. A weak or generic reason ("not important") is worse than an honest "missed on first pass, should be its own item" -- gaps is a genuine coverage check, not a formality to satisfy. If no checklist was provided below, return gaps: [].`;
 
 // Explicitly triggered (the Propose button, or buildEstimateFromAllDocuments),
 // never run automatically at Analyze time -- same posture scope-line-
@@ -134,6 +164,18 @@ export async function proposeLineItemsFromDrawing(
   // See drawing-ai-client.ts's own header for why this can be OpenRouter
   // instead of OpenAI direct -- scoped to this pipeline only.
   const { client, model, viaOpenRouter } = getDrawingAiClient();
+
+  // Real gap this closes (Sept 2026, FootJoy PGA 2027 -- see
+  // Document.proposedLineItemGaps' own schema comment): summarizeDrawing
+  // (Analyze) and this function are two fully independent AI calls that
+  // both re-read the same pages cold, so nothing previously forced this
+  // pass to account for every fact the summary pass already found.
+  // Building the checklist from whatever extractedSummary is ALREADY on
+  // this document row -- if Analyze hasn't run yet (or predates this
+  // field), scopeSummary is undefined and the checklist is simply skipped
+  // (SYSTEM_PROMPT's own instruction covers the no-checklist case).
+  const existingSummary = document.extractedSummary as unknown as DocumentSummary | null;
+  const scopeChecklist = existingSummary?.scopeSummary ?? [];
 
   const { images, totalPages, pageTexts, pageNumbers, blankPageNumbers } = await pageImages(document.mimeType, bytes);
   const attempted = images.length + blankPageNumbers.length;
@@ -167,7 +209,10 @@ export async function proposeLineItemsFromDrawing(
     // document only when the cache is still null, not an empty array).
     return db.document.update({
       where: { id: documentId },
-      data: { proposedLineItems: [] as unknown as Prisma.InputJsonValue },
+      data: {
+        proposedLineItems: [] as unknown as Prisma.InputJsonValue,
+        proposedLineItemGaps: null as unknown as Prisma.InputJsonValue,
+      },
     });
   }
 
@@ -186,6 +231,16 @@ export async function proposeLineItemsFromDrawing(
             type: "text",
             text: `Drawing: ${document.filename} (${images.length} page image${images.length === 1 ? "" : "s"})`,
           },
+          ...(scopeChecklist.length > 0
+            ? [
+                {
+                  type: "text" as const,
+                  text: `Facts already identified in this document's summary (cross-check against these -- see system prompt):\n${scopeChecklist
+                    .map((fact, i) => `${i + 1}. [page ${fact.pageNumber ?? "?"}] ${fact.text}`)
+                    .join("\n")}`,
+                },
+              ]
+            : []),
           ...buildPageContentParts(images, pageTexts, pageNumbers),
         ],
       },
@@ -214,7 +269,7 @@ export async function proposeLineItemsFromDrawing(
         : "OpenAI returned an empty response.",
     );
   }
-  const parsed = JSON.parse(content) as { items: DrawingLineItemFromAI[] };
+  const parsed = JSON.parse(content) as { items: DrawingLineItemFromAI[]; gaps: DrawingLineItemGapFromAI[] };
 
   // estimateId inherits the document's own manual tag directly -- same
   // "a rendering package is always cleanly single-project" reasoning as
@@ -229,10 +284,19 @@ export async function proposeLineItemsFromDrawing(
 
   const matchesCache = await buildProposedLineItemMatchesCache(items, versionId, document.opportunityId, documentId, userId);
 
+  // Explicitly null (not the model's own gaps: []) when no checklist
+  // existed to check against -- distinguishes "nothing to report because
+  // there was nothing to check" from "checked a real checklist and every
+  // fact was accounted for," per Document.proposedLineItemGaps' own
+  // schema comment. Doesn't trust the model to make this distinction on
+  // its own even though the prompt asks for it.
+  const gaps = scopeChecklist.length > 0 ? parsed.gaps : null;
+
   return db.document.update({
     where: { id: documentId },
     data: {
       proposedLineItems: items as unknown as Prisma.InputJsonValue,
+      proposedLineItemGaps: gaps as unknown as Prisma.InputJsonValue,
       ...(matchesCache ? { proposedLineItemMatches: matchesCache as unknown as Prisma.InputJsonValue } : {}),
     },
   });

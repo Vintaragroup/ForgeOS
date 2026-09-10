@@ -586,6 +586,23 @@ model Document {
   // that anything is unsafe.
   proposedLineItemMatches Json?
 
+  // DRAWING-only (see proposeLineItemsFromDrawing) -- scope facts this
+  // document's own summary (extractedSummary.scopeSummary) already found
+  // that the model could NOT map to any entry in proposedLineItems above,
+  // with its own stated reason. Real gap this closes (Sept 2026, FootJoy
+  // PGA 2027): the summary and proposal passes are two fully independent
+  // AI calls, so nothing previously forced the proposal pass to account
+  // for every fact the summary pass already found -- confirmed live, 100
+  // scope-summary facts on one real file, only 23 became line items, with
+  // specific missing detail (multiple hole-frame panel variants, a wood
+  // lam overlay, halo lighting) never showing up anywhere reviewable.
+  // Shape: { text: string; pageNumber: number | null; reason: string | null }[].
+  // Null when the document had no extractedSummary to check against yet
+  // (Propose run before Analyze, or a document that predates this field)
+  // -- distinct from an empty array, which means a real checklist was
+  // given and every fact was accounted for.
+  proposedLineItemGaps Json?
+
   // Parallel to proposedLineItems above, but a distinct shape (includes
   // unitPrice/totalPrice) -- populated only for a VENDOR_QUOTE document
   // by vendor-quote-service.ts's proposeVendorQuoteLineItems, matched at

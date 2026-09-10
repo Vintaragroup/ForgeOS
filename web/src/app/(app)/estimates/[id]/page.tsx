@@ -729,6 +729,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     ? duplicateStatus.flatMap((status, i) => (status.selected ? [i] : []))
     : (proposedItems?.map((_, i) => i) ?? []);
 
+  // DRAWING-only (see proposeLineItemsFromDrawing's own header comment) --
+  // scope facts this SAME document's own summary already found that the
+  // model couldn't map to any item above. Null (not an empty array) means
+  // there was no summary to check against yet, not "checked and found
+  // nothing" -- see Document.proposedLineItemGaps' own schema comment.
+  const proposedItemGaps =
+    (proposeDocument?.proposedLineItemGaps as unknown as
+      | { text: string; pageNumber: number | null; reason: string | null }[]
+      | null) ?? null;
+
   // Same data the Project Brief already shows on the Opportunity page,
   // surfaced here too -- whoever's pricing and signing off on THIS
   // estimate shouldn't have to go find the Opportunity tab to see that a
@@ -961,6 +971,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     proposeDocumentId={proposeDocumentId}
                     proposeDocument={proposeDocument ?? null}
                     proposedItems={proposedItems}
+                    proposedItemGaps={proposedItemGaps}
                     proposeCatalog={proposeCatalog}
                     duplicateStatus={duplicateStatus}
                     defaultSelectedProposedIndices={defaultSelectedProposedIndices}
@@ -4509,6 +4520,7 @@ function DocumentsTab({
   proposeDocumentId,
   proposeDocument,
   proposedItems,
+  proposedItemGaps,
   proposeCatalog,
   duplicateStatus,
   defaultSelectedProposedIndices,
@@ -4551,8 +4563,12 @@ function DocumentsTab({
   scopeDocuments: { id: string; filename: string }[];
   proposeScopeItemsAction: (formData: FormData) => void | Promise<void>;
   proposeDocumentId: string | undefined;
-  proposeDocument: { id: string; filename: string } | null;
+  proposeDocument: { id: string; filename: string; mimeType: string } | null;
   proposedItems: ProposedLineItem[] | null;
+  // DRAWING-only -- see proposeLineItemsFromDrawing's own header comment.
+  // Null means no summary existed to check against yet, distinct from an
+  // empty array (checked, everything accounted for).
+  proposedItemGaps: { text: string; pageNumber: number | null; reason: string | null }[] | null;
   proposeCatalog: Awaited<ReturnType<typeof loadCatalogForMatching>>;
   duplicateStatus: Awaited<ReturnType<typeof resolveDuplicateStatusForReview>> | null;
   defaultSelectedProposedIndices: number[];
@@ -5172,6 +5188,64 @@ function DocumentsTab({
                     : ""}
                 </Button>
               </form>
+            </div>
+          )}
+
+          {/* DRAWING-only -- see proposeLineItemsFromDrawing's own header
+              comment for the real gap this closes: a separate earlier
+              summary pass over this SAME document can find detail (panel
+              sizes, material callouts) this proposal pass then silently
+              drops, since the two AI calls never previously saw each
+              other's output. null means no summary existed yet to check
+              against -- distinct from an empty array, which means a real
+              checklist was given and every fact made it into an item
+              above. Same amber-list-with-citation pattern as the Scope
+              coverage card below, not a new visual language. */}
+          {proposeDocument && proposedItemGaps !== null && (
+            <div className="mt-4 border-t border-neutral-200 pt-4">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                Coverage vs. this document&apos;s summary
+              </h3>
+              {proposedItemGaps.length === 0 ? (
+                <p className="text-sm text-neutral-500">
+                  Every fact from this document&apos;s summary is reflected above.
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-2 text-sm">
+                  {proposedItemGaps.map((gap, i) => {
+                    const href = citationHref(
+                      opportunityId,
+                      proposeDocument,
+                      { sourceQuote: "", pageNumber: gap.pageNumber },
+                      `/estimates/${estimateId}#proposal-gap-${i}`,
+                    );
+                    return (
+                      <li
+                        key={i}
+                        id={`proposal-gap-${i}`}
+                        className="flex items-start justify-between gap-3 rounded-md bg-amber-50 px-3 py-2"
+                      >
+                        <span className="flex items-start gap-2 text-amber-900">
+                          <span aria-hidden>⚠</span>
+                          <span>
+                            {gap.text}
+                            {gap.reason && <span className="block text-xs text-amber-700">{gap.reason}</span>}
+                          </span>
+                        </span>
+                        {href ? (
+                          <Link href={href} className="shrink-0 text-xs text-brand-navy hover:underline">
+                            Page {gap.pageNumber} →
+                          </Link>
+                        ) : (
+                          <span className="shrink-0 text-xs text-neutral-400">
+                            {gap.pageNumber ? `Page ${gap.pageNumber}` : ""}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           )}
         </Card>
