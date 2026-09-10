@@ -169,6 +169,44 @@ export async function pageImages(
     ensureCanvasFontsRegistered();
     const pdf = await getDocumentProxy(new Uint8Array(bytes));
     const pageCount = Math.min(pdf.numPages, maxPages);
+
+    // Extracted BEFORE rasterization now (was after) specifically so each
+    // page's own text density can inform that page's rasterization scale
+    // below -- see TEXT_RICH_CHAR_THRESHOLD. Best-effort: a text-extraction
+    // failure (corrupt/unusual PDF structure) shouldn't take down the whole
+    // vision analysis -- every page just falls back to "" (image-only,
+    // full-scale), same as a page that genuinely has no text layer at all.
+    let pageTexts: string[];
+    try {
+      pageTexts = (await extractPdfPageTexts(bytes)).slice(0, pageCount).map((t) => t.trim());
+    } catch {
+      pageTexts = [];
+    }
+    while (pageTexts.length < pageCount) pageTexts.push("");
+
+    // Real incident (Titleist FootJoy re-upload, Sept 2026): a rasterization
+    // run on a large (18.7MB, 11-page, embedded-font-subset) PDF died with a
+    // bare 500 after ~12s and zero catchable exception -- no page number, no
+    // stack trace, nothing this function's own error handling ever got a
+    // chance to log. Root-caused by locally re-running this exact function
+    // with memory logging added: rendering all 11 pages peaked at 4.09GB RSS
+    // (process.memoryUsage().rss -- total process memory, including
+    // @napi-rs/canvas's native/off-heap allocations, unlike
+    // --max-old-space-size which only caps the JS heap) for a task whose
+    // real output is 6.3MB of base64 image data -- almost certainly what
+    // exceeds Vercel's function memory ceiling and gets the process killed
+    // outright, with no JS exception to catch. First suspected the
+    // rasterization `scale` (canvas buffer size), but a live re-test at a
+    // lower scale for text-rich pages barely moved the peak (still ~4.1GB) --
+    // ruling that out. The real cause: PDF.js's PDFDocumentProxy caches each
+    // page's decoded resources (fonts, decompressed images/content streams)
+    // internally and never evicts them on its own -- calling pdf.getPage()
+    // repeatedly on the SAME shared proxy (as this loop does, on purpose, to
+    // avoid re-parsing the whole file per page) accumulates every page's
+    // retained resources for the life of that proxy. pdf.cleanup() (a real,
+    // documented PDFDocumentProxy method -- confirmed present at runtime)
+    // explicitly clears those caches; safe to call between renders (not
+    // during one), which a completed loop iteration always is.
     const images: string[] = [];
     for (let page = 1; page <= pageCount; page++) {
       images.push(
@@ -178,18 +216,11 @@ export async function pageImages(
           canvasImport: () => import("@napi-rs/canvas"),
         }),
       );
+      await pdf.cleanup();
+      console.log(
+        `[pageImages] rendered page ${page}/${pageCount}, rss=${(process.memoryUsage().rss / 1024 / 1024).toFixed(0)}MB`,
+      );
     }
-    // Best-effort: a text-extraction failure (corrupt/unusual PDF
-    // structure) shouldn't take down the whole vision analysis -- every
-    // page just falls back to "" (image-only), same as a page that
-    // genuinely has no text layer at all.
-    let pageTexts: string[];
-    try {
-      pageTexts = (await extractPdfPageTexts(bytes)).slice(0, pageCount).map((t) => t.trim());
-    } catch {
-      pageTexts = [];
-    }
-    while (pageTexts.length < pageCount) pageTexts.push("");
     return { images, totalPages: pdf.numPages, pageTexts };
   }
   throw new Error(`Unsupported file type for drawing analysis: ${mimeType}`);
