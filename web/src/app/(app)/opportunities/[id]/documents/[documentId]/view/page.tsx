@@ -1,4 +1,6 @@
 import { notFound, redirect } from "next/navigation";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
@@ -10,7 +12,7 @@ import {
   findSpreadsheetMatch,
   renderHighlightedPdfPage,
 } from "@/lib/document-view-service";
-import { DOCX_MIME, PDF_MIME, XLSX_MIME } from "@/lib/ai/text-extraction";
+import { DOCX_MIME, PDF_MIME, XLSX_MIME, isTextOrMarkdownDocument } from "@/lib/ai/text-extraction";
 import { getCitableLineItems, getCitableQuotes, getThreadMessages } from "@/lib/chat-service";
 import { linkifyMentions } from "@/lib/citation";
 import { Card, LinkButton, PageHeader } from "@/components/ui";
@@ -99,6 +101,8 @@ export default async function DocumentViewPage(
         <SpreadsheetView documentId={documentId} quote={quoteParam} />
       ) : document.mimeType === DOCX_MIME ? (
         <DocxView documentId={documentId} quote={quoteParam} />
+      ) : isTextOrMarkdownDocument(document.mimeType, document.filename) ? (
+        <MarkdownView documentId={documentId} />
       ) : (
         <Card className="p-10 text-center text-sm text-neutral-500">
           This file type can&apos;t be previewed in-app. Download it to view it locally.
@@ -233,6 +237,74 @@ async function DocxView({ documentId, quote }: { documentId: string; quote?: str
   return (
     <Card className="p-8">
       <div className="docx-view text-sm" dangerouslySetInnerHTML={{ __html: highlighted }} />
+    </Card>
+  );
+}
+
+// Full document headings/tables, unlike chat-widget.tsx's own
+// markdownComponents -- that set deliberately downgrades headings to a
+// bold line because a real <h1> inside a ~24rem chat bubble reads as a
+// document section, not a reply. A standalone document view has no such
+// constraint; a design note or README-style scope doc legitimately wants
+// real section headings. No in-context quote highlighting here (unlike
+// DocxView/SpreadsheetView) -- ReferencedExcerpt above already shows the
+// cited text; scoped out as a smaller, deliberate gap rather than full
+// parity with every other viewer's highlighting.
+const documentMarkdownComponents: Components = {
+  h1: ({ children }) => <h1 className="mb-3 text-xl font-semibold">{children}</h1>,
+  h2: ({ children }) => <h2 className="mb-2 mt-4 text-lg font-semibold first:mt-0">{children}</h2>,
+  h3: ({ children }) => <h3 className="mb-2 mt-3 text-base font-semibold first:mt-0">{children}</h3>,
+  p: ({ children }) => <p className="mb-3 leading-relaxed last:mb-0">{children}</p>,
+  ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
+  ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  a: ({ href, children }) =>
+    href ? (
+      <a href={href} className="underline decoration-dotted underline-offset-2 hover:decoration-solid">
+        {children}
+      </a>
+    ) : (
+      <>{children}</>
+    ),
+  code: ({ className, children }) =>
+    /language-/.test(className ?? "") ? (
+      <code className={className}>{children}</code>
+    ) : (
+      <code className="rounded bg-neutral-900/[0.06] px-1 py-0.5 font-mono text-[0.85em]">{children}</code>
+    ),
+  pre: ({ children }) => (
+    <pre className="mb-3 overflow-x-auto rounded-md bg-neutral-900 p-3 text-xs text-neutral-100 last:mb-0">{children}</pre>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="mb-3 border-l-2 border-neutral-300 pl-3 text-neutral-600 last:mb-0">{children}</blockquote>
+  ),
+  table: ({ children }) => (
+    <div className="mb-3 overflow-x-auto rounded-md border border-neutral-200">
+      <table className="w-full text-xs">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => <th className="border-b border-neutral-200 px-2 py-1 text-left font-semibold">{children}</th>,
+  td: ({ children }) => <td className="border-t border-neutral-100 px-2 py-1">{children}</td>,
+  hr: () => <hr className="my-4 border-neutral-200" />,
+};
+
+async function MarkdownView({ documentId }: { documentId: string }) {
+  const { bytes } = await getDocumentBytes(documentId);
+  const text = bytes.toString("utf-8");
+
+  return (
+    <Card className="p-8">
+      <div className="text-sm">
+        {/* remark-gfm: react-markdown's default is CommonMark only -- a
+            table (a real scope/spec doc's own GFM table syntax, confirmed
+            live: without this it rendered as one raw "| Item | Qty | ..."
+            line instead of an actual table) needs GFM explicitly. */}
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={documentMarkdownComponents}>
+          {text}
+        </ReactMarkdown>
+      </div>
     </Card>
   );
 }

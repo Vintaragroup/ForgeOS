@@ -7,6 +7,7 @@ import ExcelJS from "exceljs";
 import { extractText, getDocumentProxy } from "unpdf";
 import type { DocumentType } from "@/generated/prisma/enums";
 import { serializeWorkbookForPrompt } from "@/lib/xlsx-utils";
+import { ocrDocumentText } from "@/lib/ai/ocr-fallback";
 
 export type ExtractionResult =
   | { status: "COMPLETE"; text: string }
@@ -56,6 +57,15 @@ export async function extractDocumentText(
     const pdf = await getDocumentProxy(new Uint8Array(bytes));
     const { text } = await extractText(pdf, { mergePages: true });
     if (!text.trim()) {
+      // A scanned/no-text-layer PDF -- the same class of gap DRAWING
+      // documents solve with vision (summarizeDrawing), but a full
+      // vision-LLM call is the wrong tool here: this is printed text
+      // trapped in an image, not something needing spatial/visual
+      // reasoning. Real OCR (ocr-fallback.ts) is reserved for exactly
+      // this case -- see that file's own header for why it's used here
+      // and nowhere else in this app.
+      const ocrText = await ocrDocumentText(mimeType, bytes);
+      if (ocrText.trim()) return { status: "COMPLETE", text: ocrText };
       return { status: "UNSUPPORTED", reason: "No extractable text found in this PDF." };
     }
     return { status: "COMPLETE", text };
@@ -97,9 +107,7 @@ export async function extractDocumentText(
   // is valid UTF-8 text, no separate parsing library needed; the AI
   // summarizer already handles the odd stray "#"/"-" formatting character
   // fine as part of the raw text.
-  const isUnreliableMimeType = !mimeType || mimeType === "application/octet-stream";
-  const looksLikeMarkdownFilename = isUnreliableMimeType && /\.(md|markdown)$/i.test(filename);
-  if (mimeType === TEXT_MIME || MARKDOWN_MIMES.has(mimeType) || looksLikeMarkdownFilename) {
+  if (isTextOrMarkdownDocument(mimeType, filename)) {
     const text = bytes.toString("utf-8");
     if (!text.trim()) {
       return { status: "UNSUPPORTED", reason: "This text file is empty." };
@@ -107,7 +115,29 @@ export async function extractDocumentText(
     return { status: "COMPLETE", text };
   }
 
+  // A scanned page uploaded directly as an image (not wrapped in a PDF)
+  // for a non-DRAWING type -- previously fell straight to the generic
+  // UNSUPPORTED below with zero handling at all. Same OCR fallback as the
+  // PDF branch above.
+  if (IMAGE_MIMES.has(mimeType)) {
+    const ocrText = await ocrDocumentText(mimeType, bytes);
+    if (ocrText.trim()) return { status: "COMPLETE", text: ocrText };
+    return { status: "UNSUPPORTED", reason: "No extractable text found in this image." };
+  }
+
   return { status: "UNSUPPORTED", reason: `Unsupported file type for text extraction: ${mimeType}` };
+}
+
+const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/jpg"]);
+
+// Shared with the document viewer (view/page.tsx) so ".md not previewable
+// in-app" and "no extractable text" can never silently disagree about
+// whether a given upload is really a text/markdown document -- same
+// mimeType-unreliability problem either caller would hit on its own.
+export function isTextOrMarkdownDocument(mimeType: string, filename = ""): boolean {
+  const isUnreliableMimeType = !mimeType || mimeType === "application/octet-stream";
+  const looksLikeMarkdownFilename = isUnreliableMimeType && /\.(md|markdown)$/i.test(filename);
+  return mimeType === TEXT_MIME || MARKDOWN_MIMES.has(mimeType) || looksLikeMarkdownFilename;
 }
 
 // Per-page text, used only to locate which page a cited fact's sourceQuote

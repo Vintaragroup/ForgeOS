@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createCanvas } from "@napi-rs/canvas";
+import { PDFDocument } from "pdf-lib";
 import {
   extractDocumentText,
   extractPdfPageTexts,
@@ -9,6 +11,31 @@ import {
 } from "@/lib/ai/text-extraction";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
+
+// Same "raster image, not pdf-lib's own vector text" fixture pattern as
+// ocr-fallback.test.ts -- see that file's own comment for why pdf-lib's
+// drawText can't be used here (it creates a real, findable text layer,
+// which the regular unpdf extraction above would already catch, never
+// reaching the OCR fallback this is meant to exercise).
+function textImagePngBytes(text: string): Buffer {
+  const canvas = createCanvas(900, 200);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "white";
+  ctx.fillRect(0, 0, 900, 200);
+  ctx.fillStyle = "black";
+  ctx.font = "36px sans-serif";
+  ctx.fillText(text, 20, 100);
+  const dataUrl = canvas.toDataURL();
+  return Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64");
+}
+
+async function scannedPdfBytes(text: string): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([900, 200]);
+  const img = await doc.embedPng(textImagePngBytes(text));
+  page.drawImage(img, { x: 0, y: 0, width: 900, height: 200 });
+  return Buffer.from(await doc.save());
+}
 
 describe("extractDocumentText", () => {
   it("extracts real text from the RFP PDF (unpdf)", async () => {
@@ -51,6 +78,38 @@ describe("extractDocumentText", () => {
     const result = await extractDocumentText("DRAWING", "application/pdf", bytes);
     expect(result.status).toBe("UNSUPPORTED");
   });
+
+  // Real gap this closes (Sept 2026): a scanned non-DRAWING PDF with zero
+  // embedded text previously went straight to UNSUPPORTED with no
+  // fallback at all -- see ocr-fallback.ts's own header. This is where
+  // that fallback wires in.
+  it(
+    "recovers text via OCR from a scanned CONTRACT PDF with no embedded text layer",
+    async () => {
+      const bytes = await scannedPdfBytes("CONTRACT NO 4521");
+      const result = await extractDocumentText("CONTRACT", "application/pdf", bytes);
+      expect(result.status).toBe("COMPLETE");
+      if (result.status === "COMPLETE") {
+        expect(result.text).toContain("CONTRACT NO 4521");
+      }
+    },
+    30_000,
+  );
+
+  // Previously had zero handling anywhere in this file -- fell straight to
+  // the generic "Unsupported file type" catch-all.
+  it(
+    "recovers text via OCR from a raw scanned image upload (not wrapped in a PDF)",
+    async () => {
+      const bytes = textImagePngBytes("VENDOR SERVICES AGREEMENT");
+      const result = await extractDocumentText("OTHER", "image/png", bytes);
+      expect(result.status).toBe("COMPLETE");
+      if (result.status === "COMPLETE") {
+        expect(result.text).toContain("VENDOR SERVICES AGREEMENT");
+      }
+    },
+    30_000,
+  );
 
   it("extracts a .md file's raw text when the browser reports a real markdown mimeType", async () => {
     const bytes = Buffer.from("# Kickoff Notes\n\n- Booth build due 2026-09-01\n- Client wants FR carpet quoted separately");
