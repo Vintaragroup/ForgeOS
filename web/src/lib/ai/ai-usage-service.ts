@@ -86,6 +86,30 @@ export async function getUserAiUsageSummary(userId: string) {
   return { totals, byFeature };
 }
 
+// Real per-run token/cost visibility for the batched drawing line-item
+// proposal flow (see drawing-line-item-service.ts and the estimates page's
+// own Propose card) -- `since` is typically that run's own
+// Document.lineItemProposalStartedAt, and recordAiUsage already writes one
+// AiUsageEvent row per batch automatically (proposeLineItemsFromDrawing's
+// own loop), so this needs no new tracking table: just scoping the
+// existing events to one document and one run's time window. The concrete "way to
+// optimize token spend" this feature settled on is visibility, not an
+// invented auto-optimization -- letting the estimator see the real cost of
+// a run is what lets them decide whether it's worth splitting a huge
+// document, re-running at a different batch size, etc.
+export async function getDocumentAiUsageSince(documentId: string, since: Date) {
+  const result = await db.aiUsageEvent.aggregate({
+    where: { documentId, createdAt: { gte: since } },
+    _sum: { totalTokens: true, estimatedCostUsd: true },
+    _count: { _all: true },
+  });
+  return {
+    totalTokens: result._sum.totalTokens ?? 0,
+    estimatedCostUsd: result._sum.estimatedCostUsd?.toNumber() ?? 0,
+    callCount: result._count._all,
+  };
+}
+
 // No internal access control, same posture as admin-analytics.ts's
 // getAdminAnalytics() -- only ever called from the Dashboard's already
 // isAdmin-gated branch (src/app/(app)/page.tsx), not exposed as its own

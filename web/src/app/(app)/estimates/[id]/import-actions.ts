@@ -1,5 +1,6 @@
 "use server";
 
+import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { RateLimitError } from "openai";
@@ -7,6 +8,7 @@ import { commitPricingImport } from "@/lib/pricing-import-service";
 import { commitAiProposedImport, type SheetDestination } from "@/lib/ai/spreadsheet-line-item-service";
 import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-line-item-service";
 import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service";
+import { getDrawingAiClient } from "@/lib/ai/drawing-ai-client";
 import { runScopeCoverageAnalysis } from "@/lib/ai/scope-coverage-service";
 import { buildEstimateFromAllDocuments } from "@/lib/ai/estimate-synthesis-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
@@ -177,29 +179,130 @@ export async function proposeScopeItemsAction(estimateId: string, formData: Form
   const versionId = String(formData.get("versionId") ?? "").trim() || null;
   if (versionId) await assertVersionBelongsToEstimate(estimateId, versionId);
 
-  try {
-    // Same dispatch shape as analyze-document.ts -- a DRAWING has no
-    // extracted text, so it needs the vision-based proposer instead of
-    // the text-based one, but both write the identical ProposedLineItem[]
-    // shape, so everything downstream (this action's redirect, the
-    // preview table, commitScopeItemsAction) needs no branch of its own.
-    const { documentType } = await db.document.findUniqueOrThrow({
+  // Same dispatch shape as analyze-document.ts -- a DRAWING has no
+  // extracted text, so it needs the vision-based proposer instead of the
+  // text-based one, but both write the identical ProposedLineItem[] shape,
+  // so everything downstream (the preview table, commitScopeItemsAction)
+  // needs no branch of its own.
+  const { documentType, lineItemProposalStatus } = await db.document.findUniqueOrThrow({
+    where: { id: documentId },
+    select: { documentType: true, lineItemProposalStatus: true },
+  });
+
+  if (documentType === "DRAWING") {
+    // Backgrounded (see proposeLineItemsFromDrawing's own header comment)
+    // -- a batched run is several sequential AI calls now, not one, so
+    // blocking this request on the whole thing would leave the button
+    // showing a static "Proposing..." for several minutes with no real
+    // progress. Same shape as proposeVendorQuoteItemsAction
+    // (bid-package-actions.ts): do the fast synchronous part here (an
+    // early AI-configured check so a missing key fails loudly instead of
+    // only inside the background callback, and the first status write),
+    // then hand the real work to after() -- line-item-proposal-progress.tsx
+    // polls getDocumentLineItemProposalStatusAction below to make
+    // batch-by-batch progress visible.
+    if (lineItemProposalStatus === "ANALYZING") {
+      throw new Error("A proposal run is already in progress for this document.");
+    }
+    try {
+      getDrawingAiClient();
+    } catch (err) {
+      if (err instanceof AiNotConfiguredError) {
+        throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable this.");
+      }
+      throw err;
+    }
+    await db.document.update({
       where: { id: documentId },
-      select: { documentType: true },
+      data: {
+        lineItemProposalStatus: "ANALYZING",
+        lineItemProposalStartedAt: new Date(),
+        lineItemProposalBatchIndex: null,
+        lineItemProposalBatchTotal: null,
+        lineItemProposalError: null,
+      },
     });
-    if (documentType === "DRAWING") {
-      await proposeLineItemsFromDrawing(documentId, opportunityId, user.id, versionId);
-    } else {
+    revalidatePath(`/estimates/${estimateId}`);
+    // proposeLineItemsFromDrawing already writes FAILED + a real error
+    // message itself before rethrowing on any batch failure (see its own
+    // header comment) -- there's no request/response left by the time
+    // after() runs this, so the rejection is swallowed here rather than
+    // left as an unhandled promise rejection in server logs; the error is
+    // already visible wherever the poller reads it from.
+    after(() => proposeLineItemsFromDrawing(documentId, opportunityId, user.id, versionId).catch(() => {}));
+  } else {
+    try {
       await proposeLineItemsFromScope(documentId, opportunityId, user.id, versionId);
+    } catch (err) {
+      if (err instanceof AiNotConfiguredError) {
+        throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable this.");
+      }
+      throw err;
     }
-  } catch (err) {
-    if (err instanceof AiNotConfiguredError) {
-      throw new Error("AI features aren't configured yet -- add OPENAI_API_KEY to enable this.");
-    }
-    throw err;
   }
   revalidatePath(`/estimates/${estimateId}`);
   redirect(`/estimates/${estimateId}?tab=documents&proposeDocumentId=${documentId}`);
+}
+
+// A generous ceiling far above any real observed batch run -- if an
+// ANALYZING row is still there past this, either the after()-backgrounded
+// call above was killed by the platform before its own catch could write
+// FAILED (a real risk: after()'s background work shares the function's
+// overall maxDuration, not a separately extended budget -- see this
+// feature's own plan), or something else left it stuck. Treating this the
+// same as a real FAILED here means the poller (line-item-proposal-progress.tsx)
+// never hangs silently even if the background function never got to write
+// its own error. 15 minutes is deliberately generous: the real batch-size
+// sweep (drawing-ai-client.ts's DEFAULT_DRAWING_BATCH_SIZE comment) took
+// 40.8s wall time for a real 14-page document's 5 batches on gpt-4o direct
+// -- ~22x that real observed time, real margin for a much larger document
+// or a slower model, not a tight guess.
+const STALE_ANALYSIS_THRESHOLD_MS = 15 * 60 * 1000;
+
+// Cheap, access-checked read for line-item-proposal-progress.tsx's poller
+// -- mirrors getBidPackageExtractionStatusAction (bid-package-actions.ts).
+// documentId scoped to this opportunity, not trusted alone, same
+// cross-resource-ID discipline as every other action in this file.
+export async function getDocumentLineItemProposalStatusAction(estimateId: string, documentId: string) {
+  await requireEstimateAccess(estimateId);
+  const opportunityId = await estimateOpportunityId(estimateId);
+  const document = await db.document.findFirstOrThrow({
+    where: { id: documentId, opportunityId },
+    select: {
+      lineItemProposalStatus: true,
+      lineItemProposalBatchIndex: true,
+      lineItemProposalBatchTotal: true,
+      lineItemProposalStartedAt: true,
+      lineItemProposalError: true,
+    },
+  });
+
+  if (
+    document.lineItemProposalStatus === "ANALYZING" &&
+    document.lineItemProposalStartedAt &&
+    Date.now() - document.lineItemProposalStartedAt.getTime() > STALE_ANALYSIS_THRESHOLD_MS
+  ) {
+    // Self-healing: persist FAILED for real, not just report it as such --
+    // otherwise the next poll (or the next person to open this page) hits
+    // the exact same stuck ANALYZING state again.
+    const error = "This run didn't finish in a reasonable time and was likely interrupted -- try Propose items again.";
+    await db.document.update({ where: { id: documentId }, data: { lineItemProposalStatus: "FAILED", lineItemProposalError: error } });
+    return {
+      status: "FAILED" as const,
+      batchIndex: document.lineItemProposalBatchIndex,
+      batchTotal: document.lineItemProposalBatchTotal,
+      startedAt: document.lineItemProposalStartedAt,
+      error,
+    };
+  }
+
+  return {
+    status: document.lineItemProposalStatus,
+    batchIndex: document.lineItemProposalBatchIndex,
+    batchTotal: document.lineItemProposalBatchTotal,
+    startedAt: document.lineItemProposalStartedAt,
+    error: document.lineItemProposalError,
+  };
 }
 
 // Plain-form fallback (no-JS parity, same dual-button convention the

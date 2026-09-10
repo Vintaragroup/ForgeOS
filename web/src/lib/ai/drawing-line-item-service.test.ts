@@ -5,7 +5,13 @@ import { PDFDocument } from "pdf-lib";
 import { db } from "@/lib/db";
 import { uploadDocument } from "@/lib/document-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
-import { proposeLineItemsFromDrawing, SYSTEM_PROMPT } from "@/lib/ai/drawing-line-item-service";
+import {
+  proposeLineItemsFromDrawing,
+  SYSTEM_PROMPT,
+  chunkPagesIntoBatches,
+  filterChecklistForBatch,
+  mergeAdjacentBatchDuplicates,
+} from "@/lib/ai/drawing-line-item-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
@@ -85,6 +91,117 @@ describe("proposeLineItemsFromDrawing blank-page handling", () => {
     const result = await proposeLineItemsFromDrawing(document.id, document.opportunityId);
 
     expect(result.proposedLineItems).toEqual([]);
+  });
+});
+
+describe("chunkPagesIntoBatches", () => {
+  it("groups pages into sequential batches of the given size, without splitting a page across batches", () => {
+    const images = ["img1", "img2", "img3", "img4", "img5"];
+    const pageTexts = ["t1", "t2", "t3", "t4", "t5"];
+    const pageNumbers = [1, 2, 3, 4, 5];
+
+    const batches = chunkPagesIntoBatches(images, pageTexts, pageNumbers, 2);
+
+    expect(batches).toEqual([
+      { images: ["img1", "img2"], pageTexts: ["t1", "t2"], pageNumbers: [1, 2] },
+      { images: ["img3", "img4"], pageTexts: ["t3", "t4"], pageNumbers: [3, 4] },
+      { images: ["img5"], pageTexts: ["t5"], pageNumbers: [5] },
+    ]);
+  });
+
+  it("preserves true (non-contiguous) page numbers when earlier blank pages were excluded", () => {
+    // pageImages excludes blank pages mid-sequence -- array position no
+    // longer matches page number (e.g. page 2 was blank and excluded).
+    const batches = chunkPagesIntoBatches(["a", "b", "c"], ["", "", ""], [1, 3, 4], 2);
+    expect(batches).toEqual([
+      { images: ["a", "b"], pageTexts: ["", ""], pageNumbers: [1, 3] },
+      { images: ["c"], pageTexts: [""], pageNumbers: [4] },
+    ]);
+  });
+});
+
+describe("filterChecklistForBatch", () => {
+  it("includes only facts whose pageNumber falls within the batch's pages", () => {
+    const checklist = [
+      { text: "fact on page 1", sourceQuote: "", pageNumber: 1 },
+      { text: "fact on page 5", sourceQuote: "", pageNumber: 5 },
+      { text: "fact on page 3", sourceQuote: "", pageNumber: 3 },
+    ];
+
+    const result = filterChecklistForBatch(checklist, [3, 4]);
+
+    expect(result.map((f) => f.text)).toEqual(["fact on page 3"]);
+  });
+
+  it("always includes a fact with no pageNumber, in every batch", () => {
+    const checklist = [{ text: "unattributed fact", sourceQuote: "", pageNumber: null }];
+
+    expect(filterChecklistForBatch(checklist, [1, 2]).map((f) => f.text)).toEqual(["unattributed fact"]);
+    expect(filterChecklistForBatch(checklist, [9])).toHaveLength(1);
+  });
+});
+
+describe("mergeAdjacentBatchDuplicates", () => {
+  const item = (description: string, pageNumber: number) =>
+    ({
+      description,
+      qty: 1,
+      qtyIsExplicit: true,
+      unit: "EA",
+      lineType: "MATERIAL" as const,
+      category: "Booth Structure & Walls" as const,
+      pageNumber,
+    });
+
+  it("drops an unambiguous exact-description duplicate at a batch boundary", () => {
+    const itemsByBatch = [
+      [item("Wall Panel 39.06\" width", 3), item("Something else", 2)],
+      [item("wall panel 39.06\" width", 3), item("Different item", 4)],
+    ];
+    const pageNumbersByBatch = [[2, 3], [3, 4]];
+
+    const { items, droppedCount } = mergeAdjacentBatchDuplicates(itemsByBatch, pageNumbersByBatch);
+
+    expect(droppedCount).toBe(1);
+    expect(items.map((i) => i.description)).toEqual(["Wall Panel 39.06\" width", "Something else", "Different item"]);
+  });
+
+  it("does not merge genuinely different boundary items, even on the same page", () => {
+    const itemsByBatch = [
+      [item("Wall Panel 39.06\" width", 3)],
+      [item("Wall Panel 42.43\" width", 3)],
+    ];
+    const pageNumbersByBatch = [[2, 3], [3, 4]];
+
+    const { items, droppedCount } = mergeAdjacentBatchDuplicates(itemsByBatch, pageNumbersByBatch);
+
+    expect(droppedCount).toBe(0);
+    expect(items).toHaveLength(2);
+  });
+
+  it("does not treat batches separated by an excluded page as adjacent", () => {
+    // Batch 1 ends at page 3, batch 2 starts at page 5 -- page 4 was
+    // excluded (blank), so this is a real gap, not a seam.
+    const itemsByBatch = [[item("Wall Panel 39.06\" width", 3)], [item("Wall Panel 39.06\" width", 5)]];
+    const pageNumbersByBatch = [[2, 3], [5, 6]];
+
+    const { items, droppedCount } = mergeAdjacentBatchDuplicates(itemsByBatch, pageNumbersByBatch);
+
+    expect(droppedCount).toBe(0);
+    expect(items).toHaveLength(2);
+  });
+
+  it("leaves an ambiguous match (2+ candidates share the same description) alone rather than guessing", () => {
+    const itemsByBatch = [
+      [item("Wall Panel 39.06\" width", 3), item("wall panel 39.06\" width", 3)],
+      [item("Wall Panel 39.06\" width", 3)],
+    ];
+    const pageNumbersByBatch = [[2, 3], [3, 4]];
+
+    const { items, droppedCount } = mergeAdjacentBatchDuplicates(itemsByBatch, pageNumbersByBatch);
+
+    expect(droppedCount).toBe(0);
+    expect(items).toHaveLength(3);
   });
 });
 

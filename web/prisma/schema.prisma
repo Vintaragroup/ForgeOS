@@ -510,6 +510,15 @@ enum ExtractionStatus {
   UNSUPPORTED
 }
 
+// See Document.lineItemProposalStatus -- distinct from ExtractionStatus
+// above, which tracks the unrelated Analyze-document pipeline.
+enum LineItemProposalStatus {
+  IDLE
+  ANALYZING
+  COMPLETE
+  FAILED
+}
+
 model Document {
   id            String      @id @default(cuid())
   opportunityId String
@@ -602,6 +611,26 @@ model Document {
   // -- distinct from an empty array, which means a real checklist was
   // given and every fact was accounted for.
   proposedLineItemGaps Json?
+
+  // Progress tracking for the batched proposeLineItemsFromDrawing run
+  // (Sept 2026 -- batching per small group of pages replaced one
+  // whole-document call after real testing showed the model's
+  // per-segment panel-grouping quality reliably degrades once >1 page's
+  // worth of images are in a single call; see drawing-line-item-service.ts).
+  // Backgrounded via next/server's after() from proposeScopeItemsAction,
+  // polled by the client (line-item-proposal-progress.tsx) the same way
+  // BidPackage.vendorExtractionPhase already is for vendor-quote extraction
+  // -- that flow is the only other backgrounded-AI-work precedent in this
+  // codebase. batchIndex/Total are null until the run's page count is known
+  // (set together with ANALYZING); proposedLineItems/Gaps/Matches above are
+  // only ever written once, in the single final update after every batch
+  // succeeds -- a mid-run failure never leaves partial item data, just a
+  // FAILED status + error naming which page range failed.
+  lineItemProposalStatus     LineItemProposalStatus @default(IDLE)
+  lineItemProposalBatchIndex Int?
+  lineItemProposalBatchTotal Int?
+  lineItemProposalStartedAt  DateTime?
+  lineItemProposalError      String?
 
   // Parallel to proposedLineItems above, but a distinct shape (includes
   // unitPrice/totalPrice) -- populated only for a VENDOR_QUOTE document

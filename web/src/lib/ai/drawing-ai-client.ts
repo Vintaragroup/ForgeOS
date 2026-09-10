@@ -87,6 +87,67 @@ export const DRAWING_REASONING_BUDGET = {
 // platform silently killing the whole function with no trace at all.
 export const DRAWING_REQUEST_TIMEOUT_MS = 180_000;
 
+// proposeLineItemsFromDrawing batches pages into groups of this size
+// instead of sending a whole document in one call (Sept 2026 -- see that
+// file's own header). Real testing (isolated single-page calls against
+// Titleist "GeneralMeasurements.pdf" using the real production SYSTEM_PROMPT
+// and schema) proved the model's per-segment panel-grouping instruction
+// works correctly on ONE page but reliably degrades to coarse, ungrouped
+// output once all 14 pages of that same file are in a single call -- a
+// genuine attention/context-capacity limit at scale, not a prompt-wording
+// issue.
+//
+// 3 is not a guess -- confirmed via a real batch-size sweep (scripts/
+// tmp-batch-sweep.ts, run against the same real 14-page file, gpt-4o
+// direct) across sizes 2/3/4:
+//   size 2 (7 batches): totally missed page 10's wall-panel dimensions
+//     (zero panels reported -- pairing it with page 9 in one call crowded
+//     it out), despite otherwise-good detail on pages 7/9/11.
+//   size 3 (5 batches): the only size that captured real per-segment panel
+//     grouping (qty>1 items with real repeated-dimension counts) on EVERY
+//     one of the four reference pages (7/9/10/11) -- page 10 correctly
+//     grouped 8x 39.06" + 2x 24" panels, matching the single-page-isolation
+//     result closely.
+//   size 4 (4 batches): page 7 nearly zeroed out (no wall-panel dimensions
+//     at all) -- the same coarse-output degradation the whole-document
+//     case showed, just starting to reappear at a smaller scale.
+// Override via AI_DRAWING_BATCH_SIZE, same convention as AI_DRAWING_MAX_PAGES
+// (drawing-summary-service.ts).
+export const DEFAULT_DRAWING_BATCH_SIZE = 3;
+
+// DRAWING_REASONING_BUDGET above was tuned against ONE whole-document
+// (11-page) call -- reusing it unchanged per batch would over-provision a
+// small batch's reasoning-token budget. Scales proportionally to the
+// batch's own page count, with a floor so a 1-page batch still gets a
+// working budget rather than a near-zero one. The 11-page baseline and the
+// 0.35 floor are both placeholders, still NOT validated by real data: the
+// real batch-size sweep (see DEFAULT_DRAWING_BATCH_SIZE's own comment) ran
+// on gpt-4o direct (no AI_DRAWING_MODEL set), so viaOpenRouter was false
+// and this function was never actually exercised by that sweep -- it only
+// applies on the OpenRouter-routed reasoning-model path. Needs its own
+// real measurement against that path before this formula should be
+// trusted as final.
+// Shown to the user before they click Propose on a drawing (see the
+// estimates page's own Propose card), using the user's own "10 pages"
+// reference point. Real measurement, not a guess: the batch-size-3 sweep
+// (see DEFAULT_DRAWING_BATCH_SIZE's own comment) took 40.8s wall time for
+// the real 14-page file's 5 batches (~8.2s/batch avg) on gpt-4o direct --
+// scaled to a 10-page document (ceil(10/3) = 4 batches) that's ~33s,
+// rounded up to a full minute for real-world margin (network variance,
+// a slower/more complex real page). Model-dependent -- if AI_DRAWING_MODEL
+// is ever set to route through OpenRouter, this hasn't been re-measured
+// against that path.
+export const DRAWING_BATCH_TIME_ESTIMATE_MINUTES = 1;
+
+const REASONING_BUDGET_BASELINE_PAGES = 11;
+export function reasoningBudgetForBatch(pageCount: number) {
+  const scale = Math.max(pageCount / REASONING_BUDGET_BASELINE_PAGES, 0.35);
+  return {
+    max_tokens: Math.round(DRAWING_REASONING_BUDGET.max_tokens * scale),
+    reasoning: { max_tokens: Math.round(DRAWING_REASONING_BUDGET.reasoning.max_tokens * scale) },
+  } as const;
+}
+
 // Shared by summarizeDrawing and proposeLineItemsFromDrawing -- interleaves
 // each page's real extracted text (when pageImages found one) directly
 // before that page's own image, rather than one block of text followed by

@@ -152,6 +152,9 @@ import { BoothActionsMenu } from "@/components/booth-actions-menu";
 import { ElementGroupActionsMenu } from "@/components/element-group-actions-menu";
 import { SectionMoveMenu } from "@/components/section-move-menu";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
+import { LineItemProposalProgress } from "./line-item-proposal-progress";
+import { DRAWING_BATCH_TIME_ESTIMATE_MINUTES } from "@/lib/ai/drawing-ai-client";
+import { getDocumentAiUsageSince } from "@/lib/ai/ai-usage-service";
 import {
   applyAllHighConfidenceMatchesAction,
   applySelectedVendorMatchesAction,
@@ -171,6 +174,18 @@ import { MatchGroupCheckbox } from "@/components/match-group-checkbox";
 import { ApplySelectedMatchesBar } from "@/components/apply-selected-matches-bar";
 import { CommitSelectedLineItemsBar } from "@/components/commit-selected-line-items-bar";
 import { money } from "@/lib/money";
+
+// proposeScopeItemsAction's DRAWING branch (import-actions.ts) backgrounds
+// a batched multi-call proposeLineItemsFromDrawing run via next/server's
+// after() -- that background work shares this route's overall execution
+// budget rather than getting a separately extended one, and several
+// sequential batch calls (each up to DRAWING_REQUEST_TIMEOUT_MS) can
+// exceed the platform's 300s default well before a real document's worth
+// of batches finishes. Raised here, not tuned to an exact measured
+// ceiling yet -- see this feature's own plan for the real per-batch-latency
+// measurement that should replace this with a tighter, evidence-based
+// value.
+export const maxDuration = 600;
 
 const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
@@ -739,6 +754,16 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       | { text: string; pageNumber: number | null; reason: string | null }[]
       | null) ?? null;
 
+  // Real per-run token/cost visibility for a completed DRAWING proposal --
+  // see getDocumentAiUsageSince's own comment. Only meaningful once a run
+  // has actually finished and left a real startedAt behind; a scope
+  // (non-drawing) document's single synchronous call never sets
+  // lineItemProposalStatus at all, so this stays null for that path too.
+  const documentAiUsage =
+    proposeDocument?.lineItemProposalStatus === "COMPLETE" && proposeDocument.lineItemProposalStartedAt
+      ? await getDocumentAiUsageSince(proposeDocument.id, proposeDocument.lineItemProposalStartedAt)
+      : null;
+
   // Same data the Project Brief already shows on the Opportunity page,
   // surfaced here too -- whoever's pricing and signing off on THIS
   // estimate shouldn't have to go find the Opportunity tab to see that a
@@ -972,6 +997,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     proposeDocument={proposeDocument ?? null}
                     proposedItems={proposedItems}
                     proposedItemGaps={proposedItemGaps}
+                    documentAiUsage={documentAiUsage}
                     proposeCatalog={proposeCatalog}
                     duplicateStatus={duplicateStatus}
                     defaultSelectedProposedIndices={defaultSelectedProposedIndices}
@@ -4521,6 +4547,7 @@ function DocumentsTab({
   proposeDocument,
   proposedItems,
   proposedItemGaps,
+  documentAiUsage,
   proposeCatalog,
   duplicateStatus,
   defaultSelectedProposedIndices,
@@ -4563,12 +4590,28 @@ function DocumentsTab({
   scopeDocuments: { id: string; filename: string }[];
   proposeScopeItemsAction: (formData: FormData) => void | Promise<void>;
   proposeDocumentId: string | undefined;
-  proposeDocument: { id: string; filename: string; mimeType: string } | null;
+  proposeDocument:
+    | {
+        id: string;
+        filename: string;
+        mimeType: string;
+        lineItemProposalStatus: "IDLE" | "ANALYZING" | "COMPLETE" | "FAILED";
+        lineItemProposalBatchIndex: number | null;
+        lineItemProposalBatchTotal: number | null;
+        lineItemProposalStartedAt: Date | null;
+        lineItemProposalError: string | null;
+      }
+    | null;
   proposedItems: ProposedLineItem[] | null;
   // DRAWING-only -- see proposeLineItemsFromDrawing's own header comment.
   // Null means no summary existed to check against yet, distinct from an
   // empty array (checked, everything accounted for).
   proposedItemGaps: { text: string; pageNumber: number | null; reason: string | null }[] | null;
+  // Real per-run token/cost total for a just-completed DRAWING proposal --
+  // see getDocumentAiUsageSince's own comment. null whenever there's
+  // nothing to show (no run yet, still ANALYZING, or a non-drawing
+  // document, which never sets lineItemProposalStatus at all).
+  documentAiUsage: { totalTokens: number; estimatedCostUsd: number; callCount: number } | null;
   proposeCatalog: Awaited<ReturnType<typeof loadCatalogForMatching>>;
   duplicateStatus: Awaited<ReturnType<typeof resolveDuplicateStatusForReview>> | null;
   defaultSelectedProposedIndices: number[];
@@ -5047,27 +5090,55 @@ function DocumentsTab({
               actionHref={`/opportunities/${opportunityId}`}
               actionLabel="Go to Opportunity"
             />
+          ) : proposeDocument?.lineItemProposalStatus === "ANALYZING" ? (
+            // proposeScopeItemsAction's DRAWING branch backgrounds this run
+            // via after() (see that action's own comment) -- the form is
+            // hidden rather than just disabled while it's in flight, both
+            // for UX (there's genuinely nothing to submit right now) and as
+            // a second guard alongside that action's own "already
+            // ANALYZING" check against a second concurrent click.
+            <LineItemProposalProgress
+              estimateId={estimateId}
+              documentId={proposeDocument.id}
+              initialStatus={proposeDocument.lineItemProposalStatus}
+              initialBatchIndex={proposeDocument.lineItemProposalBatchIndex}
+              initialBatchTotal={proposeDocument.lineItemProposalBatchTotal}
+              initialStartedAt={(proposeDocument.lineItemProposalStartedAt ?? new Date()).toISOString()}
+              initialError={proposeDocument.lineItemProposalError}
+            />
           ) : (
-            <form action={proposeScopeItemsAction} className="flex items-end gap-3">
-              <div className="flex-1">
-                <SelectField
-                  label="Document"
-                  name="documentId"
-                  defaultValue={proposeDocumentId ?? ""}
-                  options={scopeDocuments.map((d) => ({ value: d.id, label: d.filename }))}
-                />
-              </div>
-              {/* Lets a fresh proposal cache a Tier 2 duplicate-match hint
-                  against the version actually current right now -- see
-                  proposeLineItemsFromScope's own versionId parameter
-                  comment. Omitted (no currentVersion yet) simply means no
-                  Tier 2 UI hinting; commitScopeLineItems's own fresh Tier 1
-                  recompute at commit time is unaffected either way. */}
-              {currentVersion && <input type="hidden" name="versionId" value={currentVersion.id} />}
-              <SubmitButton pendingText="Proposing…" variant="secondary">
-                Propose items
-              </SubmitButton>
-            </form>
+            <>
+              <form action={proposeScopeItemsAction} className="flex items-end gap-3">
+                <div className="flex-1">
+                  <SelectField
+                    label="Document"
+                    name="documentId"
+                    defaultValue={proposeDocumentId ?? ""}
+                    options={scopeDocuments.map((d) => ({ value: d.id, label: d.filename }))}
+                  />
+                </div>
+                {/* Lets a fresh proposal cache a Tier 2 duplicate-match hint
+                    against the version actually current right now -- see
+                    proposeLineItemsFromScope's own versionId parameter
+                    comment. Omitted (no currentVersion yet) simply means no
+                    Tier 2 UI hinting; commitScopeLineItems's own fresh Tier 1
+                    recompute at commit time is unaffected either way. */}
+                {currentVersion && <input type="hidden" name="versionId" value={currentVersion.id} />}
+                <SubmitButton pendingText="Proposing…" variant="secondary">
+                  Propose items
+                </SubmitButton>
+              </form>
+              <p className="mt-2 text-xs text-neutral-400">
+                Drawing documents are analyzed page-by-page for accuracy -- typically ~{DRAWING_BATCH_TIME_ESTIMATE_MINUTES}m
+                for a 10-page drawing. Other document types are usually much faster.
+              </p>
+            </>
+          )}
+
+          {proposeDocument?.lineItemProposalStatus === "FAILED" && proposeDocument.lineItemProposalError && (
+            <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {proposeDocument.lineItemProposalError}
+            </p>
           )}
 
           {proposeDocument && proposedItems && proposedItems.length === 0 && (
@@ -5093,6 +5164,13 @@ function DocumentsTab({
                   </>
                 )}
               </p>
+              {documentAiUsage && (
+                <p className="mb-3 text-xs text-neutral-400">
+                  This analysis used ~{documentAiUsage.totalTokens.toLocaleString()} tokens (~$
+                  {documentAiUsage.estimatedCostUsd.toFixed(2)}) across {documentAiUsage.callCount} batch
+                  {documentAiUsage.callCount === 1 ? "" : "es"}.
+                </p>
+              )}
               <MatchSelectionProvider initialSelected={defaultSelectedProposedIndices}>
                 <div className="mb-4 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
                   <table className="w-full text-sm">
