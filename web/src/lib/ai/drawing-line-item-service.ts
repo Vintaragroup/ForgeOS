@@ -17,7 +17,12 @@ import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { pageImages } from "@/lib/ai/drawing-summary-service";
-import { getDrawingAiClient, DRAWING_REASONING_BUDGET, buildPageContentParts } from "@/lib/ai/drawing-ai-client";
+import {
+  getDrawingAiClient,
+  DRAWING_REASONING_BUDGET,
+  DRAWING_REQUEST_TIMEOUT_MS,
+  buildPageContentParts,
+} from "@/lib/ai/drawing-ai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import {
   buildProposedLineItemMatchesCache,
@@ -173,7 +178,7 @@ export async function proposeLineItemsFromDrawing(
       },
     ],
     response_format: { type: "json_schema", json_schema: DRAWING_LINE_ITEM_SCHEMA },
-  });
+  }, { timeout: DRAWING_REQUEST_TIMEOUT_MS });
 
   await recordAiUsage({
     userId,

@@ -19,7 +19,12 @@ import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { getDocumentProxy, renderPageAsImage } from "unpdf";
-import { getDrawingAiClient, DRAWING_REASONING_BUDGET, buildPageContentParts } from "@/lib/ai/drawing-ai-client";
+import {
+  getDrawingAiClient,
+  DRAWING_REASONING_BUDGET,
+  DRAWING_REQUEST_TIMEOUT_MS,
+  buildPageContentParts,
+} from "@/lib/ai/drawing-ai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import type { DocumentSummary, KeyDateType } from "@/lib/ai/document-summary-service";
 import { PDF_MIME, extractPdfPageTexts } from "@/lib/ai/text-extraction";
@@ -263,7 +268,7 @@ export async function summarizeDrawing(documentId: string, userId: string | null
         },
       ],
       response_format: { type: "json_schema", json_schema: DRAWING_SCHEMA },
-    });
+    }, { timeout: DRAWING_REQUEST_TIMEOUT_MS });
 
     await recordAiUsage({
       userId,

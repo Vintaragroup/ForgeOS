@@ -73,6 +73,20 @@ export const DRAWING_REASONING_BUDGET = {
   reasoning: { max_tokens: 24000 },
 } as const;
 
+// Real incident (Titleist FootJoy re-upload, Sept 2026): a drawing
+// analysis call ran the full 300s to Vercel's own hard function-timeout
+// ceiling and got killed mid-flight, with zero exception logged --
+// confirmed via Vercel's runtime logs, not a guess. The document was left
+// stuck at extractionStatus "PROCESSING" forever, since the code that
+// would set it to FAILED (and log why) never got to run. Every real
+// successful run measured this session took 60-100s, so a call that's
+// still running at 3x that is not going to finish -- this timeout makes
+// the request fail on ITS OWN terms, inside the 300s window, so the
+// existing catch block actually gets to log the real cause and mark the
+// document FAILED (visible on the SUPER_ADMIN dashboard) instead of the
+// platform silently killing the whole function with no trace at all.
+export const DRAWING_REQUEST_TIMEOUT_MS = 180_000;
+
 // Shared by summarizeDrawing and proposeLineItemsFromDrawing -- interleaves
 // each page's real extracted text (when pageImages found one) directly
 // before that page's own image, rather than one block of text followed by
