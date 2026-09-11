@@ -308,6 +308,8 @@ A separate, genuinely different pattern from the sequential-segment case above: 
 
 The sequential-segment grouping above captures each panel's WIDTH from the dimension line, but a panel's real size for sheet-good/material costing needs both dimensions. When a real height value for that same wall/panel run is determinable from the sheet -- a shared "total height"/overall-elevation dimension printed elsewhere on the same sheet, or a per-panel height callout -- include it in the item's description alongside the width, e.g. "39.06"W x 190.51"H wall panel". Only state a height that's actually determinable from a real printed value on the sheet; if no height is stated or inferable anywhere on the sheet, leave it out of the description entirely rather than inventing or assuming one -- the same honesty rule qtyIsExplicit already applies to quantity applies here to dimensions.
 
+A height you use for a panel must come from the SAME page as that panel, never a different page you're also looking at in this same batch -- even when another page shown to you happens to have its own similar-looking height dimension nearby, it belongs to that other page's own elevation, not this one's. This matters even more on a page that itself shows more than one elevation or view of the same corner/component (common on a single detail sheet): match each panel to the height labeled on its OWN elevation specifically, not a different elevation drawn elsewhere on that same sheet -- two elevations on one sheet showing the same corner from different angles often have two different, both-correct heights (e.g. a shorter returned side wall next to a taller front wall), and applying one elevation's height to a panel that actually belongs to the other would misstate its real size.
+
 - unit: a sensible unit for this item (EA, SQFT, LF, HR, LOT) -- infer from context if the sheet doesn't state one.
 - lineType: MATERIAL for goods/fabrication, LABOR for installation/labor-only work, FEE for flat fees/rentals/services.
 - category: which section this item belongs to.
@@ -565,6 +567,7 @@ export async function proposeLineItemsFromDrawing(
   // visible FAILED state the user can just retry, not a quietly worse
   // result they'd have no way to notice.
   let elementMap: DrawingElementMapFromAI["pages"];
+  const pass1StartedAt = Date.now();
   try {
     const { elementMap: map, usage } = await identifyDrawingElements(
       client,
@@ -584,6 +587,9 @@ export async function proposeLineItemsFromDrawing(
       documentId,
       opportunityId: document.opportunityId,
     });
+    console.log(
+      `[proposeLineItemsFromDrawing] document ${documentId}: element identification pass took ${((Date.now() - pass1StartedAt) / 1000).toFixed(1)}s.`,
+    );
   } catch (err) {
     const message = `Element identification pass failed: ${err instanceof Error ? err.message : String(err)}`;
     await db.document.update({
@@ -613,6 +619,12 @@ export async function proposeLineItemsFromDrawing(
     const batchChecklist = filterChecklistForBatch(scopeChecklist, batch.pageNumbers);
     const elementContext = buildElementContextForBatch(elementMap, batch.pageNumbers);
 
+    // No per-batch timing was ever recorded before this -- a real
+    // production run once took 6m31s total across 7 calls with no way
+    // after the fact to tell whether that was even latency across every
+    // call or one call stalling near DRAWING_REQUEST_TIMEOUT_MS. This
+    // makes the NEXT slow run diagnosable from server logs alone.
+    const batchStartedAt = Date.now();
     try {
       const completion = await client.chat.completions.create(
         {
@@ -667,6 +679,10 @@ export async function proposeLineItemsFromDrawing(
         documentId,
         opportunityId: document.opportunityId,
       });
+
+      console.log(
+        `[proposeLineItemsFromDrawing] document ${documentId}: batch ${i + 1} of ${batches.length} (pages ${batch.pageNumbers.join(", ")}) took ${((Date.now() - batchStartedAt) / 1000).toFixed(1)}s.`,
+      );
 
       const content = completion.choices[0]?.message?.content;
       if (!content) {

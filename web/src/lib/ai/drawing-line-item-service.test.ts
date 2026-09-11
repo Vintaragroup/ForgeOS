@@ -289,6 +289,20 @@ describe("SYSTEM_PROMPT", () => {
   });
 
   // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf" --
+  // real production use): page 7 ("LEFT FRONT CORNER") in isolation
+  // consistently read one height, but the SAME page batched with pages
+  // 8-9 (its normal 3-page batch) produced a different, unstable height
+  // on every real run -- confirmed via a dedicated isolation test that the
+  // instability only appears once other pages' images are in the same
+  // call. Page 7 is also itself a genuinely multi-elevation sheet (4
+  // separate elevations, several with their own different heights),
+  // confirmed by direct visual inspection.
+  it("instructs the model not to borrow a height from a different page or a different elevation on the same page", () => {
+    expect(SYSTEM_PROMPT).toMatch(/must come from the SAME page as that panel/);
+    expect(SYSTEM_PROMPT).toMatch(/match each panel to the height labeled on its OWN elevation/);
+  });
+
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf" --
   // real production use): a page titled "CALLOUTS" that's purely a
   // floor-plan legend (dashed boxes naming zones like "Left Back Corner,"
   // "Front Tower Left," with no dimensions or fabrication detail of its
