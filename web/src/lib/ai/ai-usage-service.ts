@@ -102,11 +102,19 @@ export async function getDocumentAiUsageSince(documentId: string, since: Date) {
     where: { documentId, createdAt: { gte: since } },
     _sum: { totalTokens: true, estimatedCostUsd: true },
     _count: { _all: true },
+    // No durationMs field exists on AiUsageEvent (or anywhere else) --
+    // the latest event's own createdAt in this run's window is a real,
+    // already-available stand-in for "when the run finished" (recordAiUsage
+    // is called right after each batch's completion, so the last one lands
+    // within moments of the whole run's final write), letting the caller
+    // compute elapsed time as lastEventAt - since with no new migration.
+    _max: { createdAt: true },
   });
   return {
     totalTokens: result._sum.totalTokens ?? 0,
     estimatedCostUsd: result._sum.estimatedCostUsd?.toNumber() ?? 0,
     callCount: result._count._all,
+    lastEventAt: result._max.createdAt ?? null,
   };
 }
 

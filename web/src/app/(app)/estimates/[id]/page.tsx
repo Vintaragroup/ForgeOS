@@ -187,6 +187,17 @@ import { money } from "@/lib/money";
 // value.
 export const maxDuration = 600;
 
+// Same seconds-under-a-minute/minutes-otherwise convention as
+// line-item-proposal-progress.tsx's own formatDuration -- used here for
+// the completed-run summary line instead of the live in-progress one.
+function formatAiCallDuration(ms: number): string {
+  const totalSeconds = Math.max(Math.round(ms / 1000), 0);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
+
 const SECTION_TYPE_OPTIONS = [
   { value: "COMPONENT", label: "Component" },
   { value: "CATEGORY", label: "Category" },
@@ -754,14 +765,24 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       | { text: string; pageNumber: number | null; reason: string | null }[]
       | null) ?? null;
 
-  // Real per-run token/cost visibility for a completed DRAWING proposal --
-  // see getDocumentAiUsageSince's own comment. Only meaningful once a run
-  // has actually finished and left a real startedAt behind; a scope
-  // (non-drawing) document's single synchronous call never sets
+  // Real per-run token/cost/duration visibility for a completed DRAWING
+  // proposal -- see getDocumentAiUsageSince's own comment. Only meaningful
+  // once a run has actually finished and left a real startedAt behind; a
+  // scope (non-drawing) document's single synchronous call never sets
   // lineItemProposalStatus at all, so this stays null for that path too.
+  // durationMs is computed here (not inside getDocumentAiUsageSince) since
+  // it needs proposalStartedAt, which the caller already has -- no new
+  // Document field for "finished at" needed, lastEventAt already IS that
+  // signal in practice (recordAiUsage runs right after each batch
+  // completes, so the last one lands within moments of the run's own final
+  // write).
+  const proposalStartedAt = proposeDocument?.lineItemProposalStartedAt ?? null;
   const documentAiUsage =
-    proposeDocument?.lineItemProposalStatus === "COMPLETE" && proposeDocument.lineItemProposalStartedAt
-      ? await getDocumentAiUsageSince(proposeDocument.id, proposeDocument.lineItemProposalStartedAt)
+    proposeDocument?.lineItemProposalStatus === "COMPLETE" && proposalStartedAt
+      ? await getDocumentAiUsageSince(proposeDocument.id, proposalStartedAt).then((usage) => ({
+          ...usage,
+          durationMs: usage.lastEventAt ? usage.lastEventAt.getTime() - proposalStartedAt.getTime() : null,
+        }))
       : null;
 
   // Same data the Project Brief already shows on the Opportunity page,
@@ -4611,7 +4632,7 @@ function DocumentsTab({
   // see getDocumentAiUsageSince's own comment. null whenever there's
   // nothing to show (no run yet, still ANALYZING, or a non-drawing
   // document, which never sets lineItemProposalStatus at all).
-  documentAiUsage: { totalTokens: number; estimatedCostUsd: number; callCount: number } | null;
+  documentAiUsage: { totalTokens: number; estimatedCostUsd: number; callCount: number; durationMs: number | null } | null;
   proposeCatalog: Awaited<ReturnType<typeof loadCatalogForMatching>>;
   duplicateStatus: Awaited<ReturnType<typeof resolveDuplicateStatusForReview>> | null;
   defaultSelectedProposedIndices: number[];
@@ -5168,7 +5189,8 @@ function DocumentsTab({
                 <p className="mb-3 text-xs text-neutral-400">
                   This analysis used ~{documentAiUsage.totalTokens.toLocaleString()} tokens (~$
                   {documentAiUsage.estimatedCostUsd.toFixed(2)}) across {documentAiUsage.callCount} AI call
-                  {documentAiUsage.callCount === 1 ? "" : "s"}.
+                  {documentAiUsage.callCount === 1 ? "" : "s"}
+                  {documentAiUsage.durationMs !== null && <> in {formatAiCallDuration(documentAiUsage.durationMs)}</>}.
                 </p>
               )}
               <MatchSelectionProvider initialSelected={defaultSelectedProposedIndices}>
