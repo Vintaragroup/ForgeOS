@@ -302,6 +302,27 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toMatch(/match each panel to the height labeled on its OWN elevation/);
   });
 
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf",
+  // real production use): page 12 ("CENTER WALL") genuinely has two
+  // separate elevations, each with its own individual segments AND its
+  // own overall dimension(s) -- confirmed by direct, careful visual
+  // inspection: right elevation 29.29"+39.06"x5 (aggregate 224.59"), left
+  // elevation 19.53"x2+95.21"+56.15"+95.20" with TWO overlapping overall
+  // totals (290.50" full width, 246.56" grid-only sub-width). Real models
+  // tested against this exact page were both incomplete/unstable --
+  // gpt-4o consistently missed the 95.21"/95.20" segments, Claude Sonnet
+  // 4.5 swung between finding almost nothing and treating one elevation's
+  // aggregate as a "return panel" belonging to the other.
+  it("instructs the model that one elevation can have more than one overall/aggregate dimension", () => {
+    expect(SYSTEM_PROMPT).toMatch(/MORE THAN ONE such overall dimension/);
+    expect(SYSTEM_PROMPT).toMatch(/Every one of these overall\/sub-total numbers is a check-dimension/);
+  });
+
+  it("instructs the model to fully work through every elevation on a multi-elevation sheet, not just the first or most prominent one", () => {
+    expect(SYSTEM_PROMPT).toMatch(/don't stop after the first elevation you process/);
+    expect(SYSTEM_PROMPT).toMatch(/has 11 real segments to account for in total/);
+  });
+
   // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf" --
   // real production use): a page titled "CALLOUTS" that's purely a
   // floor-plan legend (dashed boxes naming zones like "Left Back Corner,"

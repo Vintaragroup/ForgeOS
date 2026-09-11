@@ -31,6 +31,25 @@ describe("estimateCostUsd", () => {
     expect(unknown).toBe(gpt4o);
     expect(unknown).toBeGreaterThan(0);
   });
+
+  // Real gap this closes (Sept 2026): drawing-ai-client.ts's AI_DRAWING_MODEL
+  // override routes real calls through OpenRouter to one of these two
+  // model ids -- neither had a pricing entry, so every real OpenRouter-routed
+  // drawing-proposal run's displayed cost was silently computed using
+  // gpt-4o's (cheaper) rate instead, understating the real spend. Confirmed
+  // live: Claude Sonnet 4.5's real output-token rate is 50% higher than
+  // gpt-4o's ($15 vs $10/1M), so the two must NOT resolve to the same cost.
+  it("uses Claude Sonnet 4.5's own real rate, not gpt-4o's fallback rate", () => {
+    const sonnet = estimateCostUsd("anthropic/claude-sonnet-4.5", 1_000_000, 1_000_000);
+    const gpt4o = estimateCostUsd("gpt-4o", 1_000_000, 1_000_000);
+    expect(sonnet).toBeCloseTo(18.0, 6); // $3 input + $15 output per 1M tokens
+    expect(sonnet).not.toBe(gpt4o);
+  });
+
+  it("uses Gemini 2.5 Pro's own real rate, not gpt-4o's fallback rate", () => {
+    const gemini = estimateCostUsd("google/gemini-2.5-pro", 1_000_000, 1_000_000);
+    expect(gemini).toBeCloseTo(11.25, 6); // $1.25 input + $10 output per 1M tokens
+  });
 });
 
 describe("recordAiUsage / getUserAiUsageSummary", () => {

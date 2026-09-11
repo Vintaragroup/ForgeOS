@@ -17,6 +17,25 @@ const PRICING_PER_MILLION_TOKENS_USD: Record<string, { input: number; output: nu
   // still declared instead of omitted so this entry has the same shape
   // as every other rate.
   "text-embedding-3-small": { input: 0.02, output: 0 },
+  // Real gap this closes (Sept 2026): drawing-ai-client.ts's AI_DRAWING_MODEL
+  // override routes proposeLineItemsFromDrawing/summarizeDrawing through
+  // OpenRouter to one of these two model ids (see that file's own header
+  // for the A/B test that picked between them) -- neither had an entry
+  // here, so every OpenRouter-routed call was silently falling back to
+  // gpt-4o's rate below, UNDERSTATING real cost (confirmed live: Claude
+  // Sonnet 4.5's real output-token rate is 50% higher than gpt-4o's).
+  // Real, current per-token rates below (Sept 2026, both ≤200K-token
+  // prompts -- this pipeline's real page-image prompts stay well under
+  // that): Anthropic's own published direct rate for Sonnet 4.5, and
+  // Google's own published direct rate for Gemini 2.5 Pro. OpenRouter
+  // itself passes through the underlying provider's per-token rate with
+  // no markup (confirmed via current OpenRouter/Anthropic pricing
+  // comparisons) -- its own separate ~5% credit-purchase fee is a
+  // funding-level cost, not a per-call one, and isn't modeled here, same
+  // as this function's existing "close enough for a cost-awareness
+  // dashboard" posture already accepts.
+  "anthropic/claude-sonnet-4.5": { input: 3.0, output: 15.0 },
+  "google/gemini-2.5-pro": { input: 1.25, output: 10.0 },
 };
 
 // Falls back to gpt-4o's (higher) rate for an unrecognized model string
