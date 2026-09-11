@@ -129,13 +129,25 @@ export const DEFAULT_DRAWING_BATCH_SIZE = 3;
 // trusted as final.
 // Shown to the user before they click Propose on a drawing (see the
 // estimates page's own Propose card), using the user's own "10 pages"
-// reference point. Real measurement, not a guess: the batch-size-3 sweep
-// (see DEFAULT_DRAWING_BATCH_SIZE's own comment) took 40.8s wall time for
-// the real 14-page file's 5 batches (~8.2s/batch avg) on gpt-4o direct --
-// scaled to a 10-page document (ceil(10/3) = 4 batches) that's ~33s,
-// rounded up to a full minute for real-world margin (network variance,
-// a slower/more complex real page). Model-dependent -- if AI_DRAWING_MODEL
-// is ever set to route through OpenRouter, this hasn't been re-measured
+// reference point. Re-measured after identifyDrawingElements (Pass 1) was
+// added -- the original 40.8s/33s figures this was first calibrated
+// against (see git history) predate Pass 1 and undercounted a real,
+// significant chunk of total time: a fresh real run against the same
+// 14-page file (with per-batch/Pass-1 logging now in place, see
+// proposeLineItemsFromDrawing's own console.log calls) measured Pass 1
+// alone at 24.6s (~39% of the 63.5s total) plus 5 Pass-2 batches
+// (3.5s/4.2s/11.1s/8.3s/5.0s, ~6.4s/batch avg) plus ~7s of non-AI
+// rasterization/write overhead. Scaled to a 10-page document (Pass 1
+// roughly page-count-proportional, ceil(10/3) = 4 Pass-2 batches): ~48s --
+// still comfortably rounds to a full minute for real-world margin, so the
+// displayed value doesn't need to change, only this comment's own
+// reasoning (it previously cited a pre-Pass-1 figure). One real 6m31s
+// outlier is also on record (see this feature's own investigation notes)
+// -- deliberately NOT folded into this "typical" estimate; an outlier is
+// exactly what "typically" already excludes, and padding the common case
+// to cover a rare bad-latency run would make every normal run look
+// artificially flagged as slow. Model-dependent -- if AI_DRAWING_MODEL is
+// ever set to route through OpenRouter, this hasn't been re-measured
 // against that path.
 export const DRAWING_BATCH_TIME_ESTIMATE_MINUTES = 1;
 
