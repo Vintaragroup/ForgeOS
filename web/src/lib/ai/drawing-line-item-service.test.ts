@@ -288,6 +288,19 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toMatch(/leave it out of the description entirely rather than inventing or assuming one/);
   });
 
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf" --
+  // real production use): a page titled "CALLOUTS" that's purely a
+  // floor-plan legend (dashed boxes naming zones like "Left Back Corner,"
+  // "Front Tower Left," with no dimensions or fabrication detail of its
+  // own -- confirmed by rendering and looking at the real page) produced
+  // its own generic, dimension-less placeholder item per named zone --
+  // scope that gets double-priced once here and again by that same zone's
+  // own dedicated detail sheet elsewhere in the document.
+  it("instructs the model not to propose a placeholder item per named callout on a floor-plan legend sheet", () => {
+    expect(SYSTEM_PROMPT).toMatch(/reference index, not fabrication scope/);
+    expect(SYSTEM_PROMPT).toMatch(/propose NOTHING from a page like this/);
+  });
+
   it("instructs the model to copy elementName from the per-page element list given below, never guessing one", () => {
     expect(SYSTEM_PROMPT).toMatch(/Elements identified per page/);
     expect(SYSTEM_PROMPT).toMatch(/copy that string exactly, don't reword it/);

@@ -315,6 +315,8 @@ The sequential-segment grouping above captures each panel's WIDTH from the dimen
 
 Only propose items that describe actual work or goods to be provided -- skip title blocks, revision notes, and general notes entirely. If a sheet has no concrete fabrication scope (e.g. it's purely a floor plan with no callouts), it can contribute nothing.
 
+A floor-plan/legend sheet (often titled something like "CALLOUTS") that labels WHERE each named element is located -- dashed boxes or pointer lines naming zones like "Left Back Corner," "Front Tower Left," "Hanging Sign" -- but states no dimension, material, or fabrication detail of its own for any of them, is a reference index, not fabrication scope: this is exactly the "no concrete fabrication scope" case above. Every element it names gets its own dedicated, fully-detailed sheet elsewhere in this document -- propose NOTHING from a page like this. Don't propose a placeholder item per named callout just because a name is printed on it; a bare location label with no size or spec attached isn't an item, it's a map reference to where the real item is detailed.
+
 category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")}. Pick the closest fit rather than inventing a new name -- use "Other" only when nothing on the list is a reasonable match.
 
 Two categories are easy to misroute into a broader neighbor -- check these before defaulting elsewhere:
