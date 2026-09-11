@@ -31,6 +31,7 @@ import {
   SCOPE_CATEGORIES,
   type ProposedLineItem,
   type ScopeCategory,
+  type PossibleMisreadFlag,
 } from "@/lib/ai/scope-line-item-service";
 import { normalizeDescriptionForMatch } from "@/lib/ai/line-item-duplicate-service";
 import type { DocumentSummary, CitedText } from "@/lib/ai/document-summary-service";
@@ -440,6 +441,127 @@ export function mergeAdjacentBatchDuplicates(
   return { items: kept.flat(), droppedCount };
 }
 
+// A printed decimal-inch value immediately followed by the literal
+// double-quote character SYSTEM_PROMPT's own decimal-inch convention
+// always uses (e.g. 39.06"). Optional trailing W/H captures the
+// width/height role when present, from the "NN.NN"W x NN.NN"H" convention
+// SYSTEM_PROMPT's own worked example uses -- absent for a grid/tile
+// dimension ("19.53" tiles") or any other inch value with no role marker.
+const INCH_TOKEN_REGEX = /(\d+(?:\.\d+)?)"([WH])?/g;
+
+interface InchToken {
+  // Exact printed digits, e.g. "39.06" -- compared as a string first
+  // (never reparsed to a float except for the delta-floor check in
+  // flagPossibleMisreads below), so "39.06" and "39.060" are correctly
+  // treated as different-length, non-matching strings rather than
+  // numerically-equal.
+  value: string;
+  role: "W" | "H" | null;
+}
+
+function extractInchTokens(description: string): InchToken[] {
+  return [...description.matchAll(INCH_TOKEN_REGEX)].map((m) => ({
+    value: m[1],
+    role: (m[2] as "W" | "H" | undefined) ?? null,
+  }));
+}
+
+// True only when a and b are the same length and differ at EXACTLY one
+// character position, where both characters at that position are digits
+// (never the decimal point). Deliberately NOT restricted to a curated
+// "visually confusable" digit-pair subset (3<->8, 5<->6, etc.) -- the
+// real, confirmed page-12 misread ("30.06" read for "39.06") is a
+// '0'<->'9' substitution, which is not on most such lists. Restricting to
+// a curated subset would have missed the exact case this function exists
+// to catch; see MIN_NUMERIC_DELTA_INCHES in flagPossibleMisreads below for
+// where the real false-positive protection comes from instead.
+function isSingleDigitSubstitution(a: string, b: string): boolean {
+  if (a === b || a.length !== b.length) return false;
+  let diffs = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (!/\d/.test(a[i]) || !/\d/.test(b[i])) return false;
+    if (++diffs > 1) return false;
+  }
+  return diffs === 1;
+}
+
+// Document-wide, deterministic, no AI call -- see this feature's own plan
+// (Sept 2026, Titleist "GeneralMeasurements.pdf" page 12: "30.06"" read
+// where the sheet actually shows "39.06"", a value confirmed correct and
+// repeated dozens of times elsewhere in this same document) for why a
+// pure within-document counting check catches a real misread class an
+// extraction-time prompt instruction can't fully prevent. Deliberately
+// NOT a numeric-closeness check -- SYSTEM_PROMPT already tells the
+// extraction pass not to merge "close but different" values like
+// 39.01"/39.06"/39.17" (real, intentionally distinct panels confirmed
+// this session); collapsing them HERE would repeat that same mistake one
+// layer later. This flags only a structural single-digit substitution AT
+// THE SAME STRING POSITION, gated by a numeric-delta floor so a
+// genuinely close, intentionally-distinct value is never caught by
+// coincidence -- these are two different, complementary safeguards, not
+// a contradiction: the extraction-time warning stops the MODEL from
+// merging close values into one item; this stops VALIDATION from
+// flagging a real close value as if it were a misread of another.
+//
+// Advisory only -- never modifies description/qty/anything else. A human
+// reviewer sees the flag and its full reason in the review table (see
+// estimates/[id]/page.tsx) and decides whether to fix, exclude, or ignore
+// the row before committing; the same posture as classificationUncertain
+// (scope-line-item-service.ts) for an unrelated but structurally similar
+// "a check disagreed -- don't auto-correct, just tell a human" case.
+const MIN_REFERENCE_ITEM_COUNT = 3;
+const MIN_REFERENCE_TOTAL_QTY = 5;
+const MIN_NUMERIC_DELTA_INCHES = 1.0;
+
+export function flagPossibleMisreads(items: ProposedLineItem[]): ProposedLineItem[] {
+  const tokensByItem = items.map((item) => {
+    const seen = new Map<string, InchToken>();
+    for (const t of extractInchTokens(item.description)) seen.set(t.value, t); // dedup within one item
+    return [...seen.values()];
+  });
+
+  const stats = new Map<string, { itemIndices: Set<number>; totalQty: number; roles: Set<"W" | "H" | null> }>();
+  items.forEach((item, i) => {
+    for (const token of tokensByItem[i]) {
+      const s = stats.get(token.value) ?? { itemIndices: new Set<number>(), totalQty: 0, roles: new Set<"W" | "H" | null>() };
+      s.itemIndices.add(i);
+      s.totalQty += item.qty;
+      s.roles.add(token.role);
+      stats.set(token.value, s);
+    }
+  });
+  const allValues = [...stats.keys()];
+
+  return items.map((item, i) => {
+    for (const token of tokensByItem[i]) {
+      const own = stats.get(token.value)!;
+      if (own.itemIndices.size !== 1) continue; // referenced by >=1 other item -- not a singleton, skip
+
+      for (const candidate of allValues) {
+        if (candidate === token.value || !isSingleDigitSubstitution(token.value, candidate)) continue;
+        const c = stats.get(candidate)!;
+        // Role check only when BOTH sides carry a definite, conflicting role.
+        if (token.role && !c.roles.has(null) && !c.roles.has(token.role)) continue;
+        if (c.itemIndices.size < MIN_REFERENCE_ITEM_COUNT) continue;
+        if (c.totalQty < MIN_REFERENCE_TOTAL_QTY) continue;
+        if (Math.abs(parseFloat(token.value) - parseFloat(candidate)) < MIN_NUMERIC_DELTA_INCHES) continue;
+
+        return {
+          ...item,
+          possibleMisread: {
+            referenceValue: candidate,
+            referenceItemCount: c.itemIndices.size,
+            referenceTotalQty: c.totalQty,
+            reason: `This document's own "${candidate}"" appears ${c.totalQty} time${c.totalQty === 1 ? "" : "s"} across ${c.itemIndices.size} other item${c.itemIndices.size === 1 ? "" : "s"}; this item's "${token.value}"" appears nowhere else in the document -- possible misread of a single digit.`,
+          } satisfies PossibleMisreadFlag,
+        };
+      }
+    }
+    return item;
+  });
+}
+
 // Explicitly triggered (the Propose button, or buildEstimateFromAllDocuments),
 // never run automatically at Analyze time -- same posture scope-line-
 // item-service.ts's own header comment establishes for the text path, so
@@ -746,7 +868,16 @@ export async function proposeLineItemsFromDrawing(
     estimateId: document.estimateId ?? null,
   }));
 
-  const matchesCache = await buildProposedLineItemMatchesCache(items, versionId, document.opportunityId, documentId, userId);
+  // Phase 4: within-document dimension cross-reference validation -- see
+  // flagPossibleMisreads' own header comment. Runs after merging but
+  // before the Tier 2 duplicate-match cache below; buildProposedLineItemMatchesCache
+  // only reads description/qty/unit (unaffected by this), so the ordering
+  // here is purely to keep the real narrative order (extract -> merge
+  // boundary dupes -> validate internally -> check against committed
+  // items -> persist) as one clean top-to-bottom read.
+  const flaggedItems = flagPossibleMisreads(items);
+
+  const matchesCache = await buildProposedLineItemMatchesCache(flaggedItems, versionId, document.opportunityId, documentId, userId);
 
   // Explicitly null (not the model's own gaps: []) when no checklist
   // existed to check against -- distinguishes "nothing to report because
@@ -759,7 +890,7 @@ export async function proposeLineItemsFromDrawing(
   return db.document.update({
     where: { id: documentId },
     data: {
-      proposedLineItems: items as unknown as Prisma.InputJsonValue,
+      proposedLineItems: flaggedItems as unknown as Prisma.InputJsonValue,
       proposedLineItemGaps: gaps as unknown as Prisma.InputJsonValue,
       ...(matchesCache ? { proposedLineItemMatches: matchesCache as unknown as Prisma.InputJsonValue } : {}),
       lineItemProposalStatus: "COMPLETE",

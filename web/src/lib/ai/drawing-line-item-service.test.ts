@@ -15,9 +15,10 @@ import {
   filterChecklistForBatch,
   buildElementContextForBatch,
   mergeAdjacentBatchDuplicates,
+  flagPossibleMisreads,
 } from "@/lib/ai/drawing-line-item-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
-import { SCOPE_CATEGORIES } from "@/lib/ai/scope-line-item-service";
+import { SCOPE_CATEGORIES, type ProposedLineItem } from "@/lib/ai/scope-line-item-service";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
 
@@ -256,6 +257,114 @@ describe("mergeAdjacentBatchDuplicates", () => {
 
     expect(droppedCount).toBe(0);
     expect(items).toHaveLength(3);
+  });
+});
+
+describe("flagPossibleMisreads", () => {
+  const pli = (description: string, qty: number): ProposedLineItem => ({
+    description,
+    qty,
+    qtyIsExplicit: true,
+    unit: "EA",
+    lineType: "MATERIAL",
+    category: "Booth Structure & Walls",
+    sourceQuote: "",
+  });
+
+  // Real bug reproduction (Sept 2026, Titleist "GeneralMeasurements.pdf"
+  // page 12): confirmed live that "39.06"" is a real, repeated panel
+  // width elsewhere in the document while "30.06"" (a single-digit
+  // misread of it) appears on exactly one item.
+  it("flags a singleton value that's a single-digit substitution of a commonly-confirmed value elsewhere", () => {
+    const items = [
+      pli('Wall panel 30.06"W x 190.51"H', 1),
+      pli('Wall panel 39.06"W x 190.51"H', 2),
+      pli('Wall panel 39.06"W x 137.17"H', 2),
+      pli('Wall panel 39.06"W x 90.00"H', 2),
+    ];
+
+    const flagged = flagPossibleMisreads(items);
+
+    expect(flagged[0].possibleMisread).toEqual({
+      referenceValue: "39.06",
+      referenceItemCount: 3,
+      referenceTotalQty: 6,
+      reason: expect.stringContaining('This document\'s own "39.06""'),
+    });
+    expect(flagged[1].possibleMisread).toBeUndefined();
+    expect(flagged[2].possibleMisread).toBeUndefined();
+    expect(flagged[3].possibleMisread).toBeUndefined();
+  });
+
+  // The false-positive regression that matters most: 39.01"/39.06"/39.17"
+  // are REAL, confirmed-distinct panels this session (SYSTEM_PROMPT's own
+  // "don't merge close-but-different numbers" warning exists specifically
+  // for this trio). A singleton 39.01" is structurally identical in shape
+  // to the real bug above (same length, single-digit substitution vs a
+  // commonly-confirmed "39.06") -- proves the numeric-delta floor, not
+  // the digit-substitution check alone, is what protects this case.
+  it("does not flag a genuinely close but intentionally distinct value", () => {
+    const items = [
+      pli('Wall panel 39.01"W x 190.51"H', 1),
+      pli('Wall panel 39.06"W x 190.51"H', 2),
+      pli('Wall panel 39.06"W x 137.17"H', 2),
+      pli('Wall panel 39.06"W x 90.00"H', 2),
+    ];
+
+    const flagged = flagPossibleMisreads(items);
+
+    expect(flagged.every((i) => !i.possibleMisread)).toBe(true);
+  });
+
+  it("does not flag when the candidate value is referenced by too few other items", () => {
+    const items = [
+      pli('Wall panel 30.06"W x 190.51"H', 1),
+      pli('Wall panel 39.06"W x 190.51"H', 2), // only 1 other item references "39.06" -- below MIN_REFERENCE_ITEM_COUNT
+    ];
+
+    const flagged = flagPossibleMisreads(items);
+
+    expect(flagged.every((i) => !i.possibleMisread)).toBe(true);
+  });
+
+  it("never flags the commonly-confirmed items themselves", () => {
+    const items = [
+      pli('Wall panel 30.06"W x 190.51"H', 1),
+      pli('Wall panel 39.06"W x 190.51"H', 2),
+      pli('Wall panel 39.06"W x 137.17"H', 2),
+      pli('Wall panel 39.06"W x 90.00"H', 2),
+    ];
+
+    const flagged = flagPossibleMisreads(items);
+
+    expect(flagged[1].possibleMisread).toBeUndefined();
+    expect(flagged[2].possibleMisread).toBeUndefined();
+    expect(flagged[3].possibleMisread).toBeUndefined();
+  });
+
+  it("counts a repeated dimension once per item, not once per W/H occurrence", () => {
+    // A square panel states the same value for both width and height --
+    // must not double-count toward its own reference stats.
+    const items = [
+      pli('Wall panel 30.06"W x 190.51"H', 1),
+      pli('Square panel 39.06"W x 39.06"H', 2),
+      pli('Wall panel 39.06"W x 137.17"H', 2),
+      pli('Wall panel 39.06"W x 90.00"H', 2),
+    ];
+
+    const flagged = flagPossibleMisreads(items);
+
+    expect(flagged[0].possibleMisread?.referenceItemCount).toBe(3);
+    expect(flagged[0].possibleMisread?.referenceTotalQty).toBe(6);
+  });
+
+  it("returns items unchanged when no description contains an inch token", () => {
+    const items = [pli("Booth structure fabrication", 1), pli("Installation labor", 1)];
+
+    const flagged = flagPossibleMisreads(items);
+
+    expect(flagged).toEqual(items);
+    expect(flagged.every((i) => !i.possibleMisread)).toBe(true);
   });
 });
 

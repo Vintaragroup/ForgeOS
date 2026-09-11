@@ -5247,6 +5247,21 @@ function DocumentsTab({
                                   {status.match.confidence} match
                                 </span>
                               )}
+                              {/* Phase 4 -- see flagPossibleMisreads' own
+                                  header comment (drawing-line-item-service.ts).
+                                  A distinct color/label from the match-confidence
+                                  badge above -- they answer different questions
+                                  ("is this a duplicate of something already
+                                  committed" vs. "does this dimension look like
+                                  a misread") and are never meant to collide. */}
+                              {item.possibleMisread && (
+                                <span
+                                  className="mr-1.5 rounded bg-purple-50 px-1.5 py-0.5 text-xs text-purple-700"
+                                  title={item.possibleMisread.reason}
+                                >
+                                  possible misread
+                                </span>
+                              )}
                               {item.description}
                             </td>
                             <td className="px-2 py-1 text-right">{item.unit}</td>

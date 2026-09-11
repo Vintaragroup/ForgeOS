@@ -102,6 +102,24 @@ export const QTY_ESTIMATED_SUFFIX = " (qty estimated -- verify)";
 // null: shared/unclassified, visible to every estimate. Only ever
 // resolved to a real value once an Opportunity has 2+ named Estimates --
 // see resolveProjectTag.
+// See ProposedLineItem.possibleMisread's own comment below -- lives here
+// (not in drawing-line-item-service.ts, where flagPossibleMisreads and
+// its comment actually live) purely to avoid a circular import: that file
+// already imports ProposedLineItem/ScopeCategory/SCOPE_CATEGORIES from
+// this one.
+export interface PossibleMisreadFlag {
+  // e.g. "39.06" -- the document's own commonly-confirmed value this
+  // item's value structurally resembles.
+  referenceValue: string;
+  // How many OTHER proposed items reference referenceValue.
+  referenceItemCount: number;
+  // qty summed across those items -- the stronger, physical-instance-count
+  // signal (an item can state qty > 1 for identical repeated panels).
+  referenceTotalQty: number;
+  // Full sentence, for the review-table tooltip.
+  reason: string;
+}
+
 export interface ProposedLineItem {
   description: string;
   qty: number;
@@ -135,6 +153,18 @@ export interface ProposedLineItem {
   // H3 counterpart to elementName above -- written straight to
   // LineItem.subgroupLabel on commit when present.
   subElementName?: string | null;
+  // Set only by drawing-line-item-service.ts's flagPossibleMisreads -- a
+  // purely deterministic, code-only cross-reference check over this SAME
+  // document's own already-proposed items (no AI call), run after vision
+  // extraction completes. Same "advisory only, never auto-corrects"
+  // posture as classificationUncertain above -- this never changes
+  // description/qty, only flags the row for a human to look at before
+  // committing. Unlike classificationUncertain, there IS a specific,
+  // nameable piece of evidence behind the flag (which document-wide value
+  // this item's value structurally resembles, and how strongly that other
+  // value is independently confirmed), so this carries that evidence
+  // rather than being a bare boolean -- see PossibleMisreadFlag.
+  possibleMisread?: PossibleMisreadFlag | null;
 }
 
 // What OpenAI actually returns -- project is only present when the
