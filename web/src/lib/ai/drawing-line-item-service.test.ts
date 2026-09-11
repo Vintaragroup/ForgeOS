@@ -301,6 +301,18 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toMatch(/propose NOTHING from a page like this/);
   });
 
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf",
+  // real production use): confirmed directly against page 12 ("CENTER
+  // WALL") that its own printed aggregate (224.59") is exactly the sum of
+  // five individually-dimensioned segments (29.29" + 39.06"x4) already
+  // being proposed as their own items -- yet the aggregate was ALSO
+  // proposed as a separate "wall section" item, double-counting real
+  // material cost.
+  it("instructs the model not to propose an overall/aggregate dimension as its own item alongside the segments it sums", () => {
+    expect(SYSTEM_PROMPT).toMatch(/check-dimension confirming the segments below it add up correctly/);
+    expect(SYSTEM_PROMPT).toMatch(/Never propose the overall\/aggregate span as its own separate item/);
+  });
+
   it("instructs the model to copy elementName from the per-page element list given below, never guessing one", () => {
     expect(SYSTEM_PROMPT).toMatch(/Elements identified per page/);
     expect(SYSTEM_PROMPT).toMatch(/copy that string exactly, don't reword it/);
