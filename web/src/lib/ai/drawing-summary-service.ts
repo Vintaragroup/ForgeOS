@@ -131,9 +131,13 @@ const DRAWING_SCHEMA = {
   },
 } as const;
 
-const SYSTEM_PROMPT = `You are looking at pages of a fabrication/construction drawing or CAD export for an event/exhibit contractor. Extract only what's visibly labeled or dimensioned on the sheets -- never infer a dimension, material, or date that isn't actually printed or drawn. If nothing relevant is present, use null or an empty array.
+// Exported for direct testing, same precedent as drawing-line-item-service.ts's
+// own SYSTEM_PROMPT export.
+export const SYSTEM_PROMPT = `You are looking at pages of a fabrication/construction drawing or CAD export for an event/exhibit contractor. Extract only what's visibly labeled or dimensioned on the sheets -- never infer a dimension, material, or date that isn't actually printed or drawn. If nothing relevant is present, use null or an empty array.
 
 Each page is given to you twice: first as its real extracted PDF text (when the export tool embedded one -- exact labels, dimensions, and callouts, character-for-character as printed), then as a rendered image of that same page. When real text is present for a page, treat it as the authoritative source for exact wording and numbers -- it can't be misread the way a visual scan can. Use the image to see how those labels relate to what they're pointing at, and to catch anything the text didn't capture. A page whose text line says none was extracted has no text layer at all (an AutoCAD SHX-annotation table, or a scanned page) -- read the image alone for that one.
+
+When reading dimensions directly off an image (no text layer for that page), read the actual punctuation printed rather than assuming a format: exhibit/booth CAD exports commonly use decimal-inch notation exclusively -- e.g. 39.06" means thirty-nine and six-hundredths of an INCH (a decimal point before the last two digits, not a feet mark) -- not the X'-Y" feet-and-inches format common in other construction drawings. Don't convert or reinterpret a decimal-inch number into feet-and-inches; copy the digits and punctuation exactly as they appear.
 
 scopeSummary: specific, sheet-grounded facts a bidder needs to price the work -- dimensions, materials called out, construction/assembly methods, finish notes. Not a generic description of "a booth drawing."
 riskFlags: anything a reviewer should double-check before bidding -- structural/load callouts, code/compliance notes, ADA clearances, an engineer's stamp, or a revision marked "hold"/"not for construction."

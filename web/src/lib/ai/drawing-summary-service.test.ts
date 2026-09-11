@@ -5,7 +5,7 @@ import { PDFDocument, rgb } from "pdf-lib";
 import { db } from "@/lib/db";
 import { uploadDocument } from "@/lib/document-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
-import { summarizeDrawing, pageImages } from "@/lib/ai/drawing-summary-service";
+import { summarizeDrawing, pageImages, SYSTEM_PROMPT } from "@/lib/ai/drawing-summary-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
 
 // Builds a small, deterministic multi-page PDF for exercising the blank-
@@ -191,5 +191,23 @@ describe("summarizeDrawing blank-page handling", () => {
     expect(result.analysisError).toMatch(/blank/i);
     expect(result.analysisError).toMatch(/JPEG2000/i);
     expect(result.analysisErrorAt).not.toBeNull();
+  });
+});
+
+describe("SYSTEM_PROMPT", () => {
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf" --
+  // real production use): drawing-line-item-service.ts's own SYSTEM_PROMPT
+  // got this exact decimal-inch-notation clarification fixed earlier this
+  // session, but this file's separate SYSTEM_PROMPT (the Analyze pass that
+  // builds Document.extractedSummary.scopeSummary, the checklist Propose
+  // later cross-checks against) never did -- confirmed live: the checklist
+  // for a real document showed "236' 8"", "290' 5"", "39' 6"" where the
+  // real printed values are 236.80", 290.50", 39.06" (decimal inches
+  // misread as feet-and-inches). Propose's own gaps cross-check caught and
+  // explained the discrepancy after the fact, but the real fix is here, at
+  // the source that produced the bad checklist entry in the first place.
+  it("instructs the model to read decimal-inch notation correctly, not as feet-and-inches", () => {
+    expect(SYSTEM_PROMPT).toMatch(/decimal-inch notation/);
+    expect(SYSTEM_PROMPT).toMatch(/not the X'-Y" feet-and-inches format/);
   });
 });
