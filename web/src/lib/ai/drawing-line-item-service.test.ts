@@ -15,6 +15,7 @@ import {
   filterChecklistForBatch,
   buildElementContextForBatch,
   mergeAdjacentBatchDuplicates,
+  mergeSimilarDimensionlessDuplicates,
   flagPossibleMisreads,
 } from "@/lib/ai/drawing-line-item-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
@@ -257,6 +258,123 @@ describe("mergeAdjacentBatchDuplicates", () => {
 
     expect(droppedCount).toBe(0);
     expect(items).toHaveLength(3);
+  });
+});
+
+describe("mergeSimilarDimensionlessDuplicates", () => {
+  const item = (
+    description: string,
+    elementName: string | null,
+    category: (typeof SCOPE_CATEGORIES)[number] = "Flooring & Platforms",
+  ) => ({
+    description,
+    qty: 1,
+    qtyIsExplicit: true,
+    unit: "EA",
+    lineType: "MATERIAL" as const,
+    category,
+    pageNumber: 1,
+    elementName,
+    subElementName: null,
+  });
+
+  // Real bug reproduction (Sept 2026, Titleist "GeneralMeasurements.pdf"
+  // pages 1-4): the same physical elevated platform, proposed once per
+  // batch with genuinely different wording -- confirmed live neither
+  // mergeAdjacentBatchDuplicates gate (boundary page, exact-string match)
+  // catches this.
+  it("merges a reworded duplicate description sharing elementName and category", () => {
+    const items = [
+      item(
+        "Elevated platform with raised deck on support posts, guardrail, and connecting staircase (approximate footprint -- no dimension printed on this sheet)",
+        "LEFT FRONT CORNER",
+      ),
+      item(
+        "Elevated platform/mezzanine with raised deck on support posts, guardrail, and connecting staircase (approximately 6-7 stair treads visible) - approximate footprint, no dimension printed on this sheet",
+        "LEFT FRONT CORNER",
+      ),
+    ];
+
+    const { items: result, droppedCount } = mergeSimilarDimensionlessDuplicates(items);
+
+    expect(droppedCount).toBe(1);
+    expect(result).toHaveLength(1);
+    expect(result[0].description).toBe(items[0].description);
+  });
+
+  // The false-positive regression that matters most: significantTokens
+  // (catalog-match-service.ts) silently shreds the differentiating digits
+  // of a decimal-inch value ("39.06" and "95.20" both tokenize down to
+  // just "190"/"wall"/"panel"), which would score two DIFFERENT dimensioned
+  // panels as a 100% Jaccard match. The extractInchTokens gate must
+  // exclude both items from this pass entirely, not merely score them low.
+  it("never merges two dimensioned items, even with an identical elementName and near-total token overlap", () => {
+    const items = [
+      item(`39.06"W x 190.57"H wall panel`, "CENTER WALL", "Booth Structure & Walls"),
+      item(`95.20"W x 190.57"H wall panel`, "CENTER WALL", "Booth Structure & Walls"),
+    ];
+
+    const { items: result, droppedCount } = mergeSimilarDimensionlessDuplicates(items);
+
+    expect(droppedCount).toBe(0);
+    expect(result).toHaveLength(2);
+  });
+
+  // Two genuinely different real sub-components of the same element --
+  // low token overlap must NOT be merged.
+  it("does not merge two dimensionless items sharing elementName and category but describing genuinely different scope", () => {
+    const items = [
+      item("Guardrail with vertical support posts along the platform perimeter", "LEFT FRONT CORNER"),
+      item("Staircase connecting the elevated platform deck to the show floor", "LEFT FRONT CORNER"),
+    ];
+
+    const { items: result, droppedCount } = mergeSimilarDimensionlessDuplicates(items);
+
+    expect(droppedCount).toBe(0);
+    expect(result).toHaveLength(2);
+  });
+
+  it("does not merge identical wording across two different elementNames", () => {
+    const description = "Elevated platform with raised deck on support posts, guardrail, and connecting staircase";
+    const items = [item(description, "LEFT FRONT CORNER"), item(description, "RIGHT FRONT CORNER")];
+
+    const { items: result, droppedCount } = mergeSimilarDimensionlessDuplicates(items);
+
+    expect(droppedCount).toBe(0);
+    expect(result).toHaveLength(2);
+  });
+
+  it("does not merge identical wording across two different categories", () => {
+    const description = "Elevated platform with raised deck on support posts, guardrail, and connecting staircase";
+    const items = [
+      item(description, "LEFT FRONT CORNER", "Flooring & Platforms"),
+      item(description, "LEFT FRONT CORNER", "Booth Structure & Walls"),
+    ];
+
+    const { items: result, droppedCount } = mergeSimilarDimensionlessDuplicates(items);
+
+    expect(droppedCount).toBe(0);
+    expect(result).toHaveLength(2);
+  });
+
+  // A null elementName (Pass 1 identified no element for that page) is a
+  // deliberate non-signal -- two null-elementName items are NEVER grouped,
+  // even with identical wording.
+  it("never merges two items that both have a null elementName", () => {
+    const description = "Miscellaneous approximate scope, no dimension printed on this sheet";
+    const items = [item(description, null), item(description, null)];
+
+    const { items: result, droppedCount } = mergeSimilarDimensionlessDuplicates(items);
+
+    expect(droppedCount).toBe(0);
+    expect(result).toHaveLength(2);
+  });
+
+  it("handles an empty array and a single-item array without crashing", () => {
+    expect(mergeSimilarDimensionlessDuplicates([])).toEqual({ items: [], droppedCount: 0 });
+
+    const single = [item("Elevated platform, approximate footprint", "LEFT FRONT CORNER")];
+    expect(mergeSimilarDimensionlessDuplicates(single)).toEqual({ items: single, droppedCount: 0 });
   });
 });
 

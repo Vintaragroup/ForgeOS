@@ -34,6 +34,7 @@ import {
   type PossibleMisreadFlag,
 } from "@/lib/ai/scope-line-item-service";
 import { normalizeDescriptionForMatch } from "@/lib/ai/line-item-duplicate-service";
+import { significantTokens } from "@/lib/catalog-match-service";
 import type { DocumentSummary, CitedText } from "@/lib/ai/document-summary-service";
 
 type DrawingLineItemFromAI = {
@@ -493,6 +494,113 @@ function isSingleDigitSubstitution(a: string, b: string): boolean {
   return diffs === 1;
 }
 
+// Symmetric intersection-over-union token-overlap score -- identical
+// formula/posture to vendor-match-ai-service.ts's own module-private
+// jaccard (that file's matching problem -- vendor-quote-line-to-catalog-
+// candidate -- is different from this one's cross-batch reworded-
+// description duplicates, but the same already-proven primitive is reused
+// as-is rather than reinvented; not imported directly since that file
+// doesn't export it and exporting it is out of scope for this fix). Two
+// disjoint-or-empty sets score 0, not a divide-by-zero/NaN or a
+// coincidental 1.
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection++;
+  return intersection / (a.size + b.size - intersection);
+}
+
+// Calibrated against real production runs of this exact fix (Sept 2026,
+// Titleist "GeneralMeasurements.pdf" pages 1-4 elevated-platform items),
+// not a single guess: three separate real end-to-end runs each produced a
+// genuine reworded-duplicate pair of the SAME physical platform, scoring
+// 0.75, 0.579, and 0.579 on this tokenizer -- an initial 0.6 threshold
+// (chosen against only the first run's 0.75 example) missed both 0.579
+// pairs in the second and third runs, confirmed live. A genuinely
+// different pair of dimensionless sub-components sharing one
+// elementName+category (e.g. a guardrail item vs a staircase item under
+// the same platform element) scores 0.08. 0.5 sits below all three real
+// duplicate observations with margin, and still leaves a 6x margin above
+// the confirmed real non-duplicate -- favoring precision per line-item-
+// duplicate-service.ts's own stated posture (an unmerged near-duplicate is
+// a harmless extra row a reviewer unchecks; a wrongly merged distinct item
+// silently drops real scope), while no longer missing the real duplicate
+// wording variance actually observed in production.
+const DIMENSIONLESS_DUPLICATE_JACCARD_THRESHOLD = 0.5;
+
+// Document-wide (NOT boundary-limited, unlike mergeAdjacentBatchDuplicates
+// above) sibling merge pass for a real, confirmed gap that function's own
+// header comment already documents as explicitly out of scope: the same
+// physical dimensionless element (an elevated platform/staircase with no
+// printed dimension anywhere) proposed independently by two DIFFERENT
+// batches that both happen to see it, reworded differently each call the
+// same way any two independent vision-AI calls over the same real content
+// naturally drift in wording. mergeAdjacentBatchDuplicates only compares
+// items pinned to the EXACT boundary page pair and only an EXACT
+// normalized-description match -- confirmed live (Sept 2026) neither
+// condition held for the real case this exists to catch.
+//
+// Deliberately restricted to items with ZERO extracted inch tokens (see
+// extractInchTokens above) on BOTH sides of a comparison -- this is what
+// makes reusing significantTokens (catalog-match-service.ts) as the
+// tokenizer safe here despite a confirmed, serious failure mode of that
+// tokenizer against DIMENSIONED text: two genuinely different dimensioned
+// wall panels like `39.06"W x 190.57"H wall panel` and `95.20"W x
+// 190.57"H wall panel` both tokenize to the identical set ["190", "wall",
+// "panel"] (the differentiating width digits are silently dropped --
+// splitting on the decimal point leaves 2-character fragments that fail
+// significantTokens' own length>2 filter), which would score a 100%
+// Jaccard match between two real, distinct items. Any item carrying a
+// real printed dimension is excluded from this pass entirely rather than
+// merely scored low -- dimensioned items already have flagPossibleMisreads
+// (below) as their own, narrower, purpose-built safety net.
+//
+// Grouped by (category, elementName) -- both must match, and a null
+// elementName (Pass 1 identified no element for that item's page) is
+// NEVER grouped with anything, even another null-elementName item, since
+// that's the one case with no positive signal at all that two items
+// belong to the same real physical thing beyond wording alone. elementName
+// is compared via normalizeDescriptionForMatch (already imported by this
+// file) rather than exact string equality -- the "copy elementName
+// verbatim" instruction is a prompt convention, not a schema guarantee.
+//
+// Within a group, greedily clusters in document order: each item is
+// compared only against already-kept survivors of its own group so far; a
+// jaccard score at or above DIMENSIONLESS_DUPLICATE_JACCARD_THRESHOLD
+// drops it, keeping the earliest-encountered description as the survivor
+// -- simple and predictable, and the description IS the scope of work
+// here (unlike a committed LineItem, there's no independent "which one is
+// more complete" signal to prefer one wording over the other). NOT
+// transitively closed across a 3+ item chain (A~B and B~C both above
+// threshold but A~C below drops only B, leaving A and C both as separate
+// survivors) -- an accepted, deliberately conservative edge case per this
+// same precision-over-recall posture, and not the shape of the real
+// confirmed bug (a simple pair), so not specifically defended against.
+export function mergeSimilarDimensionlessDuplicates(
+  items: DrawingLineItemFromAI[],
+): { items: DrawingLineItemFromAI[]; droppedCount: number } {
+  const tokenSets = items.map((item) =>
+    extractInchTokens(item.description).length === 0 ? new Set(significantTokens(item.description)) : null,
+  );
+  const survivorsByGroup = new Map<string, number[]>();
+  const dropped = new Set<number>();
+
+  items.forEach((item, i) => {
+    const tokens = tokenSets[i];
+    if (item.elementName === null || tokens === null) return; // dimensioned, or no element identified -- excluded from this pass
+    const groupKey = `${item.category} ${normalizeDescriptionForMatch(item.elementName)}`;
+    const survivorIndices = survivorsByGroup.get(groupKey) ?? [];
+    const isDuplicate = survivorIndices.some((si) => jaccard(tokenSets[si]!, tokens) >= DIMENSIONLESS_DUPLICATE_JACCARD_THRESHOLD);
+    if (isDuplicate) {
+      dropped.add(i);
+      return;
+    }
+    survivorsByGroup.set(groupKey, [...survivorIndices, i]);
+  });
+
+  return { items: items.filter((_, i) => !dropped.has(i)), droppedCount: dropped.size };
+}
+
 // Document-wide, deterministic, no AI call -- see this feature's own plan
 // (Sept 2026, Titleist "GeneralMeasurements.pdf" page 12: "30.06"" read
 // where the sheet actually shows "39.06"", a value confirmed correct and
@@ -864,12 +972,19 @@ export async function proposeLineItemsFromDrawing(
     );
   }
 
+  const { items: dedupedRaw, droppedCount: rewordedDuplicateCount } = mergeSimilarDimensionlessDuplicates(mergedRaw);
+  if (rewordedDuplicateCount > 0) {
+    console.warn(
+      `[proposeLineItemsFromDrawing] document ${documentId}: dropped ${rewordedDuplicateCount} likely reworded duplicate(s) of a dimensionless element (e.g. the same elevated platform independently re-described by two different batches).`,
+    );
+  }
+
   // estimateId inherits the document's own manual tag directly -- same
   // "a rendering package is always cleanly single-project" reasoning as
   // drawing-summary-service.ts's withEmptyQuote, no vision-based project
   // classification here. sourceQuote stays empty, same accepted trust
   // reduction as that file (no text layer to verify a quote against).
-  const items: ProposedLineItem[] = mergedRaw.map((item) => ({
+  const items: ProposedLineItem[] = dedupedRaw.map((item) => ({
     ...item,
     sourceQuote: "",
     estimateId: document.estimateId ?? null,
