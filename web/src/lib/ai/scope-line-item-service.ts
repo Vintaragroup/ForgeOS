@@ -126,6 +126,15 @@ export interface ProposedLineItem {
   // onto the committed LineItem -- this is the before-commit catch, the
   // audit tool (line-item-audit-service.ts) remains the after-commit net.
   classificationUncertain?: boolean;
+  // Only ever set by drawing-line-item-service.ts's identifyDrawingElements
+  // pass (H2) -- absent for every text-sourced item, same posture as
+  // pageNumber above. commitScopeLineItems uses this (falling back to
+  // category alone when absent) to decide which EstimateSection an item
+  // lands in -- see that function's own comment.
+  elementName?: string | null;
+  // H3 counterpart to elementName above -- written straight to
+  // LineItem.subgroupLabel on commit when present.
+  subElementName?: string | null;
 }
 
 // What OpenAI actually returns -- project is only present when the
@@ -724,7 +733,6 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
 
   const catalog = await loadCatalogForMatching();
   const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
-  const categories = [...new Set(items.map((i) => i.category))];
 
   // pageNumber is computed here, not stored at propose time -- same
   // reasoning as document-summary-service.ts: searching the PDF's own
@@ -740,16 +748,54 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
 
   const existingSectionCount = await db.estimateSection.count({ where: { estimateVersionId, optionId: null } });
   let nextSortOrder = existingSectionCount;
-  const created = [];
-  for (const category of categories) {
+  // Keyed by section.id, not pushed per loop iteration -- once elementName
+  // grouping can make two different (category, elementName) pairs resolve
+  // to the SAME real section (see the comment below), a plain array would
+  // double-count that one section as two "sectionsCreated" in the return
+  // value. A Map keeps sectionsCreated accurate (distinct real sections
+  // touched) while still summing rowsImported correctly across both
+  // iterations that reused it.
+  const created = new Map<string, { section: Awaited<ReturnType<typeof findOrCreateSection>>; count: number }>();
+  // Grouped by (category, elementName) rather than category alone --
+  // elementName (H2, see ProposedLineItem's own comment) comes from
+  // drawing-line-item-service.ts's identifyDrawingElements pass and is
+  // undefined/null for every scope-text-sourced item, so that pipeline
+  // falls back to exactly today's category-only grouping below,
+  // unchanged. EstimateSection has no category column at all --
+  // findOrCreateSection matches purely on (estimateVersionId, optionId,
+  // name, groupLabel) -- so iterating distinct (category, elementName)
+  // pairs naturally converges to ONE shared section per elementName even
+  // when that element has items in more than one category (e.g. "Front
+  // Towers" gets an Audio/Visual LED-screen item and a Custom Build
+  // tower-frame item in the SAME section): the second findOrCreateSection
+  // call for that name just finds and reuses the section the first call
+  // already created. Each LineItem still carries its own resolvedCategory
+  // independently below, so category-board filtering is unaffected.
+  const groupKeys: { category: ScopeCategory; elementName: string | null }[] = [];
+  const seenGroupKeys = new Set<string>();
+  for (const item of items) {
+    const elementName = item.elementName ?? null;
+    const key = `${elementName ?? ""} ${item.category}`;
+    if (seenGroupKeys.has(key)) continue;
+    seenGroupKeys.add(key);
+    groupKeys.push({ category: item.category, elementName });
+  }
+  for (const { category, elementName } of groupKeys) {
     // Reuses an existing section of the same name in this version rather
     // than creating a duplicate -- matters once more than one document is
     // committed into the same version (see estimate-synthesis-service.ts),
     // where two documents proposing the same category (e.g. "Other") used
-    // to produce two separate sections on a real test job.
+    // to produce two separate sections on a real test job. sectionType
+    // COMPONENT vs CATEGORY, and using the real element name over the
+    // coarse category as the section's own name, matches the exact
+    // convention chat-tools-service.ts's create_section tool already
+    // established for "a named physical thing" vs. a generic bucket --
+    // groupLabel (H1/"booth") is deliberately left unset here, that tier
+    // carries separate whole-exhibit Method/merge semantics this doesn't
+    // need.
     const section = await findOrCreateSection(estimateVersionId, {
-      name: category,
-      sectionType: "CATEGORY",
+      name: elementName ?? category,
+      sectionType: elementName ? "COMPONENT" : "CATEGORY",
       sortOrder: nextSortOrder++,
     });
 
@@ -760,11 +806,11 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
     // document they came from.
     const aiFeature: AiFeature = document.documentType === "DRAWING" ? "DRAWING_LINE_ITEMS" : "SCOPE_LINE_ITEMS";
 
-    const itemsForCategory = items.filter((i) => i.category === category);
+    const itemsForGroup = items.filter((i) => i.category === category && (i.elementName ?? null) === elementName);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,
-      itemsForCategory.map((item) => {
+      itemsForGroup.map((item) => {
         const catalogMatch = matchDescription(item.description, catalog);
         const description = item.qtyIsExplicit ? item.description : `${item.description}${QTY_ESTIMATED_SUFFIX}`;
         const unit = item.unit || null;
@@ -799,6 +845,10 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
           documentId,
           sourceQuote: item.sourceQuote,
           sourcePageNumber: item.pageNumber ?? (pageTexts ? locateQuotePage(pageTexts, item.sourceQuote) : null),
+          // H3 -- see ProposedLineItem.subElementName's own comment. null
+          // for every scope-text-sourced item, same posture as elementName
+          // above.
+          subgroupLabel: item.subElementName ?? null,
           aiProposalSnapshot: {
             description,
             qty: String(item.qty),
@@ -811,8 +861,8 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
         };
       }),
     );
-    created.push({ section, count: lineItems.length });
+    created.set(section.id, { section, count: (created.get(section.id)?.count ?? 0) + lineItems.length });
   }
 
-  return { filename: document.filename, sectionsCreated: created.length, rowsImported: items.length };
+  return { filename: document.filename, sectionsCreated: created.size, rowsImported: items.length };
 }

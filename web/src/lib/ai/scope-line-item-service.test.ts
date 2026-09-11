@@ -277,6 +277,153 @@ describe("commitScopeLineItems", () => {
     expect(allLineItems.every((li) => li.sourcePageNumber === null)).toBe(true);
   });
 
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf"):
+  // every AI-proposed item used to land in one flat per-category section
+  // regardless of which real physical element of the exhibit it came
+  // from. drawing-line-item-service.ts's identifyDrawingElements pass (H2)
+  // now tags items with elementName; this is where that gets wired into a
+  // real EstimateSection -- see that function's own (category, elementName)
+  // grouping comment for why one shared COMPONENT section per elementName
+  // is correct even across categories.
+  it("creates one COMPONENT section per distinct elementName, merging items from two different categories into it", async () => {
+    const document = await makeAnalyzedDocument("some scope text");
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "LED Screen 117.18\"W x 136.71\"H (6x7 grid of 19.53\" tiles)",
+        qty: 2,
+        qtyIsExplicit: true,
+        unit: "EA",
+        lineType: "MATERIAL",
+        category: "Audio/Visual",
+        sourceQuote: "some scope text",
+        elementName: "Front Towers",
+      },
+      {
+        description: "Tower frame structure",
+        qty: 2,
+        qtyIsExplicit: true,
+        unit: "EA",
+        lineType: "MATERIAL",
+        category: "Custom Build",
+        sourceQuote: "some scope text",
+        elementName: "Front Towers",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const result = await commitScopeLineItems(version.id, document.id);
+    expect(result.sectionsCreated).toBe(1);
+    expect(result.rowsImported).toBe(2);
+
+    const sections = await db.estimateSection.findMany({
+      where: { estimateVersionId: version.id },
+      include: { lineItems: true },
+    });
+    expect(sections).toHaveLength(1);
+    expect(sections[0].name).toBe("Front Towers");
+    expect(sections[0].sectionType).toBe("COMPONENT");
+    expect(sections[0].groupLabel).toBeNull();
+    expect(sections[0].lineItems).toHaveLength(2);
+  });
+
+  it("falls back to a CATEGORY-named section when elementName is absent, and keeps it separate from an elementName'd item in the same commit", async () => {
+    const document = await makeAnalyzedDocument("some scope text");
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "Generic booth item",
+        qty: 1,
+        qtyIsExplicit: false,
+        unit: "LOT",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+        // No elementName at all -- the scope-text pipeline's own real
+        // shape (never present, not just null).
+      },
+      {
+        description: "Center Wall panel 39.06\"W x 190.51\"H",
+        qty: 6,
+        qtyIsExplicit: true,
+        unit: "EA",
+        lineType: "MATERIAL",
+        category: "Booth Structure & Walls",
+        sourceQuote: "some scope text",
+        elementName: "Center Wall",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    const result = await commitScopeLineItems(version.id, document.id);
+    expect(result.sectionsCreated).toBe(2);
+
+    const sections = await db.estimateSection.findMany({
+      where: { estimateVersionId: version.id },
+      include: { lineItems: true },
+    });
+    const categorySection = sections.find((s) => s.name === "Booth Structure & Walls");
+    const componentSection = sections.find((s) => s.name === "Center Wall");
+    expect(categorySection?.sectionType).toBe("CATEGORY");
+    expect(categorySection?.lineItems).toHaveLength(1);
+    expect(componentSection?.sectionType).toBe("COMPONENT");
+    expect(componentSection?.lineItems).toHaveLength(1);
+  });
+
+  it("writes subElementName to the committed LineItem's subgroupLabel", async () => {
+    const document = await makeAnalyzedDocument("some scope text");
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "LED Screen 117.18\"W x 136.71\"H (6x7 grid of 19.53\" tiles)",
+        qty: 2,
+        qtyIsExplicit: true,
+        unit: "EA",
+        lineType: "MATERIAL",
+        category: "Audio/Visual",
+        sourceQuote: "some scope text",
+        elementName: "Front Towers",
+        subElementName: "LED Screen",
+      },
+      {
+        description: "Touch Screen (16.32\"W x 29.07\"H)",
+        qty: 2,
+        qtyIsExplicit: true,
+        unit: "EA",
+        lineType: "MATERIAL",
+        category: "Audio/Visual",
+        sourceQuote: "some scope text",
+        elementName: "Front Towers",
+        subElementName: "Touch Screen",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitScopeLineItems(version.id, document.id);
+
+    const items = await db.lineItem.findMany({ where: { section: { estimateVersionId: version.id } } });
+    expect(items).toHaveLength(2);
+    const ledItem = items.find((li) => li.description.includes("LED Screen"));
+    const touchItem = items.find((li) => li.description.includes("Touch Screen"));
+    expect(ledItem?.subgroupLabel).toBe("LED Screen");
+    expect(touchItem?.subgroupLabel).toBe("Touch Screen");
+  });
+
   it("resolves a SEG-worded item to Graphics even though the AI filed its whole scope bucket under Booth Structure & Walls", async () => {
     // Confirmed against real data: a real committed item ("SEG fabric for
     // wall systems") landed under Structure because mapScopeCategoryToCanonical

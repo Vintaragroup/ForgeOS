@@ -5167,8 +5167,8 @@ function DocumentsTab({
               {documentAiUsage && (
                 <p className="mb-3 text-xs text-neutral-400">
                   This analysis used ~{documentAiUsage.totalTokens.toLocaleString()} tokens (~$
-                  {documentAiUsage.estimatedCostUsd.toFixed(2)}) across {documentAiUsage.callCount} batch
-                  {documentAiUsage.callCount === 1 ? "" : "es"}.
+                  {documentAiUsage.estimatedCostUsd.toFixed(2)}) across {documentAiUsage.callCount} AI call
+                  {documentAiUsage.callCount === 1 ? "" : "s"}.
                 </p>
               )}
               <MatchSelectionProvider initialSelected={defaultSelectedProposedIndices}>
@@ -5178,6 +5178,17 @@ function DocumentsTab({
                       <tr className="text-left text-neutral-500">
                         <th className="w-8 px-2 py-1.5 font-normal" />
                         <th className="px-2 py-1.5 font-normal">Category</th>
+                        {/* elementName/subElementName (H2/H3) are only ever
+                            set by the drawing-vision pipeline's
+                            identifyDrawingElements pass -- see
+                            ProposedLineItem's own comment. A scope-text
+                            proposal never has one, so this column just
+                            renders "—" for every row on that path. Shows
+                            which real EstimateSection (a named component,
+                            not just a coarse category bucket) an item will
+                            land in on commit -- see commitScopeLineItems'
+                            own (category, elementName) grouping comment. */}
+                        <th className="px-2 py-1.5 font-normal">Element</th>
                         <th className="px-2 py-1.5 font-normal">Description</th>
                         <th className="px-2 py-1.5 text-right font-normal">Unit</th>
                         <th className="px-2 py-1.5 text-right font-normal">Qty</th>
@@ -5195,6 +5206,16 @@ function DocumentsTab({
                               <MatchRowCheckbox index={i} />
                             </td>
                             <td className="px-2 py-1 text-neutral-500">{item.category}</td>
+                            <td className="max-w-[12rem] truncate px-2 py-1 text-neutral-500">
+                              {item.elementName ? (
+                                <>
+                                  {item.elementName}
+                                  {item.subElementName && <span className="text-neutral-400"> › {item.subElementName}</span>}
+                                </>
+                              ) : (
+                                <span className="text-neutral-300">—</span>
+                              )}
+                            </td>
                             <td className="max-w-[24rem] truncate px-2 py-1" title={item.sourceQuote}>
                               {status?.match.confidence && (
                                 <span

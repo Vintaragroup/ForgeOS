@@ -8,11 +8,16 @@ import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import {
   proposeLineItemsFromDrawing,
   SYSTEM_PROMPT,
+  ELEMENT_MAP_SYSTEM_PROMPT,
+  DRAWING_LINE_ITEM_SCHEMA,
+  DRAWING_ELEMENT_MAP_SCHEMA,
   chunkPagesIntoBatches,
   filterChecklistForBatch,
+  buildElementContextForBatch,
   mergeAdjacentBatchDuplicates,
 } from "@/lib/ai/drawing-line-item-service";
 import { PDF_MIME } from "@/lib/ai/text-extraction";
+import { SCOPE_CATEGORIES } from "@/lib/ai/scope-line-item-service";
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
 
@@ -141,6 +146,53 @@ describe("filterChecklistForBatch", () => {
   });
 });
 
+describe("buildElementContextForBatch", () => {
+  it("formats each in-batch page's title and elements into one line per page", () => {
+    const elementMap = [
+      { pageNumber: 12, pageTitle: "CENTER WALL", elements: [{ name: "Center Wall", category: "Booth Structure & Walls" as const }] },
+      {
+        pageNumber: 13,
+        pageTitle: "FRONT TOWERS - Qty. 2",
+        elements: [
+          { name: "Front Towers", category: "Booth Structure & Walls" as const },
+          { name: "LED Screen", category: "Audio/Visual" as const },
+        ],
+      },
+    ];
+
+    const result = buildElementContextForBatch(elementMap, [12, 13]);
+
+    expect(result).toBe(
+      'Page 12 ("CENTER WALL"): Center Wall (Booth Structure & Walls)\n' +
+        'Page 13 ("FRONT TOWERS - Qty. 2"): Front Towers (Booth Structure & Walls), LED Screen (Audio/Visual)',
+    );
+  });
+
+  it("returns null when no page in the batch has any identified element", () => {
+    const elementMap = [{ pageNumber: 1, pageTitle: null, elements: [] }];
+    expect(buildElementContextForBatch(elementMap, [1])).toBeNull();
+  });
+
+  it("omits a page whose elements array is empty even if pageTitle is present", () => {
+    const elementMap = [
+      { pageNumber: 1, pageTitle: "GENERAL NOTES", elements: [] },
+      { pageNumber: 2, pageTitle: "CENTER WALL", elements: [{ name: "Center Wall", category: "Booth Structure & Walls" as const }] },
+    ];
+
+    const result = buildElementContextForBatch(elementMap, [1, 2]);
+
+    expect(result).toBe('Page 2 ("CENTER WALL"): Center Wall (Booth Structure & Walls)');
+  });
+
+  it("tolerates a batch page number that isn't present in the element map at all", () => {
+    const elementMap = [{ pageNumber: 2, pageTitle: "CENTER WALL", elements: [{ name: "Center Wall", category: "Booth Structure & Walls" as const }] }];
+
+    const result = buildElementContextForBatch(elementMap, [1, 2]);
+
+    expect(result).toBe('Page 2 ("CENTER WALL"): Center Wall (Booth Structure & Walls)');
+  });
+});
+
 describe("mergeAdjacentBatchDuplicates", () => {
   const item = (description: string, pageNumber: number) =>
     ({
@@ -151,6 +203,8 @@ describe("mergeAdjacentBatchDuplicates", () => {
       lineType: "MATERIAL" as const,
       category: "Booth Structure & Walls" as const,
       pageNumber,
+      elementName: null,
+      subElementName: null,
     });
 
   it("drops an unambiguous exact-description duplicate at a batch boundary", () => {
@@ -216,5 +270,71 @@ describe("SYSTEM_PROMPT", () => {
   it("instructs the model to preserve source wording for custom-fabricated items", () => {
     expect(SYSTEM_PROMPT).toMatch(/preserve the sheet's own specifying language/);
     expect(SYSTEM_PROMPT).toMatch(/single-sided Chinese birch/);
+  });
+
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf" --
+  // see DrawingElementMapFromAI's own header comment): an LED screen's
+  // tile grid was proposed with no overall size, and a 39.06" wall panel
+  // had no height even though the sheet stated one elsewhere. Only proves
+  // the instructions are present, not that the model follows them --
+  // that's the real-file verification (see this feature's own plan).
+  it("instructs the model to compute an overall size from a repeated-unit grid, not just report the tile count", () => {
+    expect(SYSTEM_PROMPT).toMatch(/rectangular GRID of identically-dimensioned repeated units/);
+    expect(SYSTEM_PROMPT).toMatch(/117\.18"W x 136\.71"H \(6x7 grid of 19\.53" tiles\)/);
+    expect(SYSTEM_PROMPT).toMatch(/never in qty/);
+  });
+
+  it("instructs the model to include a panel's height only when it's actually determinable from the sheet", () => {
+    expect(SYSTEM_PROMPT).toMatch(/leave it out of the description entirely rather than inventing or assuming one/);
+  });
+
+  it("instructs the model to copy elementName from the per-page element list given below, never guessing one", () => {
+    expect(SYSTEM_PROMPT).toMatch(/Elements identified per page/);
+    expect(SYSTEM_PROMPT).toMatch(/copy that string exactly, don't reword it/);
+    expect(SYSTEM_PROMPT).toMatch(/leave elementName null rather than guessing one/);
+  });
+});
+
+describe("ELEMENT_MAP_SYSTEM_PROMPT", () => {
+  it("instructs the model to read the page's own printed title first", () => {
+    expect(ELEMENT_MAP_SYSTEM_PROMPT).toMatch(/Read that title FIRST/);
+  });
+
+  it("instructs the model to reuse the exact same element name across pages of the same element", () => {
+    expect(ELEMENT_MAP_SYSTEM_PROMPT).toMatch(/MUST use the exact same name string on every page/);
+  });
+
+  it("lists the same SCOPE_CATEGORIES values used by the line-item pass", () => {
+    for (const category of SCOPE_CATEGORIES) {
+      expect(ELEMENT_MAP_SYSTEM_PROMPT).toContain(category);
+    }
+  });
+});
+
+describe("DRAWING_LINE_ITEM_SCHEMA", () => {
+  it("declares elementName and subElementName as nullable strings, required under strict mode", () => {
+    const itemProps = DRAWING_LINE_ITEM_SCHEMA.schema.properties.items.items.properties as Record<string, { type: unknown }>;
+    const required = DRAWING_LINE_ITEM_SCHEMA.schema.properties.items.items.required as readonly string[];
+
+    expect(itemProps.elementName.type).toEqual(["string", "null"]);
+    expect(itemProps.subElementName.type).toEqual(["string", "null"]);
+    // strict: true requires every declared property to be listed here --
+    // a missed entry fails silently at the OpenAI API level, not at parse
+    // time, so this is worth a direct assertion.
+    expect(required).toContain("elementName");
+    expect(required).toContain("subElementName");
+  });
+});
+
+describe("DRAWING_ELEMENT_MAP_SCHEMA", () => {
+  it("requires pageNumber, pageTitle, and elements on every page entry", () => {
+    const pageRequired = DRAWING_ELEMENT_MAP_SCHEMA.schema.properties.pages.items.required as readonly string[];
+    expect(pageRequired).toEqual(["pageNumber", "pageTitle", "elements"]);
+  });
+
+  it("requires name and category on every element entry", () => {
+    const elementRequired = DRAWING_ELEMENT_MAP_SCHEMA.schema.properties.pages.items.properties.elements.items
+      .required as readonly string[];
+    expect(elementRequired).toEqual(["name", "category"]);
   });
 });

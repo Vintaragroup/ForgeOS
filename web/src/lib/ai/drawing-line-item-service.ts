@@ -21,6 +21,7 @@ import {
   getDrawingAiClient,
   DEFAULT_DRAWING_BATCH_SIZE,
   reasoningBudgetForBatch,
+  DRAWING_REASONING_BUDGET,
   DRAWING_REQUEST_TIMEOUT_MS,
   buildPageContentParts,
 } from "@/lib/ai/drawing-ai-client";
@@ -42,7 +43,169 @@ type DrawingLineItemFromAI = {
   lineType: "MATERIAL" | "LABOR" | "FEE";
   category: ScopeCategory;
   pageNumber: number;
+  // H2/H3 -- see identifyDrawingElements below and Document.proposedLineItemGaps'
+  // neighboring schema comments for the general "why a separate earlier
+  // pass feeds this one" pattern. elementName is copied verbatim from that
+  // earlier pass's own per-page element list (see buildElementContextForBatch),
+  // never invented fresh here -- null only when that pass identified no
+  // element for this item's page. subElementName is a finer split WITHIN
+  // one elementName (e.g. "LED Screen" vs "Touch Screen" both under "Front
+  // Towers") -- null whenever elementName alone is already specific enough.
+  elementName: string | null;
+  subElementName: string | null;
 };
+
+// Sept 2026 (Titleist "GeneralMeasurements.pdf" -- real production use):
+// confirmed live that an item like "LED Screen qty=2" got proposed with no
+// overall size at all, even though the real sheet shows a 6x7 grid of
+// 19.53" tiles and no overall L x W printed anywhere -- and more broadly,
+// proposed items had no sense of which physical element of the exhibit
+// (e.g. "Front Towers") they actually belonged to, so everything of one
+// category landed in one flat bucket regardless of which real component it
+// came from. This whole-document pass fixes the second problem directly
+// (see DRAWING_ELEMENT_MAP_SCHEMA/ELEMENT_MAP_SYSTEM_PROMPT below) and
+// feeds proposeLineItemsFromDrawing's per-batch calls the per-page element
+// map they need to tag each item correctly -- the first problem (grid/tile
+// dimension recognition) is a separate, unrelated SYSTEM_PROMPT addition
+// below, since a page can need grid recognition without needing this pass
+// at all (the two are complementary, not the same fix).
+type DrawingElementMapFromAI = {
+  pages: {
+    pageNumber: number;
+    pageTitle: string | null;
+    elements: { name: string; category: ScopeCategory }[];
+  }[];
+};
+
+// Page-keyed (not element-keyed): lets the model emit however many
+// elements one page actually shows, and reuse one name across several
+// pages for a rare multi-page element, using nothing more than ordinary
+// string matching downstream -- no separate step is needed to have the
+// model pre-decide element boundaries into a different shape. This is also
+// exactly the lookup shape proposeLineItemsFromDrawing's batch loop needs
+// ("what element(s) does page N belong to"), so nothing has to invert it.
+export const DRAWING_ELEMENT_MAP_SCHEMA = {
+  name: "drawing_element_map",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pages: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            pageNumber: {
+              type: "integer",
+              description: "The page's real 'Page N' label -- same convention as DRAWING_LINE_ITEM_SCHEMA's own pageNumber.",
+            },
+            pageTitle: {
+              type: ["string", "null"],
+              description:
+                "The page's own printed title/heading, copied exactly as shown (e.g. \"FRONT TOWERS - QTY. 2\", \"CENTER WALL\"). Null only if no legible title is printed anywhere on the sheet.",
+            },
+            elements: {
+              type: "array",
+              description:
+                "The main physical element(s) shown/detailed on this page, most prominent first. Almost every sheet shows exactly ONE element (matching its own title) -- more than one only for a genuine multi-element overview sheet.",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  name: {
+                    type: "string",
+                    description:
+                      "A short, real element/component name -- prefer the sheet's own printed title verbatim; only invent a descriptive name when no title is legible. Reuse the EXACT SAME string across every page showing/continuing this same physical element.",
+                  },
+                  category: { type: "string", enum: SCOPE_CATEGORIES },
+                },
+                required: ["name", "category"],
+              },
+            },
+          },
+          required: ["pageNumber", "pageTitle", "elements"],
+        },
+      },
+    },
+    required: ["pages"],
+  },
+} as const;
+
+export const ELEMENT_MAP_SYSTEM_PROMPT = `You are looking at every page of a fabrication/construction drawing or CAD export for an event/exhibit contractor. Your only job on this pass is to identify, for each page, which real physical element(s) of the exhibit that page shows or details -- you are NOT extracting dimensions or line items here, just building a map of what's on each sheet.
+
+Real CAD export sheets from this kind of contractor are consistently titled -- almost every sheet has its own printed title, usually large text near a corner (e.g. "FRONT TOWERS - QTY. 2", "CENTER WALL", "GENERAL MEASUREMENTS"). Read that title FIRST -- it is the primary, most reliable signal for what the page is about. Copy it into pageTitle exactly as printed. Only fall back to inferring an element name yourself, from what's actually drawn, when no legible title is printed anywhere on the sheet.
+
+Most sheets detail exactly ONE physical element -- put exactly one entry in elements for those. A small number of sheets are different:
+- A whole-booth overview/isometric sheet can show several distinct named elements at once (platforms, an entrance canopy, a graphic wall, tower structures, a display table, etc.) -- list each one you can actually identify, most visually prominent first.
+- A single detail sheet can occasionally cover more than one closely-related element (e.g. a tower sheet showing both its structure AND the AV equipment mounted on it) -- when that's genuinely the case, list each as its own entry rather than merging them into one vague name.
+
+An element that spans or continues across more than one page (rare in this kind of export, but real) MUST use the exact same name string on every page it appears on -- downstream processing groups pages together purely by matching this string exactly, so consistency matters more than wording quality.
+
+category must be exactly one of: ${SCOPE_CATEGORIES.join(", ")} -- the closest fit for what that element mainly is (an LED video wall or touch screen is Audio/Visual even though it's also a structure; a booth's own walls/frame/shell is Booth Structure & Walls; a fixture built to showcase a specific product is Custom Build).
+
+If a page has no identifiable element at all (a pure title block, index, or general-notes page), return an empty elements array for it -- don't invent one.`;
+
+// Separate, side-effect-free (no DB write, no recordAiUsage of its own --
+// the caller records usage, since only it knows documentId/opportunityId
+// at the point this resolves) so a diagnostic script can call this
+// directly against a real file, same precedent as SYSTEM_PROMPT being
+// exported for exactly that reason. Reuses the SAME already-rasterized
+// images/pageTexts/pageNumbers pageImages() already produced -- rendering
+// a second, different-resolution pass would reintroduce the exact PDF.js
+// memory-leak risk pdf.cleanup() was added to fix, for a token savings
+// that's speculative and unmeasured. One whole-document call, not batched:
+// reading page titles and coarse element identification is far less
+// demanding than Pass 2's fine dimension-reading, and needs whole-document
+// context to keep one element's name consistent across pages -- something
+// per-page-group batching can't provide. Reuses DRAWING_REASONING_BUDGET
+// UNSCALED (not reasoningBudgetForBatch) since that constant was tuned
+// against exactly this call shape: one whole-document vision call.
+export async function identifyDrawingElements(
+  client: ReturnType<typeof getDrawingAiClient>["client"],
+  model: string,
+  viaOpenRouter: boolean,
+  filename: string,
+  images: string[],
+  pageTexts: string[],
+  pageNumbers: number[],
+): Promise<{
+  elementMap: DrawingElementMapFromAI;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+}> {
+  const completion = await client.chat.completions.create(
+    {
+      model,
+      temperature: 0.2,
+      ...(viaOpenRouter ? (DRAWING_REASONING_BUDGET as unknown as Record<string, unknown>) : {}),
+      messages: [
+        { role: "system", content: ELEMENT_MAP_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Drawing: ${filename} -- whole-document element identification pass (${images.length} page image${images.length === 1 ? "" : "s"})`,
+            },
+            ...buildPageContentParts(images, pageTexts, pageNumbers),
+          ],
+        },
+      ],
+      response_format: { type: "json_schema", json_schema: DRAWING_ELEMENT_MAP_SCHEMA },
+    },
+    { timeout: DRAWING_REQUEST_TIMEOUT_MS },
+  );
+  const content = completion.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error(
+      viaOpenRouter
+        ? `${model} returned an empty response during element identification (possibly exhausted its reasoning token budget) -- see DRAWING_REASONING_BUDGET in drawing-ai-client.ts.`
+        : "OpenAI returned an empty response during element identification.",
+    );
+  }
+  return { elementMap: JSON.parse(content) as DrawingElementMapFromAI, usage: completion.usage };
+}
 
 // A scope-summary fact (from this SAME document's own summarizeDrawing
 // pass) the model could not map to any proposed item -- see
@@ -61,7 +224,7 @@ type DrawingLineItemGapFromAI = { text: string; pageNumber: number | null; reaso
 // document, so asking for one would still just invite a fabricated-looking
 // string. pageNumber is model-reported and trusted directly, same as that
 // file's keyDates/scopeSummary.
-const DRAWING_LINE_ITEM_SCHEMA = {
+export const DRAWING_LINE_ITEM_SCHEMA = {
   name: "drawing_line_items",
   strict: true,
   schema: {
@@ -89,8 +252,18 @@ const DRAWING_LINE_ITEM_SCHEMA = {
               description:
                 "The page number given in that page's 'Page N' label -- the document's real page number, not your position in the list (a page that failed to render may have been skipped, so these numbers can skip values).",
             },
+            elementName: {
+              type: ["string", "null"],
+              description:
+                "The real physical element/component this item belongs to, taken from the 'Elements identified per page' list given below for the page it came from (see system prompt) -- copy that string exactly, don't reword it. Null only if no element was identified for that item's page.",
+            },
+            subElementName: {
+              type: ["string", "null"],
+              description:
+                "A more specific sub-element name only when it adds real distinguishing detail beyond elementName (e.g. separating 'LED Screen' items from 'Touch Screen' items that share one elementName like 'Front Towers'). Null when elementName alone is already specific enough.",
+            },
           },
-          required: ["description", "qty", "qtyIsExplicit", "unit", "lineType", "category", "pageNumber"],
+          required: ["description", "qty", "qtyIsExplicit", "unit", "lineType", "category", "pageNumber", "elementName", "subElementName"],
         },
       },
       gaps: {
@@ -129,10 +302,16 @@ For each item:
 - qtyIsExplicit: true when that qty value is actually printed on the sheet, OR when it's the count of named instances in a "Left & Right"-style element title as described above -- both are things the sheet itself states, just not always as a numeral.
 
 A wall or panel elevation is sometimes dimensioned as a sequence of individual segment widths along one dimension line (e.g. several consecutive callouts marching across the top of a wall), rather than one aggregate span for the whole wall -- each such segment is one physical panel. When you see this: group segments that share the exact same stated dimension into ONE item with qty equal to how many segments share it (qtyIsExplicit: true -- that count comes directly from the sheet's own repeated dimensions). A segment whose dimension doesn't match any other segment on that same elevation is its own distinct item, qty 1, qtyIsExplicit: true -- its size is genuinely stated, this isn't the "unknown quantity" placeholder case. Match on the exact printed value -- don't treat close-but-different numbers (e.g. 39.01" vs 39.06") as the same panel just because they're similar; a corner or return panel is often intentionally cut to a slightly different width on purpose, and merging them would misreport both the count and what's actually on the sheet. Don't collapse an entire dimensioned run into one generic "wall panel" item with no count either -- every segment is a real, priceable panel.
+A separate, genuinely different pattern from the sequential-segment case above: some elements (most commonly an LED video wall's tiles, but the same reading applies to any modular/repeated-unit component -- a slat-panel grid, a tile floor, a lattice) are shown as a rectangular GRID of identically-dimensioned repeated units -- rows and columns of the same small dimensioned square/rectangle -- with no overall length x width printed anywhere on the sheet. This differs from the sequential-segment case (a single dimension line of consecutive different-width panels): here every unit repeats the exact same stated dimension in both directions, arranged in a visible rows x columns layout. When you see this, don't just report the tile count -- compute the overall assembled size yourself: count the grid's rows and columns directly from the drawing (don't guess; count what's actually drawn), multiply columns x each tile's stated width for the overall width and rows x each tile's stated height for the overall height (tiles are usually square, so one stated dimension often applies to both), and report ALL of it in one item's description: the overall computed size, the row x column grid count, and the per-tile dimension -- e.g. "LED Screen 117.18"W x 136.71"H (6x7 grid of 19.53" tiles)" for a 6-column x 7-row grid of 19.53" square tiles. qty for this item is the count of ASSEMBLED units shown (e.g. qty 2 for an element titled "LED Screen qty=2"), not the individual tile count -- the tile count belongs in the description as shown above, never in qty.
+
+The sequential-segment grouping above captures each panel's WIDTH from the dimension line, but a panel's real size for sheet-good/material costing needs both dimensions. When a real height value for that same wall/panel run is determinable from the sheet -- a shared "total height"/overall-elevation dimension printed elsewhere on the same sheet, or a per-panel height callout -- include it in the item's description alongside the width, e.g. "39.06"W x 190.51"H wall panel". Only state a height that's actually determinable from a real printed value on the sheet; if no height is stated or inferable anywhere on the sheet, leave it out of the description entirely rather than inventing or assuming one -- the same honesty rule qtyIsExplicit already applies to quantity applies here to dimensions.
+
 - unit: a sensible unit for this item (EA, SQFT, LF, HR, LOT) -- infer from context if the sheet doesn't state one.
 - lineType: MATERIAL for goods/fabrication, LABOR for installation/labor-only work, FEE for flat fees/rentals/services.
 - category: which section this item belongs to.
 - pageNumber: the page number given in that page's "Page N" label -- the document's real page number, not your position in the list (a page that failed to render may have been skipped, so these numbers can skip values).
+- elementName: the real physical element this item belongs to, taken from the "Elements identified per page" list given below for the page it came from (item's own pageNumber) -- see below for exactly how to set this. Null only if no element was identified for that item's page.
+- subElementName: a more specific sub-element name only when it adds real distinguishing detail beyond elementName (e.g. separating "LED Screen" items from "Touch Screen" items that share one elementName like "Front Towers") -- null when elementName alone is already specific enough.
 
 Only propose items that describe actual work or goods to be provided -- skip title blocks, revision notes, and general notes entirely. If a sheet has no concrete fabrication scope (e.g. it's purely a floor plan with no callouts), it can contribute nothing.
 
@@ -142,7 +321,9 @@ Two categories are easy to misroute into a broader neighbor -- check these befor
 - Audio/Visual: any screen, monitor, LED video wall/tile, touch screen, or other AV equipment -- even though it's electrically powered, it belongs here, not Electrical & Lighting (reserve that one for house power, task/accent lighting, and electrical hookups that aren't themselves a display or AV device).
 - Custom Build: a fixture built specifically to showcase or display a particular product (a product rail, a dedicated display stand or cabinet, a feature element) -- reserve Booth Structure & Walls for the booth's own walls, frame, and structural shell, not fixtures placed inside it that exist to show off a product.
 
-You may also be given a checklist below labeled "Facts already identified in this document's summary" -- specific dimensions/materials/callouts a separate earlier pass over this SAME document already found. Cross-check your proposed items against every fact on that list: each one should either be clearly reflected in an item's description (directly, or as part of a broader item that covers it), or added to gaps with a real, specific reason it isn't its own biddable line -- never silently dropped. A weak or generic reason ("not important") is worse than an honest "missed on first pass, should be its own item" -- gaps is a genuine coverage check, not a formality to satisfy. If no checklist was provided below, return gaps: [].`;
+You may also be given a checklist below labeled "Facts already identified in this document's summary" -- specific dimensions/materials/callouts a separate earlier pass over this SAME document already found. Cross-check your proposed items against every fact on that list: each one should either be clearly reflected in an item's description (directly, or as part of a broader item that covers it), or added to gaps with a real, specific reason it isn't its own biddable line -- never silently dropped. A weak or generic reason ("not important") is worse than an honest "missed on first pass, should be its own item" -- gaps is a genuine coverage check, not a formality to satisfy. If no checklist was provided below, return gaps: [].
+
+You may also be given a list below labeled "Elements identified per page" -- which real physical element(s) each of this batch's pages show, from an earlier whole-document pass over this SAME drawing. Set each item's elementName to the element name listed for the page it came from -- copy that string exactly, don't reword it, so items belonging to the same physical element group together correctly downstream. If a page lists more than one element, pick whichever specific one that item's own content clearly belongs to (e.g. on a page listing both "LED Video Wall" and "Touch Screen Monitor", a touchscreen callout's elementName is "Touch Screen Monitor", not the sheet's other element). If a page isn't listed below at all, leave elementName null rather than guessing one.`;
 
 // A group of consecutive whole pages sent to the model as one call --
 // never splits a single page's own images/text across two batches, which
@@ -186,6 +367,25 @@ export function chunkPagesIntoBatches(
 export function filterChecklistForBatch(scopeChecklist: CitedText[], batchPageNumbers: number[]): CitedText[] {
   const pages = new Set(batchPageNumbers);
   return scopeChecklist.filter((fact) => fact.pageNumber === null || pages.has(fact.pageNumber));
+}
+
+// Formats identifyDrawingElements' whole-document page map down to just
+// the pages in one batch, as the "Elements identified per page" context
+// block SYSTEM_PROMPT instructs the model to copy elementName from. A page
+// with an empty elements array (identifyDrawingElements found nothing --
+// a title block, index, or notes-only page) is left out entirely rather
+// than listed with nothing to show. Returns null (omit the block) when no
+// page in this batch has anything to report.
+export function buildElementContextForBatch(
+  elementMap: DrawingElementMapFromAI["pages"],
+  batchPageNumbers: number[],
+): string | null {
+  const pages = new Set(batchPageNumbers);
+  const relevant = elementMap.filter((p) => pages.has(p.pageNumber) && p.elements.length > 0);
+  if (relevant.length === 0) return null;
+  return relevant
+    .map((p) => `Page ${p.pageNumber}${p.pageTitle ? ` ("${p.pageTitle}")` : ""}: ${p.elements.map((e) => `${e.name} (${e.category})`).join(", ")}`)
+    .join("\n");
 }
 
 // Narrow, adjacent-batch-boundary-only safety net -- NOT a general
@@ -328,24 +528,70 @@ export async function proposeLineItemsFromDrawing(
     });
   }
 
-  const batchSize = Number(process.env.AI_DRAWING_BATCH_SIZE) || DEFAULT_DRAWING_BATCH_SIZE;
-  const batches = chunkPagesIntoBatches(images, pageTexts, pageNumbers, batchSize);
-
-  // First write of the run -- makes batchTotal (only knowable once
-  // pageImages has actually run) visible to a poller immediately, and
-  // makes this function self-sufficient for progress tracking regardless
-  // of caller (a direct test/script call, or proposeScopeItemsAction's
+  // First write of the run -- moved to BEFORE Pass 1 (element
+  // identification) runs, not after, so Pass 1's own real wall time counts
+  // toward lineItemProposalStartedAt and the progress UI's elapsed-time
+  // baseline. batchTotal starts at 0/unknown (only knowable once Pass 1
+  // has finished and batches below is computed) -- the progress poller
+  // already shows a plain "Starting analysis..." state whenever batchTotal
+  // is falsy, so this needs no new UI string for Pass 1 at all. Also makes
+  // this function self-sufficient for progress tracking regardless of
+  // caller (a direct test/script call, or proposeScopeItemsAction's
   // after()-backgrounded call).
   await db.document.update({
     where: { id: documentId },
     data: {
       lineItemProposalStatus: "ANALYZING",
       lineItemProposalBatchIndex: 0,
-      lineItemProposalBatchTotal: batches.length,
+      lineItemProposalBatchTotal: 0,
       lineItemProposalStartedAt: new Date(),
       lineItemProposalError: null,
     },
   });
+
+  // Pass 1: identify which real physical element each page shows, before
+  // any of Pass 2's per-segment extraction runs -- see
+  // identifyDrawingElements' own header for why this needs whole-document
+  // context and can't just be folded into the batch loop below. Failure
+  // here aborts the whole run (same FAILED-and-rethrow posture as a batch
+  // failure below) rather than silently falling back to un-elemented,
+  // category-only output -- a deliberate choice matching this pipeline's
+  // existing "honest, not silently degraded" pattern (qtyIsExplicit, the
+  // gaps checklist): a transient Pass 1 failure should surface as a real,
+  // visible FAILED state the user can just retry, not a quietly worse
+  // result they'd have no way to notice.
+  let elementMap: DrawingElementMapFromAI["pages"];
+  try {
+    const { elementMap: map, usage } = await identifyDrawingElements(
+      client,
+      model,
+      viaOpenRouter,
+      document.filename,
+      images,
+      pageTexts,
+      pageNumbers,
+    );
+    elementMap = map.pages;
+    await recordAiUsage({
+      userId,
+      feature: "DRAWING_LINE_ITEMS",
+      model,
+      usage,
+      documentId,
+      opportunityId: document.opportunityId,
+    });
+  } catch (err) {
+    const message = `Element identification pass failed: ${err instanceof Error ? err.message : String(err)}`;
+    await db.document.update({
+      where: { id: documentId },
+      data: { lineItemProposalStatus: "FAILED", lineItemProposalError: message },
+    });
+    throw err;
+  }
+
+  const batchSize = Number(process.env.AI_DRAWING_BATCH_SIZE) || DEFAULT_DRAWING_BATCH_SIZE;
+  const batches = chunkPagesIntoBatches(images, pageTexts, pageNumbers, batchSize);
+  await db.document.update({ where: { id: documentId }, data: { lineItemProposalBatchTotal: batches.length } });
 
   const itemsByBatch: DrawingLineItemFromAI[][] = [];
   const gapsByBatch: DrawingLineItemGapFromAI[][] = [];
@@ -361,6 +607,7 @@ export async function proposeLineItemsFromDrawing(
       await db.document.update({ where: { id: documentId }, data: { lineItemProposalBatchIndex: i } });
     }
     const batchChecklist = filterChecklistForBatch(scopeChecklist, batch.pageNumbers);
+    const elementContext = buildElementContextForBatch(elementMap, batch.pageNumbers);
 
     try {
       const completion = await client.chat.completions.create(
@@ -388,6 +635,14 @@ export async function proposeLineItemsFromDrawing(
                         text: `Facts already identified in this document's summary (cross-check against these -- see system prompt):\n${batchChecklist
                           .map((fact, idx) => `${idx + 1}. [page ${fact.pageNumber ?? "?"}] ${fact.text}`)
                           .join("\n")}`,
+                      },
+                    ]
+                  : []),
+                ...(elementContext
+                  ? [
+                      {
+                        type: "text" as const,
+                        text: `Elements identified per page (from an earlier whole-document pass over this SAME drawing -- see system prompt):\n${elementContext}`,
                       },
                     ]
                   : []),
