@@ -432,6 +432,22 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toMatch(/has 11 real segments to account for in total/);
   });
 
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf",
+  // real production use): a "219.53"W x 190.51"H wall panel" item appeared
+  // in 3 separate real runs on page 12 ("CENTER WALL"). Direct, careful
+  // visual inspection of both of that page's elevations (every printed
+  // number cross-checked) confirmed "219.53"" is printed NOWHERE on the
+  // page -- but a real segment "19.53"" is printed twice, and three real
+  // aggregate totals on the same sheet (224.59", 290.50", 246.56") all
+  // start with the same leading digit "2". Not caught by
+  // flagPossibleMisreads: that function only catches a same-length
+  // single-digit substitution ("30.06" vs "39.06"), and "219.53" (6 chars)
+  // vs "19.53" (5 chars) is a digit INSERTION, a different corruption mode.
+  it("instructs the model not to blend a digit from a nearby aggregate total into a segment's own value", () => {
+    expect(SYSTEM_PROMPT).toMatch(/never blend, prepend, or append a digit from a different, nearby label/);
+    expect(SYSTEM_PROMPT).toMatch(/"19\.53"" sitting near an unrelated "224\.59"" or "290\.50"" total/);
+  });
+
   // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf" --
   // real production use): a page titled "CALLOUTS" that's purely a
   // floor-plan legend (dashed boxes naming zones like "Left Back Corner,"
@@ -443,6 +459,37 @@ describe("SYSTEM_PROMPT", () => {
   it("instructs the model not to propose a placeholder item per named callout on a floor-plan legend sheet", () => {
     expect(SYSTEM_PROMPT).toMatch(/reference index, not fabrication scope/);
     expect(SYSTEM_PROMPT).toMatch(/propose NOTHING from a page like this/);
+  });
+
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf",
+  // real production use): the real document shows two elevated platforms
+  // with staircases (one per back corner) only on its whole-booth overview
+  // pages, with no printed numeric dimension for either anywhere in the
+  // 14-page document (confirmed by direct visual inspection of every
+  // corner/wall detail sheet) -- repeated real Pass-2 runs against the
+  // batch containing the back-corner detail sheet never produced a
+  // platform/staircase item at all, a substantial, expensive, physically
+  // real structure silently dropped because nothing distinguished it from
+  // the CALLOUTS-exclusion case just above (a page with no dimension line
+  // was being treated as having no real scope to price).
+  it("instructs the model to propose an elevated platform/staircase structure even with no printed dimension, distinct from the CALLOUTS-exclusion case", () => {
+    expect(SYSTEM_PROMPT).toMatch(/raised deck on support posts/);
+    expect(SYSTEM_PROMPT).toMatch(/propose it as its own line item even when no dimension line anywhere in the document gives it a printed numeric size/);
+    expect(SYSTEM_PROMPT).toMatch(/a bare 2D zone-location index with nothing of its own to price/);
+  });
+
+  it("instructs the model to give each visually distinct platform its own item, qty 1 EA, category Flooring & Platforms", () => {
+    expect(SYSTEM_PROMPT).toMatch(/qty 1 EA, qtyIsExplicit: true, the same directly-countable logic already covered above/);
+    expect(SYSTEM_PROMPT).toMatch(/category is "Flooring & Platforms"/);
+  });
+
+  it("instructs the model to state in the description itself when a platform's size is approximate rather than read from a printed value", () => {
+    expect(SYSTEM_PROMPT).toMatch(/say so directly in the description itself/);
+    expect(SYSTEM_PROMPT).toMatch(/Never invent a precise-looking width x height the sheet never actually gives/);
+  });
+
+  it("instructs the model not to go looking for a platform on every booth", () => {
+    expect(SYSTEM_PROMPT).toMatch(/most booths have none/);
   });
 
   // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf",
@@ -471,6 +518,25 @@ describe("ELEMENT_MAP_SYSTEM_PROMPT", () => {
 
   it("instructs the model to reuse the exact same element name across pages of the same element", () => {
     expect(ELEMENT_MAP_SYSTEM_PROMPT).toMatch(/MUST use the exact same name string on every page/);
+  });
+
+  // Real gap this closes (Sept 2026, Titleist "GeneralMeasurements.pdf",
+  // real production use): the whole-booth overview pages (1-4) clearly show
+  // two elevated second-level platforms with staircases (one per back
+  // corner, confirmed by direct high-resolution visual inspection), but a
+  // real Pass-1 run against the full 14-page document collapsed all four
+  // overview pages to one generic "Booth Overview" element with no
+  // sub-decomposition -- so neither platform ever got its own
+  // elementName, and downstream Pass 2 had nothing distinct to route a
+  // platform item's section through.
+  it("instructs the model to give an elevated platform/mezzanine deck its own named element, not fold it into a generic overview entry", () => {
+    expect(ELEMENT_MAP_SYSTEM_PROMPT).toMatch(/raised deck on support posts/);
+    expect(ELEMENT_MAP_SYSTEM_PROMPT).toMatch(/connected to the floor by its own staircase/);
+    expect(ELEMENT_MAP_SYSTEM_PROMPT).toMatch(/Elevated Platform - Left Back Corner/);
+  });
+
+  it("instructs the model not to invent a platform entry that isn't genuinely visible", () => {
+    expect(ELEMENT_MAP_SYSTEM_PROMPT).toMatch(/don't go looking for a platform that isn't there/);
   });
 
   it("lists the same SCOPE_CATEGORIES values used by the line-item pass", () => {
