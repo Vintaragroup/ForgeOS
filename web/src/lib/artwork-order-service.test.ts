@@ -10,6 +10,7 @@ import {
   computeSlaDueAt,
   createArtworkOrder,
   setCustomSizeQuote,
+  setProductionSpec,
   submitArtworkOrder,
   transitionArtworkOrder,
   updateArtworkOrderDraft,
@@ -344,6 +345,43 @@ describe("acceptCustomSizeQuote", () => {
   it("refuses to accept a quote that was never issued", async () => {
     const order = await makeArtworkOrder();
     await expect(acceptCustomSizeQuote(order.id, CLIENT_ACTOR)).rejects.toThrow(/no custom-size quote/i);
+  });
+});
+
+describe("setProductionSpec", () => {
+  it("sets width, height, and bleed, and logs an annotation-only event", async () => {
+    const order = await makeArtworkOrder();
+    const { artworkOrder, event } = await setProductionSpec(
+      order.id,
+      { widthIn: 96, heightIn: 42, bleedIn: 0.25 },
+      EXPO_ACTOR,
+    );
+    expect(artworkOrder.customWidth?.toNumber()).toBe(96);
+    expect(artworkOrder.customHeight?.toNumber()).toBe(42);
+    expect(artworkOrder.bleedIn?.toNumber()).toBe(0.25);
+    // Same-status call -- an annotation, not a real transition (see
+    // transitionArtworkOrder's own comment on this pattern).
+    expect(event.fromStatus).toBe(event.toStatus);
+    expect(event.action).toBe("SET_PRODUCTION_SPEC");
+  });
+
+  it("leaves a field untouched when its value is undefined, unlike a plain-form clear", async () => {
+    const order = await makeArtworkOrder();
+    await setProductionSpec(order.id, { widthIn: 96, heightIn: 42, bleedIn: 0.25 }, EXPO_ACTOR);
+
+    const { artworkOrder } = await setProductionSpec(order.id, { bleedIn: 0.5 }, EXPO_ACTOR);
+    expect(artworkOrder.customWidth?.toNumber()).toBe(96);
+    expect(artworkOrder.customHeight?.toNumber()).toBe(42);
+    expect(artworkOrder.bleedIn?.toNumber()).toBe(0.5);
+  });
+
+  it("clears a field when its value is explicitly null", async () => {
+    const order = await makeArtworkOrder();
+    await setProductionSpec(order.id, { widthIn: 96, heightIn: 42, bleedIn: 0.25 }, EXPO_ACTOR);
+
+    const { artworkOrder } = await setProductionSpec(order.id, { bleedIn: null }, EXPO_ACTOR);
+    expect(artworkOrder.customWidth?.toNumber()).toBe(96);
+    expect(artworkOrder.bleedIn).toBeNull();
   });
 });
 

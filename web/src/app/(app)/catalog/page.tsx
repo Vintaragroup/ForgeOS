@@ -6,16 +6,25 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 export default async function CatalogPage() {
-  const [laborRateCount, materialCount, rentalItemCount, taxRateCount, categoryCount, proposalTemplateCount, vendorCount] =
-    await Promise.all([
-      db.laborRate.count({ where: { deletedAt: null } }),
-      db.material.count({ where: { deletedAt: null } }),
-      db.rentalItem.count({ where: { deletedAt: null } }),
-      db.taxRate.count({ where: { deletedAt: null } }),
-      db.category.count({ where: { deletedAt: null } }),
-      db.proposalTemplate.count({ where: { deletedAt: null } }),
-      db.vendor.count({ where: { deletedAt: null } }),
-    ]);
+  const [
+    laborRateCount,
+    materialCount,
+    rentalItemCount,
+    taxRateCount,
+    categoryCount,
+    proposalTemplateCount,
+    vendorCount,
+    artworkSizeTierCount,
+  ] = await Promise.all([
+    db.laborRate.count({ where: { deletedAt: null } }),
+    db.material.count({ where: { deletedAt: null } }),
+    db.rentalItem.count({ where: { deletedAt: null } }),
+    db.taxRate.count({ where: { deletedAt: null } }),
+    db.category.count({ where: { deletedAt: null } }),
+    db.proposalTemplate.count({ where: { deletedAt: null } }),
+    db.vendor.count({ where: { deletedAt: null } }),
+    db.artworkSizeTier.count({ where: { deletedAt: null } }),
+  ]);
 
   const sections = [
     { href: "/catalog/labor-rates", label: "Labor rates", count: laborRateCount },
@@ -25,6 +34,7 @@ export default async function CatalogPage() {
     { href: "/catalog/categories", label: "Categories", count: categoryCount },
     { href: "/catalog/proposal-templates", label: "Proposal templates", count: proposalTemplateCount },
     { href: "/catalog/vendors", label: "Vendors", count: vendorCount },
+    { href: "/catalog/artwork-size-tiers", label: "Artwork size tiers", count: artworkSizeTierCount },
   ];
 
   return (

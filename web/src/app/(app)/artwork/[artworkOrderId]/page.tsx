@@ -3,6 +3,8 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessArtworkOrder } from "@/lib/opportunity-access";
+import { getArtworkFileBytes } from "@/lib/artwork-file-service";
+import { getPdfPageDimensionsInInches } from "@/lib/document-view-service";
 import { Card, PageHeader, StatusChip, Field, SelectField, TextareaField, Button, ReadOnlyField, EmptyState } from "@/components/ui";
 import {
   assignVendorAction,
@@ -13,6 +15,7 @@ import {
   requestProofRevisionAction,
   resolveEscalationAction,
   reviewArtworkOrderAction,
+  setProductionSpecAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -57,10 +60,31 @@ export default async function ArtworkOrderPage({
   const resolveEscalationWithId = resolveEscalationAction.bind(null, order.id);
   const issueGoAheadWithId = issueProductionGoAheadAction.bind(null, order.id);
   const markDeliveredWithId = markDeliveredAction.bind(null, order.id);
+  const setProductionSpecWithId = setProductionSpecAction.bind(null, order.id);
 
   const clientArtworkFile = order.files.find((f) => f.kind === "CLIENT_ARTWORK");
   const latestProof = [...order.files].reverse().find((f) => f.kind === "PROOF");
   const overdue = order.status === "EXPO_PROOF_CHECK" && order.slaDueAt != null && order.slaDueAt < new Date();
+
+  // File-measured dims are read live (not persisted) purely to prefill the
+  // Production spec form below -- once Expo saves a spec, customWidth/
+  // customHeight on the order itself becomes the source of truth and this
+  // measurement is no longer consulted for display.
+  let measuredDims: { widthIn: number; heightIn: number } | null = null;
+  if (clientArtworkFile) {
+    try {
+      const { bytes } = await getArtworkFileBytes(clientArtworkFile.id);
+      measuredDims = await getPdfPageDimensionsInInches(bytes, 1);
+    } catch {
+      measuredDims = null;
+    }
+  }
+  const hasProductionSpec = order.customWidth != null || order.customHeight != null || order.bleedIn != null;
+  const specDefaults = {
+    widthIn: order.customWidth?.toString() ?? (measuredDims ? measuredDims.widthIn.toFixed(2) : ""),
+    heightIn: order.customHeight?.toString() ?? (measuredDims ? measuredDims.heightIn.toFixed(2) : ""),
+    bleedIn: order.bleedIn?.toString() ?? "",
+  };
 
   return (
     <>
@@ -89,7 +113,18 @@ export default async function ArtworkOrderPage({
                 </Link>
               }
             />
-            <ReadOnlyField label="Size" value={order.sizeTier?.label ?? (order.customSizeRequested ? "Custom" : "—")} />
+            <ReadOnlyField
+              label="Size"
+              value={
+                order.sizeTier
+                  ? order.sizeTier.width != null && order.sizeTier.height != null
+                    ? `${order.sizeTier.label} (${order.sizeTier.width}"×${order.sizeTier.height}")`
+                    : order.sizeTier.label
+                  : order.customSizeRequested
+                    ? "Custom"
+                    : "—"
+              }
+            />
             <ReadOnlyField label="Material" value={order.material} />
             <ReadOnlyField label="Qty" value={String(order.qty)} />
             <ReadOnlyField label="Vendor" value={order.vendor?.name ?? "Not yet assigned"} />
@@ -99,6 +134,28 @@ export default async function ArtworkOrderPage({
             />
             <ReadOnlyField label="Revision round" value={`${order.revisionRound} of ${2}`} />
           </div>
+        </Card>
+
+        <Card className="p-6">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Production spec</h2>
+          {measuredDims && (
+            <p className="mb-3 text-xs text-neutral-500">
+              Measured from the uploaded artwork file: {measuredDims.widthIn.toFixed(2)}&quot; × {measuredDims.heightIn.toFixed(2)}&quot;
+              {!hasProductionSpec && " — prefilled below."}
+            </p>
+          )}
+          <form action={setProductionSpecWithId} className="flex flex-wrap items-end gap-3">
+            <div className="w-32">
+              <Field label="Width (in)" name="widthIn" type="number" defaultValue={specDefaults.widthIn} />
+            </div>
+            <div className="w-32">
+              <Field label="Height (in)" name="heightIn" type="number" defaultValue={specDefaults.heightIn} />
+            </div>
+            <div className="w-32">
+              <Field label="Bleed (in)" name="bleedIn" type="number" defaultValue={specDefaults.bleedIn} />
+            </div>
+            <Button variant="secondary">Save production spec</Button>
+          </form>
         </Card>
 
         {order.customSizeRequested && !order.customQuoteAcceptedAt && (
@@ -124,13 +181,20 @@ export default async function ArtworkOrderPage({
           <Card className="p-6">
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Document review</h2>
             {clientArtworkFile ? (
-              <p className="mb-4 text-sm">
+              <p className="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-sm">
                 <Link
                   href={`/artwork/${order.id}/files/${clientArtworkFile.id}?inline=1`}
                   target="_blank"
                   className="text-neutral-900 underline"
                 >
                   View submitted artwork ({clientArtworkFile.filename})
+                </Link>
+                <Link
+                  href={`/artwork/${order.id}/proof-sheet?fileId=${clientArtworkFile.id}`}
+                  target="_blank"
+                  className="text-neutral-900 underline"
+                >
+                  View proof sheet
                 </Link>
               </p>
             ) : (
@@ -183,7 +247,7 @@ export default async function ArtworkOrderPage({
               {order.slaDueAt && ` SLA: check due by ${order.slaDueAt.toLocaleString()}.`}
             </p>
             {latestProof && clientArtworkFile ? (
-              <div className="mb-4 grid grid-cols-2 gap-4 text-sm">
+              <div className="mb-4 grid grid-cols-3 gap-4 text-sm">
                 <Link
                   href={`/artwork/${order.id}/files/${latestProof.id}?inline=1`}
                   target="_blank"
@@ -197,6 +261,13 @@ export default async function ArtworkOrderPage({
                   className="rounded-md border border-neutral-200 px-3 py-2 text-center hover:border-neutral-400"
                 >
                   View approved artwork
+                </Link>
+                <Link
+                  href={`/artwork/${order.id}/proof-sheet?fileId=${latestProof.id}`}
+                  target="_blank"
+                  className="rounded-md border border-neutral-200 px-3 py-2 text-center hover:border-neutral-400"
+                >
+                  View proof sheet
                 </Link>
               </div>
             ) : (

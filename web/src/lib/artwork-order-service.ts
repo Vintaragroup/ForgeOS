@@ -216,6 +216,40 @@ export async function acceptCustomSizeQuote(artworkOrderId: string, actor: Artwo
   return transitionArtworkOrder(artworkOrderId, current.status, "CUSTOM_QUOTE_ACCEPTED", actor);
 }
 
+// Expo setting/correcting the order's real production spec -- reuses
+// customWidth/customHeight rather than a parallel "final" pair (one
+// canonical spec; every change either side makes is already logged via
+// this same same-status transitionArtworkOrder call, matching
+// setCustomSizeQuote's own pattern above). Each field is independently
+// optional: Expo can set just a bleed without re-typing dimensions
+// already trusted from the uploaded file, or vice versa. `undefined`
+// means "leave unchanged"; `null` means "clear it."
+export async function setProductionSpec(
+  artworkOrderId: string,
+  spec: { widthIn?: number | null; heightIn?: number | null; bleedIn?: number | null },
+  actor: ArtworkActor,
+) {
+  const data: Prisma.ArtworkOrderUpdateInput = {};
+  const detail: Record<string, number | null> = {};
+  if (spec.widthIn !== undefined) {
+    data.customWidth = spec.widthIn;
+    detail.widthIn = spec.widthIn;
+  }
+  if (spec.heightIn !== undefined) {
+    data.customHeight = spec.heightIn;
+    detail.heightIn = spec.heightIn;
+  }
+  if (spec.bleedIn !== undefined) {
+    data.bleedIn = spec.bleedIn;
+    detail.bleedIn = spec.bleedIn;
+  }
+  await db.artworkOrder.update({ where: { id: artworkOrderId }, data });
+  const current = await db.artworkOrder.findUniqueOrThrow({ where: { id: artworkOrderId } });
+  return transitionArtworkOrder(artworkOrderId, current.status, "SET_PRODUCTION_SPEC", actor, {
+    detail: detail as Prisma.InputJsonValue,
+  });
+}
+
 // Enforces the same hard gate at the actual submission point (not just at
 // quote-accept time) -- a client could otherwise request a custom size,
 // never accept the quote, and still submit if this weren't checked here

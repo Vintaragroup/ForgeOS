@@ -279,3 +279,67 @@ export async function renderHighlightedPdfPage(bytes: Buffer, pageNumber: number
     canvasFactory.destroy(drawingContext);
   }
 }
+
+// The plain rasterizer artwork-proof-pdf.tsx needs: react-pdf can only
+// embed a raster image, never another PDF, so a client-uploaded artwork
+// PDF has to become a PNG before it can appear inside the proof sheet.
+// Same getDocumentProxy/page.render/@napi-rs/canvas pipeline
+// renderHighlightedPdfPage uses above, with the highlight-rectangle step
+// removed -- there's nothing to highlight here, just page 1 as an image.
+// Returns null (never throws) for anything unrenderable -- a corrupt
+// file, an out-of-range page, or (most commonly) a real .ai
+// (Illustrator) file, which per ARTWORK_UPLOAD_EXTENSIONS is an accepted
+// upload type but isn't actually a PDF pdf.js can parse. The caller
+// degrades to a "preview not available" message, the same posture the
+// general document viewer already takes for file types it can't render.
+export async function renderPdfPageToPng(bytes: Buffer, pageNumber: number, scale = 2): Promise<string | null> {
+  try {
+    ensureCanvasFontsRegistered();
+    const pdf = await getDocumentProxy(new Uint8Array(bytes));
+    if (pageNumber < 1 || pageNumber > pdf.numPages) return null;
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale });
+
+    const CanvasFactory = await createIsomorphicCanvasFactory(() => import("@napi-rs/canvas"));
+    const canvasFactory = new CanvasFactory();
+    const drawingContext = canvasFactory.create(viewport.width, viewport.height);
+    try {
+      await page.render({
+        canvas: drawingContext.canvas as unknown as HTMLCanvasElement,
+        canvasContext: drawingContext.context as unknown as CanvasRenderingContext2D,
+        viewport,
+      }).promise;
+      const buffer = await (drawingContext.canvas as Canvas).encode("png");
+      return `data:image/png;base64,${buffer.toString("base64")}`;
+    } finally {
+      canvasFactory.destroy(drawingContext);
+    }
+  } catch {
+    return null;
+  }
+}
+
+// The proof sheet's real-dimensions piece: reads the actual print size
+// straight off a client-uploaded artwork PDF, rather than trusting a
+// typed-in number (customWidth/customHeight can be wrong; the file's own
+// page size can't be). At scale: 1 with the PDF's default userUnit of 1,
+// getViewport's width/height ARE the page's raw extent in PDF points --
+// same viewport call renderPdfPageToPng already makes, just reading the
+// numbers instead of rasterizing. 72 points = 1 inch is a fixed PDF
+// convention, not a guess. Returns null (never throws) for the same
+// reasons renderPdfPageToPng does -- a corrupt file, an out-of-range page,
+// or a real .ai file that isn't actually PDF-parseable.
+export async function getPdfPageDimensionsInInches(
+  bytes: Buffer,
+  pageNumber: number,
+): Promise<{ widthIn: number; heightIn: number } | null> {
+  try {
+    const pdf = await getDocumentProxy(new Uint8Array(bytes));
+    if (pageNumber < 1 || pageNumber > pdf.numPages) return null;
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1 });
+    return { widthIn: viewport.width / 72, heightIn: viewport.height / 72 };
+  } catch {
+    return null;
+  }
+}

@@ -2514,6 +2514,15 @@ model ArtworkOrder {
   customQuoteAmount     Decimal?  @db.Decimal(10, 2)
   customQuoteAcceptedAt DateTime?
 
+  // Production spec Expo sets/corrects on the order itself -- reuses
+  // customWidth/customHeight above rather than a parallel "final" pair
+  // (setProductionSpec in artwork-order-service.ts can set these directly,
+  // independent of the client's own quote-negotiation flow above; every
+  // change either side makes is already logged via ArtworkOrderEvent).
+  // Bleed has no client-facing equivalent at all -- Expo-only, and null
+  // means "no bleed drawn on the proof sheet," not zero.
+  bleedIn Decimal? @db.Decimal(6, 3)
+
   material String?
   qty      Int     @default(1)
 

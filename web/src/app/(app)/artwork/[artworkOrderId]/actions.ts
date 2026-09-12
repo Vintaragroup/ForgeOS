@@ -6,6 +6,7 @@ import {
   acceptArtworkOrder,
   assignVendor,
   setCustomSizeQuote,
+  setProductionSpec,
   transitionArtworkOrder,
 } from "@/lib/artwork-order-service";
 import {
@@ -63,6 +64,34 @@ export async function issueCustomQuoteAction(artworkOrderId: string, formData: F
   const amount = Number(formData.get("amount"));
   if (!Number.isFinite(amount) || amount <= 0) throw new Error("Enter a valid quote amount.");
   await setCustomSizeQuote(artworkOrderId, amount, actor);
+  revalidatePath(`/artwork/${artworkOrderId}`);
+}
+
+// A plain edit form always resubmits all three fields together -- unlike
+// setProductionSpec's own three-way-independent-undefined shape (meant for
+// callers that only touch one field, e.g. an auto-prefill from the
+// uploaded file), this action treats a blank input as "clear this field,"
+// not "leave unchanged," since there's no way for a submitted HTML form to
+// signal the difference.
+function parseOptionalInches(formData: FormData, name: string): number | null {
+  const raw = String(formData.get(name) ?? "").trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`Enter a valid ${name === "bleedIn" ? "bleed" : "dimension"} in inches.`);
+  return n;
+}
+
+export async function setProductionSpecAction(artworkOrderId: string, formData: FormData) {
+  const actor = await expoActor(artworkOrderId);
+  await setProductionSpec(
+    artworkOrderId,
+    {
+      widthIn: parseOptionalInches(formData, "widthIn"),
+      heightIn: parseOptionalInches(formData, "heightIn"),
+      bleedIn: parseOptionalInches(formData, "bleedIn"),
+    },
+    actor,
+  );
   revalidatePath(`/artwork/${artworkOrderId}`);
 }
 

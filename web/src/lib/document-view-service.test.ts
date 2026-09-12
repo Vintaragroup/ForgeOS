@@ -1,15 +1,57 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { createElement } from "react";
 import { describe, expect, it } from "vitest";
+import { renderToBuffer, Document, Page, Text } from "@react-pdf/renderer";
 import {
   findSpreadsheetMatch,
+  getPdfPageDimensionsInInches,
   highlightQuote,
   renderDocx,
+  renderPdfPageToPng,
   renderSpreadsheet,
   stripDangerousHtml,
 } from "@/lib/document-view-service";
+import { buildTaskPacketData, TaskPacketPdfDocument } from "@/lib/task-packet-pdf";
+
+// A one-page PDF at an EXACT, known point size -- unlike makeOnePagePdf's
+// "LETTER" preset below, this lets getPdfPageDimensionsInInches's inch
+// conversion be checked precisely (72pt = 1in is a fixed PDF convention,
+// not a guess) rather than just "returns something." Document/Page/Text
+// are @react-pdf/renderer's own host-element type identifiers (plain
+// strings, not components), so this file (no JSX) has to build the tree
+// with createElement directly rather than calling them.
+async function makeFixedSizePdf(widthPt: number, heightPt: number): Promise<Buffer> {
+  return renderToBuffer(
+    createElement(
+      Document,
+      null,
+      createElement(Page, { size: [widthPt, heightPt] }, createElement(Text, null, "fixed size fixture")),
+    ),
+  );
+}
 
 const RFP_DIR = path.resolve(import.meta.dirname, "../../../data/RFP/superbowl/RFP006 - Temporary Booth Build");
+
+// A minimal real one-page PDF -- reuses TaskPacketPdfDocument (an existing,
+// already-tested @react-pdf/renderer Document in this codebase) purely as
+// a source of real, valid PDF bytes to exercise renderPdfPageToPng's
+// actual pdf.js parsing and canvas rasterization, not a hand-rolled/fake
+// buffer.
+async function makeOnePagePdf(): Promise<Buffer> {
+  const data = buildTaskPacketData({
+    showName: "Test Show",
+    companyName: "Test Co",
+    jobNumber: null,
+    taskDescription: "renderPdfPageToPng test fixture",
+    departmentCode: null,
+    departmentName: null,
+    vendorName: null,
+    dueDate: null,
+    lineItems: [],
+  });
+  return renderToBuffer(TaskPacketPdfDocument({ data }));
+}
 
 describe("renderSpreadsheet", () => {
   it("renders every real sheet of the Exhibit 1 workbook as a table, header row included", async () => {
@@ -147,5 +189,55 @@ describe("highlightQuote", () => {
   it("returns the HTML unchanged for an empty quote", () => {
     const html = "<p>Some content.</p>";
     expect(highlightQuote(html, "")).toBe(html);
+  });
+});
+
+describe("renderPdfPageToPng", () => {
+  it("rasterizes a real PDF's first page into a PNG data URL", async () => {
+    const bytes = await makeOnePagePdf();
+    const dataUrl = await renderPdfPageToPng(bytes, 1);
+    expect(dataUrl).not.toBeNull();
+    expect(dataUrl).toMatch(/^data:image\/png;base64,/);
+    // A real rasterized page is not a tiny/empty image.
+    const base64 = dataUrl!.slice("data:image/png;base64,".length);
+    expect(Buffer.from(base64, "base64").length).toBeGreaterThan(1000);
+  });
+
+  it("returns null for a page number beyond the document's real page count", async () => {
+    const bytes = await makeOnePagePdf();
+    expect(await renderPdfPageToPng(bytes, 99)).toBeNull();
+  });
+
+  it("returns null instead of throwing for bytes that aren't a real PDF at all (e.g. an .ai file)", async () => {
+    const notAPdf = Buffer.from("this is not a PDF file");
+    expect(await renderPdfPageToPng(notAPdf, 1)).toBeNull();
+  });
+});
+
+describe("getPdfPageDimensionsInInches", () => {
+  it("converts a page's exact point size to inches (72pt = 1in)", async () => {
+    // 5in x 10in at the fixed 72pt/in PDF convention.
+    const bytes = await makeFixedSizePdf(360, 720);
+    const dims = await getPdfPageDimensionsInInches(bytes, 1);
+    expect(dims).not.toBeNull();
+    expect(dims!.widthIn).toBeCloseTo(5, 5);
+    expect(dims!.heightIn).toBeCloseTo(10, 5);
+  });
+
+  it("converts a non-round point size precisely, not just a plausible-looking value", async () => {
+    const bytes = await makeFixedSizePdf(252, 90); // 3.5in x 1.25in
+    const dims = await getPdfPageDimensionsInInches(bytes, 1);
+    expect(dims!.widthIn).toBeCloseTo(3.5, 5);
+    expect(dims!.heightIn).toBeCloseTo(1.25, 5);
+  });
+
+  it("returns null for a page number beyond the document's real page count", async () => {
+    const bytes = await makeFixedSizePdf(360, 720);
+    expect(await getPdfPageDimensionsInInches(bytes, 99)).toBeNull();
+  });
+
+  it("returns null instead of throwing for bytes that aren't a real PDF at all", async () => {
+    const notAPdf = Buffer.from("this is not a PDF file");
+    expect(await getPdfPageDimensionsInInches(notAPdf, 1)).toBeNull();
   });
 });
