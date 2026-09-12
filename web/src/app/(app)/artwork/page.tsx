@@ -33,6 +33,20 @@ export default async function ArtworkReviewQueuePage() {
     include: { opportunity: { include: { company: true } }, vendor: { select: { name: true } } },
   });
 
+  // Won opportunities with no artwork order started yet -- the actual entry
+  // point into this feature. Without this, landing on this page cold (not
+  // already inside a specific Opportunity) gave no way to start anything.
+  const eligibleOpportunities = await db.opportunity.findMany({
+    where: {
+      deletedAt: null,
+      stage: "WON",
+      ...opportunityAccessWhere(user),
+      artworkOrders: { none: { deletedAt: null } },
+    },
+    orderBy: { updatedAt: "desc" },
+    include: { company: true },
+  });
+
   const actionable = orders.filter((o) => (ACTIONABLE_STATUSES as readonly string[]).includes(o.status));
   const inFlight = orders.filter((o) => !(ACTIONABLE_STATUSES as readonly string[]).includes(o.status) && o.status !== "DELIVERED_AT_SHOW");
   const now = new Date();
@@ -41,6 +55,32 @@ export default async function ArtworkReviewQueuePage() {
     <>
       <PageHeader title="Artwork review queue" />
       <div className="flex flex-col gap-6">
+        <div>
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Start a new artwork order ({eligibleOpportunities.length})
+          </h2>
+          {eligibleOpportunities.length === 0 ? (
+            <EmptyState message="No won opportunities are waiting on an artwork order right now." />
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {eligibleOpportunities.map((opp) => (
+                <li key={opp.id}>
+                  <Link
+                    href={`/opportunities/${opp.id}#artwork`}
+                    className="flex items-center justify-between rounded-md border border-dashed border-neutral-300 bg-white px-4 py-3 text-sm hover:border-neutral-400"
+                  >
+                    <span className="flex items-center gap-3">
+                      <span className="font-medium">{opp.company.name}</span>
+                      <span className="text-neutral-500">{opp.showName}</span>
+                    </span>
+                    <span className="text-neutral-600">Invite client →</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         <div>
           <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">
             Needs attention ({actionable.length})
