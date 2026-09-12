@@ -10,12 +10,23 @@ import { CompanyFieldWithCreate } from "@/components/company-field-with-create";
 // snapshot -- see opportunities/page.tsx's comment for the same reasoning.
 export const dynamic = "force-dynamic";
 
-export default async function NewOpportunityPage() {
-  const [companies, users, taxRates] = await Promise.all([
+export default async function NewOpportunityPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ showId?: string }>;
+}) {
+  const { showId: prefillShowId } = await searchParams;
+  const [companies, users, taxRates, shows] = await Promise.all([
     db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.taxRate.findMany(TAX_RATE_PICKER_QUERY),
+    db.show.findMany({ where: { deletedAt: null }, orderBy: { eventStartDate: "desc" } }),
   ]);
+  // Arriving from a Show's own "add a new client" link -- pre-select that
+  // Show and pre-fill the show-name/venue/dates fields from it, still
+  // editable (a client's own display label can differ slightly from the
+  // Show's canonical name).
+  const prefillShow = prefillShowId ? shows.find((s) => s.id === prefillShowId) : undefined;
 
   return (
     <div>
@@ -23,7 +34,13 @@ export default async function NewOpportunityPage() {
       <Card className="p-6">
         <form action={createOpportunity} className="flex flex-col gap-4">
           <CompanyFieldWithCreate companies={companies.map((c) => ({ id: c.id, name: c.name }))} />
-          <Field label="Show name" name="showName" required />
+          <SelectField
+            label="Show"
+            name="showId"
+            defaultValue={prefillShow?.id ?? ""}
+            options={[{ value: "", label: "— none (standalone job) —" }, ...shows.map((s) => ({ value: s.id, label: s.name }))]}
+          />
+          <Field label="Show name" name="showName" required defaultValue={prefillShow?.name ?? ""} />
           <OpportunityNamePreview companies={companies.map((c) => ({ id: c.id, name: c.name }))} />
           <ProjectTypeFields
             defaults={{
@@ -33,9 +50,9 @@ export default async function NewOpportunityPage() {
               boothSpace: "",
               boothType: "",
               shipDate: "",
-              venue: "",
-              eventStartDate: "",
-              eventEndDate: "",
+              venue: prefillShow?.venue ?? "",
+              eventStartDate: prefillShow?.eventStartDate?.toISOString().slice(0, 10) ?? "",
+              eventEndDate: prefillShow?.eventEndDate?.toISOString().slice(0, 10) ?? "",
               siteAddress: "",
               projectDetails: "",
             }}

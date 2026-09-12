@@ -53,6 +53,7 @@ export async function createOpportunity(formData: FormData) {
   const opportunity = await db.opportunity.create({
     data: {
       showName,
+      showId: emptyToNull(formData.get("showId")),
       companyId,
       projectType: String(formData.get("projectType") ?? "TRADESHOW_EXHIBIT") as ProjectType,
       boothNumber: emptyToNull(formData.get("boothNumber")),
@@ -96,6 +97,7 @@ export async function updateOpportunity(id: string, formData: FormData) {
     where: { id },
     data: {
       showName,
+      showId: emptyToNull(formData.get("showId")),
       companyId,
       projectType: String(formData.get("projectType") ?? "TRADESHOW_EXHIBIT") as ProjectType,
       boothNumber: emptyToNull(formData.get("boothNumber")),

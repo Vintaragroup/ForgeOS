@@ -39,7 +39,10 @@ export default async function ArtworkReviewQueuePage() {
   const orders = await db.artworkOrder.findMany({
     where: { deletedAt: null, ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }) },
     orderBy: { updatedAt: "desc" },
-    include: { opportunity: { include: { company: true } }, vendor: { select: { name: true } } },
+    include: {
+      opportunity: { include: { company: true, show: { select: { id: true, name: true } } } },
+      vendor: { select: { name: true } },
+    },
   });
 
   // Won opportunities with no artwork order started yet -- the actual entry
@@ -53,7 +56,7 @@ export default async function ArtworkReviewQueuePage() {
       artworkOrders: { none: { deletedAt: null } },
     },
     orderBy: { updatedAt: "desc" },
-    include: { company: true },
+    include: { company: true, show: { select: { id: true, name: true } } },
   });
 
   const actionable = orders.filter((o) => (ACTIONABLE_STATUSES as readonly string[]).includes(o.status));
@@ -81,6 +84,7 @@ export default async function ArtworkReviewQueuePage() {
                     <span className="flex items-center gap-3">
                       <span className="font-medium">{opp.company.name}</span>
                       <span className="text-neutral-500">{opp.showName}</span>
+                      {opp.show && <StatusChip tone="neutral">{opp.show.name}</StatusChip>}
                     </span>
                     <span className="text-neutral-600">Invite client →</span>
                   </Link>
@@ -109,6 +113,7 @@ export default async function ArtworkReviewQueuePage() {
                       <span className="flex items-center gap-3">
                         <span className="font-medium">{order.opportunity.company.name}</span>
                         <span className="text-neutral-500">{order.opportunity.showName}</span>
+                        {order.opportunity.show && <StatusChip tone="neutral">{order.opportunity.show.name}</StatusChip>}
                         <span className="font-mono text-xs text-neutral-400">{order.jobCode}</span>
                       </span>
                       <span className="flex items-center gap-2">
@@ -142,6 +147,7 @@ export default async function ArtworkReviewQueuePage() {
                     <span className="flex items-center gap-3">
                       <span className="font-medium">{order.opportunity.company.name}</span>
                       <span className="text-neutral-500">{order.opportunity.showName}</span>
+                      {order.opportunity.show && <StatusChip tone="neutral">{order.opportunity.show.name}</StatusChip>}
                       <span className="font-mono text-xs text-neutral-400">{order.jobCode}</span>
                       {order.vendor && <span className="text-neutral-400">via {order.vendor.name}</span>}
                     </span>

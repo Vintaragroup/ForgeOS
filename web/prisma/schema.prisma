@@ -236,6 +236,34 @@ enum TimelineResponsibleParty {
   EXPO_CC
 }
 
+// A real trade show as its own unit, distinct from any one client's deal --
+// for the case where Expo is the GENERAL CONTRACTOR for the whole show
+// (e.g. "2026 PGA Show"), not just fabricator for one exhibitor. Many
+// different client Opportunities can belong to one Show. Deliberately
+// minimal (name + venue/dates only) and NOT a replacement for
+// Opportunity.showName, which stays exactly as-is -- a free-text field
+// used in ~70 places (proposal PDFs, task packets, cut-list labels,
+// dashboards) that isn't worth the blast radius of removing. A Show-linked
+// Opportunity just gets its showName pre-filled from Show.name at creation
+// time; nothing downstream needs to change to read the real Show relation
+// instead, though src/lib/reports.ts's win-rate-by-show grouping does, to
+// stop silently splitting two differently-typed strings for the same show.
+model Show {
+  id             String    @id @default(cuid())
+  name           String
+  venue          String?
+  eventStartDate DateTime?
+  eventEndDate   DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  opportunities Opportunity[]
+
+  @@map("shows")
+}
+
 model Opportunity {
   id        String  @id @default(cuid())
   companyId String
@@ -271,6 +299,13 @@ model Opportunity {
   contractedFeePct  Decimal? @db.Decimal(5, 2)
 
   showName      String
+  // Optional link to the real Show this booth/deal belongs to, for the
+  // general-contractor-for-the-whole-show case -- see Show's own schema
+  // comment. Most Opportunities have no Show (a standalone fabrication
+  // job), so this stays nullable; showName above is still the field every
+  // existing display/PDF/report reads.
+  showId        String?
+  show          Show?     @relation(fields: [showId], references: [id])
   boothNumber   String?
   targetMoveIn  DateTime?
   targetMoveOut DateTime?

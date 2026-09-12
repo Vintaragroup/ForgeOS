@@ -24,7 +24,7 @@ export async function getReportsData(user: { id: string; systemRole: SystemRole 
     }),
     db.opportunity.findMany({
       where: { deletedAt: null, stage: { in: ["WON", "LOST"] }, ...accessWhere },
-      select: { showName: true, stage: true },
+      select: { showName: true, stage: true, showId: true, show: { select: { name: true } } },
     }),
     db.estimateVersion.findMany({
       where: { isCurrent: true, estimate: { opportunity: accessWhere } },
@@ -50,16 +50,24 @@ export async function getReportsData(user: { id: string; systemRole: SystemRole 
     };
   });
 
-  const showTotals = new Map<string, { won: number; lost: number }>();
+  // Groups by the real Show when an opportunity is linked to one (its
+  // showId, a stable identity), falling back to the raw showName string
+  // for unlinked opportunities -- exactly today's behavior for those,
+  // fixed for linked ones. The old pure-string groupby silently split two
+  // opportunities under the same real show into separate buckets on any
+  // typo/casing difference; a real showId can't drift that way.
+  const showTotals = new Map<string, { label: string; won: number; lost: number }>();
   for (const opp of closedOpportunities) {
-    const entry = showTotals.get(opp.showName) ?? { won: 0, lost: 0 };
+    const key = opp.showId ?? `name:${opp.showName}`;
+    const label = opp.show?.name ?? opp.showName;
+    const entry = showTotals.get(key) ?? { label, won: 0, lost: 0 };
     if (opp.stage === "WON") entry.won += 1;
     else entry.lost += 1;
-    showTotals.set(opp.showName, entry);
+    showTotals.set(key, entry);
   }
-  const winRateByShow = [...showTotals.entries()]
-    .map(([showName, { won, lost }]) => ({
-      showName,
+  const winRateByShow = [...showTotals.values()]
+    .map(({ label, won, lost }) => ({
+      showName: label,
       won,
       lost,
       total: won + lost,

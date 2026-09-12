@@ -842,7 +842,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   );
   const isMultiProject = namedEstimates.length >= 2;
 
-  const [companies, users, contacts, documents, chatMessages, citableLineItems, citableQuotes, taxRates, misattributedLineItems] =
+  const [companies, users, contacts, documents, chatMessages, citableLineItems, citableQuotes, taxRates, misattributedLineItems, shows] =
     await Promise.all([
       db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
       db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -858,6 +858,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       // Zero-cost for the common single-project Opportunity -- returns []
       // immediately without a query (see findMisattributedLineItems).
       isMultiProject ? findMisattributedLineItems(opportunity.id) : Promise.resolve([] as MisattributedLineItem[]),
+      db.show.findMany({ where: { deletedAt: null }, orderBy: { eventStartDate: "desc" } }),
     ]);
 
   const updateWithId = updateOpportunity.bind(null, opportunity.id);
@@ -1136,6 +1137,12 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                 defaultValue={opportunity.companyId}
                 required
                 options={companies.map((c) => ({ value: c.id, label: c.name }))}
+              />
+              <SelectField
+                label="Show"
+                name="showId"
+                defaultValue={opportunity.showId ?? ""}
+                options={[{ value: "", label: "— none (standalone job) —" }, ...shows.map((s) => ({ value: s.id, label: s.name }))]}
               />
               <Field label="Show name" name="showName" defaultValue={opportunity.showName} required />
               <OpportunityNamePreview companies={companies.map((c) => ({ id: c.id, name: c.name }))} />
