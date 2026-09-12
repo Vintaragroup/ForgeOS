@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getDashboardData, type UpcomingDeadline } from "@/lib/dashboard";
 import { getAdminAnalytics, getRecentAnalysisFailures } from "@/lib/admin-analytics";
 import { getCurrentUser } from "@/lib/auth";
+import { DEPARTMENT_HOME } from "@/lib/department-home";
 import { recordDeadlineActionAction, routeDashboardQueryAction } from "./dashboard-actions";
 import { Button } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -93,8 +94,15 @@ export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const { pipeline, upcomingDeadlines, recentProposals, flaggedForReview } = await getDashboardData(user);
   const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
+  // Admins always keep the generic cross-app dashboard regardless of their
+  // own department -- this check runs before any dashboard data is
+  // fetched, so a redirected department user never pays for those queries.
+  if (!isAdmin && user.departmentCode && DEPARTMENT_HOME[user.departmentCode]) {
+    redirect(DEPARTMENT_HOME[user.departmentCode]);
+  }
+
+  const { pipeline, upcomingDeadlines, recentProposals, flaggedForReview } = await getDashboardData(user);
   const adminStats = isAdmin ? await getAdminAnalytics() : null;
   // Stricter than isAdmin above -- a real error message (stack-adjacent
   // detail from an AI provider call) is more internal than the aggregate

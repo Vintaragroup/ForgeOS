@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Bebas_Neue } from "next/font/google";
 import { getCurrentUser } from "@/lib/auth";
 import { logoutAction } from "./logout/actions";
 import { AppNav, type NavGroup } from "@/components/app-nav";
+import { DEPARTMENT_NAV } from "@/lib/department-home";
 import "../globals.css";
 
 const geistSans = Geist({
@@ -69,6 +70,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/catalog/rental-items", label: "Rental items" },
       { href: "/catalog/proposal-templates", label: "Proposal templates" },
       { href: "/catalog/vendors", label: "Vendors" },
+      { href: "/catalog/artwork-size-tiers", label: "Artwork size tiers" },
       { href: "/catalog/cut-list-settings", label: "Cut list settings" },
     ],
   },
@@ -77,6 +79,13 @@ const NAV_GROUPS: NavGroup[] = [
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const user = await getCurrentUser();
   const isAdmin = user?.systemRole === "ADMIN" || user?.systemRole === "SUPER_ADMIN";
+  // A department-scoped user sees only their department's handful of pages
+  // -- an admin always sees the full nav regardless of their own department
+  // (matches the same isAdmin short-circuit the / redirect uses).
+  const navGroups =
+    !isAdmin && user?.departmentCode && DEPARTMENT_NAV[user.departmentCode]
+      ? DEPARTMENT_NAV[user.departmentCode]
+      : NAV_GROUPS;
 
   return (
     <html
@@ -86,7 +95,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col bg-neutral-50 text-neutral-900">
         <header className="bg-brand-black text-white">
           <AppNav
-            groups={NAV_GROUPS}
+            groups={navGroups}
             adminLink={isAdmin ? { href: "/admin/users", label: "Admin" } : null}
             userName={user?.name ?? null}
             logoutAction={logoutAction}
