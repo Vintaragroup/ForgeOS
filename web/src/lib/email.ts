@@ -39,11 +39,15 @@ export async function sendEmail(params: { to: string; subject: string; text: str
     console.warn(`[email] RESEND_API_KEY not set -- skipping email "${params.subject}" to ${params.to}`);
     return false;
   }
-  try {
-    await resend.emails.send({ from: EMAIL_FROM, to: params.to, subject: params.subject, text: params.text });
-    return true;
-  } catch (err) {
-    console.error(`[email] failed to send "${params.subject}" to ${params.to}:`, err);
+  // The Node SDK does NOT throw for API-level failures -- it returns
+  // { data, error }. A try/catch here would only ever catch a network-level
+  // exception, silently missing every real send failure (bad domain, rate
+  // limit, etc.), which is exactly the failure mode this function exists to
+  // never let slip through as a false "sent".
+  const { error } = await resend.emails.send({ from: EMAIL_FROM, to: params.to, subject: params.subject, text: params.text });
+  if (error) {
+    console.error(`[email] failed to send "${params.subject}" to ${params.to}:`, error);
     return false;
   }
+  return true;
 }
