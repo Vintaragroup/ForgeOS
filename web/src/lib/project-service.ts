@@ -48,6 +48,23 @@ export async function convertOpportunityToProject(opportunityId: string, data: {
   });
 }
 
+// "The accepted estimate" for production -- Project has no direct FK to
+// Estimate/EstimateVersion (deliberate, both already reach the same
+// Opportunity, see the schema comment above the Project model), so this
+// is derived instead: the most recently locked version across every
+// Estimate this Opportunity has (usually one, but an Opportunity can have
+// more -- e.g. two separate exhibits). Only a LOCKED version counts --
+// that's the real signal an estimate is settled, same gate the cut-list
+// card and now task-generation-service.ts both need. Shared here (not
+// duplicated in the page and the task-generation service) so both stay
+// in sync on exactly which version production reads from.
+export async function resolveProductionEstimateVersion(opportunityId: string) {
+  return db.estimateVersion.findFirst({
+    where: { estimate: { opportunityId }, isLocked: true },
+    orderBy: { versionNumber: "desc" },
+  });
+}
+
 export async function updateProjectDetails(
   projectId: string,
   data: { jobNumber?: string | null; status?: ProjectStatus; showStartDate?: Date | null; showEndDate?: Date | null },
@@ -174,6 +191,34 @@ export async function updateTaskStatus(projectId: string, taskId: string, status
 export async function deleteTask(projectId: string, taskId: string) {
   const existing = await db.task.findFirstOrThrow({ where: { id: taskId, workOrder: { projectId } } });
   return db.task.delete({ where: { id: existing.id } });
+}
+
+// Manual counterpart to generateTasksFromEstimate's bulk grouping
+// (task-generation-service.ts) -- lets a coordinator build a task by hand
+// or fix a mis-grouped item, since taskId could otherwise only ever be
+// populated by that one bulk action. projectId ownership check on the
+// Task side matches updateTaskStatus's own; the LineItem side needs its
+// own separate check since a lineItemId taken from a form/URL directly
+// doesn't prove it belongs to the SAME project's own opportunity -- same
+// cross-resource ID authorization gap deleteLineItem (estimate-
+// service.ts) was fixed for, just one hop further removed here (LineItem
+// -> EstimateSection -> EstimateVersion -> Estimate -> opportunityId,
+// vs. Task -> WorkOrder -> Project -> opportunityId).
+export async function linkLineItemToTask(projectId: string, taskId: string, lineItemId: string) {
+  const [project, task] = await Promise.all([
+    db.project.findUniqueOrThrow({ where: { id: projectId } }),
+    db.task.findFirstOrThrow({ where: { id: taskId, workOrder: { projectId } } }),
+  ]);
+  const lineItem = await db.lineItem.findFirstOrThrow({
+    where: { id: lineItemId, section: { estimateVersion: { estimate: { opportunityId: project.opportunityId } } } },
+  });
+  return db.lineItem.update({ where: { id: lineItem.id }, data: { taskId: task.id } });
+}
+
+export async function unlinkLineItemFromTask(projectId: string, taskId: string, lineItemId: string) {
+  await db.task.findFirstOrThrow({ where: { id: taskId, workOrder: { projectId } } });
+  const lineItem = await db.lineItem.findFirstOrThrow({ where: { id: lineItemId, taskId } });
+  return db.lineItem.update({ where: { id: lineItem.id }, data: { taskId: null } });
 }
 
 // Self-contained ForgeOS record replacing the workbook's TRUCKING & LOAD

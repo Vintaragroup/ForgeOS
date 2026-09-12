@@ -107,12 +107,12 @@ model User {
   salesRepOn      Opportunity[]             @relation("OpportunitySalesRep")
   collaboratingOn OpportunityCollaborator[] @relation("OpportunityCollaborator")
 
-  approvedEstimateVersions EstimateVersion[]     @relation("EstimateVersionApprover")
+  approvedEstimateVersions EstimateVersion[]      @relation("EstimateVersionApprover")
   uploadedAttachments      Attachment[]
   assignedTasks            Task[]
   recordedCostActuals      CostActual[]
-  adminAuditLogsActed      AdminAuditLog[]       @relation("AdminAuditLogActor")
-  adminAuditLogsTargeted   AdminAuditLog[]       @relation("AdminAuditLogTarget")
+  adminAuditLogsActed      AdminAuditLog[]        @relation("AdminAuditLogActor")
+  adminAuditLogsTargeted   AdminAuditLog[]        @relation("AdminAuditLogTarget")
   lineItemAuditLogs        LineItemAuditLog[]
   lineItemAccuracyFlags    LineItemAccuracyFlag[]
   uploadedDocuments        Document[]
@@ -568,8 +568,8 @@ model Document {
   // plus-timestamp shape rather than a new field, e.g. "All N rendered
   // pages came back blank -- likely an embedded image encoding (e.g.
   // JPEG2000) this system can't decode."
-  analysisError   String?   @db.Text
-  analysisErrorAt DateTime?
+  analysisError     String?          @db.Text
+  analysisErrorAt   DateTime?
   // AI-proposed, unpriced draft line items read from this document's
   // Scope of Work text -- separate from extractedSummary because it's a
   // distinct, explicitly-triggered operation (see scope-line-item-service.ts),
@@ -1261,7 +1261,7 @@ model LineItemAccuracyFlag {
   originalProposal Json
   // The item's corrected values, as just saved by the estimator in the
   // same edit that checked "this was wrong."
-  correctedValues Json
+  correctedValues  Json
 
   reason String?
 
@@ -1648,6 +1648,22 @@ model LineItem {
   bidPackageId String?
   bidPackage   BidPackage? @relation(fields: [bidPackageId], references: [id])
 
+  // Phase: sales-to-production handoff. Which production Task (Project ->
+  // WorkOrder -> Task) this item's scope has been assigned to -- null
+  // means "unclaimed," the same state every line item starts in and the
+  // signal generateTasksFromEstimate (task-generation-service.ts) reads
+  // to find what still needs grouping. A direct optional FK, not a join
+  // table, matching the exact shape documentId/attachmentId/bidPackageId
+  // above already use for "which X is this currently associated with" --
+  // there's no partial-quantity-split concept anywhere in this schema
+  // (qty is one atomic field), so a real task bundling several line items
+  // is many-LineItems-to-one-Task, never true many-to-many. No explicit
+  // onDelete: Prisma's default for an optional relation is already SET
+  // NULL, which is exactly right for deleteTask's real hard delete --
+  // line items go back to unclaimed, they're never deleted themselves.
+  taskId String?
+  task   Task?   @relation(fields: [taskId], references: [id])
+
   // Per-item PDF visibility, independent of category/isClientOwned/isDraft
   // -- an estimator can carry a line internally (cost tracking, a note to
   // self) without it ever reaching the client-facing Proposal PDF. Default
@@ -1675,6 +1691,7 @@ model LineItem {
   @@index([bidPackageId])
   @@index([documentId])
   @@index([attachmentId])
+  @@index([taskId])
   @@map("line_items")
 }
 
@@ -2265,6 +2282,9 @@ model Task {
   deletedAt DateTime?
 
   costActuals CostActual[]
+  // See LineItem.taskId's own comment for why this is a plain relation,
+  // not a join table.
+  lineItems   LineItem[]
 
   @@map("tasks")
 }

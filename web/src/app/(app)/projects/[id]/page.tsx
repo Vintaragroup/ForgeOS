@@ -1,16 +1,21 @@
+import { Fragment } from "react";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { getCutListCostReport, type CutListCostReport } from "@/lib/cut-list-nesting-service";
+import { resolveProductionEstimateVersion } from "@/lib/project-service";
 import type { Prisma } from "@/generated/prisma/client";
 import {
   addShipmentAction,
   addTaskAction,
   deleteShipmentAction,
   deleteTaskAction,
+  generateTasksForWorkOrderAction,
+  linkLineItemToTaskAction,
   startWorkOrderAction,
+  unlinkLineItemFromTaskAction,
   updateProjectDetailsAction,
   updateShipmentAction,
   updateTaskStatusAction,
@@ -72,7 +77,11 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
           tasks: {
             where: { deletedAt: null },
             orderBy: { createdAt: "asc" },
-            include: { assignedTo: true, vendor: true },
+            include: {
+              assignedTo: true,
+              vendor: true,
+              lineItems: { select: { id: true, description: true, qty: true, unit: true }, orderBy: { description: "asc" } },
+            },
           },
           shipments: { where: { deletedAt: null }, orderBy: { createdAt: "asc" } },
         },
@@ -100,23 +109,22 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
     db.vendor.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
   ]);
 
-  // Project has no direct FK to Estimate/EstimateVersion -- deliberate,
-  // both already reach the same Opportunity, so a second direct link
-  // would just be a redundant path to the same data (see the schema
-  // comment above the Project model). "The accepted estimate" for
-  // production is derived here instead: the most recently locked version
-  // across every Estimate this Opportunity has (usually one, but an
-  // Opportunity can have more -- e.g. two separate exhibits). Only a
-  // LOCKED version's cut list is shown -- that's the real signal an
-  // estimate is settled, same gate cut-list/page.tsx itself now enforces
-  // (Phase 6).
-  const lockedVersion = await db.estimateVersion.findFirst({
-    where: { estimate: { opportunityId: project.opportunityId }, isLocked: true },
-    orderBy: { versionNumber: "desc" },
-  });
+  const lockedVersion = await resolveProductionEstimateVersion(project.opportunityId);
   let cutListReport: CutListCostReport | null = null;
+  // Unclaimed (taskId: null) line items on the locked version -- offered
+  // in each Task's "add existing line item" picker. Only a LOCKED
+  // version's items are offered -- same "settled scope only" gate the
+  // cut-list card and generateTasksFromEstimate both use.
+  let unclaimedLineItems: UnclaimedLineItem[] = [];
   if (lockedVersion) {
-    cutListReport = await getCutListCostReport(lockedVersion.id);
+    [cutListReport, unclaimedLineItems] = await Promise.all([
+      getCutListCostReport(lockedVersion.id),
+      db.lineItem.findMany({
+        where: { section: { estimateVersionId: lockedVersion.id }, taskId: null },
+        select: { id: true, description: true, qty: true, unit: true },
+        orderBy: { description: "asc" },
+      }),
+    ]);
   }
 
   const updateProjectWithId = updateProjectDetailsAction.bind(null, project.id);
@@ -237,30 +245,53 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
           </form>
         </Card>
       ) : (
-        <WorkOrderCard projectId={project.id} workOrder={workOrder} users={users} vendors={vendors} />
+        <WorkOrderCard
+          projectId={project.id}
+          workOrder={workOrder}
+          users={users}
+          vendors={vendors}
+          unclaimedLineItems={unclaimedLineItems}
+          hasLockedVersion={lockedVersion !== null}
+        />
       )}
     </div>
   );
 }
 
 type WorkOrderWithTasks = Prisma.WorkOrderGetPayload<{
-  include: { tasks: { include: { assignedTo: true; vendor: true } }; shipments: true };
+  include: {
+    tasks: {
+      include: {
+        assignedTo: true;
+        vendor: true;
+        lineItems: { select: { id: true; description: true; qty: true; unit: true } };
+      };
+    };
+    shipments: true;
+  };
 }>;
+
+type UnclaimedLineItem = { id: string; description: string; qty: Prisma.Decimal; unit: string | null };
 
 function WorkOrderCard({
   projectId,
   workOrder,
   users,
   vendors,
+  unclaimedLineItems,
+  hasLockedVersion,
 }: {
   projectId: string;
   workOrder: WorkOrderWithTasks;
   users: { id: string; name: string }[];
   vendors: { id: string; name: string }[];
+  unclaimedLineItems: UnclaimedLineItem[];
+  hasLockedVersion: boolean;
 }) {
   const updateWorkOrderWithIds = updateWorkOrderAction.bind(null, projectId, workOrder.id);
   const addTaskWithIds = addTaskAction.bind(null, projectId, workOrder.id);
   const addShipmentWithIds = addShipmentAction.bind(null, projectId, workOrder.id);
+  const generateTasksWithIds = generateTasksForWorkOrderAction.bind(null, projectId, workOrder.id);
 
   return (
     <Card className="p-6" id="work-order">
@@ -294,7 +325,14 @@ function WorkOrderCard({
       </form>
 
       <div className="border-t border-neutral-200 pt-6">
-        <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Tasks</h3>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">Tasks</h3>
+          <form action={generateTasksWithIds} title={hasLockedVersion ? undefined : "Lock an estimate version for this opportunity first"}>
+            <Button variant="secondary" disabled={!hasLockedVersion}>
+              Generate tasks from estimate
+            </Button>
+          </form>
+        </div>
         {workOrder.tasks.length > 0 && (
           <table className="mb-4 w-full text-sm">
             <thead>
@@ -312,42 +350,101 @@ function WorkOrderCard({
               {workOrder.tasks.map((task) => {
                 const updateStatusWithIds = updateTaskStatusAction.bind(null, projectId, task.id);
                 const deleteWithIds = deleteTaskAction.bind(null, projectId, task.id);
+                const linkWithIds = linkLineItemToTaskAction.bind(null, projectId, task.id);
                 return (
-                  <tr key={task.id} className="border-t border-neutral-100">
-                    <td className="py-1.5">{task.description}</td>
-                    <td className="py-1.5">{task.departmentCode ?? ""}</td>
-                    <td className="py-1.5">{task.assignedTo?.name ?? ""}</td>
-                    <td className="py-1.5">{task.vendor?.name ?? ""}</td>
-                    <td className="py-1.5">{fmtDate(task.dueDate)}</td>
-                    <td className="py-1.5">
-                      <form action={updateStatusWithIds} className="flex items-center gap-1.5">
-                        <select
-                          // Forces React to remount this uncontrolled select
-                          // when the server-side status changes -- otherwise
-                          // the DOM node is reused across the Server
-                          // Action's re-render and keeps showing the
-                          // pre-submit value (same bug/fix as the
-                          // Opportunity stage select).
-                          key={task.status}
-                          name="status"
-                          defaultValue={task.status}
-                          className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-neutral-500"
+                  <Fragment key={task.id}>
+                    <tr className="border-t border-neutral-100">
+                      <td className="py-1.5">{task.description}</td>
+                      <td className="py-1.5">{task.departmentCode ?? ""}</td>
+                      <td className="py-1.5">{task.assignedTo?.name ?? ""}</td>
+                      <td className="py-1.5">{task.vendor?.name ?? ""}</td>
+                      <td className="py-1.5">{fmtDate(task.dueDate)}</td>
+                      <td className="py-1.5">
+                        <form action={updateStatusWithIds} className="flex items-center gap-1.5">
+                          <select
+                            // Forces React to remount this uncontrolled select
+                            // when the server-side status changes -- otherwise
+                            // the DOM node is reused across the Server
+                            // Action's re-render and keeps showing the
+                            // pre-submit value (same bug/fix as the
+                            // Opportunity stage select).
+                            key={task.status}
+                            name="status"
+                            defaultValue={task.status}
+                            className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-neutral-500"
+                          >
+                            {TASK_STATUS_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button className="text-xs text-neutral-700 hover:underline">update</button>
+                        </form>
+                      </td>
+                      <td className="py-1.5 text-right whitespace-nowrap">
+                        <a
+                          href={`/projects/${projectId}/tasks/${task.id}/packet`}
+                          target="_blank"
+                          className="mr-3 text-xs text-brand-navy hover:underline"
                         >
-                          {TASK_STATUS_OPTIONS.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                        <button className="text-xs text-neutral-700 hover:underline">update</button>
-                      </form>
-                    </td>
-                    <td className="py-1.5 text-right">
-                      <form action={deleteWithIds}>
-                        <button className="text-xs text-red-500 hover:underline">remove</button>
-                      </form>
-                    </td>
-                  </tr>
+                          Packet (PDF)
+                        </a>
+                        <form action={deleteWithIds} className="inline">
+                          <button className="text-xs text-red-500 hover:underline">remove</button>
+                        </form>
+                      </td>
+                    </tr>
+                    <tr className="border-t border-neutral-100 bg-neutral-50/50">
+                      <td colSpan={7} className="py-1.5 pl-2">
+                        <details>
+                          <summary className="cursor-pointer text-xs text-neutral-500">
+                            Line items ({task.lineItems.length})
+                          </summary>
+                          <div className="mt-2 flex flex-col gap-2 pb-1">
+                            {task.lineItems.length > 0 && (
+                              <ul className="flex flex-col divide-y divide-neutral-200 text-xs">
+                                {task.lineItems.map((li) => {
+                                  const unlinkWithIds = unlinkLineItemFromTaskAction.bind(null, projectId, task.id, li.id);
+                                  return (
+                                    <li key={li.id} className="flex items-center justify-between gap-3 py-1.5">
+                                      <span>
+                                        {li.description}
+                                        <span className="ml-1.5 text-neutral-400">
+                                          qty {li.qty.toString()}
+                                          {li.unit ? ` ${li.unit}` : ""}
+                                        </span>
+                                      </span>
+                                      <form action={unlinkWithIds}>
+                                        <button className="shrink-0 text-red-500 hover:underline">remove</button>
+                                      </form>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
+                            {unclaimedLineItems.length > 0 ? (
+                              <form action={linkWithIds} className="flex items-end gap-2">
+                                <div className="w-72">
+                                  <SelectField
+                                    label="Add existing line item"
+                                    name="lineItemId"
+                                    options={unclaimedLineItems.map((li) => ({
+                                      value: li.id,
+                                      label: `${li.description} (qty ${li.qty.toString()}${li.unit ? ` ${li.unit}` : ""})`,
+                                    }))}
+                                  />
+                                </div>
+                                <Button variant="secondary">Add</Button>
+                              </form>
+                            ) : (
+                              <p className="text-xs text-neutral-400">No unclaimed line items left to add.</p>
+                            )}
+                          </div>
+                        </details>
+                      </td>
+                    </tr>
+                  </Fragment>
                 );
               })}
             </tbody>

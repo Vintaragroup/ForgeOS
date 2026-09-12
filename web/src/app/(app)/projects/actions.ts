@@ -5,12 +5,15 @@ import {
   addTask,
   deleteShipment,
   deleteTask,
+  linkLineItemToTask,
   startWorkOrder,
+  unlinkLineItemFromTask,
   updateProjectDetails,
   updateShipment,
   updateTaskStatus,
   updateWorkOrder,
 } from "@/lib/project-service";
+import { generateTasksFromEstimate } from "@/lib/task-generation-service";
 import type { ProjectStatus, ShipmentStatus, TaskStatus, WorkOrderStatus } from "@/generated/prisma/enums";
 import { revalidatePath } from "next/cache";
 import { requireProjectAccess } from "@/lib/opportunity-access";
@@ -56,6 +59,12 @@ export async function updateWorkOrderAction(projectId: string, workOrderId: stri
   revalidatePath(`/projects/${projectId}`);
 }
 
+export async function generateTasksForWorkOrderAction(projectId: string, workOrderId: string) {
+  await requireProjectAccess(projectId);
+  await generateTasksFromEstimate(projectId, workOrderId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
 export async function addTaskAction(projectId: string, workOrderId: string, formData: FormData) {
   await requireProjectAccess(projectId);
   const description = String(formData.get("description") ?? "").trim();
@@ -79,6 +88,20 @@ export async function updateTaskStatusAction(projectId: string, taskId: string, 
 export async function deleteTaskAction(projectId: string, taskId: string) {
   await requireProjectAccess(projectId);
   await deleteTask(projectId, taskId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function linkLineItemToTaskAction(projectId: string, taskId: string, formData: FormData) {
+  await requireProjectAccess(projectId);
+  const lineItemId = String(formData.get("lineItemId") ?? "").trim();
+  if (!lineItemId) throw new Error("Select a line item to add.");
+  await linkLineItemToTask(projectId, taskId, lineItemId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function unlinkLineItemFromTaskAction(projectId: string, taskId: string, lineItemId: string) {
+  await requireProjectAccess(projectId);
+  await unlinkLineItemFromTask(projectId, taskId, lineItemId);
   revalidatePath(`/projects/${projectId}`);
 }
 

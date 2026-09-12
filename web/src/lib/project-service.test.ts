@@ -7,12 +7,16 @@ import {
   convertOpportunityToProject,
   deleteShipment,
   deleteTask,
+  linkLineItemToTask,
+  resolveProductionEstimateVersion,
   startWorkOrder,
+  unlinkLineItemFromTask,
   updateProjectDetails,
   updateShipment,
   updateTaskStatus,
   updateWorkOrder,
 } from "@/lib/project-service";
+import { addLineItem, addSection, createEstimateVersion, lockEstimateVersion } from "@/lib/estimate-service";
 import { buildEmptyMilestones, type TimelineData, type TimelineMilestone } from "@/lib/timeline-service";
 
 afterEach(async () => {
@@ -20,10 +24,16 @@ afterEach(async () => {
   await db.shipment.deleteMany();
   await db.workOrder.deleteMany();
   await db.project.deleteMany();
+  await db.lineItemAuditLog.deleteMany();
+  await db.lineItem.deleteMany();
+  await db.estimateSection.deleteMany();
+  await db.estimateVersion.deleteMany();
+  await db.estimate.deleteMany();
   await db.document.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
   await db.user.deleteMany();
+  await db.category.deleteMany();
 });
 
 afterAll(async () => {
@@ -472,5 +482,119 @@ describe("project-ownership checks (cross-resource ID authorization)", () => {
     const stillThere = await db.shipment.findUnique({ where: { id: shipment.id } });
     expect(stillThere).not.toBeNull();
     expect(stillThere?.status).toBe("PLANNED");
+  });
+});
+
+describe("resolveProductionEstimateVersion", () => {
+  it("returns null when the opportunity has no locked version yet", async () => {
+    const opportunity = await makeWonOpportunity();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    await createEstimateVersion(estimate.id, 0);
+
+    await expect(resolveProductionEstimateVersion(opportunity.id)).resolves.toBeNull();
+  });
+
+  it("returns the highest-versionNumber locked version, across every Estimate the opportunity has", async () => {
+    const opportunity = await makeWonOpportunity();
+    // Two versions of the SAME estimate (versionNumber is scoped
+    // per-estimate, see createEstimateVersion's own previousCurrent
+    // lookup) -- both locked (real locking doesn't require the earlier
+    // one to be unlocked first, just no longer "current").
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const v1 = await createEstimateVersion(estimate.id);
+    await lockEstimateVersion(v1.id);
+    const v2 = await createEstimateVersion(estimate.id);
+    await lockEstimateVersion(v2.id);
+
+    // A second, unrelated Estimate on the SAME opportunity (e.g. a second
+    // exhibit) with its own lower-versionNumber locked version -- confirms
+    // the query genuinely spans every Estimate, not just the first found.
+    const estimate2 = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const v3 = await createEstimateVersion(estimate2.id);
+    await lockEstimateVersion(v3.id);
+
+    const resolved = await resolveProductionEstimateVersion(opportunity.id);
+    expect(resolved?.id).toBe(v2.id);
+    expect(resolved?.versionNumber).toBe(2);
+  });
+});
+
+describe("linkLineItemToTask / unlinkLineItemFromTask", () => {
+  async function makeProjectWithTaskAndLineItem() {
+    const opportunity = await makeWonOpportunity();
+    const project = await convertOpportunityToProject(opportunity.id);
+    const workOrder = await startWorkOrder(project.id);
+    const task = await addTask(project.id, workOrder.id, { description: "Graphics production" });
+
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+    const section = await addSection(version.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    const lineItem = await addLineItem(version.id, section.id, {
+      lineType: "MATERIAL",
+      description: "SEG graphic panel",
+      qty: 1,
+      unitCost: 500,
+    });
+
+    return { opportunity, project, task, lineItem };
+  }
+
+  it("links a line item to a task", async () => {
+    const { project, task, lineItem } = await makeProjectWithTaskAndLineItem();
+
+    const linked = await linkLineItemToTask(project.id, task.id, lineItem.id);
+    expect(linked.taskId).toBe(task.id);
+  });
+
+  it("unlinks a line item back to null (unclaimed), not deleted", async () => {
+    const { project, task, lineItem } = await makeProjectWithTaskAndLineItem();
+    await linkLineItemToTask(project.id, task.id, lineItem.id);
+
+    const unlinked = await unlinkLineItemFromTask(project.id, task.id, lineItem.id);
+    expect(unlinked.taskId).toBeNull();
+
+    const stillExists = await db.lineItem.findUnique({ where: { id: lineItem.id } });
+    expect(stillExists).not.toBeNull();
+  });
+
+  it("re-linking to a different task moves it, rather than requiring an unlink first", async () => {
+    const { project, task, lineItem } = await makeProjectWithTaskAndLineItem();
+    await linkLineItemToTask(project.id, task.id, lineItem.id);
+
+    const workOrder = await db.workOrder.findFirstOrThrow({ where: { projectId: project.id } });
+    const otherTask = await addTask(project.id, workOrder.id, { description: "Structure fabrication" });
+    const moved = await linkLineItemToTask(project.id, otherTask.id, lineItem.id);
+
+    expect(moved.taskId).toBe(otherTask.id);
+  });
+
+  it("deleting a Task un-assigns its line items rather than deleting or blocking on them", async () => {
+    const { project, task, lineItem } = await makeProjectWithTaskAndLineItem();
+    await linkLineItemToTask(project.id, task.id, lineItem.id);
+
+    await deleteTask(project.id, task.id);
+
+    const reloaded = await db.lineItem.findUniqueOrThrow({ where: { id: lineItem.id } });
+    expect(reloaded.taskId).toBeNull();
+  });
+
+  it("rejects linking a lineItemId that belongs to a different project's opportunity", async () => {
+    const { project: projectA, task: taskA } = await makeProjectWithTaskAndLineItem();
+    const { lineItem: lineItemB } = await makeProjectWithTaskAndLineItem();
+
+    await expect(linkLineItemToTask(projectA.id, taskA.id, lineItemB.id)).rejects.toThrow();
+  });
+
+  it("rejects a taskId that belongs to a different project", async () => {
+    const { lineItem: lineItemA, project: projectA } = await makeProjectWithTaskAndLineItem();
+    const { task: taskB } = await makeProjectWithTaskAndLineItem();
+
+    await expect(linkLineItemToTask(projectA.id, taskB.id, lineItemA.id)).rejects.toThrow();
+  });
+
+  it("unlinkLineItemFromTask rejects a lineItemId not currently linked to the given task", async () => {
+    const { project, task, lineItem } = await makeProjectWithTaskAndLineItem();
+    // Never linked -- lineItem.taskId is still null.
+    await expect(unlinkLineItemFromTask(project.id, task.id, lineItem.id)).rejects.toThrow();
   });
 });
