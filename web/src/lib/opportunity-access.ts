@@ -114,6 +114,18 @@ export async function requireProjectAccess(projectId: string) {
   return requireOpportunityAccess(project.opportunityId);
 }
 
+// Same idea, for actions taking an artworkOrderId. Internal-only access --
+// the account-less external client/vendor identities for the artwork
+// portals go through requirePortalAccess (artwork-portal-auth.ts) instead,
+// never through this SystemRole/Opportunity-based axis.
+export async function requireArtworkOrderAccess(artworkOrderId: string) {
+  const artworkOrder = await db.artworkOrder.findUniqueOrThrow({
+    where: { id: artworkOrderId },
+    select: { opportunityId: true },
+  });
+  return requireOpportunityAccess(artworkOrder.opportunityId);
+}
+
 // Same idea, for actions taking only a proposalId -- Proposal has no
 // opportunityId of its own (3 hops: proposal -> estimateVersion ->
 // estimate -> opportunityId).

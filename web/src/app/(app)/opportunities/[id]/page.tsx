@@ -20,6 +20,7 @@ import {
   updateDocumentTypeAction,
 } from "./documents/actions";
 import { regenerateTimelineAction, runClarificationQuestionsAnalysisAction } from "./ai-actions";
+import { inviteToArtworkPortalAction } from "./artwork-actions";
 import { getTimelineData, buildEmptyMilestones, type TimelineData } from "@/lib/timeline-service";
 import { TimelineMilestoneRow } from "@/components/timeline-milestone-row";
 import { money } from "@/lib/money";
@@ -803,6 +804,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         },
       },
       projects: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
+      artworkOrders: { where: { deletedAt: null }, orderBy: { createdAt: "desc" }, select: { id: true, status: true, jobCode: true } },
       stageEvents: { orderBy: { changedAt: "desc" } },
       collaborators: { select: { userId: true } },
     },
@@ -865,6 +867,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   const collaboratorIds = new Set(opportunity.collaborators.map((c) => c.userId));
   const convertWithId = convertToEstimate.bind(null, opportunity.id);
   const convertToProjectWithId = convertToProject.bind(null, opportunity.id);
+  const inviteToArtworkPortalWithId = inviteToArtworkPortalAction.bind(null, opportunity.id);
   const pricingScheduleDoc = documents.find((d) => d.documentType === "PRICING_SCHEDULE");
   const buildEstimateWithIds = pricingScheduleDoc
     ? buildEstimateFromDocumentsAction.bind(null, opportunity.id, pricingScheduleDoc.id)
@@ -1568,6 +1571,47 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                   </span>
                   <Link href={`/projects/${p.id}`} className="text-neutral-900 hover:underline">
                     Open project →
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CollapsibleSection>
+      )}
+
+      {opportunity.stage === "WON" && (
+        <CollapsibleSection title="Artwork" id="artwork">
+          {opportunity.artworkOrders.length === 0 ? (
+            <>
+              <p className="mb-4 text-sm text-neutral-500">
+                No artwork order started yet. Inviting the client emails them a link to their own portal to submit
+                order details and artwork -- see the Graphics artwork pipeline spec.
+              </p>
+              <form action={inviteToArtworkPortalWithId} className="flex flex-wrap items-end gap-3">
+                <div className="min-w-64">
+                  <SelectField
+                    label="Client contact"
+                    name="contactId"
+                    defaultValue={opportunity.primaryContactId ?? ""}
+                    options={[
+                      { value: "", label: "Select a contact…" },
+                      ...contacts.map((c) => ({ value: c.id, label: c.email ? `${c.name} (${c.email})` : c.name })),
+                    ]}
+                    required
+                  />
+                </div>
+                <Button variant="secondary">Invite to Artwork Portal</Button>
+              </form>
+            </>
+          ) : (
+            <ul className="flex flex-col gap-2 text-sm">
+              {opportunity.artworkOrders.map((a) => (
+                <li key={a.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
+                  <span>
+                    {a.jobCode} — {a.status.replaceAll("_", " ")}
+                  </span>
+                  <Link href={`/artwork/${a.id}`} className="text-neutral-900 hover:underline">
+                    Open →
                   </Link>
                 </li>
               ))}

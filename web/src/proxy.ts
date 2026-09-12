@@ -9,9 +9,19 @@ import { SESSION_COOKIE, parseSessionValue } from "@/lib/session";
 // from src/lib/auth.ts where they need the real user record, since Next's
 // own docs warn a matcher change could silently drop proxy coverage for a
 // Server Action and this should not be the only line of defense forever.
+//
+// /client-portal and /vendor-portal are ALSO exempt -- these are the
+// artwork pipeline's external client/vendor surfaces (see
+// artwork-portal-auth.ts), authenticated by a magic-link token in their own
+// URL, never by this internal session cookie. Every page/action under
+// those two prefixes independently calls requirePortalAccess itself
+// (same "don't rely on the gate alone" posture the internal side already
+// takes for Server Actions), so exempting them here is safe.
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (pathname === "/login") return NextResponse.next();
+  if (pathname === "/login" || pathname.startsWith("/client-portal/") || pathname.startsWith("/vendor-portal/")) {
+    return NextResponse.next();
+  }
 
   const session = parseSessionValue(request.cookies.get(SESSION_COOKIE)?.value);
   if (session) return NextResponse.next();

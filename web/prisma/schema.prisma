@@ -325,11 +325,12 @@ model Opportunity {
   // PATCHable via updateTimelineMilestoneAction without a full regenerate.
   timelineMilestones Json?
 
-  stageEvents StageChangeEvent[]
-  estimates   Estimate[]
-  projects    Project[]
-  documents   Document[]
-  chatThread  ChatThread?
+  stageEvents   StageChangeEvent[]
+  estimates     Estimate[]
+  projects      Project[]
+  documents     Document[]
+  chatThread    ChatThread?
+  artworkOrders ArtworkOrder[]
 
   // Access control: an owner always has access; a collaborator is anyone
   // else explicitly granted access (see src/lib/opportunity-access.ts).
@@ -2326,13 +2327,262 @@ model Vendor {
   contactInfo String?
   category    String?
 
+  // Added for the artwork approval pipeline (ArtworkPortalInvite) --
+  // needed to send a vendor its magic-link portal invite. Nothing else in
+  // this app emails a Vendor today.
+  email String?
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  tasks Task[]
+  tasks         Task[]
+  artworkOrders ArtworkOrder[]
 
   @@map("vendors")
+}
+
+// ---------------------------------------------------------------------
+// Artwork approval pipeline (Client -> Expo -> Vendor). See
+// data/Graphics-approval-docs/forgeos-artwork-pipeline-spec.md for the
+// full spec this implements: a 19-state lifecycle with a hard
+// vendor-anonymity constraint (client must never learn which vendor
+// produces their artwork) and a 2-round proof-revision cap with
+// auto-escalation on a 3rd required round.
+//
+// Deliberately scoped to Opportunity, not a specific Estimate -- inherits
+// the same known two-exhibit ambiguity Project already has today (see
+// Estimate.name's own comment); not a new limitation introduced here.
+//
+// Unlike StageChangeEvent/changeOpportunityStage (any stage -> any stage,
+// no actor recorded), this pipeline enforces real transition validation
+// and records who acted -- see assertValidTransition/transitionArtworkOrder
+// in artwork-order-service.ts. That permissiveness is fine for an internal
+// sales pipeline; it is not fine here, where the client literally must not
+// be able to reach a state that would expose a proof before Expo clears it.
+enum ArtworkOrderStatus {
+  INVITED
+  ORDER_DRAFTED
+  SUBMITTED
+  UNDER_ART_REVIEW
+  REJECTED
+  ACCEPTED
+  VENDOR_ASSIGNED
+  PROOF_IN_PROGRESS
+  PROOF_SUBMITTED
+  EXPO_PROOF_CHECK
+  PROOF_REVISION_REQUESTED
+  ESCALATED
+  PROOF_UNDER_REVIEW
+  PROOF_APPROVED
+  PRODUCTION_GO_AHEAD
+  IN_PRODUCTION
+  PACKAGED_READY
+  SHIPPED_TO_SHOW
+  DELIVERED_AT_SHOW
+}
+
+// Who performed an action or uploaded a file -- distinct from SystemRole,
+// since CLIENT/VENDOR are account-less external actors authenticated via
+// ArtworkPortalInvite's magic link, never a real User row (see
+// artwork-portal-auth.ts). SYSTEM is for automated transitions (e.g. a
+// future SLA cron), not used by anything in this initial slice.
+enum ArtworkActorType {
+  CLIENT
+  EXPO
+  VENDOR
+  SYSTEM
+}
+
+enum ArtworkFileKind {
+  CLIENT_ARTWORK
+  PROOF
+}
+
+enum ArtworkPortalRole {
+  CLIENT
+  VENDOR
+}
+
+// Config table for standard size tiers and the Expo-produced-art fee per
+// tier -- mirrors LaborRate/TaxRate's own pattern (a small, admin-seeded,
+// bespoke rate table; no generic "rate engine" abstraction exists in this
+// codebase and this doesn't introduce one).
+model ArtworkSizeTier {
+  id              String   @id @default(cuid())
+  label           String
+  width           Decimal? @db.Decimal(8, 3)
+  height          Decimal? @db.Decimal(8, 3)
+  isStandard      Boolean  @default(true)
+  expoProducedFee Decimal  @db.Decimal(10, 2)
+  effectiveDate   DateTime @default(now())
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  artworkOrders ArtworkOrder[]
+
+  @@map("artwork_size_tiers")
+}
+
+model ArtworkOrder {
+  id            String      @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+
+  status ArtworkOrderStatus @default(INVITED)
+
+  sizeTierId String?
+  sizeTier   ArtworkSizeTier? @relation(fields: [sizeTierId], references: [id])
+
+  // Custom-size request: a hard gate per the spec's business rules --
+  // submitArtworkOrder must refuse to advance past OrderDrafted until
+  // Expo sets customQuoteAmount AND the client sets customQuoteAcceptedAt.
+  customSizeRequested   Boolean   @default(false)
+  customWidth           Decimal?  @db.Decimal(8, 3)
+  customHeight          Decimal?  @db.Decimal(8, 3)
+  customQuoteAmount     Decimal?  @db.Decimal(10, 2)
+  customQuoteAcceptedAt DateTime?
+
+  material String?
+  qty      Int     @default(1)
+
+  // Fee is computed from ArtworkSizeTier.expoProducedFee at the moment
+  // Expo accepts the artwork (Accepted transition), not at order-draft
+  // time -- the size tier could theoretically change before then.
+  wantsExpoProducedArt Boolean  @default(false)
+  expoProducedFee      Decimal? @db.Decimal(10, 2)
+
+  vendorId String?
+  vendor   Vendor? @relation(fields: [vendorId], references: [id])
+
+  // The ONLY identifier ever shown to the vendor -- see
+  // getVendorPortalView's selector in the vendor-portal piece. Assigned at
+  // creation; never derived from anything client-identifying.
+  jobCode String @unique
+
+  // Revision rounds between vendor and Expo/client, capped at 2 -- see
+  // transitionArtworkOrder's handling of ProofRevisionRequested. A 3rd
+  // required round routes to Escalated instead of incrementing further;
+  // resolving an escalation resets this to 0.
+  revisionRound Int @default(0)
+
+  // Set when entering ExpoProofCheck: 24h normally, 4h if the show's
+  // eventStartDate is within its final week. Passive-flag only in this
+  // slice (see plan's deferred-scope list) -- no active-notification cron
+  // reads this yet.
+  slaDueAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  files   ArtworkFile[]
+  events  ArtworkOrderEvent[]
+  invites ArtworkPortalInvite[]
+
+  @@index([opportunityId])
+  @@index([vendorId])
+  @@map("artwork_orders")
+}
+
+model ArtworkFile {
+  id             String       @id @default(cuid())
+  artworkOrderId String
+  artworkOrder   ArtworkOrder @relation(fields: [artworkOrderId], references: [id])
+
+  kind ArtworkFileKind
+  // Proof revision round this file belongs to (matches ArtworkOrder.
+  // revisionRound at upload time); 0 for the client's original artwork.
+  round Int @default(0)
+
+  // System-assigned display name (e.g. "proof-round-1.pdf") -- NEVER the
+  // uploader's original filename. This is the concrete mechanism behind
+  // the vendor-anonymity rule's file-metadata clause: an uploader's own
+  // filename could leak identifying info (a vendor's company name, a
+  // client's internal file-naming convention) to the other party.
+  filename   String
+  mimeType   String
+  sizeBytes  Int
+  storageKey String
+
+  uploadedByType   ArtworkActorType
+  uploadedByUserId String?
+  uploadedByEmail  String?
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([artworkOrderId])
+  @@map("artwork_files")
+}
+
+// Single audit trail for every state transition and notable action in the
+// pipeline -- mirrors LineItemAuditLog's pattern (one shared writer
+// function, a JSON detail blob for action-specific structured extras)
+// rather than StageChangeEvent's narrower fromStage/toStage/note shape,
+// since this pipeline also needs to capture WHO acted (an external
+// client/vendor has no User row) and sometimes-restricted visibility.
+model ArtworkOrderEvent {
+  id             String       @id @default(cuid())
+  artworkOrderId String
+  artworkOrder   ArtworkOrder @relation(fields: [artworkOrderId], references: [id])
+
+  fromStatus ArtworkOrderStatus?
+  toStatus   ArtworkOrderStatus
+
+  // e.g. "REJECT", "APPROVE", "REQUEST_REVISION", "ESCALATION_RESOLVED",
+  // "CUSTOM_QUOTE_NEGOTIATION" -- free text, not an enum, matching
+  // LineItemAuditLog's own action-type looseness for anything beyond the
+  // handful of values worth a real enum.
+  action String
+  note   String?
+  // Structured extras for actions that need more than fromStatus/toStatus/
+  // note -- e.g. an escalation resolution's {contactedWho, outcome, note}
+  // per the spec's non-negotiable audit requirement, or a custom-size
+  // negotiation round's {contactedWho, outcome, note}.
+  detail Json?
+
+  actorType   ArtworkActorType
+  actorUserId String?
+  actorEmail  String?
+
+  // True only for escalation-resolution events per the spec's resolved
+  // decision: visible to admins/opportunity owner/collaborators only, not
+  // all Expo staff (these notes can contain vendor-performance or pricing
+  // color) -- filtered at read time via canAccessOpportunity, not a new
+  // permission role.
+  restrictedToInternal Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([artworkOrderId])
+  @@map("artwork_order_events")
+}
+
+// Magic-link access for account-less external actors (Client/Vendor).
+// Deliberately NOT an extension of User/SystemRole -- see
+// artwork-portal-auth.ts, which is structurally independent from
+// session.ts (separate secret, separate cookie, no shared code) because
+// these actors never get a real ForgeOS account.
+model ArtworkPortalInvite {
+  id             String            @id @default(cuid())
+  artworkOrderId String
+  artworkOrder   ArtworkOrder      @relation(fields: [artworkOrderId], references: [id])
+
+  role  ArtworkPortalRole
+  email String
+
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  revokedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([artworkOrderId])
+  @@map("artwork_portal_invites")
 }
 
 // ---------------------------------------------------------------------
