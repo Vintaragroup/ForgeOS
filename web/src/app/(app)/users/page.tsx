@@ -10,6 +10,7 @@ export default async function UsersPage() {
     db.user.findMany({
       where: { deletedAt: null },
       orderBy: { name: "asc" },
+      include: { departmentRef: { select: { name: true } } },
     }),
     getCurrentUser(),
   ]);
@@ -33,7 +34,10 @@ export default async function UsersPage() {
                   <div className="text-sm text-neutral-500">{user.email}</div>
                 </div>
                 <div className="text-sm text-neutral-500">
-                  {[user.role, user.department].filter(Boolean).join(" · ") || "—"}
+                  {/* Prefer the real Department relation; fall back to the
+                      deprecated free-text field only until backfilled --
+                      see User.departmentCode's own schema comment. */}
+                  {[user.role, user.departmentRef?.name ?? user.department].filter(Boolean).join(" · ") || "—"}
                 </div>
               </li>
             ))}

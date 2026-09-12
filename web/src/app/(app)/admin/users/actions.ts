@@ -21,7 +21,7 @@ export async function createAdminUser(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const role = emptyToNull(formData.get("role"));
-  const department = emptyToNull(formData.get("department"));
+  const departmentCode = emptyToNull(formData.get("departmentCode"));
   const requestedSystemRole = String(formData.get("systemRole") ?? ASSIGNABLE_BY_ADMIN);
 
   if (!name || !email) throw new Error("Name and email are required");
@@ -38,7 +38,7 @@ export async function createAdminUser(formData: FormData) {
       name,
       email,
       role,
-      department,
+      departmentCode,
       systemRole,
       passwordHash: await hashPassword(password),
     },
@@ -67,7 +67,7 @@ export async function updateUserProfile(id: string, formData: FormData) {
     data: {
       name,
       role: emptyToNull(formData.get("role")),
-      department: emptyToNull(formData.get("department")),
+      departmentCode: emptyToNull(formData.get("departmentCode")),
     },
   });
 

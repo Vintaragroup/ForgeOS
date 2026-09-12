@@ -47,7 +47,7 @@ export const getCurrentUser = cache(async () => {
   if (!session) return null;
   const user = await db.user.findFirst({
     where: { id: session.userId, deletedAt: null },
-    select: { id: true, name: true, email: true, systemRole: true, passwordChangedAt: true },
+    select: { id: true, name: true, email: true, systemRole: true, departmentCode: true, passwordChangedAt: true },
   });
   if (!user) return null;
   // A session issued before the user's password was last changed is

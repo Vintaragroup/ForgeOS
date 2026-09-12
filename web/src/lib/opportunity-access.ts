@@ -15,6 +15,7 @@
 import type { Prisma, SystemRole } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { canAccessArtworkOrdersViaDepartment, type DepartmentUser } from "@/lib/department-access";
 
 type AccessUser = { id: string; systemRole: SystemRole };
 
@@ -114,16 +115,36 @@ export async function requireProjectAccess(projectId: string) {
   return requireOpportunityAccess(project.opportunityId);
 }
 
-// Same idea, for actions taking an artworkOrderId. Internal-only access --
-// the account-less external client/vendor identities for the artwork
-// portals go through requirePortalAccess (artwork-portal-auth.ts) instead,
-// never through this SystemRole/Opportunity-based axis.
+// Read-side counterpart to requireArtworkOrderAccess below, for pages/
+// routes that want a boolean to notFound() on rather than a thrown error
+// (matching canAccessOpportunity's own shape) -- an artwork order is
+// reachable if the user can access its opportunity via the usual
+// owner/collaborator/admin check, OR is a Graphics-department user (see
+// department-access.ts's own comment for why this grant is scoped to
+// exactly ArtworkOrder, not a general opportunity-access loosening).
+// artworkOrderPage.tsx and its files/[fileId] route both call this instead
+// of canAccessOpportunity directly -- using canAccessOpportunity there
+// would silently skip the department grant entirely.
+export async function canAccessArtworkOrder(user: DepartmentUser & AccessUser, opportunityId: string): Promise<boolean> {
+  return canAccessArtworkOrdersViaDepartment(user) || canAccessOpportunity(user, opportunityId);
+}
+
+// Same idea as requireEstimateAccess, for actions taking an artworkOrderId.
+// Internal-only access -- the account-less external client/vendor
+// identities for the artwork portals go through requirePortalAccess
+// (artwork-portal-auth.ts) instead, never through this SystemRole/
+// Opportunity-based axis.
 export async function requireArtworkOrderAccess(artworkOrderId: string) {
   const artworkOrder = await db.artworkOrder.findUniqueOrThrow({
     where: { id: artworkOrderId },
     select: { opportunityId: true },
   });
-  return requireOpportunityAccess(artworkOrder.opportunityId);
+  const user = await getCurrentUser();
+  if (!user) throw new Error("Not authenticated");
+  if (!(await canAccessArtworkOrder(user, artworkOrder.opportunityId))) {
+    throw new Error("You don't have access to this artwork order");
+  }
+  return user;
 }
 
 // Same idea, for actions taking only a proposalId -- Proposal has no

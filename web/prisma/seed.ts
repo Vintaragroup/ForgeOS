@@ -18,12 +18,50 @@ import { CUTLIST_SEED_MATERIALS } from "./seed-data/cutlist-materials";
 const adapter = new PrismaPg(process.env.DATABASE_URL!);
 const db = new PrismaClient({ adapter });
 
+// The full department taxonomy (Department model, prisma/schema.prisma) --
+// code+name only, no rate. A strict superset of DEPARTMENT_RATES below:
+// every department that IS job-costed labor appears in both lists with the
+// same code, but SL/PU/AV/ID/RC have no LaborRate row because that rate was
+// never tracked (see prisma/schema.prisma's Department model comment for
+// why identity and job-costing are deliberately decoupled). Must match the
+// same 21 rows the add_department_model migration's own INSERT seeds, since
+// that migration is what a fresh production deploy actually runs -- this
+// block is for keeping a dev DB's data current on repeat `npx tsx
+// prisma/seed.ts` runs, not the source of truth for a first-time deploy.
+const DEPARTMENTS: { code: string; name: string }[] = [
+  { code: "SL", name: "Sales" },
+  { code: "ES", name: "Estimating" },
+  { code: "PM", name: "Project Management" },
+  { code: "AM", name: "Account Management" },
+  { code: "DE", name: "Design" },
+  { code: "EN", name: "Engineering" },
+  { code: "PU", name: "Purchasing" },
+  { code: "GR", name: "Graphics" },
+  { code: "CC", name: "CNC" },
+  { code: "EF", name: "Exhibit Fabrication" },
+  { code: "ME", name: "Metal" },
+  { code: "LP", name: "Laminating/Painting" },
+  { code: "EL", name: "Electrical" },
+  { code: "AV", name: "Audio/Visual" },
+  { code: "AS", name: "Assembly" },
+  { code: "CR", name: "Crates" },
+  { code: "HA", name: "Handling" },
+  { code: "ID", name: "Install & Dismantle" },
+  { code: "WH", name: "Warehouse" },
+  { code: "RC", name: "Receiving" },
+  { code: "SR", name: "Shipping" },
+];
+
 // business-rules.md Rule 1: 15 department rates, hardcoded on COMPONENT 1
 // only in the source workbook and fanned out by formula to 43 sibling
 // sheets. Single-sourced here instead.
 const DEPARTMENT_RATES: { code: string; name: string; rate: number }[] = [
   { code: "DE", name: "Design", rate: 66.15 },
-  { code: "EN", name: "Engineering & Purchasing", rate: 58.8 },
+  // Split from the original combined "Engineering & Purchasing" rate --
+  // see the Department seed block below's own comment on PU. The 58.8
+  // figure was never separately tracked per function, so it stays on EN
+  // only; PU intentionally has no LaborRate row (see DEPARTMENTS below).
+  { code: "EN", name: "Engineering", rate: 58.8 },
   { code: "PM", name: "Project Management", rate: 58.8 },
   { code: "HA", name: "Handling", rate: 38.71 },
   { code: "GR", name: "Graphics", rate: 61.25 },
@@ -37,7 +75,9 @@ const DEPARTMENT_RATES: { code: string; name: string; rate: number }[] = [
   { code: "AS", name: "Assembly", rate: 38.71 },
   { code: "SR", name: "Shipping", rate: 38.71 },
   { code: "WH", name: "Warehouse", rate: 38.71 },
-  { code: "AM", name: "AM", rate: 58.8 }, // workbook label truncated; preserved as-is
+  // Workbook label was truncated to just "AM" with no way to tell what it
+  // stood for -- confirmed with the user (2026-09-12): Account Management.
+  { code: "AM", name: "Account Management", rate: 58.8 },
 ];
 
 // business-rules.md Rule 9: Standard Cost Sheet's flat rental prices.
@@ -149,6 +189,17 @@ const MATERIALS: {
 ];
 
 async function main() {
+  // Must run before the LaborRate/Task/User upserts below -- their
+  // departmentCode columns are real foreign keys into this table now.
+  for (const d of DEPARTMENTS) {
+    await db.department.upsert({
+      where: { code: d.code },
+      create: { code: d.code, name: d.name },
+      update: { name: d.name },
+    });
+  }
+  console.log(`Seeded ${DEPARTMENTS.length} departments.`);
+
   for (const d of DEPARTMENT_RATES) {
     await db.laborRate.upsert({
       where: { id: `dept-${d.code}` },

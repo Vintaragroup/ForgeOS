@@ -1,5 +1,6 @@
 import { createAdminUser } from "../actions";
 import { getCurrentUser } from "@/lib/auth";
+import { db } from "@/lib/db";
 import { Button, Card, Field, PageHeader, SelectField } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -7,6 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function NewAdminUserPage() {
   const requester = await getCurrentUser();
   const canGrantAdmin = requester?.systemRole === "SUPER_ADMIN";
+  const departments = await db.department.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } });
 
   return (
     <div>
@@ -23,7 +25,12 @@ export default async function NewAdminUserPage() {
             placeholder="At least 8 characters"
           />
           <Field label="Job title" name="role" placeholder="Estimator, Account Executive, ..." />
-          <Field label="Department" name="department" />
+          <SelectField
+            label="Department"
+            name="departmentCode"
+            defaultValue=""
+            options={[{ value: "", label: "Unassigned" }, ...departments.map((d) => ({ value: d.code, label: d.name }))]}
+          />
           {canGrantAdmin ? (
             <SelectField
               label="Access level"

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import {
   assertBidPackageBelongsToEstimate,
   assertVersionBelongsToEstimate,
+  canAccessArtworkOrder,
   canAccessOpportunity,
   estimateOpportunityId,
   opportunityAccessWhere,
@@ -93,6 +94,40 @@ describe("canAccessOpportunity", () => {
     const opportunity = await makeOpportunity(company.id); // no owner
 
     expect(await canAccessOpportunity(stranger, opportunity.id)).toBe(false);
+  });
+});
+
+describe("canAccessArtworkOrder", () => {
+  it("grants a Graphics-department user access to an opportunity they neither own nor collaborate on", async () => {
+    const owner = await makeUser();
+    const graphicsUser = await db.user.create({
+      data: { name: "Graphics User", email: `${Math.random()}@test.com`, systemRole: "EMPLOYEE", departmentCode: "GR" },
+    });
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await makeOpportunity(company.id, owner.id);
+
+    expect(await canAccessArtworkOrder(graphicsUser, opportunity.id)).toBe(true);
+  });
+
+  it("denies a non-Graphics-department user who is neither owner nor collaborator", async () => {
+    const owner = await makeUser();
+    const engineeringUser = await db.user.create({
+      data: { name: "Engineering User", email: `${Math.random()}@test.com`, systemRole: "EMPLOYEE", departmentCode: "EN" },
+    });
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await makeOpportunity(company.id, owner.id);
+
+    expect(await canAccessArtworkOrder(engineeringUser, opportunity.id)).toBe(false);
+  });
+
+  it("still grants the owner access regardless of department", async () => {
+    const owner = await db.user.create({
+      data: { name: "Owner", email: `${Math.random()}@test.com`, systemRole: "EMPLOYEE", departmentCode: "EN" },
+    });
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const opportunity = await makeOpportunity(company.id, owner.id);
+
+    expect(await canAccessArtworkOrder(owner, opportunity.id)).toBe(true);
   });
 });
 

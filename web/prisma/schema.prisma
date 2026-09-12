@@ -80,7 +80,16 @@ model User {
   name              String
   email             String     @unique
   role              String? // job title, e.g. "Estimator" -- not access control
+  // Deprecated free-text field, kept (not dropped) until
+  // scripts/backfill-user-department-codes.ts's mapping is reviewed --
+  // never read for logic, only ever displayed. departmentCode below is the
+  // real field: a Department.code, used by src/lib/department-access.ts
+  // to grant department-scoped access independent of opportunity
+  // ownership (see that file's own comment for why this is a second,
+  // narrower access axis, not a replacement for owner/collaborator).
   department        String?
+  departmentCode    String?
+  departmentRef     Department? @relation(fields: [departmentCode], references: [code])
   systemRole        SystemRole @default(EMPLOYEE)
   // scrypt "salt:hash" pair, set via `npm run set-password` -- never through
   // a web form, so there is no unauthenticated password-set endpoint. Null
@@ -938,10 +947,34 @@ enum LaborUnionStatus {
 // where laborTier and unionStatus apply: a market typically has 2-3 rows
 // (straight time always, overtime almost always, double time only where
 // the source data actually has one -- 15 of 78 markets).
+// The real identity table for a shop/org department -- code+name only, no
+// rate. Distinct on purpose from LaborRate below: LaborRate specifically
+// means "what does an hour of this cost on a job," and not every real
+// department is job-costed labor (Sales, Purchasing, Account Management
+// aren't line items on an estimate the way Graphics/CNC/Metal are). Every
+// LaborRate department row implies a Department, but not every Department
+// needs a LaborRate row -- see prisma/seed.ts's DEPARTMENTS block for why
+// some of the 21 seeded codes intentionally have no matching LaborRate yet.
+model Department {
+  code String @id // e.g. "GR" -- matches the same string values LaborRate.departmentCode/Task.departmentCode/User.departmentCode already use, not a new numbering scheme
+  name String
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  users      User[]
+  tasks      Task[]
+  laborRates LaborRate[]
+
+  @@map("departments")
+}
+
 model LaborRate {
   id             String            @id @default(cuid())
   rateType       LaborRateType
-  departmentCode String? // e.g. "DE", "EN" -- business-rules.md Rule 1's 15 codes
+  departmentCode String? // e.g. "DE", "EN" -- business-rules.md Rule 1's original codes, now also a Department.code
+  department     Department?       @relation(fields: [departmentCode], references: [code])
   departmentName String?
   city           String?
   laborTier      LaborRateTier?
@@ -2269,6 +2302,7 @@ model Task {
 
   description    String
   departmentCode String?
+  department     Department? @relation(fields: [departmentCode], references: [code])
   status         TaskStatus @default(TODO)
   dueDate        DateTime?
 

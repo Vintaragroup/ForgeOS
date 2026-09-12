@@ -22,9 +22,10 @@ const ROLE_LABELS: Record<string, string> = {
 
 export default async function AdminUserDetailPage(props: PageProps<"/admin/users/[id]">) {
   const { id } = await props.params;
-  const [user, requester] = await Promise.all([
+  const [user, requester, departments] = await Promise.all([
     db.user.findUnique({ where: { id } }),
     getCurrentUser(),
+    db.department.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
   ]);
   if (!user) notFound();
 
@@ -54,7 +55,12 @@ export default async function AdminUserDetailPage(props: PageProps<"/admin/users
             defaultValue={user.role ?? ""}
             placeholder="Estimator, Account Executive, ..."
           />
-          <Field label="Department" name="department" defaultValue={user.department ?? ""} />
+          <SelectField
+            label="Department"
+            name="departmentCode"
+            defaultValue={user.departmentCode ?? ""}
+            options={[{ value: "", label: "Unassigned" }, ...departments.map((d) => ({ value: d.code, label: d.name }))]}
+          />
           <div>
             <Button>Save changes</Button>
           </div>

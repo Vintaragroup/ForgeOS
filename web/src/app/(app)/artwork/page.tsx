@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
+import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
 import { PageHeader, StatusChip, EmptyState } from "@/components/ui";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board --
@@ -27,8 +28,16 @@ export default async function ArtworkReviewQueuePage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  // A Graphics-department user sees EVERY artwork order, not just ones on
+  // opportunities they own/collaborate on -- every ArtworkOrder is
+  // Graphics-relevant by definition (see department-access.ts). This is
+  // deliberately NOT extended to eligibleOpportunities below: starting a
+  // new order means inviting the client from THAT opportunity's own page,
+  // which is still fully opportunity-gated (this plan doesn't loosen
+  // canAccessOpportunity itself) -- listing an opportunity a department
+  // user can't actually click through to would just be a dead link.
   const orders = await db.artworkOrder.findMany({
-    where: { deletedAt: null, opportunity: opportunityAccessWhere(user) },
+    where: { deletedAt: null, ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }) },
     orderBy: { updatedAt: "desc" },
     include: { opportunity: { include: { company: true } }, vendor: { select: { name: true } } },
   });

@@ -104,9 +104,10 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
         }
       : null,
   });
-  const [users, vendors] = await Promise.all([
+  const [users, vendors, departments] = await Promise.all([
     db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
     db.vendor.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
+    db.department.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
   ]);
 
   const lockedVersion = await resolveProductionEstimateVersion(project.opportunityId);
@@ -250,6 +251,7 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
           workOrder={workOrder}
           users={users}
           vendors={vendors}
+          departments={departments}
           unclaimedLineItems={unclaimedLineItems}
           hasLockedVersion={lockedVersion !== null}
         />
@@ -278,6 +280,7 @@ function WorkOrderCard({
   workOrder,
   users,
   vendors,
+  departments,
   unclaimedLineItems,
   hasLockedVersion,
 }: {
@@ -285,6 +288,7 @@ function WorkOrderCard({
   workOrder: WorkOrderWithTasks;
   users: { id: string; name: string }[];
   vendors: { id: string; name: string }[];
+  departments: { code: string; name: string }[];
   unclaimedLineItems: UnclaimedLineItem[];
   hasLockedVersion: boolean;
 }) {
@@ -454,8 +458,12 @@ function WorkOrderCard({
           <div className="flex-1 min-w-[10rem]">
             <Field label="Description" name="description" required />
           </div>
-          <div className="w-24">
-            <Field label="Dept" name="departmentCode" placeholder="EF" />
+          <div className="w-40">
+            <SelectField
+              label="Dept"
+              name="departmentCode"
+              options={[{ value: "", label: "— none —" }, ...departments.map((d) => ({ value: d.code, label: d.name }))]}
+            />
           </div>
           <div className="w-40">
             <SelectField

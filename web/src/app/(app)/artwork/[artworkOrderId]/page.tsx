@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { canAccessOpportunity } from "@/lib/opportunity-access";
+import { canAccessArtworkOrder } from "@/lib/opportunity-access";
 import { Card, PageHeader, StatusChip, Field, SelectField, TextareaField, Button, ReadOnlyField, EmptyState } from "@/components/ui";
 import {
   assignVendorAction,
@@ -46,7 +46,7 @@ export default async function ArtworkOrderPage({
     },
   });
   if (!order) notFound();
-  if (!(await canAccessOpportunity(user, order.opportunityId))) notFound();
+  if (!(await canAccessArtworkOrder(user, order.opportunityId))) notFound();
 
   const vendors = await db.vendor.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } });
   const reviewWithId = reviewArtworkOrderAction.bind(null, order.id);

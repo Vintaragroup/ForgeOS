@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
-import { canAccessOpportunity } from "@/lib/opportunity-access";
+import { canAccessArtworkOrder } from "@/lib/opportunity-access";
 import { getArtworkFileBytes } from "@/lib/artwork-file-service";
 import { db } from "@/lib/db";
 
@@ -27,7 +27,7 @@ export async function GET(
   if (!order) notFound();
 
   const user = await getCurrentUser();
-  if (!user || !(await canAccessOpportunity(user, order.opportunityId))) notFound();
+  if (!user || !(await canAccessArtworkOrder(user, order.opportunityId))) notFound();
 
   return new Response(new Uint8Array(bytes), {
     headers: {
