@@ -12,6 +12,8 @@ import {
 afterEach(async () => {
   await db.proposal.deleteMany();
   await db.proposalTemplate.deleteMany();
+  await db.project.deleteMany();
+  await db.stageChangeEvent.deleteMany();
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
   await db.lineItemAuditLog.deleteMany();
@@ -194,5 +196,80 @@ describe("send / sign lifecycle", () => {
     await sendProposal(proposal.id);
 
     await expect(sendProposal(proposal.id)).rejects.toThrow(/already sent/);
+  });
+});
+
+describe("signProposal -- production handoff trigger", () => {
+  async function makeSentProposal(label?: string) {
+    const { version, user } = await makeLockedVersion(label);
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: `Standard-${label ?? "Structure"}` } });
+    const proposal = await generateProposal(version.id, template.id);
+    await sendProposal(proposal.id);
+    const opportunity = await db.opportunity.findFirstOrThrow({
+      where: { estimates: { some: { versions: { some: { id: version.id } } } } },
+    });
+    return { proposal, opportunity };
+  }
+
+  it("advances the opportunity to WON and creates exactly one Project", async () => {
+    const { proposal, opportunity } = await makeSentProposal();
+    expect(opportunity.stage).toBe("NEW"); // sanity check: not already WON before signing (fixture never sets a stage, default is NEW)
+
+    await signProposal(proposal.id, "Jane Doe", "Owner");
+
+    const reloaded = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
+    expect(reloaded.stage).toBe("WON");
+
+    const stageChange = await db.stageChangeEvent.findFirst({ where: { opportunityId: opportunity.id, toStage: "WON" } });
+    expect(stageChange).not.toBeNull();
+    expect(stageChange?.note).toMatch(/proposal signed/i);
+
+    const projects = await db.project.findMany({ where: { opportunityId: opportunity.id } });
+    expect(projects).toHaveLength(1);
+  });
+
+  it("does not re-advance stage or duplicate the StageChangeEvent if the opportunity is already WON", async () => {
+    const { proposal, opportunity } = await makeSentProposal();
+    await db.opportunity.update({ where: { id: opportunity.id }, data: { stage: "WON" } });
+
+    await signProposal(proposal.id, "Jane Doe");
+
+    const stageChanges = await db.stageChangeEvent.findMany({ where: { opportunityId: opportunity.id, toStage: "WON" } });
+    expect(stageChanges).toHaveLength(0); // already WON -- signProposal's guard should skip the transition entirely
+
+    const projects = await db.project.findMany({ where: { opportunityId: opportunity.id } });
+    expect(projects).toHaveLength(1); // still converts to a Project even though stage didn't need to change
+  });
+
+  it("signing a second proposal for the same opportunity does not create a second Project", async () => {
+    const { proposal, opportunity } = await makeSentProposal();
+    await signProposal(proposal.id, "Jane Doe");
+
+    // A second Estimate/EstimateVersion/Proposal on the SAME opportunity --
+    // e.g. two separate exhibits for one client -- see project-service.ts's
+    // own comment on why Project has no direct FK to Estimate.
+    const estimate2 = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version2 = await createEstimateVersion(estimate2.id, 0);
+    const section2 = await addSection(version2.id, { name: "COMPONENT 2", sectionType: "COMPONENT" });
+    const category2 = await db.category.create({ data: { name: "Second Exhibit Cat", key: "second-exhibit-cat" } });
+    await addLineItem(version2.id, section2.id, {
+      lineType: "MATERIAL",
+      description: "Aluminum",
+      qty: 5,
+      unitCost: 10,
+      category: category2.name,
+    });
+    await lockEstimateVersion(version2.id);
+    const approver2 = await db.user.create({ data: { name: "Second Approver", email: `approver2-${Date.now()}@example.com` } });
+    await approveEstimateVersion(version2.id, approver2.id);
+    const template2 = await db.proposalTemplate.create({ data: { name: "Standard 2" } });
+    const proposal2 = await generateProposal(version2.id, template2.id);
+    await sendProposal(proposal2.id);
+
+    await signProposal(proposal2.id, "John Smith");
+
+    const projects = await db.project.findMany({ where: { opportunityId: opportunity.id } });
+    expect(projects).toHaveLength(1);
   });
 });

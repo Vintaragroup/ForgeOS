@@ -83,6 +83,22 @@ describe("convertOpportunityToProject", () => {
     const projectCount = await db.project.count({ where: { opportunityId: opportunity.id } });
     expect(projectCount).toBe(0);
   });
+
+  // Was previously only a caller-enforced invariant (the manual "Convert
+  // to Project" button only ever renders when opportunity.projects.length
+  // === 0) -- made structural so signProposal (proposal-service.ts) can
+  // safely call this without duplicating that same check itself.
+  it("is idempotent -- a second call converges on the existing Project instead of creating a duplicate", async () => {
+    const opportunity = await makeWonOpportunity();
+
+    const first = await convertOpportunityToProject(opportunity.id, { jobNumber: "J-1001" });
+    const second = await convertOpportunityToProject(opportunity.id, { jobNumber: "J-9999" });
+
+    expect(second.id).toBe(first.id);
+    expect(second.jobNumber).toBe("J-1001"); // the second call's jobNumber is ignored, not applied
+    const projectCount = await db.project.count({ where: { opportunityId: opportunity.id } });
+    expect(projectCount).toBe(1);
+  });
 });
 
 describe("updateProjectDetails", () => {

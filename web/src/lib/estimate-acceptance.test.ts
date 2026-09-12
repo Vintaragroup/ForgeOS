@@ -32,6 +32,14 @@ afterEach(async () => {
   await db.proposal.deleteMany();
   await db.proposalTemplate.deleteMany();
   await db.changeOrder.deleteMany();
+  // signProposal (proposal-service.ts) now advances Opportunity.stage to
+  // WON and creates a Project as a side effect of the real sign workflow
+  // this file exercises -- both must be cleared before opportunity itself,
+  // or the blanket deleteMany below (and every other test file's own
+  // blanket opportunity.deleteMany, since this shares one Postgres test
+  // DB) fails on a dangling FK.
+  await db.project.deleteMany();
+  await db.stageChangeEvent.deleteMany();
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
   await db.lineItemAuditLog.deleteMany();

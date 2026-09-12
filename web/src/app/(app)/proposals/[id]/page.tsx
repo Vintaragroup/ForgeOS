@@ -141,6 +141,14 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   const sendWithId = sendProposalAction.bind(null, proposal.id);
   const signWithId = signProposalAction.bind(null, proposal.id);
 
+  // signProposal (proposal-service.ts) auto-creates the Project the
+  // moment a proposal is signed -- this is only ever null for a proposal
+  // signed before that behavior existed, not a real "still missing" case
+  // for anything signed going forward.
+  const project = proposal.signedAt
+    ? await db.project.findFirst({ where: { opportunityId: opportunity.id, deletedAt: null } })
+    : null;
+
   const { brandColor, logoUrl } = extractBranding(proposal.templateConfigSnapshot);
   const paymentMethodNote = extractPaymentMethodNote(proposal.templateConfigSnapshot);
 
@@ -428,6 +436,14 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
             </dd>
           </div>
         </dl>
+        {project && (
+          <div className="mb-4 flex items-center justify-between rounded-md bg-green-50 px-4 py-3 text-sm text-green-800">
+            <span>Signed — production started</span>
+            <Link href={`/projects/${project.id}`} className="font-medium text-brand-navy hover:underline">
+              Go to project →
+            </Link>
+          </div>
+        )}
         {!proposal.sentAt && (
           <form action={sendWithId}>
             <Button>Send proposal</Button>

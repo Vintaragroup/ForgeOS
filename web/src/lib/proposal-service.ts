@@ -5,6 +5,8 @@
 
 import { db } from "@/lib/db";
 import { auditLineItemCategories } from "@/lib/category-audit";
+import { changeOpportunityStage } from "@/lib/opportunity-service";
+import { convertOpportunityToProject } from "@/lib/project-service";
 
 async function assertLocked(estimateVersionId: string) {
   const version = await db.estimateVersion.findUniqueOrThrow({
@@ -124,14 +126,17 @@ export async function signProposal(proposalId: string, signedByName: string, sig
   if (!signedByName.trim()) {
     throw new Error("A signer name is required.");
   }
-  const proposal = await db.proposal.findUniqueOrThrow({ where: { id: proposalId } });
+  const proposal = await db.proposal.findUniqueOrThrow({
+    where: { id: proposalId },
+    include: { estimateVersion: { include: { estimate: { select: { opportunityId: true } } } } },
+  });
   if (!proposal.sentAt) {
     throw new Error(`Proposal ${proposalId} must be sent before it can be marked signed.`);
   }
   if (proposal.signedAt) {
     throw new Error(`Proposal ${proposalId} was already signed at ${proposal.signedAt.toISOString()}.`);
   }
-  return db.proposal.update({
+  const signed = await db.proposal.update({
     where: { id: proposalId },
     data: {
       signedAt: new Date(),
@@ -139,4 +144,23 @@ export async function signProposal(proposalId: string, signedByName: string, sig
       signedByTitle: signedByTitle?.trim() || null,
     },
   });
+
+  // A signed proposal is the deal closing -- advance the opportunity to
+  // WON (if it isn't already) and start production in the same gesture,
+  // collapsing what used to be two disconnected manual steps (mark WON,
+  // then separately click "Convert to Project") into the one moment that
+  // actually represents the deal closing. Reuses changeOpportunityStage
+  // (opportunity-service.ts) and convertOpportunityToProject
+  // (project-service.ts) as-is rather than reimplementing the
+  // stage/StageChangeEvent or Project-creation logic here -- the latter is
+  // now idempotent specifically so it's safe to call from a second site
+  // like this one without duplicating its own "already converted" guard.
+  const opportunityId = proposal.estimateVersion.estimate.opportunityId;
+  const opportunity = await db.opportunity.findUniqueOrThrow({ where: { id: opportunityId } });
+  if (opportunity.stage !== "WON") {
+    await changeOpportunityStage(opportunityId, "WON", "Auto-advanced: proposal signed");
+  }
+  await convertOpportunityToProject(opportunityId);
+
+  return signed;
 }

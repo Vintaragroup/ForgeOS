@@ -30,6 +30,14 @@ export async function convertOpportunityToProject(opportunityId: string, data: {
   if (opportunity.stage !== "WON") {
     throw new Error("Only a WON opportunity can be converted to a Project.");
   }
+  // Idempotent -- the manual "Convert to Project" button only ever renders
+  // when opportunity.projects.length === 0, so this was previously a
+  // caller-enforced invariant rather than a structural one. Making it
+  // idempotent here means a second call (e.g. from signProposal, which
+  // can't assume the UI's own guard already ran) safely converges on the
+  // existing Project instead of creating a duplicate.
+  const existing = await db.project.findFirst({ where: { opportunityId, deletedAt: null } });
+  if (existing) return existing;
   return db.project.create({
     data: {
       opportunityId,
