@@ -14,6 +14,7 @@ export async function createVendor(formData: FormData) {
       name,
       contactInfo: emptyToNull(formData.get("contactInfo")),
       category: emptyToNull(formData.get("category")),
+      email: emptyToNull(formData.get("email")),
     },
   });
 
@@ -31,6 +32,7 @@ export async function updateVendor(id: string, formData: FormData) {
       name,
       contactInfo: emptyToNull(formData.get("contactInfo")),
       category: emptyToNull(formData.get("category")),
+      email: emptyToNull(formData.get("email")),
     },
   });
 

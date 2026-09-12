@@ -19,10 +19,17 @@ export default async function VendorDetailPage(props: PageProps<"/catalog/vendor
         <form action={updateWithId} className="flex flex-col gap-4">
           <Field label="Vendor name" name="name" defaultValue={vendor.name} required />
           <Field
+            label="Email"
+            name="email"
+            type="email"
+            defaultValue={vendor.email ?? ""}
+            placeholder="e.g. jobs@vendor.com"
+          />
+          <Field
             label="Contact info"
             name="contactInfo"
             defaultValue={vendor.contactInfo ?? ""}
-            placeholder="e.g. phone, email"
+            placeholder="e.g. phone"
           />
           <Field
             label="Category"

@@ -42,7 +42,14 @@ export async function issuePortalInvite(artworkOrderId: string, role: ArtworkPor
 // NOT a single-use gate and never causes a later, otherwise-valid call to
 // fail.
 export async function validatePortalToken(magicLinkToken: string): Promise<PortalIdentity | null> {
-  const [inviteId, rawToken] = magicLinkToken.split(":");
+  // Next's dynamic route params for this app/version do NOT get
+  // percent-decoded before reaching the page/route handler, so a token
+  // straight from a [token] segment still has its ":" delimiter as
+  // "%3A" -- decoding here (a no-op for an already-decoded string, e.g.
+  // one passed straight from a bound Server Action closure rather than
+  // freshly read from params) makes every caller work regardless of
+  // which shape it received.
+  const [inviteId, rawToken] = decodeURIComponent(magicLinkToken).split(":");
   if (!inviteId || !rawToken) return null;
 
   const invite = await db.artworkPortalInvite.findUnique({ where: { id: inviteId } });

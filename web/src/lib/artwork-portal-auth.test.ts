@@ -85,6 +85,19 @@ describe("issuePortalInvite / validatePortalToken", () => {
     expect(await validatePortalToken("not-a-valid-token")).toBeNull();
   });
 
+  // Regression: Next's dynamic [token] route params arrive with the URL's
+  // ":" delimiter still percent-encoded as "%3A" rather than decoded (found
+  // 2026-09-12 -- every real client/vendor magic link 404'd until this was
+  // fixed). validatePortalToken must decode before splitting so it works
+  // whether it's called with a raw params.token or an already-decoded one.
+  it("validates a token that still has its ':' delimiter percent-encoded, as a raw route param would arrive", async () => {
+    const order = await makeArtworkOrder();
+    const { magicLinkToken } = await issuePortalInvite(order.id, "CLIENT", "client@example.com");
+
+    const identity = await validatePortalToken(encodeURIComponent(magicLinkToken));
+    expect(identity).toEqual({ artworkOrderId: order.id, role: "CLIENT", email: "client@example.com" });
+  });
+
   it("scopes each invite to its own artwork order -- a token for one order never resolves to another", async () => {
     const orderA = await makeArtworkOrder();
     const orderB = await makeArtworkOrder();
