@@ -8,6 +8,14 @@ export const DEPARTMENT_HOME: Record<string, string> = {
   GR: "/departments/graphics",
 };
 
+// Display label for each department's dashboard -- keyed off the same
+// department codes as DEPARTMENT_HOME so an admin's "Departments" nav group
+// (RootLayout) can list every department dashboard without a third map to
+// keep in sync.
+export const DEPARTMENT_LABELS: Record<string, string> = {
+  GR: "Graphics",
+};
+
 // Deliberately hand-built per department rather than derived from the main
 // NAV_GROUPS -- a department-scoped user should see exactly the handful of
 // pages relevant to them, not "everything except a blocklist," so a new
