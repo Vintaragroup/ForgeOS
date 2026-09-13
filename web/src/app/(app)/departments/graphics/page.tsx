@@ -4,8 +4,13 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
-import { startArtworkOrderFromDashboardAction, linkOpportunityToShowFromDashboardAction } from "./actions";
-import { PageHeader, Card, Stat, StatusChip, EmptyState, SelectField, Button } from "@/components/ui";
+import {
+  startArtworkOrderFromDashboardAction,
+  linkOpportunityToShowFromDashboardAction,
+  onboardNewClientFromDashboardAction,
+} from "./actions";
+import { PageHeader, Card, Stat, StatusChip, EmptyState, SelectField, Field, Button } from "@/components/ui";
+import { CompanyFieldWithCreate } from "@/components/company-field-with-create";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
 // generic Artwork review queue this page is a Graphics-specific front door
@@ -31,6 +36,12 @@ export default async function GraphicsHomePage({
   if (!user) redirect("/login");
 
   const { opportunityId: selectedOpportunityId } = await searchParams;
+
+  // Gates "Onboard a new client" below -- matches
+  // onboardNewClientFromDashboardAction's own check exactly, so the form
+  // never renders somewhere it would just throw on submit.
+  const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
+  const canOnboardNewClient = isAdmin || canAccessArtworkOrdersViaDepartment(user);
 
   // Same visibility rule as the orders query below: department-wide for a
   // GR member (or an admin, via opportunityAccessWhere's own isAdmin
@@ -80,13 +91,20 @@ export default async function GraphicsHomePage({
   // its own pipeline stage -- linking it to a show is what MAKES it
   // eligible per canStartArtworkOnboarding, not a result of already being
   // eligible).
-  const [shows, unassignedOpportunities] = await Promise.all([
+  const [shows, unassignedOpportunities, companies] = await Promise.all([
     db.show.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
     db.opportunity.findMany({
       where: { ...startableWhere, deletedAt: null, showId: null },
       orderBy: { updatedAt: "desc" },
       select: { id: true, showName: true, company: { select: { name: true } } },
     }),
+    // "Onboard a new client" below -- every company, not scoped to
+    // opportunity access, since picking an existing company here is just
+    // naming it, the same as CompanyFieldWithCreate's other caller
+    // (opportunities/new) already does with no such scoping either.
+    canOnboardNewClient
+      ? db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })
+      : Promise.resolve([]),
   ]);
 
   // Same query artwork/page.tsx uses, including the department-wide
@@ -161,6 +179,42 @@ export default async function GraphicsHomePage({
           them right back to this same page. */}
       <PageHeader title="Graphics" noBack />
       <div className="flex flex-col gap-6">
+        {canOnboardNewClient && (
+          <Card className="p-5">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+              Onboard a new client
+            </h2>
+            <p className="mb-4 text-sm text-neutral-500">
+              For an exhibitor that isn&apos;t in the system yet -- creates their company (or picks an existing
+              one), a contact, and a deal in one step, then goes straight to inviting them.
+            </p>
+            <form action={onboardNewClientFromDashboardAction} className="flex flex-col gap-4">
+              <CompanyFieldWithCreate companies={companies} />
+              <div className="flex flex-wrap gap-3">
+                <div className="min-w-56 flex-1">
+                  <Field label="Contact name" name="contactName" required />
+                </div>
+                <div className="min-w-56 flex-1">
+                  <Field label="Contact email" name="contactEmail" type="email" required />
+                </div>
+              </div>
+              <div className="min-w-56">
+                <SelectField
+                  label="Show"
+                  name="showId"
+                  options={[
+                    { value: "", label: "— none (standalone deal) —" },
+                    ...shows.map((s) => ({ value: s.id, label: s.name })),
+                  ]}
+                />
+              </div>
+              <div>
+                <Button variant="secondary">Add client & continue</Button>
+              </div>
+            </form>
+          </Card>
+        )}
+
         <Card className="p-5">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
             Start an artwork order

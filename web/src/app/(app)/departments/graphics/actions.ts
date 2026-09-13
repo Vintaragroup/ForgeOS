@@ -7,6 +7,7 @@ import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
 import { createArtworkOrder, canStartArtworkOnboarding } from "@/lib/artwork-order-service";
 import { notifyClientInvited } from "@/lib/artwork-notifications";
+import { NEW_COMPANY_VALUE } from "@/lib/opportunity-new-company";
 
 // Graphics-dashboard counterpart to opportunities/[id]/artwork-actions.ts's
 // inviteToArtworkPortalAction -- same underlying operation (start an
@@ -79,4 +80,74 @@ export async function linkOpportunityToShowFromDashboardAction(formData: FormDat
   // opportunity -- link-then-invite is one continuous task from a Graphics
   // user's perspective, not two separate trips back to this page.
   redirect(`/departments/graphics?opportunityId=${opportunityId}`);
+}
+
+// The real front door for a genuinely NEW exhibitor: before this, a
+// Graphics employee had no way to onboard one at all -- their department
+// nav has no Companies/Contacts/Opportunities links (deliberately, so they
+// never see cost/margin data on those pages), so a brand-new client meant
+// asking an admin to create the Company/Contact/Opportunity first. This
+// collapses that whole chain into one submit: reuses the exact same
+// "+ New client" Company-resolution logic opportunities/actions.ts's
+// createOpportunity already has (NEW_COMPANY_VALUE, company-field-with-
+// create.tsx) rather than re-deriving it, creates a real Contact
+// (email required here, unlike Contact creation in general, since the
+// whole point is inviting them to the portal), and an Opportunity linked
+// to both -- then redirects into the same "Start an artwork order" step 2
+// the other two actions in this file land on.
+//
+// Restricted to GR-department members and admins specifically (not the
+// broader "owner/collaborator OR department" rule the other two actions
+// use) -- there's no existing opportunity to already have ownership of
+// here, so that fallback has nothing to check.
+export async function onboardNewClientFromDashboardAction(formData: FormData) {
+  const user = await getCurrentUser();
+  if (!user) throw new Error("Not authenticated");
+  const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
+  if (!isAdmin && !canAccessArtworkOrdersViaDepartment(user)) {
+    throw new Error("You don't have access to onboard a new client.");
+  }
+
+  let companyId = String(formData.get("companyId") ?? "").trim();
+  const contactName = String(formData.get("contactName") ?? "").trim();
+  const contactEmail = String(formData.get("contactEmail") ?? "").trim();
+  const showId = String(formData.get("showId") ?? "").trim() || null;
+  if (!companyId) throw new Error("Select or name a client company.");
+  if (!contactName) throw new Error("Contact name is required.");
+  if (!contactEmail) throw new Error("Contact email is required to invite them to the artwork portal.");
+
+  let companyName: string;
+  if (companyId === NEW_COMPANY_VALUE) {
+    const newCompanyName = String(formData.get("newCompanyName") ?? "").trim();
+    if (!newCompanyName) throw new Error("New client name is required.");
+    const company = await db.company.create({ data: { name: newCompanyName } });
+    companyId = company.id;
+    companyName = company.name;
+  } else {
+    const company = await db.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true } });
+    companyName = company.name;
+  }
+
+  const show = showId ? await db.show.findUniqueOrThrow({ where: { id: showId }, select: { name: true } }) : null;
+
+  const contact = await db.contact.create({
+    data: { name: contactName, email: contactEmail, role: "CLIENT_CONTACT", companyId },
+  });
+
+  // No manual "show name" field in this form (unlike the full New
+  // Opportunity page, which makes you re-type it even right after picking
+  // a Show from a dropdown) -- derived here instead, since the whole point
+  // of this quick-onboard box is fewer redundant fields, not a smaller
+  // version of the same form.
+  const opportunity = await db.opportunity.create({
+    data: {
+      companyId,
+      showId,
+      showName: show ? `${companyName} @ ${show.name}` : companyName,
+      primaryContactId: contact.id,
+      projectType: "TRADESHOW_EXHIBIT",
+    },
+  });
+
+  redirect(`/departments/graphics?opportunityId=${opportunity.id}`);
 }
