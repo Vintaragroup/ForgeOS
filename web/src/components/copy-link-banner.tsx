@@ -2,22 +2,27 @@
 
 import { useRef, useState } from "react";
 
-// Renders once, right after a fresh client-portal invite -- see
-// notifyClientInvited's own comment for why: only the invite's tokenHash is
-// ever persisted, so the raw link in the URL that got this page rendered is
-// the only chance anyone has to recover it. Reloading this page without
-// ?invite= (or navigating away and back) won't bring it back; a brand new
-// invite would need to be issued instead.
-export function CopyLinkBanner({ link }: { link: string }) {
+// Renders once, right after a fresh secret link is issued -- originally
+// the client-portal invite flow (see notifyClientInvited's own comment
+// for why: only the invite's tokenHash is ever persisted, so the raw
+// link in the URL that got this page rendered is the only chance anyone
+// has to recover it), reused as-is by the personal calendar-feed link
+// (calendar-feed.ts's issueCalendarFeedToken has the identical
+// hash-only-persisted constraint). `message` defaults to the original
+// client-portal copy so that call site needs no change.
+export function CopyLinkBanner({
+  link,
+  message = "Client portal link — copy this now and send it to the client yourself. Email delivery isn't working yet, and this link won't be shown again after you leave this page.",
+}: {
+  link: string;
+  message?: string;
+}) {
   const [copied, setCopied] = useState(false);
   const codeRef = useRef<HTMLElement>(null);
 
   return (
     <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 p-4">
-      <p className="mb-2 text-sm font-medium text-amber-900">
-        Client portal link — copy this now and send it to the client yourself. Email delivery isn&apos;t working
-        yet, and this link won&apos;t be shown again after you leave this page.
-      </p>
+      <p className="mb-2 text-sm font-medium text-amber-900">{message}</p>
       <div className="flex items-center gap-2">
         <code ref={codeRef} className="flex-1 overflow-x-auto rounded border border-amber-200 bg-white px-3 py-2 text-xs text-neutral-800">
           {link}

@@ -421,6 +421,8 @@
 .dash-qa.dash-c-gray:hover { border-color: var(--dash-gray); }
 .dash-qa.dash-c-tan .dash-dot { background: var(--dash-tan); }
 .dash-qa.dash-c-tan:hover { border-color: var(--dash-tan); }
+.dash-qa.dash-c-red .dash-dot { background: var(--dash-chip-critical-text); }
+.dash-qa.dash-c-red:hover { border-color: var(--dash-chip-critical-text); }
 
 /* section shell */
 

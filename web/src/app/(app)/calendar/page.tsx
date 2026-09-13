@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
-import { getCalendarItems, utcToday, utcAddDays, CALENDAR_ITEM_TYPE_LABELS, type CalendarItem, type CalendarItemTone } from "@/lib/calendar";
+import { getCalendarItems, getUpcomingWithOverdue, isOverdueItem, utcToday, utcAddDays, CALENDAR_ITEM_TYPE_LABELS, type CalendarItem, type CalendarItemTone } from "@/lib/calendar";
+import { hasActiveCalendarFeedToken } from "@/lib/calendar-feed";
 import { PageHeader, Card, Field, SelectField, Button } from "@/components/ui";
-import { createCalendarEventAction, deleteCalendarEventAction } from "./actions";
+import { CopyLinkBanner } from "@/components/copy-link-banner";
+import { createCalendarEventAction, deleteCalendarEventAction, issueCalendarFeedTokenAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -111,11 +113,18 @@ function weekBarSegments(items: CalendarItem[], weekStart: Date, weekEnd: Date) 
     });
 }
 
-export default async function CalendarPage({ searchParams }: { searchParams: Promise<{ month?: string }> }) {
+export default async function CalendarPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ month?: string; feedUrl?: string }>;
+}) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const { month } = await searchParams;
+  const { month, feedUrl } = await searchParams;
+  // Only fetch this when feedUrl is absent -- the one request that
+  // redirected here with a fresh feedUrl already knows the answer.
+  const hasFeed = feedUrl ? true : await hasActiveCalendarFeedToken(user.id);
   const today = utcToday();
   const parsedMonth = month ? parseMonthParam(month) : null;
   const monthStart = parsedMonth ?? utcMonthStart(today);
@@ -128,7 +137,7 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
 
   const [gridItems, agendaItems] = await Promise.all([
     getCalendarItems(user, gridStart, gridEnd),
-    getCalendarItems(user, today, utcAddDays(today, AGENDA_WINDOW_DAYS)),
+    getUpcomingWithOverdue(user, today, AGENDA_WINDOW_DAYS),
   ]);
 
   const pointItemsByDay = new Map<string, CalendarItem[]>();
@@ -208,8 +217,10 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
                             <Link
                               key={item.id}
                               href={item.href}
-                              className={`truncate rounded px-1 py-0.5 text-[11px] font-medium ${TONE_PILL[item.tone]}`}
-                              title={item.title}
+                              className={`truncate rounded px-1 py-0.5 text-[11px] font-medium ${TONE_PILL[item.tone]} ${
+                                isOverdueItem(item, today) ? "ring-1 ring-inset ring-red-500" : ""
+                              }`}
+                              title={isOverdueItem(item, today) ? `${item.title} (overdue)` : item.title}
                             >
                               {item.title}
                             </Link>
@@ -251,15 +262,26 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
               <p className="text-sm text-neutral-400">Nothing coming up.</p>
             ) : (
               <ul className="flex flex-col gap-2">
-                {agendaItems.map((item) => (
+                {agendaItems.map((item) => {
+                  const overdue = isOverdueItem(item, today);
+                  return (
                   <li key={item.id} className="flex items-start justify-between gap-2 text-sm">
                     <div className="min-w-0">
                       <Link href={item.href} className="block truncate font-medium text-neutral-900 hover:underline">
                         {item.title}
                       </Link>
                       <div className="text-xs text-neutral-500">
-                        {CALENDAR_ITEM_TYPE_LABELS[item.type]} · {fmtDay(item.dateStart)}
-                        {item.dateEnd ? `–${fmtDay(item.dateEnd)}` : ""}
+                        {CALENDAR_ITEM_TYPE_LABELS[item.type]} ·{" "}
+                        {overdue ? (
+                          <span className="rounded-full bg-red-50 px-1.5 py-0.5 font-medium text-red-700">
+                            Overdue — {fmtDay(item.dateStart)}
+                          </span>
+                        ) : (
+                          <>
+                            {fmtDay(item.dateStart)}
+                            {item.dateEnd ? `–${fmtDay(item.dateEnd)}` : ""}
+                          </>
+                        )}
                       </div>
                     </div>
                     {item.type === "CUSTOM" && (item.ownerId === user.id || isAdmin) && (
@@ -273,8 +295,28 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
                       </form>
                     )}
                   </li>
-                ))}
+                  );
+                })}
               </ul>
+            )}
+          </Card>
+
+          <Card className="p-4">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Subscribe</h2>
+            {feedUrl ? (
+              <CopyLinkBanner
+                link={feedUrl}
+                message="Calendar feed link — copy this into your calendar app (Google Calendar, Apple Calendar, Outlook) now. It won't be shown again after you leave this page; use Regenerate below if you lose it."
+              />
+            ) : (
+              <>
+                <p className="mb-3 text-sm text-neutral-500">
+                  Get a personal link you can subscribe to from any calendar app — it stays in sync automatically.
+                </p>
+                <form action={issueCalendarFeedTokenAction}>
+                  <Button variant="secondary">{hasFeed ? "Regenerate feed link" : "Get subscribe link"}</Button>
+                </form>
+              </>
             )}
           </Card>
 

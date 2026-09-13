@@ -15,6 +15,8 @@ import type { Prisma, SystemRole } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment, type DepartmentUser } from "@/lib/department-access";
+import type { DocumentSummary } from "@/lib/ai/document-summary-service";
+import { citationHref, parseFreeTextDate } from "@/lib/citation";
 
 export type CalendarItemType =
   | "OPPORTUNITY_EVENT_WINDOW"
@@ -27,6 +29,8 @@ export type CalendarItemType =
   | "WORK_ORDER_INSTALL"
   | "TASK_DUE"
   | "ARTWORK_SLA_DUE"
+  | "RFP_DEADLINE"
+  | "RFP_MILESTONE"
   | "CUSTOM";
 
 export const CALENDAR_ITEM_TYPE_LABELS: Record<CalendarItemType, string> = {
@@ -38,6 +42,8 @@ export const CALENDAR_ITEM_TYPE_LABELS: Record<CalendarItemType, string> = {
   WORK_ORDER_ARTWORK_DEADLINE: "Artwork deadline",
   WORK_ORDER_BALANCE_DUE: "Balance due",
   WORK_ORDER_INSTALL: "Install",
+  RFP_DEADLINE: "RFP deadline",
+  RFP_MILESTONE: "RFP milestone",
   TASK_DUE: "Task due",
   ARTWORK_SLA_DUE: "Artwork proof SLA",
   CUSTOM: "Note",
@@ -47,6 +53,26 @@ export const CALENDAR_ITEM_TYPE_LABELS: Record<CalendarItemType, string> = {
 // consistency, even though the calendar page renders its own markup, not
 // StatusChip itself.
 export type CalendarItemTone = "neutral" | "info" | "warning" | "good" | "critical";
+
+// WorkOrder's 5 milestone dates are also already surfaced by
+// dashboard.ts's own UPCOMING DEADLINES section (same fields, its own
+// DeadlineKind union) -- the Dashboard's CALENDAR widget excludes these
+// item types so the two sections don't list the same deadline twice.
+// /calendar itself keeps every type; this only trims what the Dashboard
+// widget shows.
+export const WORK_ORDER_ITEM_TYPES: readonly CalendarItemType[] = [
+  "WORK_ORDER_DEPOSIT_DUE",
+  "WORK_ORDER_PRODUCTION_MEETING",
+  "WORK_ORDER_ARTWORK_DEADLINE",
+  "WORK_ORDER_BALANCE_DUE",
+  "WORK_ORDER_INSTALL",
+];
+
+// Same reasoning/purpose as WORK_ORDER_ITEM_TYPES above -- RFP key dates
+// are also already surfaced by dashboard.ts's own UPCOMING DEADLINES
+// section, so the Dashboard's CALENDAR widget excludes these item types
+// too. /calendar itself keeps every type.
+export const RFP_ITEM_TYPES: readonly CalendarItemType[] = ["RFP_DEADLINE", "RFP_MILESTONE"];
 
 export interface CalendarItem {
   // Stable + unique across every source: `${type}:${sourceRowId}`.
@@ -91,6 +117,26 @@ export function utcAddDays(d: Date, days: number): Date {
   return new Date(d.getTime() + days * 86_400_000);
 }
 
+// Item kinds that represent a deadline someone owes work against --
+// eligible for "overdue" styling when their date has passed. A past
+// OPPORTUNITY_EVENT_WINDOW/MOVE_WINDOW just means the show already
+// happened (not a missed deadline), and a past CUSTOM note is just
+// history, so neither counts as overdue. RFP_MILESTONE is deliberately
+// excluded too -- matches dashboard.ts's own `overdue: dateType ===
+// "DEADLINE" && date < now` rule, which is never true for a
+// milestone-kind fact regardless of date.
+const DEADLINE_ITEM_TYPES: readonly CalendarItemType[] = [
+  ...WORK_ORDER_ITEM_TYPES,
+  "TASK_DUE",
+  "ARTWORK_SLA_DUE",
+  "OPPORTUNITY_SHIP_DATE",
+  "RFP_DEADLINE",
+];
+
+export function isOverdueItem(item: CalendarItem, today: Date): boolean {
+  return DEADLINE_ITEM_TYPES.includes(item.type) && item.dateStart < today;
+}
+
 export async function getCalendarItems(
   user: CalendarUser,
   rangeStart: Date,
@@ -101,7 +147,7 @@ export async function getCalendarItems(
     ? {}
     : { opportunity: oppAccess };
 
-  const [opportunities, workOrders, tasks, artworkOrders, customEvents] = await Promise.all([
+  const [opportunities, workOrders, tasks, artworkOrders, customEvents, rfpDocuments, deadlineActions] = await Promise.all([
     db.opportunity.findMany({
       where: {
         deletedAt: null,
@@ -150,6 +196,9 @@ export async function getCalendarItems(
     db.task.findMany({
       where: {
         deletedAt: null,
+        // A completed task's due date is no longer actionable -- showing
+        // it would just be clutter, not a reminder.
+        status: { not: "DONE" },
         dueDate: { gte: rangeStart, lte: rangeEnd },
         OR: [{ assignedToId: user.id }, { workOrder: { project: { opportunity: oppAccess } } }],
       },
@@ -182,6 +231,23 @@ export async function getCalendarItems(
         ],
       },
       select: { id: true, title: true, date: true, dateEnd: true, opportunityId: true, createdByUserId: true },
+    }),
+    // No date filter in SQL -- extractedSummary is JSON, same reasoning
+    // dashboard.ts's own getDashboardData already has for its identical
+    // query. Filtering happens in JS against [rangeStart, rangeEnd] below.
+    db.document.findMany({
+      where: { deletedAt: null, extractionStatus: "COMPLETE", opportunity: { deletedAt: null, ...oppAccess } },
+      select: {
+        id: true,
+        mimeType: true,
+        opportunityId: true,
+        extractedSummary: true,
+        opportunity: { select: { showName: true } },
+      },
+    }),
+    db.deadlineAction.findMany({
+      where: { opportunity: oppAccess },
+      select: { opportunityId: true, dedupeKey: true },
     }),
   ]);
 
@@ -292,6 +358,68 @@ export async function getCalendarItems(
     });
   }
 
+  // Two documents from the same RFP package routinely restate the same
+  // fact -- deduped with the identical factKey/dedupeKey formula
+  // dashboard.ts's own getDashboardData already uses, so the two views
+  // never disagree about what counts as "the same fact."
+  const actedKeys = new Set(deadlineActions.map((a) => `${a.opportunityId}::${a.dedupeKey}`));
+  const seenKeyDates = new Set<string>();
+  for (const doc of rfpDocuments) {
+    if (!doc.extractedSummary) continue;
+    const summary = doc.extractedSummary as unknown as DocumentSummary;
+    for (const kd of summary.keyDates) {
+      // Older analyses predate dateType (undefined) -- default to
+      // MILESTONE, same as dashboard.ts, so a stale record can't falsely
+      // alarm as overdue.
+      const dateType = kd.dateType ?? "MILESTONE";
+      if (dateType === "INFORMATIONAL") continue;
+
+      const date = parseFreeTextDate(kd.date);
+      if (!inRange(date, rangeStart, rangeEnd)) continue;
+
+      const factKey = `${kd.label.trim().toLowerCase()}::${date.toISOString().slice(0, 10)}`;
+      const dedupeKey = `${doc.opportunityId}::${factKey}`;
+      if (seenKeyDates.has(dedupeKey)) continue;
+      seenKeyDates.add(dedupeKey);
+      // A deadline already dismissed on the Dashboard (Mark submitted /
+      // Schedule / Mark paid) must not reappear here -- DeadlineAction is
+      // a permanent, global-per-opportunity dismissal, not per-user or
+      // per-view.
+      if (actedKeys.has(dedupeKey)) continue;
+
+      const type: CalendarItemType = dateType === "DEADLINE" ? "RFP_DEADLINE" : "RFP_MILESTONE";
+      items.push({
+        id: `${type}:${dedupeKey}`,
+        type,
+        title: kd.label,
+        dateStart: date,
+        href: citationHref(doc.opportunityId, doc, kd) ?? `/opportunities/${doc.opportunityId}`,
+        tone: type === "RFP_DEADLINE" ? "critical" : "info",
+        opportunityId: doc.opportunityId,
+      });
+    }
+  }
+
   items.sort((a, b) => a.dateStart.getTime() - b.dateStart.getTime());
   return items;
+}
+
+// The default use everywhere except the month grid: "what's coming up,"
+// which should also surface a deadline that JUST became overdue -- a
+// plain forward-only range (today -> today+N) would silently drop it the
+// moment its date passes, exactly the gap that motivated UPCOMING
+// DEADLINES' own PAST_DEADLINE_GRACE_DAYS in dashboard.ts. Only
+// DEADLINE_ITEM_TYPES are pulled from the backward grace window -- an
+// event window that already started, or a CUSTOM note from days ago, has
+// no "overdue" meaning and shouldn't resurface just because the window
+// widened backward.
+const OVERDUE_GRACE_DAYS = 7;
+
+export async function getUpcomingWithOverdue(user: CalendarUser, today: Date, forwardDays: number): Promise<CalendarItem[]> {
+  const [pastItems, upcomingItems] = await Promise.all([
+    getCalendarItems(user, utcAddDays(today, -OVERDUE_GRACE_DAYS), utcAddDays(today, -1)),
+    getCalendarItems(user, today, utcAddDays(today, forwardDays)),
+  ]);
+  const overdue = pastItems.filter((item) => isOverdueItem(item, today));
+  return [...overdue, ...upcomingItems].sort((a, b) => a.dateStart.getTime() - b.dateStart.getTime());
 }

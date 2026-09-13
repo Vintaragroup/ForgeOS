@@ -1,8 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getAppBaseUrl } from "@/lib/email";
+import { issueCalendarFeedToken } from "@/lib/calendar-feed";
 
 function isAdmin(user: { systemRole: string }) {
   return user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
@@ -53,4 +56,11 @@ export async function deleteCalendarEventAction(eventId: string) {
 
   revalidatePath("/calendar");
   revalidatePath("/");
+}
+
+export async function issueCalendarFeedTokenAction() {
+  const user = await getCurrentUser();
+  if (!user) throw new Error("Not signed in.");
+  const rawToken = await issueCalendarFeedToken(user.id);
+  redirect(`/calendar?feedUrl=${encodeURIComponent(`${getAppBaseUrl()}/api/calendar-feed/${rawToken}.ics`)}`);
 }

@@ -83,12 +83,14 @@ export async function updateTaskStatusAction(projectId: string, taskId: string, 
   const status = String(formData.get("status")) as TaskStatus;
   await updateTaskStatus(projectId, taskId, status);
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/tasks");
 }
 
 export async function deleteTaskAction(projectId: string, taskId: string) {
   await requireProjectAccess(projectId);
   await deleteTask(projectId, taskId);
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/tasks");
 }
 
 export async function linkLineItemToTaskAction(projectId: string, taskId: string, formData: FormData) {

@@ -22,13 +22,20 @@ import { SESSION_COOKIE, parseSessionValue } from "@/lib/session";
 // no session cookie at all (see vercel.ts), authenticated instead by a
 // CRON_SECRET bearer token each route checks itself (same
 // "don't rely on the gate alone" posture as the two portal prefixes above).
+//
+// /api/calendar-feed is exempt too -- a calendar app's plain background
+// GET carries no session cookie at all, authenticated instead by the
+// token embedded in its own URL (calendar-feed.ts's
+// validateCalendarFeedToken), same "don't rely on the gate alone" posture
+// as the two portal prefixes and /api/cron above.
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (
     pathname === "/login" ||
     pathname.startsWith("/client-portal/") ||
     pathname.startsWith("/vendor-portal/") ||
-    pathname.startsWith("/api/cron/")
+    pathname.startsWith("/api/cron/") ||
+    pathname.startsWith("/api/calendar-feed/")
   ) {
     return NextResponse.next();
   }

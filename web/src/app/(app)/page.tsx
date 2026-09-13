@@ -2,7 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getDashboardData, type UpcomingDeadline } from "@/lib/dashboard";
 import { getAdminAnalytics, getRecentAnalysisFailures } from "@/lib/admin-analytics";
-import { getCalendarItems, utcToday, utcAddDays, CALENDAR_ITEM_TYPE_LABELS } from "@/lib/calendar";
+import { getUpcomingWithOverdue, isOverdueItem, utcToday, CALENDAR_ITEM_TYPE_LABELS, WORK_ORDER_ITEM_TYPES, RFP_ITEM_TYPES } from "@/lib/calendar";
+import { getTasksForUser } from "@/lib/tasks";
 import { getCurrentUser } from "@/lib/auth";
 import { DEPARTMENT_HOME } from "@/lib/department-home";
 import { recordDeadlineActionAction, routeDashboardQueryAction } from "./dashboard-actions";
@@ -104,12 +105,20 @@ export default async function DashboardPage() {
   }
 
   const today = new Date();
-  const calendarWindowStart = utcToday();
-  const calendarWindowEnd = utcAddDays(calendarWindowStart, 7);
-  const [{ pipeline, upcomingDeadlines, recentProposals, flaggedForReview }, calendarItems] = await Promise.all([
+  const calendarToday = utcToday();
+  const [{ pipeline, upcomingDeadlines, recentProposals, flaggedForReview }, rawCalendarItems, myTasks] = await Promise.all([
     getDashboardData(user),
-    getCalendarItems(user, calendarWindowStart, calendarWindowEnd),
+    getUpcomingWithOverdue(user, calendarToday, 7),
+    getTasksForUser(user, { mineOnly: true, includeCompleted: false }),
   ]);
+  // WorkOrder milestones and RFP key dates are already covered by
+  // UPCOMING DEADLINES below (same fields, via dashboard.ts's own
+  // DeadlineKind) -- excluded here so the two sections don't list the
+  // same deadline twice. /calendar itself keeps every type; this only
+  // trims the Dashboard widget.
+  const calendarItems = rawCalendarItems.filter(
+    (item) => !WORK_ORDER_ITEM_TYPES.includes(item.type) && !RFP_ITEM_TYPES.includes(item.type),
+  );
   const adminStats = isAdmin ? await getAdminAnalytics() : null;
   // Stricter than isAdmin above -- a real error message (stack-adjacent
   // detail from an AI provider call) is more internal than the aggregate
@@ -177,6 +186,10 @@ export default async function DashboardPage() {
               <span className="dash-dot" />
               Reports
             </Link>
+            <Link className="dash-qa dash-c-red" href="/tasks?view=mine">
+              <span className="dash-dot" />
+              {myTasks.length > 0 ? `My Tasks (${myTasks.length})` : "My Tasks"}
+            </Link>
           </div>
         </div>
       </div>
@@ -223,7 +236,11 @@ export default async function DashboardPage() {
                     <div className="dash-row-title">{item.title}</div>
                     <div className="dash-row-sub">{CALENDAR_ITEM_TYPE_LABELS[item.type]}</div>
                   </div>
-                  <span className="dash-row-date">{fmtDate(item.dateStart)}</span>
+                  {isOverdueItem(item, calendarToday) ? (
+                    <span className="dash-chip dash-critical">Overdue — {fmtDate(item.dateStart)}</span>
+                  ) : (
+                    <span className="dash-row-date">{fmtDate(item.dateStart)}</span>
+                  )}
                 </Link>
               ))}
             </div>

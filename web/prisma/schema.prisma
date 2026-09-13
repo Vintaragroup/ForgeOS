@@ -130,6 +130,7 @@ model User {
   aiUsageEvents            AiUsageEvent[]
   vendorMatchApplyLogs     VendorMatchApplyLog[]
   calendarEvents           CalendarEvent[]
+  calendarFeedTokens       CalendarFeedToken[]
 
   @@map("users")
 }
@@ -2778,6 +2779,29 @@ model ArtworkPortalInvite {
 
   @@index([artworkOrderId])
   @@map("artwork_portal_invites")
+}
+
+// A user's personal .ics calendar-feed subscription -- one active token per
+// user, polled indefinitely by an external calendar app rather than a
+// one-shot magic link. Same hash-only-persisted, ${rowId}.${rawToken}
+// shape as ArtworkPortalInvite above, replicated rather than shared (see
+// calendar-feed.ts's own comment for why -- this is an unrelated
+// resource, not ArtworkOrder). Unlike ArtworkPortalInvite there is no
+// expiresAt: a subscription should keep working indefinitely; only
+// issuing a new token (which revokes the old row) ever invalidates a
+// previous URL.
+model CalendarFeedToken {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  tokenHash String
+
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@index([userId])
+  @@map("calendar_feed_tokens")
 }
 
 // ---------------------------------------------------------------------
