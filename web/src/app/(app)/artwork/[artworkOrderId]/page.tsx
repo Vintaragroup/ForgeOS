@@ -253,7 +253,7 @@ export default async function ArtworkOrderPage({
               {order.slaDueAt && ` SLA: check due by ${order.slaDueAt.toLocaleString()}.`}
             </p>
             {latestProof && clientArtworkFile ? (
-              <div className="mb-4 grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+              <div className="mb-4 grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
                 <Link
                   href={`/artwork/${order.id}/files/${latestProof.id}?inline=1`}
                   target="_blank"
@@ -281,6 +281,20 @@ export default async function ArtworkOrderPage({
                   className="rounded-md border border-neutral-200 px-3 py-2 text-center hover:border-neutral-400"
                 >
                   Automated visual diff
+                </Link>
+                <Link
+                  href={`/artwork/${order.id}/annotate?fileId=${latestProof.id}`}
+                  target="_blank"
+                  className="rounded-md border border-neutral-200 px-3 py-2 text-center hover:border-neutral-400"
+                >
+                  Annotate proof
+                </Link>
+                <Link
+                  href={`/artwork/${order.id}/annotate?fileId=${clientArtworkFile.id}`}
+                  target="_blank"
+                  className="rounded-md border border-neutral-200 px-3 py-2 text-center hover:border-neutral-400"
+                >
+                  Annotate approved artwork
                 </Link>
               </div>
             ) : (

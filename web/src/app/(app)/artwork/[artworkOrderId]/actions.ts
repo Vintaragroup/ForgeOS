@@ -19,6 +19,7 @@ import {
   notifyVendorGoAhead,
   notifyVendorRevisionRequested,
 } from "@/lib/artwork-notifications";
+import { createAnnotation, resolveAnnotation } from "@/lib/artwork-annotation-service";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ArtworkPortalRole } from "@/generated/prisma/enums";
@@ -169,4 +170,38 @@ export async function markDeliveredAction(artworkOrderId: string) {
   const clientEmail = await latestInviteEmail(artworkOrderId, "CLIENT");
   if (clientEmail) await notifyClientDelivered(artworkOrderId, clientEmail);
   revalidatePath(`/artwork/${artworkOrderId}`);
+}
+
+export async function createAnnotationAction(artworkOrderId: string, formData: FormData) {
+  const actor = await expoActor(artworkOrderId);
+  const artworkFileId = String(formData.get("artworkFileId") ?? "").trim();
+  if (!artworkFileId) throw new Error("Missing artworkFileId.");
+  // Cross-resource check: an artworkFileId submitted from the form must
+  // actually belong to THIS order -- same class of check as the
+  // annotate page's own fileId verification.
+  const file = await db.artworkFile.findUniqueOrThrow({ where: { id: artworkFileId } });
+  if (file.artworkOrderId !== artworkOrderId) throw new Error("This file doesn't belong to this order.");
+  await createAnnotation(
+    artworkFileId,
+    { xPct: Number(formData.get("xPct")), yPct: Number(formData.get("yPct")), note: String(formData.get("note") ?? "") },
+    actor,
+  );
+  revalidatePath(`/artwork/${artworkOrderId}/annotate`);
+}
+
+export async function resolveAnnotationAction(artworkOrderId: string, formData: FormData) {
+  const actor = await expoActor(artworkOrderId);
+  const annotationId = String(formData.get("annotationId") ?? "").trim();
+  if (!annotationId) throw new Error("Missing annotationId.");
+  // Cross-resource check: an annotationId submitted from the form must
+  // actually belong to a file on THIS order.
+  const annotation = await db.artworkAnnotation.findUniqueOrThrow({
+    where: { id: annotationId },
+    include: { artworkFile: { select: { artworkOrderId: true } } },
+  });
+  if (annotation.artworkFile.artworkOrderId !== artworkOrderId) {
+    throw new Error("This pin doesn't belong to this order.");
+  }
+  await resolveAnnotation(annotationId, actor.userId!);
+  revalidatePath(`/artwork/${artworkOrderId}/annotate`);
 }

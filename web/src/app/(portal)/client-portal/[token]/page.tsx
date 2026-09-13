@@ -205,14 +205,24 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
               <p className="mb-3 text-sm text-neutral-600">
                 This proof has been reviewed by your account manager and matches your approved artwork.
               </p>
-              <a
-                href={`/client-portal/${token}/files/${latestProof.id}?inline=1`}
-                target="_blank"
-                rel="noreferrer"
-                className="mb-4 inline-block text-sm text-neutral-900 underline"
-              >
-                View proof
-              </a>
+              <p className="mb-4 flex flex-wrap gap-x-4 gap-y-1">
+                <a
+                  href={`/client-portal/${token}/files/${latestProof.id}?inline=1`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-neutral-900 underline"
+                >
+                  View proof
+                </a>
+                <a
+                  href={`/client-portal/${token}/annotate?fileId=${latestProof.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-neutral-900 underline"
+                >
+                  Point out a specific spot
+                </a>
+              </p>
               <div className="flex flex-col gap-3">
                 <form action={approveProofWithToken}>
                   <Button>Approve — Send to Production</Button>

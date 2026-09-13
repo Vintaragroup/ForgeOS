@@ -106,6 +106,16 @@ export default async function VendorPortalPage({ params }: { params: Promise<{ t
               <span className="font-medium">Expo review note:</span> {latestReviewNote.note}
             </div>
           )}
+          {latestProof && (
+            <a
+              href={`/vendor-portal/${token}/annotate?fileId=${latestProof.id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="mb-4 inline-block text-sm text-neutral-900 underline"
+            >
+              See marked-up spots on the proof
+            </a>
+          )}
           <ArtworkUploadForm
             artworkOrderId={order.id}
             uploadTokenUrl={`/vendor-portal/${token}/upload-token`}

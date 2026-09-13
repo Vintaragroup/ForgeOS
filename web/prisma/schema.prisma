@@ -2615,11 +2615,60 @@ model ArtworkFile {
   // not an error, just an early, honest signal instead of a late one.
   previewable Boolean?
 
+  annotations ArtworkAnnotation[]
+
   createdAt DateTime  @default(now())
   deletedAt DateTime?
 
   @@index([artworkOrderId])
   @@map("artwork_files")
+}
+
+// Pinned-point comments on a rasterized proof/approved-artwork image --
+// "point at exactly where," not a freehand drawing tool (see this feature's
+// own plan for why freehand was deliberately scoped out). Only ever created
+// by CLIENT or EXPO (never VENDOR or SYSTEM): the vendor sees every pin on
+// their own proof but never creates or resolves one, mirroring the same
+// one-directional vendor-anonymity convention ArtworkOrderEvent's own notes
+// already follow -- the vendor-facing read path omits authorType/
+// authorUserId/authorEmail from its own query entirely (structural
+// enforcement, not just a hidden UI field) rather than relying on this
+// model's own shape to keep that promise.
+model ArtworkAnnotation {
+  id            String      @id @default(cuid())
+  artworkFileId String
+  artworkFile   ArtworkFile @relation(fields: [artworkFileId], references: [id])
+
+  // No multi-page concept exists anywhere in this pipeline today (proof
+  // sheet, proof diff, and every rasterization call all hardcode page 1) --
+  // this stays forward-compatible without introducing one now; every write
+  // in this feature's initial slice always passes 1.
+  page Int @default(1)
+
+  // 0-1, resolution-independent -- survives the underlying image being
+  // re-rendered at a different scale later.
+  xPct Float
+  yPct Float
+
+  note String
+
+  // Same actor shape as ArtworkOrderEvent's own actorType/actorUserId/
+  // actorEmail -- authorType is only ever CLIENT or EXPO here.
+  authorType   ArtworkActorType
+  authorUserId String?
+  authorEmail  String?
+
+  // Marks a pin addressed without deleting the record -- an audit trail,
+  // same instinct as everything else in this pipeline. Always resolved by
+  // an Expo user; no separate resolution note needed since the pin's own
+  // note already documents the issue.
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([artworkFileId])
+  @@map("artwork_annotations")
 }
 
 // Single audit trail for every state transition and notable action in the

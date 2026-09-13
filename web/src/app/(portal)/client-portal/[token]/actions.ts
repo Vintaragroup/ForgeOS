@@ -10,6 +10,7 @@ import {
 } from "@/lib/artwork-order-service";
 import { finalizeArtworkUpload } from "@/lib/artwork-file-service";
 import { notifyReviewersEscalation, notifyReviewersOfSubmission, notifyVendorRevisionRequested } from "@/lib/artwork-notifications";
+import { createAnnotation } from "@/lib/artwork-annotation-service";
 import { db } from "@/lib/db";
 
 // Every action here only ever receives the token itself, not a separate
@@ -120,4 +121,21 @@ export async function reportProofMismatchAction(token: string, formData: FormDat
     if (vendorInvite) await notifyVendorRevisionRequested(identity.artworkOrderId, vendorInvite.email, note);
   }
   revalidatePath(`/client-portal/${token}`);
+}
+
+export async function createAnnotationAction(token: string, formData: FormData) {
+  const identity = await requireClientIdentity(token);
+  const artworkFileId = String(formData.get("artworkFileId") ?? "").trim();
+  if (!artworkFileId) throw new Error("Missing artworkFileId.");
+  // Cross-resource check: fileId is a SEPARATE identifier from the token,
+  // so it must be proven to belong to this same order -- same posture as
+  // files/[fileId]/route.ts's own requirePortalAccess check.
+  const file = await db.artworkFile.findUniqueOrThrow({ where: { id: artworkFileId } });
+  if (file.artworkOrderId !== identity.artworkOrderId) throw new Error("This file doesn't belong to your order.");
+  await createAnnotation(
+    artworkFileId,
+    { xPct: Number(formData.get("xPct")), yPct: Number(formData.get("yPct")), note: String(formData.get("note") ?? "") },
+    actor(identity),
+  );
+  revalidatePath(`/client-portal/${token}/annotate`);
 }
