@@ -3,12 +3,25 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
+// DIRECT_URL, not DATABASE_URL -- a 2026-09-13 production incident (two
+// consecutive `prisma migrate deploy` failures, P1002 "timed out trying to
+// acquire a postgres advisory lock") traced to DATABASE_URL being Render's
+// pooled/PgBouncer connection (port 6432), the same one src/lib/db.ts's
+// runtime adapter uses for ordinary app queries. Prisma's own migration
+// lock is session-scoped: whatever backend PgBouncer hands the CLI to
+// acquire pg_advisory_lock never gets a matching unlock, and PgBouncer then
+// recycles that same backend to serve unrelated app queries -- so the lock
+// just sits there indefinitely, blocking every future migrate attempt.
+// DIRECT_URL is Render's unpooled connection (typically port 5432); only
+// the CLI (migrate/generate/studio/db pull, all routed through this file)
+// uses it -- the running app keeps using the pooled DATABASE_URL via
+// src/lib/db.ts's own adapter, untouched.
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    url: process.env["DIRECT_URL"],
   },
 });
