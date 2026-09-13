@@ -45,7 +45,11 @@ export interface ArtworkProofData {
 // How far apart a requested size and the file-measured size can be before
 // it's worth flagging -- loose enough to absorb a PDF page's own rounding/
 // margin noise, tight enough to still catch a genuine wrong-file mistake.
-const SIZE_MISMATCH_TOLERANCE_IN = 0.25;
+// Exported so the proof-vs-approved image diff (artwork-image-diff.ts) can
+// reuse the exact same threshold rather than a second, potentially-drifting
+// magic number -- both are asking the same underlying question ("are these
+// two measurements of the same real object close enough to call equal").
+export const SIZE_MISMATCH_TOLERANCE_IN = 0.25;
 
 // Plain, explicit arguments rather than a raw Prisma payload -- the route
 // does its own DB shaping, this stays trivial to unit test. Mirrors
@@ -117,7 +121,7 @@ export function buildArtworkProofData(input: {
   };
 }
 
-function formatInches(n: number): string {
+export function formatInches(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 

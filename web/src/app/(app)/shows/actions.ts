@@ -34,6 +34,7 @@ export async function updateShow(id: string, formData: FormData) {
       venue: emptyToNull(formData.get("venue")),
       eventStartDate: emptyToDate(formData.get("eventStartDate")),
       eventEndDate: emptyToDate(formData.get("eventEndDate")),
+      escalationContactId: emptyToNull(formData.get("escalationContactId")),
     },
   });
 

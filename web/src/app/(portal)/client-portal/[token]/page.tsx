@@ -161,6 +161,13 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
           <div className="mt-6 border-t border-neutral-200 pt-4">
             <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Artwork</h3>
             {clientArtworkFile && <p className="mb-3 text-sm text-neutral-600">Uploaded: {clientArtworkFile.filename}</p>}
+            {clientArtworkFile?.previewable === false && (
+              <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                This file couldn&apos;t be verified as a print-ready PDF. If this is a native Illustrator file, re-save
+                it with &quot;Create PDF Compatible File&quot; checked in Illustrator&apos;s save dialog and re-upload
+                — otherwise Expo will need to open it directly in Illustrator to review it.
+              </p>
+            )}
             <ArtworkUploadForm
               artworkOrderId={order.id}
               uploadTokenUrl={`/client-portal/${token}/upload-token`}

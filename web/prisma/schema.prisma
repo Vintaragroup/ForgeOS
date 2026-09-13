@@ -111,10 +111,11 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  contactLinks    Contact[]                 @relation("UserContact")
-  opportunities   Opportunity[]             @relation("OpportunityOwner")
-  salesRepOn      Opportunity[]             @relation("OpportunitySalesRep")
-  collaboratingOn OpportunityCollaborator[] @relation("OpportunityCollaborator")
+  contactLinks       Contact[]                 @relation("UserContact")
+  opportunities      Opportunity[]             @relation("OpportunityOwner")
+  salesRepOn         Opportunity[]             @relation("OpportunitySalesRep")
+  collaboratingOn    OpportunityCollaborator[] @relation("OpportunityCollaborator")
+  escalationContactFor Show[]                  @relation("ShowEscalationContact")
 
   approvedEstimateVersions EstimateVersion[]      @relation("EstimateVersionApprover")
   uploadedAttachments      Attachment[]
@@ -254,6 +255,15 @@ model Show {
   venue          String?
   eventStartDate DateTime?
   eventEndDate   DateTime?
+
+  // When set, this person alone gets notified on an artwork-order
+  // escalation for ANY opportunity under this show -- a dedicated
+  // show-wide coordinator, rather than each opportunity's own scattered
+  // owner/salesRep (the default artwork-notifications.ts already uses when
+  // this is null). Deliberately scoped to escalation only, not every
+  // notification type -- see getEscalationNotifyEmails's own comment.
+  escalationContactId String?
+  escalationContact    User?   @relation("ShowEscalationContact", fields: [escalationContactId], references: [id])
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -2547,10 +2557,17 @@ model ArtworkOrder {
   revisionRound Int @default(0)
 
   // Set when entering ExpoProofCheck: 24h normally, 4h if the show's
-  // eventStartDate is within its final week. Passive-flag only in this
-  // slice (see plan's deferred-scope list) -- no active-notification cron
-  // reads this yet.
+  // eventStartDate is within its final week. Now read by the active
+  // SLA-warning cron (see slaWarningNotifiedAt below).
   slaDueAt DateTime?
+  // Dedupe guard for the SLA-warning cron -- set once the halfway-point
+  // warning email has actually gone out, so an order isn't re-notified on
+  // every hourly tick until it clears EXPO_PROOF_CHECK. Cleared implicitly
+  // by simply never being read again once the order moves on (never reset
+  // to null on a status change -- a stale timestamp on a since-resolved
+  // order is harmless, since the cron's own where-clause already excludes
+  // anything not currently in EXPO_PROOF_CHECK).
+  slaWarningNotifiedAt DateTime?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -2588,6 +2605,15 @@ model ArtworkFile {
   uploadedByType   ArtworkActorType
   uploadedByUserId String?
   uploadedByEmail  String?
+
+  // Whether this file actually parsed as a real PDF at upload time (checked
+  // once, cheaply, via getPdfPageDimensionsInInches -- no rasterization).
+  // null means "uploaded before this check existed," not "unknown/pending"
+  // -- never backfilled, since the proof sheet's own try-and-fail-gracefully
+  // behavior at render time is the real fallback regardless of this flag.
+  // A false here is expected for a genuine (non-PDF-compatible) .ai file --
+  // not an error, just an early, honest signal instead of a late one.
+  previewable Boolean?
 
   createdAt DateTime  @default(now())
   deletedAt DateTime?

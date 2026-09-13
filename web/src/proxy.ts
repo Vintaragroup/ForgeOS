@@ -17,9 +17,19 @@ import { SESSION_COOKIE, parseSessionValue } from "@/lib/session";
 // those two prefixes independently calls requirePortalAccess itself
 // (same "don't rely on the gate alone" posture the internal side already
 // takes for Server Actions), so exempting them here is safe.
+//
+// /api/cron is exempt too -- Vercel Cron invokes these routes directly with
+// no session cookie at all (see vercel.ts), authenticated instead by a
+// CRON_SECRET bearer token each route checks itself (same
+// "don't rely on the gate alone" posture as the two portal prefixes above).
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (pathname === "/login" || pathname.startsWith("/client-portal/") || pathname.startsWith("/vendor-portal/")) {
+  if (
+    pathname === "/login" ||
+    pathname.startsWith("/client-portal/") ||
+    pathname.startsWith("/vendor-portal/") ||
+    pathname.startsWith("/api/cron/")
+  ) {
     return NextResponse.next();
   }
 

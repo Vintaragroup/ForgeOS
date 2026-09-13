@@ -9,11 +9,27 @@
 import path from "node:path";
 import { db } from "@/lib/db";
 import { getObject } from "@/lib/storage";
+import { getPdfPageDimensionsInInches } from "@/lib/document-view-service";
 import type { ArtworkActorType, ArtworkFileKind } from "@/generated/prisma/enums";
 
 function systemAssignedFilename(kind: ArtworkFileKind, round: number, originalFilename: string): string {
   const ext = path.extname(originalFilename).toLowerCase() || ".pdf";
   return kind === "PROOF" ? `proof-round-${round}${ext}` : `artwork${ext}`;
+}
+
+// Checked once, here, rather than trusting the browser-reported mimeType --
+// File.type is unreliable for .ai specifically (often empty, never really
+// "application/pdf"), and nothing upstream of this call ever inspects the
+// actual bytes. A false result is expected and NOT an error for a genuine
+// (non-PDF-compatible) .ai file -- it's the file-format's real limitation,
+// surfaced early instead of only when Expo opens the proof sheet later.
+async function checkPreviewable(storageKey: string): Promise<boolean> {
+  try {
+    const bytes = await getObject(storageKey);
+    return (await getPdfPageDimensionsInInches(bytes, 1)) !== null;
+  } catch {
+    return false;
+  }
 }
 
 export async function finalizeArtworkUpload(
@@ -30,6 +46,7 @@ export async function finalizeArtworkUpload(
     uploadedByEmail?: string | null;
   },
 ) {
+  const previewable = await checkPreviewable(data.storageKey);
   return db.artworkFile.create({
     data: {
       artworkOrderId,
@@ -42,6 +59,7 @@ export async function finalizeArtworkUpload(
       uploadedByType: data.uploadedByType,
       uploadedByUserId: data.uploadedByUserId ?? null,
       uploadedByEmail: data.uploadedByEmail ?? null,
+      previewable,
     },
   });
 }

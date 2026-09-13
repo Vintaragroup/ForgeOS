@@ -36,6 +36,8 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
     select: { id: true, showName: true, company: { select: { name: true } } },
   });
 
+  const users = await db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } });
+
   const updateShowWithId = updateShow.bind(null, show.id);
   const deleteShowWithId = deleteShow.bind(null, show.id);
   const assignWithId = assignOpportunityToShowAction.bind(null, show.id);
@@ -62,6 +64,19 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
               defaultValue={show.eventEndDate?.toISOString().slice(0, 10)}
             />
           </div>
+          <SelectField
+            label="Escalation contact"
+            name="escalationContactId"
+            defaultValue={show.escalationContactId ?? ""}
+            options={[
+              { value: "", label: "— none (use each opportunity's own owner/sales rep) —" },
+              ...users.map((u) => ({ value: u.id, label: u.name })),
+            ]}
+          />
+          <p className="-mt-2 text-xs text-neutral-500">
+            When set, this person alone is notified if any artwork order under this show escalates --
+            instead of each opportunity&apos;s own owner and sales rep.
+          </p>
           <div>
             <Button>Save changes</Button>
           </div>

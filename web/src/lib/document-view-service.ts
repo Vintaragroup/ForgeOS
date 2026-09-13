@@ -280,19 +280,16 @@ export async function renderHighlightedPdfPage(bytes: Buffer, pageNumber: number
   }
 }
 
-// The plain rasterizer artwork-proof-pdf.tsx needs: react-pdf can only
-// embed a raster image, never another PDF, so a client-uploaded artwork
-// PDF has to become a PNG before it can appear inside the proof sheet.
-// Same getDocumentProxy/page.render/@napi-rs/canvas pipeline
-// renderHighlightedPdfPage uses above, with the highlight-rectangle step
-// removed -- there's nothing to highlight here, just page 1 as an image.
-// Returns null (never throws) for anything unrenderable -- a corrupt
-// file, an out-of-range page, or (most commonly) a real .ai
-// (Illustrator) file, which per ARTWORK_UPLOAD_EXTENSIONS is an accepted
-// upload type but isn't actually a PDF pdf.js can parse. The caller
-// degrades to a "preview not available" message, the same posture the
-// general document viewer already takes for file types it can't render.
-export async function renderPdfPageToPng(bytes: Buffer, pageNumber: number, scale = 2): Promise<string | null> {
+// The core rasterizer both renderPdfPageToPng and the proof-vs-approved
+// image diff (artwork-image-diff.ts) build on -- the diff needs the raw
+// Canvas (for getImageData pixel access), not a pre-encoded PNG data URL,
+// so this is the shared piece rather than having the diff feature
+// re-implement the same getDocumentProxy/page.render/@napi-rs/canvas
+// pipeline a second time. Returns null (never throws) for anything
+// unrenderable -- a corrupt file, an out-of-range page, or (most commonly)
+// a real .ai (Illustrator) file, which per ARTWORK_UPLOAD_EXTENSIONS is an
+// accepted upload type but isn't actually a PDF pdf.js can parse.
+export async function rasterizePdfPageToCanvas(bytes: Buffer, pageNumber: number, scale: number): Promise<Canvas | null> {
   try {
     ensureCanvasFontsRegistered();
     const pdf = await getDocumentProxy(new Uint8Array(bytes));
@@ -303,20 +300,36 @@ export async function renderPdfPageToPng(bytes: Buffer, pageNumber: number, scal
     const CanvasFactory = await createIsomorphicCanvasFactory(() => import("@napi-rs/canvas"));
     const canvasFactory = new CanvasFactory();
     const drawingContext = canvasFactory.create(viewport.width, viewport.height);
-    try {
-      await page.render({
-        canvas: drawingContext.canvas as unknown as HTMLCanvasElement,
-        canvasContext: drawingContext.context as unknown as CanvasRenderingContext2D,
-        viewport,
-      }).promise;
-      const buffer = await (drawingContext.canvas as Canvas).encode("png");
-      return `data:image/png;base64,${buffer.toString("base64")}`;
-    } finally {
-      canvasFactory.destroy(drawingContext);
-    }
+    // Deliberately no canvasFactory.destroy() here, unlike the rest of this
+    // factory's usual lifecycle -- unpdf's own destroy() zeroes
+    // context.canvas.width/height in place (it's meant for a factory
+    // instance reusing one context across pages, not for the standalone
+    // one-shot case here), which would blank the very canvas this function
+    // returns before the caller ever gets to read it. A plain Canvas object
+    // needs no explicit disposal -- it's freed by normal GC once the
+    // caller's own reference goes out of scope.
+    await page.render({
+      canvas: drawingContext.canvas as unknown as HTMLCanvasElement,
+      canvasContext: drawingContext.context as unknown as CanvasRenderingContext2D,
+      viewport,
+    }).promise;
+    return drawingContext.canvas as Canvas;
   } catch {
     return null;
   }
+}
+
+// The plain rasterizer artwork-proof-pdf.tsx needs: react-pdf can only
+// embed a raster image, never another PDF, so a client-uploaded artwork
+// PDF has to become a PNG before it can appear inside the proof sheet.
+// The caller degrades to a "preview not available" message on a null
+// result, the same posture the general document viewer already takes for
+// file types it can't render.
+export async function renderPdfPageToPng(bytes: Buffer, pageNumber: number, scale = 2): Promise<string | null> {
+  const canvas = await rasterizePdfPageToCanvas(bytes, pageNumber, scale);
+  if (!canvas) return null;
+  const buffer = await canvas.encode("png");
+  return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
 // The proof sheet's real-dimensions piece: reads the actual print size

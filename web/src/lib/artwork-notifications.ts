@@ -39,6 +39,24 @@ async function getInternalNotifyEmails(opportunityId: string): Promise<string[]>
   return [...new Set([opportunity.owner?.email, opportunity.salesRep?.email].filter((e): e is string => !!e))];
 }
 
+// Escalation-only variant: when the opportunity's Show has a dedicated
+// escalationContact set, that ONE person is notified instead of the
+// per-opportunity owner/salesRep -- a show-wide coordinator sees every
+// escalation across all of that show's clients, rather than each one
+// scattering to whichever rep happens to own that particular deal.
+// Deliberately NOT used by any other notify* function here -- submission/
+// proof-ready/shipped notifications stay on getInternalNotifyEmails
+// unchanged, since only escalation routing was asked to be configurable.
+export async function getEscalationNotifyEmails(opportunityId: string): Promise<string[]> {
+  const opportunity = await db.opportunity.findUniqueOrThrow({
+    where: { id: opportunityId },
+    select: { show: { select: { escalationContact: { select: { email: true } } } } },
+  });
+  const contactEmail = opportunity.show?.escalationContact?.email;
+  if (contactEmail) return [contactEmail];
+  return getInternalNotifyEmails(opportunityId);
+}
+
 // Row 1: Expo creates client record -> Client -> portal invite link.
 export async function notifyClientInvited(artworkOrderId: string, email: string) {
   const link = await clientPortalLink(artworkOrderId, email);
@@ -132,11 +150,27 @@ export async function notifyVendorRevisionRequested(artworkOrderId: string, emai
 // the auto-escalation alert.
 export async function notifyReviewersEscalation(opportunityId: string, jobCode: string) {
   const artworkOrderUrl = `${getAppBaseUrl()}/artwork`;
-  for (const email of await getInternalNotifyEmails(opportunityId)) {
+  for (const email of await getEscalationNotifyEmails(opportunityId)) {
     await sendEmail({
       to: email,
       subject: `Escalated: revision cap reached (${jobCode})`,
       text: `Job ${jobCode} has hit its 2-round revision cap and needs manual resolution before it can continue:\n\n${artworkOrderUrl}`,
+    });
+  }
+}
+
+// Not a row in the spec's original notification matrix -- the active half
+// of ArtworkOrder.slaDueAt, which was passive-only until the SLA-warning
+// cron. Reuses getEscalationNotifyEmails rather than getInternalNotifyEmails
+// since the people expected to act on an approaching SLA are the same ones
+// who'd be paged if it actually escalates.
+export async function notifySlaWarning(opportunityId: string, jobCode: string, slaDueAt: Date) {
+  const artworkOrderUrl = `${getAppBaseUrl()}/artwork`;
+  for (const email of await getEscalationNotifyEmails(opportunityId)) {
+    await sendEmail({
+      to: email,
+      subject: `SLA warning: proof check due soon (${jobCode})`,
+      text: `Job ${jobCode}'s proof check is due by ${slaDueAt.toLocaleString()} and is now past the halfway point of its review window:\n\n${artworkOrderUrl}`,
     });
   }
 }

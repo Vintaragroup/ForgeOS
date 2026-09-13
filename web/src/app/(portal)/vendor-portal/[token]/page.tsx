@@ -36,7 +36,7 @@ async function getVendorPortalView(artworkOrderId: string) {
   const latestProof = await db.artworkFile.findFirst({
     where: { artworkOrderId, kind: "PROOF", deletedAt: null },
     orderBy: { round: "desc" },
-    select: { id: true, filename: true, round: true },
+    select: { id: true, filename: true, round: true, previewable: true },
   });
   // Unified "Expo review note" per the spec's vendor-anonymity principle in
   // the OTHER direction too -- a vendor must never learn whether a
@@ -118,6 +118,13 @@ export default async function VendorPortalPage({ params }: { params: Promise<{ t
       {!needsProof && order.status !== "PRODUCTION_GO_AHEAD" && order.status !== "IN_PRODUCTION" && order.status !== "PACKAGED_READY" && order.status !== "SHIPPED_TO_SHOW" && order.status !== "DELIVERED_AT_SHOW" && (
         <Card className="p-6 text-center text-sm text-neutral-500">
           {latestProof ? `Proof submitted (${latestProof.filename}) — waiting on Expo's review.` : "Waiting on Expo."}
+          {latestProof?.previewable === false && (
+            <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-left text-amber-900">
+              This file couldn&apos;t be verified as a print-ready PDF. If it&apos;s a native Illustrator file, re-save
+              it with &quot;Create PDF Compatible File&quot; checked and resubmit — otherwise Expo will need to open it
+              directly in Illustrator to review it.
+            </p>
+          )}
         </Card>
       )}
 

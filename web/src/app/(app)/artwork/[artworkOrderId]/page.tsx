@@ -247,7 +247,7 @@ export default async function ArtworkOrderPage({
               {order.slaDueAt && ` SLA: check due by ${order.slaDueAt.toLocaleString()}.`}
             </p>
             {latestProof && clientArtworkFile ? (
-              <div className="mb-4 grid grid-cols-3 gap-4 text-sm">
+              <div className="mb-4 grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
                 <Link
                   href={`/artwork/${order.id}/files/${latestProof.id}?inline=1`}
                   target="_blank"
@@ -268,6 +268,13 @@ export default async function ArtworkOrderPage({
                   className="rounded-md border border-neutral-200 px-3 py-2 text-center hover:border-neutral-400"
                 >
                   View proof sheet
+                </Link>
+                <Link
+                  href={`/artwork/${order.id}/proof-diff`}
+                  target="_blank"
+                  className="rounded-md border border-neutral-200 px-3 py-2 text-center hover:border-neutral-400"
+                >
+                  Automated visual diff
                 </Link>
               </div>
             ) : (
@@ -352,6 +359,11 @@ export default async function ArtworkOrderPage({
                 <li key={f.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
                   <span>
                     {f.filename} <span className="text-neutral-400">({f.kind === "PROOF" ? `proof round ${f.round}` : "client artwork"})</span>
+                    {f.previewable === false && (
+                      <span className="ml-2">
+                        <StatusChip tone="warning">Preview unavailable</StatusChip>
+                      </span>
+                    )}
                   </span>
                   <Link href={`/artwork/${order.id}/files/${f.id}`} className="text-neutral-900 hover:underline">
                     Download →
