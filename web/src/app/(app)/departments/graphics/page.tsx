@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
-import { PageHeader, Card, Stat, StatusChip, EmptyState } from "@/components/ui";
+import { startArtworkOrderFromDashboardAction } from "./actions";
+import { PageHeader, Card, Stat, StatusChip, EmptyState, SelectField, Button } from "@/components/ui";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
 // generic Artwork review queue this page is a Graphics-specific front door
@@ -21,9 +22,42 @@ const UPCOMING_SHOW_WINDOW_DAYS = 14;
 const STALLED_REJECTION_DAYS = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export default async function GraphicsHomePage() {
+export default async function GraphicsHomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ opportunityId?: string }>;
+}) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+
+  const { opportunityId: selectedOpportunityId } = await searchParams;
+
+  // Same visibility rule as the orders query below: department-wide for a
+  // GR member (or an admin, via opportunityAccessWhere's own isAdmin
+  // bypass), otherwise scoped to opportunities this specific user owns or
+  // collaborates on -- so this picker never offers to start an order on an
+  // opportunity the user couldn't otherwise see.
+  const startableWhere = canAccessArtworkOrdersViaDepartment(user) ? {} : opportunityAccessWhere(user);
+  // Only WON opportunities with no artwork order yet -- mirrors the
+  // opportunity page's own Artwork section, which likewise only shows the
+  // invite form while artworkOrders.length === 0 (a repeat order for the
+  // same opportunity is still possible, just not from this quick-start
+  // picker -- use the opportunity's own page for that).
+  const startableOpportunities = await db.opportunity.findMany({
+    where: { ...startableWhere, stage: "WON", deletedAt: null, artworkOrders: { none: { deletedAt: null } } },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, companyId: true, showName: true, primaryContactId: true, company: { select: { name: true } } },
+  });
+
+  const selectedOpportunity = selectedOpportunityId
+    ? startableOpportunities.find((o) => o.id === selectedOpportunityId)
+    : undefined;
+  const selectedOpportunityContacts = selectedOpportunity
+    ? await db.contact.findMany({
+        where: { deletedAt: null, companyId: selectedOpportunity.companyId },
+        orderBy: { name: "asc" },
+      })
+    : [];
 
   // Same query artwork/page.tsx uses, including the department-wide
   // widening (a Graphics user sees every ArtworkOrder, not just ones on
@@ -97,6 +131,58 @@ export default async function GraphicsHomePage() {
           them right back to this same page. */}
       <PageHeader title="Graphics" noBack />
       <div className="flex flex-col gap-6">
+        <Card className="p-5">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Start an artwork order
+          </h2>
+          {startableOpportunities.length === 0 ? (
+            <EmptyState message="No won opportunity is ready to start an artwork order right now." />
+          ) : (
+            <>
+              <form method="GET" className="flex flex-wrap items-end gap-3">
+                <div className="min-w-72">
+                  <SelectField
+                    label="Opportunity"
+                    name="opportunityId"
+                    defaultValue={selectedOpportunityId ?? ""}
+                    options={[
+                      { value: "", label: "Select a won opportunity…" },
+                      ...startableOpportunities.map((o) => ({
+                        value: o.id,
+                        label: `${o.company.name} — ${o.showName}`,
+                      })),
+                    ]}
+                    required
+                  />
+                </div>
+                <Button variant="secondary">Continue</Button>
+              </form>
+
+              {selectedOpportunity && (
+                <form action={startArtworkOrderFromDashboardAction} className="mt-4 flex flex-wrap items-end gap-3">
+                  <input type="hidden" name="opportunityId" value={selectedOpportunity.id} />
+                  <div className="min-w-64">
+                    <SelectField
+                      label="Client contact"
+                      name="contactId"
+                      defaultValue={selectedOpportunity.primaryContactId ?? ""}
+                      options={[
+                        { value: "", label: "Select a contact…" },
+                        ...selectedOpportunityContacts.map((c) => ({
+                          value: c.id,
+                          label: c.email ? `${c.name} (${c.email})` : c.name,
+                        })),
+                      ]}
+                      required
+                    />
+                  </div>
+                  <Button variant="secondary">Invite to Artwork Portal</Button>
+                </form>
+              )}
+            </>
+          )}
+        </Card>
+
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           <Link href="/artwork">
             <Stat value={String(reviewOrders.length)} label="Awaiting review" />
