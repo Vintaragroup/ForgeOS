@@ -35,11 +35,11 @@ export const metadata: Metadata = {
 // estimate becomes a proposal), Directory groups "who" lookups, Catalog
 // mirrors its own existing hub page. Groups with a single item render as a
 // plain link in AppNav rather than a one-item dropdown.
+// No top-level "Calendar" nav entry -- same posture as the Dashboard's
+// own UPCOMING DEADLINES / RECENT PROPOSALS sections, which also have no
+// nav item of their own. The Dashboard's CALENDAR widget (with its "View
+// calendar ->" link) is the entry point instead.
 const NAV_GROUPS: NavGroup[] = [
-  {
-    label: "Calendar",
-    items: [{ href: "/calendar", label: "Calendar" }],
-  },
   {
     label: "Pipeline",
     items: [
