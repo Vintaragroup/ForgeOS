@@ -73,9 +73,15 @@ export default async function GraphicsHomePage({
     select: { id: true, companyId: true, showName: true, primaryContactId: true, company: { select: { name: true } } },
   });
 
+  // Fewer clicks for the common case: with exactly one eligible opportunity,
+  // there's nothing a "Continue" click could actually disambiguate -- treat
+  // it as selected on page load rather than making the user pick the only
+  // option and click through to see it.
   const selectedOpportunity = selectedOpportunityId
     ? startableOpportunities.find((o) => o.id === selectedOpportunityId)
-    : undefined;
+    : startableOpportunities.length === 1
+      ? startableOpportunities[0]
+      : undefined;
   const selectedOpportunityContacts = selectedOpportunity
     ? await db.contact.findMany({
         where: { deletedAt: null, companyId: selectedOpportunity.companyId },
@@ -92,7 +98,14 @@ export default async function GraphicsHomePage({
   // eligible per canStartArtworkOnboarding, not a result of already being
   // eligible).
   const [shows, unassignedOpportunities, companies] = await Promise.all([
-    db.show.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    // Soonest-first -- the show someone's actually about to work is the one
+    // that matters most in a picker, not alphabetical order. A show with no
+    // event date set yet (nulls) sorts last, after every dated show.
+    db.show.findMany({
+      where: { deletedAt: null },
+      orderBy: { eventStartDate: { sort: "asc", nulls: "last" } },
+      select: { id: true, name: true },
+    }),
     db.opportunity.findMany({
       where: { ...startableWhere, deletedAt: null, showId: null },
       orderBy: { updatedAt: "desc" },
@@ -123,6 +136,12 @@ export default async function GraphicsHomePage({
       vendor: { select: { name: true } },
     },
   });
+
+  // Both Show pickers below default to it when there's exactly one show in
+  // the system -- nothing to disambiguate yet, so don't make every single
+  // onboarding/link ask which show, when there's only ever one right answer
+  // (still overridable the moment a second show exists).
+  const defaultShowId = shows.length === 1 ? shows[0].id : "";
 
   const now = new Date();
 
@@ -202,6 +221,7 @@ export default async function GraphicsHomePage({
                 <SelectField
                   label="Show"
                   name="showId"
+                  defaultValue={defaultShowId}
                   options={[
                     { value: "", label: "— none (standalone deal) —" },
                     ...shows.map((s) => ({ value: s.id, label: s.name })),
@@ -228,7 +248,7 @@ export default async function GraphicsHomePage({
                   <SelectField
                     label="Opportunity"
                     name="opportunityId"
-                    defaultValue={selectedOpportunityId ?? ""}
+                    defaultValue={selectedOpportunity?.id ?? selectedOpportunityId ?? ""}
                     options={[
                       { value: "", label: "Select an opportunity…" },
                       ...startableOpportunities.map((o) => ({
@@ -281,6 +301,7 @@ export default async function GraphicsHomePage({
                 <SelectField
                   label="Show"
                   name="showId"
+                  defaultValue={defaultShowId}
                   options={[
                     { value: "", label: "Select a show…" },
                     ...shows.map((s) => ({ value: s.id, label: s.name })),

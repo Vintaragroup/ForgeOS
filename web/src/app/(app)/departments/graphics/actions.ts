@@ -78,7 +78,19 @@ export async function linkOpportunityToShowFromDashboardAction(formData: FormDat
   const hasAccess = (await canAccessOpportunity(user, opportunityId)) || canAccessArtworkOrdersViaDepartment(user);
   if (!hasAccess) throw new Error("You don't have access to this opportunity.");
 
-  await db.opportunity.update({ where: { id: opportunityId }, data: { showId } });
+  const [show, opportunity] = await Promise.all([
+    db.show.findUniqueOrThrow({ where: { id: showId }, select: { name: true } }),
+    db.opportunity.findUniqueOrThrow({ where: { id: opportunityId }, select: { showName: true, company: { select: { name: true } } } }),
+  ]);
+  // Reconcile showName with the show being linked -- but ONLY when it still
+  // looks auto-generated (exactly the bare company name, onboardNewClient
+  // FromDashboardAction's own standalone-deal fallback above). A showName
+  // someone actually typed or edited is left alone: this is closing a gap
+  // this dashboard itself created, not a general "keep showName in sync
+  // with its show" rule applied to every opportunity that gets linked here.
+  const showName = opportunity.showName === opportunity.company.name ? `${opportunity.company.name} @ ${show.name}` : undefined;
+
+  await db.opportunity.update({ where: { id: opportunityId }, data: { showId, ...(showName ? { showName } : {}) } });
 
   // Straight into the "Start an artwork order" picker's step 2 for the same
   // opportunity -- link-then-invite is one continuous task from a Graphics
