@@ -51,3 +51,32 @@ export async function startArtworkOrderFromDashboardAction(formData: FormData) {
 
   redirect(`/artwork/${order.id}`);
 }
+
+// Companion to startArtworkOrderFromDashboardAction above: an opportunity
+// often exists before its show does (or gets created standalone and only
+// later turns out to belong to a whole-show contract) -- this lets a
+// Graphics user close that gap without leaving the dashboard, by linking an
+// already-unassigned opportunity to an already-existing show. Reuses the
+// exact same access rule (department-wide OR ownership) as the rest of
+// this file, and the same update shows/actions.ts's own
+// assignOpportunityToShowAction performs -- just reachable from here too,
+// with department-wide access rather than only owner/collaborator/admin.
+export async function linkOpportunityToShowFromDashboardAction(formData: FormData) {
+  const user = await getCurrentUser();
+  if (!user) throw new Error("Not authenticated");
+
+  const showId = String(formData.get("showId") ?? "").trim();
+  const opportunityId = String(formData.get("opportunityId") ?? "").trim();
+  if (!showId) throw new Error("Select a show to link this opportunity to.");
+  if (!opportunityId) throw new Error("Select an opportunity to link.");
+
+  const hasAccess = (await canAccessOpportunity(user, opportunityId)) || canAccessArtworkOrdersViaDepartment(user);
+  if (!hasAccess) throw new Error("You don't have access to this opportunity.");
+
+  await db.opportunity.update({ where: { id: opportunityId }, data: { showId } });
+
+  // Straight into the "Start an artwork order" picker's step 2 for the same
+  // opportunity -- link-then-invite is one continuous task from a Graphics
+  // user's perspective, not two separate trips back to this page.
+  redirect(`/departments/graphics?opportunityId=${opportunityId}`);
+}

@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
-import { startArtworkOrderFromDashboardAction } from "./actions";
+import { startArtworkOrderFromDashboardAction, linkOpportunityToShowFromDashboardAction } from "./actions";
 import { PageHeader, Card, Stat, StatusChip, EmptyState, SelectField, Button } from "@/components/ui";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
@@ -71,6 +71,23 @@ export default async function GraphicsHomePage({
         orderBy: { name: "asc" },
       })
     : [];
+
+  // "Link an opportunity to a show" (below): every show in the system --
+  // this isn't scoped to opportunities the user can already see, since a
+  // show itself isn't opportunity-scoped data -- paired with every
+  // not-yet-linked opportunity the user has access to, same visibility rule
+  // as startableWhere above (an opportunity gets shown here regardless of
+  // its own pipeline stage -- linking it to a show is what MAKES it
+  // eligible per canStartArtworkOnboarding, not a result of already being
+  // eligible).
+  const [shows, unassignedOpportunities] = await Promise.all([
+    db.show.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    db.opportunity.findMany({
+      where: { ...startableWhere, deletedAt: null, showId: null },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true, showName: true, company: { select: { name: true } } },
+    }),
+  ]);
 
   // Same query artwork/page.tsx uses, including the department-wide
   // widening (a Graphics user sees every ArtworkOrder, not just ones on
@@ -193,6 +210,46 @@ export default async function GraphicsHomePage({
                 </form>
               )}
             </>
+          )}
+        </Card>
+
+        <Card className="p-5">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Link an opportunity to a show
+          </h2>
+          {shows.length === 0 ? (
+            <EmptyState message="No shows exist yet -- start one from Pipeline → Shows." />
+          ) : unassignedOpportunities.length === 0 ? (
+            <EmptyState message="No unassigned opportunity is available to link to a show right now." />
+          ) : (
+            <form action={linkOpportunityToShowFromDashboardAction} className="flex flex-wrap items-end gap-3">
+              <div className="min-w-56">
+                <SelectField
+                  label="Show"
+                  name="showId"
+                  options={[
+                    { value: "", label: "Select a show…" },
+                    ...shows.map((s) => ({ value: s.id, label: s.name })),
+                  ]}
+                  required
+                />
+              </div>
+              <div className="min-w-64">
+                <SelectField
+                  label="Opportunity"
+                  name="opportunityId"
+                  options={[
+                    { value: "", label: "Select an opportunity…" },
+                    ...unassignedOpportunities.map((o) => ({
+                      value: o.id,
+                      label: `${o.company.name} — ${o.showName}`,
+                    })),
+                  ]}
+                  required
+                />
+              </div>
+              <Button variant="secondary">Link</Button>
+            </form>
           )}
         </Card>
 
