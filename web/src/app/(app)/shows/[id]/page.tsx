@@ -94,6 +94,12 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
           Clients ({show.opportunities.length})
         </h2>
+        {/* No "must be Won" gate here (unlike a standalone opportunity's own
+            page) -- see canStartArtworkOnboarding's own comment: every
+            opportunity listed below is already linked to THIS show, and a
+            show existing at all is itself the "already won" signal for the
+            whole event, regardless of any individual exhibitor's own
+            estimating-pipeline stage. */}
         {show.opportunities.length === 0 ? (
           <EmptyState message="No clients assigned to this show yet." />
         ) : (
@@ -114,8 +120,6 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
                       <Link href={`/artwork/${artworkOrder.id}`} className="text-sm text-neutral-900 underline">
                         Artwork: {artworkOrder.jobCode} — {artworkOrder.status.replaceAll("_", " ")}
                       </Link>
-                    ) : opp.stage !== "WON" ? (
-                      <p className="text-sm text-neutral-500">Artwork onboarding opens once this deal is Won.</p>
                     ) : opp.company.contacts.length === 0 ? (
                       <p className="text-sm text-neutral-500">
                         No contact with an email on file for {opp.company.name} -- add one before inviting.

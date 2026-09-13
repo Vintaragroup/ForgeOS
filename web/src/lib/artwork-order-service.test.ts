@@ -7,6 +7,7 @@ import {
   acceptCustomSizeQuote,
   assertValidTransition,
   assignVendor,
+  canStartArtworkOnboarding,
   computeSlaDueAt,
   createArtworkOrder,
   setCustomSizeQuote,
@@ -44,6 +45,24 @@ async function makeArtworkOrder(eventStartDate: Date | null = null) {
 const EXPO_ACTOR = { type: "EXPO" as const, userId: "user-1" };
 const CLIENT_ACTOR = { type: "CLIENT" as const, email: "client@example.com" };
 const VENDOR_ACTOR = { type: "VENDOR" as const, email: "vendor@example.com" };
+
+describe("canStartArtworkOnboarding", () => {
+  it("is eligible once Won, even with no show", () => {
+    expect(canStartArtworkOnboarding({ stage: "WON", showId: null })).toBe(true);
+  });
+
+  it("is eligible when linked to a show, regardless of pipeline stage", () => {
+    for (const stage of ["NEW", "CONTACTED", "QUALIFIED", "ESTIMATING", "LOST"]) {
+      expect(canStartArtworkOnboarding({ stage, showId: "show-1" })).toBe(true);
+    }
+  });
+
+  it("is not eligible for a standalone (no show) opportunity short of Won", () => {
+    for (const stage of ["NEW", "CONTACTED", "QUALIFIED", "ESTIMATING", "LOST"]) {
+      expect(canStartArtworkOnboarding({ stage, showId: null })).toBe(false);
+    }
+  });
+});
 
 describe("assertValidTransition", () => {
   it("allows every legal edge in the state diagram", () => {

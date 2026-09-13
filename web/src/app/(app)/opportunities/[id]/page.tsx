@@ -21,6 +21,7 @@ import {
 } from "./documents/actions";
 import { regenerateTimelineAction, runClarificationQuestionsAnalysisAction } from "./ai-actions";
 import { inviteToArtworkPortalAction } from "./artwork-actions";
+import { canStartArtworkOnboarding } from "@/lib/artwork-order-service";
 import { getTimelineData, buildEmptyMilestones, type TimelineData } from "@/lib/timeline-service";
 import { TimelineMilestoneRow } from "@/components/timeline-milestone-row";
 import { money } from "@/lib/money";
@@ -1586,7 +1587,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         </CollapsibleSection>
       )}
 
-      {opportunity.stage === "WON" && (
+      {canStartArtworkOnboarding(opportunity) && (
         <CollapsibleSection title="Artwork" id="artwork">
           {opportunity.artworkOrders.length === 0 ? (
             <>

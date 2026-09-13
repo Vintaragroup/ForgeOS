@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { requireOpportunityAccess } from "@/lib/opportunity-access";
-import { createArtworkOrder } from "@/lib/artwork-order-service";
+import { createArtworkOrder, canStartArtworkOnboarding } from "@/lib/artwork-order-service";
 import { notifyClientInvited } from "@/lib/artwork-notifications";
 import { db } from "@/lib/db";
 
@@ -21,7 +21,16 @@ export async function inviteToArtworkPortalAction(opportunityId: string, formDat
   // belong to THIS opportunity's company, not just be some valid Contact id
   // -- same class of gap opportunity-access.ts's other assertBelongsTo*
   // helpers exist to close.
-  const opportunity = await db.opportunity.findUniqueOrThrow({ where: { id: opportunityId }, select: { companyId: true } });
+  const opportunity = await db.opportunity.findUniqueOrThrow({
+    where: { id: opportunityId },
+    select: { companyId: true, stage: true, showId: true },
+  });
+  // Self-checked here too, not just left to the page's own gate -- same
+  // "don't rely on the gate alone" posture as the cross-resource check
+  // right below.
+  if (!canStartArtworkOnboarding(opportunity)) {
+    throw new Error("This opportunity needs to be Won, or linked to a show, before starting an artwork order.");
+  }
   const contact = await db.contact.findFirstOrThrow({ where: { id: contactId, companyId: opportunity.companyId } });
   if (!contact.email) throw new Error(`${contact.name} has no email on file -- add one before inviting.`);
 

@@ -14,6 +14,22 @@ import type { Prisma } from "@/generated/prisma/client";
 
 export const MAX_REVISION_ROUNDS = 2;
 
+// A Show represents ExpoCCI already holding the contract for that whole
+// event -- creating one IS the "we won this" signal, independent of where
+// any individual exhibitor's own Opportunity happens to sit in the
+// separate sales/estimating pipeline (New/Contacted/Qualified/Estimating/
+// Won/Lost). So artwork onboarding opens for ANY opportunity linked to a
+// show, at any stage -- a standalone opportunity (no show, sold as its own
+// one-off deal) still needs its own stage to actually reach WON, since
+// there's no show-level "already secured" signal to lean on instead.
+// Single source of truth for this rule -- every surface that gates
+// artwork onboarding (the Opportunity page's own Artwork section, the Show
+// hub's per-client invite, the Graphics dashboard's quick-start picker)
+// reads from here rather than re-deriving it, so they can't drift apart.
+export function canStartArtworkOnboarding(opportunity: { stage: string; showId: string | null }): boolean {
+  return opportunity.stage === "WON" || opportunity.showId != null;
+}
+
 // Mirrors the exact edges in the spec's Section 2 state diagram, including
 // both loop-backs (Rejected -> OrderDrafted, Escalated -> ProofInProgress).
 // A status with no legal outgoing edge (DeliveredAtShow) maps to [].

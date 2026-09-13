@@ -38,13 +38,26 @@ export default async function GraphicsHomePage({
   // collaborates on -- so this picker never offers to start an order on an
   // opportunity the user couldn't otherwise see.
   const startableWhere = canAccessArtworkOrdersViaDepartment(user) ? {} : opportunityAccessWhere(user);
-  // Only WON opportunities with no artwork order yet -- mirrors the
-  // opportunity page's own Artwork section, which likewise only shows the
-  // invite form while artworkOrders.length === 0 (a repeat order for the
-  // same opportunity is still possible, just not from this quick-start
-  // picker -- use the opportunity's own page for that).
+  // Only opportunities eligible per canStartArtworkOnboarding (Won, or
+  // linked to a show -- see that function's own comment) with no artwork
+  // order yet -- mirrors the opportunity page's own Artwork section, which
+  // likewise only shows the invite form while artworkOrders.length === 0 (a
+  // repeat order for the same opportunity is still possible, just not from
+  // this quick-start picker -- use the opportunity's own page for that).
+  // Combined via AND rather than spreading startableWhere's own OR
+  // alongside a second OR here -- two sibling `OR` keys on one Prisma
+  // where-object would silently collide (the second overwrites the first),
+  // which would wrongly drop the ownership scoping for a non-department
+  // employee.
   const startableOpportunities = await db.opportunity.findMany({
-    where: { ...startableWhere, stage: "WON", deletedAt: null, artworkOrders: { none: { deletedAt: null } } },
+    where: {
+      AND: [
+        startableWhere,
+        { deletedAt: null },
+        { artworkOrders: { none: { deletedAt: null } } },
+        { OR: [{ stage: "WON" }, { showId: { not: null } }] },
+      ],
+    },
     orderBy: { updatedAt: "desc" },
     select: { id: true, companyId: true, showName: true, primaryContactId: true, company: { select: { name: true } } },
   });
@@ -136,7 +149,7 @@ export default async function GraphicsHomePage({
             Start an artwork order
           </h2>
           {startableOpportunities.length === 0 ? (
-            <EmptyState message="No won opportunity is ready to start an artwork order right now." />
+            <EmptyState message="No opportunity is ready to start an artwork order right now -- won a deal, or linked one to a show, to see it here." />
           ) : (
             <>
               <form method="GET" className="flex flex-wrap items-end gap-3">
@@ -146,7 +159,7 @@ export default async function GraphicsHomePage({
                     name="opportunityId"
                     defaultValue={selectedOpportunityId ?? ""}
                     options={[
-                      { value: "", label: "Select a won opportunity…" },
+                      { value: "", label: "Select an opportunity…" },
                       ...startableOpportunities.map((o) => ({
                         value: o.id,
                         label: `${o.company.name} — ${o.showName}`,

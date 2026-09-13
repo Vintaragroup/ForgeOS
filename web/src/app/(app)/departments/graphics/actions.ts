@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
-import { createArtworkOrder } from "@/lib/artwork-order-service";
+import { createArtworkOrder, canStartArtworkOnboarding } from "@/lib/artwork-order-service";
 import { notifyClientInvited } from "@/lib/artwork-notifications";
 
 // Graphics-dashboard counterpart to opportunities/[id]/artwork-actions.ts's
@@ -32,14 +32,13 @@ export async function startArtworkOrderFromDashboardAction(formData: FormData) {
 
   const opportunity = await db.opportunity.findUniqueOrThrow({
     where: { id: opportunityId },
-    select: { companyId: true, stage: true },
+    select: { companyId: true, stage: true, showId: true },
   });
-  // Mirrors the opportunity page's own gate (its Artwork section only
-  // renders at all once stage === "WON") -- enforced here too since this
+  // Mirrors the opportunity page's own gate -- enforced here too since this
   // action is independently reachable, not just gated by what the picker
   // above happens to list.
-  if (opportunity.stage !== "WON") {
-    throw new Error("Only a won opportunity can start an artwork order.");
+  if (!canStartArtworkOnboarding(opportunity)) {
+    throw new Error("This opportunity needs to be Won, or linked to a show, before starting an artwork order.");
   }
   // Same cross-resource check as inviteToArtworkPortalAction: a contactId
   // submitted from the form must actually belong to THIS opportunity's
