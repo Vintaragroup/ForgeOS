@@ -129,6 +129,7 @@ model User {
   deadlineActionsTaken     DeadlineAction[]
   aiUsageEvents            AiUsageEvent[]
   vendorMatchApplyLogs     VendorMatchApplyLog[]
+  calendarEvents           CalendarEvent[]
 
   @@map("users")
 }
@@ -394,6 +395,7 @@ model Opportunity {
 
   deadlineActions DeadlineAction[]
   aiUsageEvents   AiUsageEvent[]
+  calendarEvents  CalendarEvent[]
 
   @@map("opportunities")
 }
@@ -2396,6 +2398,46 @@ model Shipment {
   deletedAt DateTime?
 
   @@map("shipments")
+}
+
+enum CalendarEventVisibility {
+  PRIVATE
+  ORG
+}
+
+// Freeform calendar entries for things with no existing home in the data
+// model (an internal meeting, a reminder) -- everything else on the
+// calendar (show dates, move-in/out, ship dates, WorkOrder milestones,
+// Task due dates, ArtworkOrder SLA due dates) is aggregated live from its
+// own source model by src/lib/calendar.ts, not duplicated here. dateEnd
+// is optional and only meaningful for a short multi-day span; most rows
+// are a single-day point event with dateEnd left null.
+model CalendarEvent {
+  id    String  @id @default(cuid())
+  title String
+  notes String?
+
+  date    DateTime
+  dateEnd DateTime?
+
+  visibility CalendarEventVisibility @default(PRIVATE)
+
+  createdByUserId String
+  createdBy       User   @relation(fields: [createdByUserId], references: [id])
+
+  // Convenience link only, never used for access control -- visibility
+  // above is the only gate. Not exposed in the v1 create form; reserved
+  // for a future "link this note to a deal" affordance.
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([date])
+  @@index([createdByUserId])
+  @@map("calendar_events")
 }
 
 // Pure net-new capability -- data-model-v0.md: "no vendor/supplier table

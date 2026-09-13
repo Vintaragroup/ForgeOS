@@ -23,7 +23,7 @@ export const DEPARTMENT_LABELS: Record<string, string> = {
 // department's filtered view without a deliberate decision here.
 export const DEPARTMENT_NAV: Record<string, NavGroup[]> = {
   GR: [
-    { label: "Production", items: [{ href: "/artwork", label: "Artwork" }] },
+    { label: "Production", items: [{ href: "/artwork", label: "Artwork" }, { href: "/calendar", label: "Calendar" }] },
     {
       label: "Catalog",
       items: [

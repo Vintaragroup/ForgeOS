@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getDashboardData, type UpcomingDeadline } from "@/lib/dashboard";
 import { getAdminAnalytics, getRecentAnalysisFailures } from "@/lib/admin-analytics";
+import { getCalendarItems, utcToday, utcAddDays, CALENDAR_ITEM_TYPE_LABELS } from "@/lib/calendar";
 import { getCurrentUser } from "@/lib/auth";
 import { DEPARTMENT_HOME } from "@/lib/department-home";
 import { recordDeadlineActionAction, routeDashboardQueryAction } from "./dashboard-actions";
@@ -102,7 +103,13 @@ export default async function DashboardPage() {
     redirect(DEPARTMENT_HOME[user.departmentCode]);
   }
 
-  const { pipeline, upcomingDeadlines, recentProposals, flaggedForReview } = await getDashboardData(user);
+  const today = new Date();
+  const calendarWindowStart = utcToday();
+  const calendarWindowEnd = utcAddDays(calendarWindowStart, 7);
+  const [{ pipeline, upcomingDeadlines, recentProposals, flaggedForReview }, calendarItems] = await Promise.all([
+    getDashboardData(user),
+    getCalendarItems(user, calendarWindowStart, calendarWindowEnd),
+  ]);
   const adminStats = isAdmin ? await getAdminAnalytics() : null;
   // Stricter than isAdmin above -- a real error message (stack-adjacent
   // detail from an AI provider call) is more internal than the aggregate
@@ -112,7 +119,6 @@ export default async function DashboardPage() {
   const analysisFailures = isSuperAdmin ? await getRecentAnalysisFailures() : null;
 
   const firstName = user.name.trim().split(/\s+/)[0] ?? user.name;
-  const today = new Date();
 
   return (
     <div id="forgeos-dashboard" className="dash dash-full-bleed -my-8">
@@ -191,6 +197,37 @@ export default async function DashboardPage() {
               </Link>
             ))}
           </div>
+        </div>
+
+        <div className="dash-section">
+          <div className="dash-section-head">
+            <h2 className="dash-section-title">CALENDAR</h2>
+            <Link href="/calendar" className="dash-section-link">
+              View calendar →
+            </Link>
+          </div>
+          {calendarItems.length === 0 ? (
+            <div className="dash-card">
+              <div className="dash-row">
+                <div>
+                  <div className="dash-row-title">Nothing on the calendar in the next 7 days</div>
+                  <div className="dash-row-sub">Show dates, milestones, and reminders will show up here.</div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="dash-card">
+              {calendarItems.map((item) => (
+                <Link key={item.id} href={item.href} className="dash-row" style={{ color: "inherit", textDecoration: "none" }}>
+                  <div>
+                    <div className="dash-row-title">{item.title}</div>
+                    <div className="dash-row-sub">{CALENDAR_ITEM_TYPE_LABELS[item.type]}</div>
+                  </div>
+                  <span className="dash-row-date">{fmtDate(item.dateStart)}</span>
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="dash-section">

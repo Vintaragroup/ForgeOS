@@ -24,6 +24,7 @@
     "@tarikjabiri/dxf": "^2.8.9",
     "@vercel/blob": "^2.8.0",
     "@vercel/config": "^0.7.0",
+    "date-fns": "^4.4.0",
     "exceljs": "^4.4.0",
     "mammoth": "^1.12.0",
     "maxrects-packer": "^2.7.3",

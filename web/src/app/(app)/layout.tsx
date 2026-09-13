@@ -37,6 +37,10 @@ export const metadata: Metadata = {
 // plain link in AppNav rather than a one-item dropdown.
 const NAV_GROUPS: NavGroup[] = [
   {
+    label: "Calendar",
+    items: [{ href: "/calendar", label: "Calendar" }],
+  },
+  {
     label: "Pipeline",
     items: [
       { href: "/shows", label: "Shows" },
