@@ -1,8 +1,12 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { getEscalationNotifyEmails } from "@/lib/artwork-notifications";
+import { getEscalationNotifyEmails, notifyClientInvited } from "@/lib/artwork-notifications";
+import { createArtworkOrder } from "@/lib/artwork-order-service";
 
 afterEach(async () => {
+  await db.artworkOrderEvent.deleteMany();
+  await db.artworkPortalInvite.deleteMany();
+  await db.artworkOrder.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
   await db.show.deleteMany();
@@ -62,5 +66,22 @@ describe("getEscalationNotifyEmails", () => {
 
     const emails = await getEscalationNotifyEmails(opportunity.id);
     expect(emails).toEqual([]);
+  });
+});
+
+describe("notifyClientInvited", () => {
+  it("returns the real client-portal link -- the only moment it's ever recoverable, since only its hash is persisted", async () => {
+    const company = await db.company.create({ data: { name: "Test Co 5" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    const order = await createArtworkOrder(opportunity.id);
+
+    const link = await notifyClientInvited(order.id, "client@example.com");
+
+    expect(link).toContain(`/client-portal/`);
+    const invite = await db.artworkPortalInvite.findFirstOrThrow({ where: { artworkOrderId: order.id } });
+    expect(link).toContain(invite.id);
+    // The raw token itself is never persisted (only tokenHash) -- can't
+    // assert the link's token half against anything stored, only that a
+    // real invite row backs the id half of the link that was returned.
   });
 });

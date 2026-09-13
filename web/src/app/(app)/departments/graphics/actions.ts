@@ -48,9 +48,13 @@ export async function startArtworkOrderFromDashboardAction(formData: FormData) {
   if (!contact.email) throw new Error(`${contact.name} has no email on file -- add one before inviting.`);
 
   const order = await createArtworkOrder(opportunityId);
-  await notifyClientInvited(order.id, contact.email);
+  // Rides along on the redirect (?invite=) so the order page can show the
+  // real link once as a fallback -- Resend can't currently deliver, and
+  // this is the only moment the raw token is ever knowable (see
+  // notifyClientInvited's own comment).
+  const link = await notifyClientInvited(order.id, contact.email);
 
-  redirect(`/artwork/${order.id}`);
+  redirect(`/artwork/${order.id}?invite=${encodeURIComponent(link)}`);
 }
 
 // Companion to startArtworkOrderFromDashboardAction above: an opportunity

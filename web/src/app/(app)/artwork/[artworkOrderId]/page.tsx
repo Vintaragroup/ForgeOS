@@ -6,6 +6,7 @@ import { canAccessArtworkOrder } from "@/lib/opportunity-access";
 import { getArtworkFileBytes } from "@/lib/artwork-file-service";
 import { getPdfPageDimensionsInInches } from "@/lib/document-view-service";
 import { Card, PageHeader, StatusChip, Field, SelectField, TextareaField, Button, ReadOnlyField, EmptyState } from "@/components/ui";
+import { CopyLinkBanner } from "@/components/copy-link-banner";
 import {
   assignVendorAction,
   confirmProofMatchAction,
@@ -31,10 +32,13 @@ const STATUS_TONE: Record<string, "neutral" | "info" | "warning" | "good" | "cri
 
 export default async function ArtworkOrderPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ artworkOrderId: string }>;
+  searchParams: Promise<{ invite?: string }>;
 }) {
   const { artworkOrderId } = await params;
+  const { invite } = await searchParams;
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
@@ -101,6 +105,8 @@ export default async function ArtworkOrderPage({
       />
 
       <div className="flex flex-col gap-6">
+        {invite && <CopyLinkBanner link={invite} />}
+
         <Card className="p-6">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Order</h2>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">

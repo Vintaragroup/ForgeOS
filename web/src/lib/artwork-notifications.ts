@@ -58,13 +58,21 @@ export async function getEscalationNotifyEmails(opportunityId: string): Promise<
 }
 
 // Row 1: Expo creates client record -> Client -> portal invite link.
-export async function notifyClientInvited(artworkOrderId: string, email: string) {
+// Returns the link (unlike every other notify* function here) so the
+// caller can surface it in the internal UI as a one-time fallback --
+// Resend can't currently deliver (unverified domain), and this is the
+// ONLY moment the raw token is ever knowable: only its hash is persisted
+// (see ArtworkPortalInvite's schema comment), so a caller that doesn't
+// capture it here has no way to recover it later short of re-issuing a
+// brand new invite.
+export async function notifyClientInvited(artworkOrderId: string, email: string): Promise<string> {
   const link = await clientPortalLink(artworkOrderId, email);
   await sendEmail({
     to: email,
     subject: "Your exhibitor artwork portal is ready",
     text: `You're invited to submit your show artwork through our portal:\n\n${link}\n\nThis link is yours to keep -- bookmark it, you'll use it throughout the process.`,
   });
+  return link;
 }
 
 // Row 2: order + artwork submitted -> Art Dept, Account Rep.
