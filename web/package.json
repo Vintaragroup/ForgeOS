@@ -15,7 +15,9 @@
     "create-admin": "tsx scripts/create-admin.ts",
     "backfill-line-item-categories": "tsx scripts/backfill-line-item-categories.ts",
     "backfill-document-embeddings": "tsx scripts/backfill-document-embeddings.ts",
-    "import-pga-graphics-log": "tsx scripts/import-pga-graphics-log.ts"
+    "import-pga-graphics-log": "tsx scripts/import-pga-graphics-log.ts",
+    "import-salesmate-users": "tsx scripts/import-salesmate-users.ts",
+    "import-salesmate-companies": "tsx scripts/import-salesmate-companies.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.5",

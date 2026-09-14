@@ -53,6 +53,12 @@ __pycache__/
 # web/scripts/import-pga-graphics-log.ts reads this locally.
 /data/Graphics-operations/
 
+# Real customer list exported from Salesmate (the sales pipeline system) --
+# real client names, addresses, and phone numbers. Same "never goes to the
+# public remote" reasoning as the other data/ entries above.
+# web/scripts/import-salesmate-companies.ts reads this locally.
+/data/Sales-mate_customer-list/
+
 .vercel
 .env*
 data/Screenshot 2026-09-02 at 1.22.38 PM.png
