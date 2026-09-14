@@ -339,6 +339,19 @@ export function LinkButton({
   );
 }
 
+// The spin-in-place indicator SubmitButton has used on every long-running
+// Server Action button in the app -- pulled out as its own primitive so any
+// other pending state (not just a submit button) can reuse the same mark
+// instead of re-drawing the circle.
+export function Spinner({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    </svg>
+  );
+}
+
 export function EmptyState({ message }: { message: string }) {
   return (
     <div className="rounded-lg border border-dashed border-neutral-300 p-10 text-center text-sm text-neutral-500">

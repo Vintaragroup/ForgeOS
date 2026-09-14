@@ -65,7 +65,7 @@ export function AppNav({
               <Link
                 key={group.label}
                 href={group.items[0].href}
-                className={`rounded-md px-3 py-2 transition-colors hover:text-brand-teal-light ${
+                className={`link-underline rounded-md px-3 py-2 transition-colors hover:text-brand-teal-light ${
                   groupActive(group) ? "text-brand-teal-light" : ""
                 }`}
               >
@@ -75,7 +75,7 @@ export function AppNav({
               <div key={group.label} className="group relative">
                 <button
                   type="button"
-                  className={`flex items-center gap-1 rounded-md px-3 py-2 transition-colors hover:text-brand-teal-light ${
+                  className={`link-underline flex items-center gap-1 rounded-md px-3 py-2 transition-colors hover:text-brand-teal-light ${
                     groupActive(group) ? "text-brand-teal-light" : ""
                   }`}
                 >
@@ -105,7 +105,7 @@ export function AppNav({
           {adminLink && (
             <Link
               href={adminLink.href}
-              className={`ml-2 rounded-md border-l border-white/10 px-3 py-2 pl-4 transition-colors hover:text-brand-tangerine ${
+              className={`link-underline ml-2 rounded-md border-l border-white/10 px-3 py-2 pl-4 transition-colors hover:text-brand-tangerine ${
                 isActive(adminLink.href) ? "text-brand-tangerine" : ""
               }`}
             >

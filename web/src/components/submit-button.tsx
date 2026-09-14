@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { useFormStatus } from "react-dom";
+import { Spinner } from "@/components/ui";
 
 // A Server Action form's own <button type="submit"> has no idea the
 // action is still running -- Analyze, Generate, Build, Propose, and Run
@@ -53,12 +54,7 @@ export function SubmitButton({
       aria-label={ariaLabel}
       className={`inline-flex items-center justify-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-60 ${variantClasses} ${className ?? ""}`}
     >
-      {pending && (
-        <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-        </svg>
-      )}
+      {pending && <Spinner />}
       {pending ? pendingText : children}
     </button>
   );

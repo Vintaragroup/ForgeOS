@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useDismissableMenu } from "@/lib/use-dismissable-menu";
 
 // Move-booth and merge-booth used to sit as two always-visible forms right
 // in the booth's H1 header, competing for space with Hide/Untag/reorder on
@@ -32,26 +32,7 @@ export function BoothActionsMenu({
   mergeAction: ((formData: FormData) => void) | null;
   targetBoothOptions: { value: string; label: string }[];
 }) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handlePointerDown(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
+  const { open, setOpen, containerRef } = useDismissableMenu();
 
   return (
     <div ref={containerRef} className="relative">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useDismissableMenu } from "@/lib/use-dismissable-menu";
 
 // Kebab-triggered popover for a flat/standalone (or untagged-booth)
 // section's own "reparent to a different booth" tool -- same shell as
@@ -16,26 +16,7 @@ import { useEffect, useRef, useState } from "react";
 // section's header look taller than a tagged booth's despite both using
 // the exact same font-size/line-height.
 export function SectionMoveMenu({ moveAction }: { moveAction: (formData: FormData) => void }) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handlePointerDown(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
+  const { open, setOpen, containerRef } = useDismissableMenu();
 
   return (
     <div ref={containerRef} className="relative">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useDismissableMenu } from "@/lib/use-dismissable-menu";
 
 // H2-level counterpart to BoothActionsMenu's own H1-level merge tool --
 // same kebab-triggered popover pattern (open on click, close on outside
@@ -23,26 +23,7 @@ export function ElementGroupActionsMenu({
   // bar instead of this component's default light H2 styling.
   theme?: "light" | "dark";
 }) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handlePointerDown(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
+  const { open, setOpen, containerRef } = useDismissableMenu();
 
   if (targetGroupOptions.length === 0) return null;
   const dark = theme === "dark";

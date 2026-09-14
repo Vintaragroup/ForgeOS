@@ -251,6 +251,29 @@
 .dash-strip-stat .n { font-family: var(--font-display); font-size: 1.3125rem; color: var(--dash-navy); line-height: 1; }
 .dash-strip-stat .l { font-size: 0.78125rem; color: var(--dash-text-soft); }
 
+/* Animated underline for nav-style text links -- a lightweight, CSS-only
+   draw-in effect (no SVG/library deps) instead of a static
+   hover:underline, for a link that deserves a bit more presence than a
+   plain color change (top nav, dashboard quick links). */
+.link-underline {
+  position: relative;
+  text-decoration: none;
+}
+.link-underline::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 100%;
+  bottom: -2px;
+  height: 1px;
+  background: currentColor;
+  transition: right 0.18s ease;
+}
+.link-underline:hover::after,
+.link-underline:focus-visible::after {
+  right: 0;
+}
+
 /* theme toggle */
 
 .dash-theme-toggle {
