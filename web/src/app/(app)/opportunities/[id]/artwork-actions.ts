@@ -35,7 +35,7 @@ export async function inviteToArtworkPortalAction(opportunityId: string, formDat
   const contact = await db.contact.findFirstOrThrow({ where: { id: contactId, companyId: opportunity.companyId } });
   if (!contact.email) throw new Error(`${contact.name} has no email on file -- add one before inviting.`);
 
-  const order = await createArtworkOrder(opportunityId);
+  const order = await createArtworkOrder({ opportunityId });
   const link = await notifyClientInvited(order.id, contact.email);
 
   redirect(`/artwork/${order.id}?invite=${encodeURIComponent(link)}`);

@@ -11,6 +11,8 @@ import {
 } from "./actions";
 import { PageHeader, Card, Stat, StatusChip, EmptyState, SelectField, Field, Button } from "@/components/ui";
 import { CompanyFieldWithCreate } from "@/components/company-field-with-create";
+import { OrderIdentity } from "@/components/artwork-order-identity";
+import { getMyClientGraphicsSummary } from "@/lib/artwork-hub";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
 // generic Artwork review queue this page is a Graphics-specific front door
@@ -27,21 +29,86 @@ const UPCOMING_SHOW_WINDOW_DAYS = 14;
 const STALLED_REJECTION_DAYS = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// Tone map for the Production Log table's status chip -- every status not
+// listed here (the bulk of the pipeline's mid-proof states) reads as
+// neutral, which is the right default for "just moving through the normal
+// steps, nothing to flag."
+const PRODUCTION_LOG_STATUS_TONE: Record<string, "neutral" | "info" | "warning" | "good" | "critical"> = {
+  ESCALATED: "critical",
+  CANCELLED: "critical",
+  REJECTED: "warning",
+  REPRINT_REQUESTED: "warning",
+  DELIVERED_AT_SHOW: "good",
+  PACKAGED_READY: "good",
+};
+
 export default async function GraphicsHomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ opportunityId?: string }>;
+  searchParams: Promise<{
+    opportunityId?: string;
+    logClient?: string;
+    logStatus?: string;
+    logVendor?: string;
+    logMaterial?: string;
+  }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const { opportunityId: selectedOpportunityId } = await searchParams;
+  const { opportunityId: selectedOpportunityId, logClient, logStatus, logVendor, logMaterial } = await searchParams;
+  const isGrDept = canAccessArtworkOrdersViaDepartment(user);
 
   // Gates "Onboard a new client" below -- matches
   // onboardNewClientFromDashboardAction's own check exactly, so the form
   // never renders somewhere it would just throw on submit.
   const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
-  const canOnboardNewClient = isAdmin || canAccessArtworkOrdersViaDepartment(user);
+  const canOnboardNewClient = isAdmin || isGrDept;
+
+  // A non-Graphics-department, non-admin user with assigned clients gets a
+  // dedicated, read-only rollup instead of this whole page -- mirrors the
+  // source spreadsheet's own "Account Executive Dashboard" tab, which is
+  // itself just this same rollup with no other content on it. Checked (and
+  // returned) before any of the GR-only queries below run, since none of
+  // them apply to this user anyway (opportunityAccessWhere already scopes
+  // them down to next-to-nothing for a pure AE with no ownership/
+  // collaborator access).
+  if (!isGrDept && !isAdmin) {
+    const myClients = await getMyClientGraphicsSummary(user);
+    if (myClients.length > 0) {
+      return (
+        <>
+          <PageHeader title="Graphics" noBack />
+          <Card className="p-5">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+              Your clients&apos; graphics
+            </h2>
+            <ul className="flex flex-col gap-2">
+              {myClients.map((c) => (
+                <li
+                  key={c.opportunityId}
+                  className="flex items-center justify-between rounded-md border border-neutral-200 bg-white px-4 py-3 text-sm"
+                >
+                  <span className="flex items-center gap-3">
+                    <span className="font-medium">{c.companyName}</span>
+                    <span className="text-neutral-500">{c.showName}</span>
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <StatusChip tone={c.artReceivedCount === c.totalPieces ? "good" : "warning"}>
+                      Art received: {c.artReceivedCount}/{c.totalPieces}
+                    </StatusChip>
+                    <span className="text-neutral-400">
+                      {c.totalPieces} piece{c.totalPieces === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </>
+      );
+    }
+  }
 
   // Same visibility rule as the orders query below: department-wide for a
   // GR member (or an admin, via opportunityAccessWhere's own isAdmin
@@ -133,7 +200,11 @@ export default async function GraphicsHomePage({
     orderBy: { updatedAt: "desc" },
     include: {
       opportunity: { include: { company: true, show: { select: { id: true, name: true } } } },
+      // Only set for a Hub/hanging-sign piece with no opportunity -- see
+      // ArtworkOrder.showId's schema comment.
+      show: { select: { id: true, name: true, eventStartDate: true } },
       vendor: { select: { name: true } },
+      designer: { select: { name: true } },
     },
   });
 
@@ -160,15 +231,20 @@ export default async function GraphicsHomePage({
 
   // opportunity.eventStartDate comes through for free on the query above --
   // Prisma's `include` returns every scalar field of the related record,
-  // only nested relations need their own explicit selection.
+  // only nested relations need their own explicit selection. A Hub/
+  // hanging-sign order (opportunity null) falls back to its own Show's
+  // eventStartDate instead -- see ArtworkOrder.showId's schema comment.
+  function eventStartDateOf(order: (typeof orders)[number]): Date | null {
+    return order.opportunity?.eventStartDate ?? order.show?.eventStartDate ?? null;
+  }
   const upcomingWindowEnd = new Date(now.getTime() + UPCOMING_SHOW_WINDOW_DAYS * DAY_MS);
   const upcomingShowOrders = orders
     .filter((o) => o.status !== "DELIVERED_AT_SHOW")
     .filter((o) => {
-      const eventStartDate = o.opportunity.eventStartDate;
+      const eventStartDate = eventStartDateOf(o);
       return eventStartDate != null && eventStartDate >= now && eventStartDate <= upcomingWindowEnd;
     })
-    .sort((a, b) => a.opportunity.eventStartDate!.getTime() - b.opportunity.eventStartDate!.getTime());
+    .sort((a, b) => eventStartDateOf(a)!.getTime() - eventStartDateOf(b)!.getTime());
 
   const rejectedOrders = orders.filter((o) => o.status === "REJECTED");
   const rejectedEvents = rejectedOrders.length
@@ -190,6 +266,27 @@ export default async function GraphicsHomePage({
     .map((order) => ({ order, rejectedAt: latestRejectedAt.get(order.id) ?? order.updatedAt }))
     .filter(({ rejectedAt }) => now.getTime() - rejectedAt.getTime() >= STALLED_REJECTION_DAYS * DAY_MS)
     .sort((a, b) => a.rejectedAt.getTime() - b.rejectedAt.getTime());
+
+  // Production log: a full, filterable view of every graphic piece --
+  // distinct from the action-oriented triage buckets above (escalated/
+  // upcoming/stalled), this is the department's own running list, the
+  // direct replacement for the spreadsheet's own "Graphics Log" master
+  // tab. Reuses the `orders` fetch already made above rather than a
+  // second query -- filter option lists are derived from the actual data
+  // present, so a dropdown never offers a value that couldn't match
+  // anything.
+  const clientLabel = (o: (typeof orders)[number]) => (o.opportunity ? o.opportunity.company.name : "PGA Hub");
+  const distinctClients = [...new Set(orders.map(clientLabel))].sort();
+  const distinctVendors = [...new Set(orders.flatMap((o) => (o.vendor ? [o.vendor.name] : [])))].sort();
+  const distinctMaterials = [...new Set(orders.flatMap((o) => (o.material ? [o.material] : [])))].sort();
+  const distinctStatuses = [...new Set(orders.map((o) => o.status))].sort();
+  const productionLogOrders = orders.filter((o) => {
+    if (logClient && clientLabel(o) !== logClient) return false;
+    if (logStatus && o.status !== logStatus) return false;
+    if (logVendor && o.vendor?.name !== logVendor) return false;
+    if (logMaterial && o.material !== logMaterial) return false;
+    return true;
+  });
 
   return (
     <>
@@ -360,8 +457,7 @@ export default async function GraphicsHomePage({
                     className="flex items-center justify-between rounded-md border border-red-200 bg-white px-4 py-3 text-sm hover:border-red-400"
                   >
                     <span className="flex items-center gap-3">
-                      <span className="font-medium">{order.opportunity.company.name}</span>
-                      <span className="text-neutral-500">{order.opportunity.showName}</span>
+                      <OrderIdentity order={order} />
                       <span className="font-mono text-xs text-neutral-400">{order.jobCode}</span>
                     </span>
                     <StatusChip tone="critical">Escalated</StatusChip>
@@ -381,9 +477,7 @@ export default async function GraphicsHomePage({
           ) : (
             <ul className="flex flex-col gap-2">
               {upcomingShowOrders.map((order) => {
-                const daysUntil = Math.ceil(
-                  (order.opportunity.eventStartDate!.getTime() - now.getTime()) / DAY_MS,
-                );
+                const daysUntil = Math.ceil((eventStartDateOf(order)!.getTime() - now.getTime()) / DAY_MS);
                 return (
                   <li key={order.id}>
                     <Link
@@ -391,8 +485,7 @@ export default async function GraphicsHomePage({
                       className="flex items-center justify-between rounded-md border border-neutral-200 bg-white px-4 py-3 text-sm hover:border-neutral-400"
                     >
                       <span className="flex items-center gap-3">
-                        <span className="font-medium">{order.opportunity.company.name}</span>
-                        <span className="text-neutral-500">{order.opportunity.showName}</span>
+                        <OrderIdentity order={order} />
                         <span className="font-mono text-xs text-neutral-400">{order.jobCode}</span>
                       </span>
                       <StatusChip tone={daysUntil <= 3 ? "critical" : "warning"}>
@@ -423,8 +516,7 @@ export default async function GraphicsHomePage({
                       className="flex items-center justify-between rounded-md border border-neutral-200 bg-white px-4 py-3 text-sm hover:border-neutral-400"
                     >
                       <span className="flex items-center gap-3">
-                        <span className="font-medium">{order.opportunity.company.name}</span>
-                        <span className="text-neutral-500">{order.opportunity.showName}</span>
+                        <OrderIdentity order={order} />
                         <span className="font-mono text-xs text-neutral-400">{order.jobCode}</span>
                       </span>
                       <StatusChip tone="warning">{daysStalled}d since rejected</StatusChip>
@@ -433,6 +525,99 @@ export default async function GraphicsHomePage({
                 );
               })}
             </ul>
+          )}
+        </Card>
+
+        <Card className="p-5">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Production log ({productionLogOrders.length} of {orders.length})
+          </h2>
+          <form method="get" className="mb-4 flex flex-wrap items-end gap-3">
+            <div className="min-w-48">
+              <SelectField
+                label="Client"
+                name="logClient"
+                defaultValue={logClient ?? ""}
+                options={[{ value: "", label: "All clients" }, ...distinctClients.map((c) => ({ value: c, label: c }))]}
+              />
+            </div>
+            <div className="min-w-44">
+              <SelectField
+                label="Status"
+                name="logStatus"
+                defaultValue={logStatus ?? ""}
+                options={[
+                  { value: "", label: "All statuses" },
+                  ...distinctStatuses.map((s) => ({ value: s, label: s.replaceAll("_", " ") })),
+                ]}
+              />
+            </div>
+            <div className="min-w-40">
+              <SelectField
+                label="Vendor"
+                name="logVendor"
+                defaultValue={logVendor ?? ""}
+                options={[{ value: "", label: "All vendors" }, ...distinctVendors.map((v) => ({ value: v, label: v }))]}
+              />
+            </div>
+            <div className="min-w-48">
+              <SelectField
+                label="Material"
+                name="logMaterial"
+                defaultValue={logMaterial ?? ""}
+                options={[{ value: "", label: "All materials" }, ...distinctMaterials.map((m) => ({ value: m, label: m }))]}
+              />
+            </div>
+            <Button variant="secondary" type="submit">
+              Apply
+            </Button>
+            {(logClient || logStatus || logVendor || logMaterial) && (
+              <Link href="/departments/graphics" className="text-sm text-neutral-500 hover:underline">
+                Clear
+              </Link>
+            )}
+          </form>
+          {productionLogOrders.length === 0 ? (
+            <EmptyState message="No graphic pieces match these filters." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-neutral-200 text-xs uppercase tracking-wide text-neutral-500">
+                    <th className="py-2 pr-3">Client</th>
+                    <th className="py-2 pr-3">Piece</th>
+                    <th className="py-2 pr-3">Material</th>
+                    <th className="py-2 pr-3">Vendor</th>
+                    <th className="py-2 pr-3">Status</th>
+                    <th className="py-2 pr-3">Art due</th>
+                    <th className="py-2 pr-3">Designer</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productionLogOrders.map((order) => (
+                    <tr key={order.id} className="border-b border-neutral-100">
+                      <td className="py-2 pr-3">
+                        <Link href={`/artwork/${order.id}`} className="flex items-center gap-2 hover:underline">
+                          <OrderIdentity order={order} />
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-3">{order.graphicCode ?? "—"}</td>
+                      <td className="py-2 pr-3">{order.material ?? "—"}</td>
+                      <td className="py-2 pr-3">{order.vendor?.name ?? "—"}</td>
+                      <td className="py-2 pr-3">
+                        <StatusChip tone={PRODUCTION_LOG_STATUS_TONE[order.status] ?? "neutral"}>
+                          {order.status.replaceAll("_", " ")}
+                        </StatusChip>
+                      </td>
+                      <td className="py-2 pr-3">
+                        {order.artDueDate ? order.artDueDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
+                      </td>
+                      <td className="py-2 pr-3">{order.designer?.name ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
 

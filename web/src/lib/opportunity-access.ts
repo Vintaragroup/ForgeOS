@@ -125,8 +125,16 @@ export async function requireProjectAccess(projectId: string) {
 // artworkOrderPage.tsx and its files/[fileId] route both call this instead
 // of canAccessOpportunity directly -- using canAccessOpportunity there
 // would silently skip the department grant entirely.
-export async function canAccessArtworkOrder(user: DepartmentUser & AccessUser, opportunityId: string): Promise<boolean> {
-  return canAccessArtworkOrdersViaDepartment(user) || canAccessOpportunity(user, opportunityId);
+//
+// opportunityId is null for a Show-owned Hub/hanging-sign piece (see
+// ArtworkOrder.showId's schema comment) -- there's no owner/collaborator
+// to check in that case, so access is department-only.
+export async function canAccessArtworkOrder(
+  user: DepartmentUser & AccessUser,
+  opportunityId: string | null,
+): Promise<boolean> {
+  if (canAccessArtworkOrdersViaDepartment(user)) return true;
+  return opportunityId != null && (await canAccessOpportunity(user, opportunityId));
 }
 
 // Same idea as requireEstimateAccess, for actions taking an artworkOrderId.

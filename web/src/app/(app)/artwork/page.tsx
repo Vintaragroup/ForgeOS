@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
 import { PageHeader, StatusChip, EmptyState } from "@/components/ui";
+import { OrderIdentity } from "@/components/artwork-order-identity";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board --
 // this is a live queue, not something that should freeze at build time.
@@ -41,6 +42,9 @@ export default async function ArtworkReviewQueuePage() {
     orderBy: { updatedAt: "desc" },
     include: {
       opportunity: { include: { company: true, show: { select: { id: true, name: true } } } },
+      // Only set for a Hub/hanging-sign piece with no opportunity -- see
+      // ArtworkOrder.showId's schema comment.
+      show: { select: { id: true, name: true } },
       vendor: { select: { name: true } },
     },
   });
@@ -111,9 +115,7 @@ export default async function ArtworkReviewQueuePage() {
                       className="flex items-center justify-between rounded-md border border-neutral-200 bg-white px-4 py-3 text-sm hover:border-neutral-400"
                     >
                       <span className="flex items-center gap-3">
-                        <span className="font-medium">{order.opportunity.company.name}</span>
-                        <span className="text-neutral-500">{order.opportunity.showName}</span>
-                        {order.opportunity.show && <StatusChip tone="neutral">{order.opportunity.show.name}</StatusChip>}
+                        <OrderIdentity order={order} />
                         <span className="font-mono text-xs text-neutral-400">{order.jobCode}</span>
                       </span>
                       <span className="flex items-center gap-2">
@@ -145,9 +147,7 @@ export default async function ArtworkReviewQueuePage() {
                     className="flex items-center justify-between rounded-md border border-neutral-200 bg-white px-4 py-3 text-sm hover:border-neutral-400"
                   >
                     <span className="flex items-center gap-3">
-                      <span className="font-medium">{order.opportunity.company.name}</span>
-                      <span className="text-neutral-500">{order.opportunity.showName}</span>
-                      {order.opportunity.show && <StatusChip tone="neutral">{order.opportunity.show.name}</StatusChip>}
+                      <OrderIdentity order={order} />
                       <span className="font-mono text-xs text-neutral-400">{order.jobCode}</span>
                       {order.vendor && <span className="text-neutral-400">via {order.vendor.name}</span>}
                     </span>

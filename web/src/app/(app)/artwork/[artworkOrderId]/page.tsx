@@ -13,9 +13,11 @@ import {
   issueCustomQuoteAction,
   issueProductionGoAheadAction,
   markDeliveredAction,
+  recordPostShowDispositionAction,
   requestProofRevisionAction,
   resolveEscalationAction,
   reviewArtworkOrderAction,
+  setProductionDetailAction,
   setProductionSpecAction,
 } from "./actions";
 
@@ -46,8 +48,12 @@ export default async function ArtworkOrderPage({
     where: { id: artworkOrderId, deletedAt: null },
     include: {
       opportunity: { include: { company: true } },
+      // Only set for a Hub/hanging-sign piece with no opportunity -- see
+      // ArtworkOrder.showId's schema comment.
+      show: { select: { id: true, name: true } },
       vendor: true,
       sizeTier: true,
+      designer: { select: { name: true } },
       files: { where: { deletedAt: null }, orderBy: { createdAt: "asc" } },
       events: { orderBy: { createdAt: "desc" } },
     },
@@ -56,6 +62,14 @@ export default async function ArtworkOrderPage({
   if (!(await canAccessArtworkOrder(user, order.opportunityId))) notFound();
 
   const vendors = await db.vendor.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } });
+  // Designers are internal staff in the DE ("Design") department -- see
+  // department-home.ts's DEPARTMENT_LABELS for the code list. Falls back
+  // to an empty list gracefully (just "Unassigned" in the dropdown) if no
+  // one's been assigned to that department yet.
+  const designers = await db.user.findMany({
+    where: { departmentCode: "DE", deletedAt: null },
+    orderBy: { name: "asc" },
+  });
   const reviewWithId = reviewArtworkOrderAction.bind(null, order.id);
   const issueQuoteWithId = issueCustomQuoteAction.bind(null, order.id);
   const assignVendorWithId = assignVendorAction.bind(null, order.id);
@@ -65,6 +79,8 @@ export default async function ArtworkOrderPage({
   const issueGoAheadWithId = issueProductionGoAheadAction.bind(null, order.id);
   const markDeliveredWithId = markDeliveredAction.bind(null, order.id);
   const setProductionSpecWithId = setProductionSpecAction.bind(null, order.id);
+  const setProductionDetailWithId = setProductionDetailAction.bind(null, order.id);
+  const recordPostShowDispositionWithId = recordPostShowDispositionAction.bind(null, order.id);
 
   const clientArtworkFile = order.files.find((f) => f.kind === "CLIENT_ARTWORK");
   const latestProof = [...order.files].reverse().find((f) => f.kind === "PROOF");
@@ -110,15 +126,37 @@ export default async function ArtworkOrderPage({
         <Card className="p-6">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Order</h2>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <ReadOnlyField label="Client" value={order.opportunity.company.name} />
-            <ReadOnlyField
-              label="Show"
-              value={
-                <Link href={`/opportunities/${order.opportunityId}`} className="hover:underline">
-                  {order.opportunity.showName}
-                </Link>
-              }
-            />
+            {order.opportunity ? (
+              <>
+                <ReadOnlyField label="Client" value={order.opportunity.company.name} />
+                <ReadOnlyField
+                  label="Show"
+                  value={
+                    <Link href={`/opportunities/${order.opportunityId}`} className="hover:underline">
+                      {order.opportunity.showName}
+                    </Link>
+                  }
+                />
+              </>
+            ) : (
+              // A Show-owned Hub/hanging-sign piece has no client -- see
+              // ArtworkOrder.showId's schema comment.
+              <>
+                <ReadOnlyField label="Client" value="PGA Hub" />
+                <ReadOnlyField
+                  label="Show"
+                  value={
+                    order.show ? (
+                      <Link href={`/shows/${order.show.id}`} className="hover:underline">
+                        {order.show.name}
+                      </Link>
+                    ) : (
+                      "—"
+                    )
+                  }
+                />
+              </>
+            )}
             <ReadOnlyField
               label="Size"
               value={
@@ -131,15 +169,69 @@ export default async function ArtworkOrderPage({
                     : "—"
               }
             />
-            <ReadOnlyField label="Material" value={order.material} />
-            <ReadOnlyField label="Qty" value={String(order.qty)} />
             <ReadOnlyField label="Vendor" value={order.vendor?.name ?? "Not yet assigned"} />
             <ReadOnlyField
               label="Expo-produced art"
               value={order.wantsExpoProducedArt ? `Yes${order.expoProducedFee ? ` — $${order.expoProducedFee}` : ""}` : "No"}
             />
             <ReadOnlyField label="Revision round" value={`${order.revisionRound} of ${2}`} />
+            <ReadOnlyField label="Graphic code" value={order.graphicCode} />
+            <ReadOnlyField label="Finishing details" value={order.finishingDetails} />
+            <ReadOnlyField label="Art due" value={order.artDueDate ? order.artDueDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null} />
+            <ReadOnlyField
+              label="Existing graphics status"
+              value={order.existingGraphicsStatus ? order.existingGraphicsStatus.replaceAll("_", " ") : null}
+            />
+            <ReadOnlyField label="Sizes verified" value={order.verifiedSizes ? "Yes" : "No"} />
+            <ReadOnlyField label="Designer" value={order.designer?.name} />
           </div>
+        </Card>
+
+        <Card className="p-6">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Production detail</h2>
+          <p className="mb-3 text-xs text-neutral-500">
+            Filled in and corrected by Graphics during production -- material/qty were previously only editable by
+            the client pre-submission; this covers the same fields plus the rest of the production record.
+          </p>
+          <form action={setProductionDetailWithId} className="flex flex-col gap-3">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <Field label="Material" name="material" defaultValue={order.material ?? ""} />
+              <Field label="Qty" name="qty" type="number" defaultValue={String(order.qty)} />
+              <Field label="Graphic code" name="graphicCode" defaultValue={order.graphicCode ?? ""} placeholder="e.g. A1" />
+              <Field label="Finishing details" name="finishingDetails" defaultValue={order.finishingDetails ?? ""} placeholder="e.g. SEG" />
+              <Field
+                label="Art due"
+                name="artDueDate"
+                type="date"
+                defaultValue={order.artDueDate ? order.artDueDate.toISOString().slice(0, 10) : ""}
+              />
+              <SelectField
+                label="Existing graphics status"
+                name="existingGraphicsStatus"
+                defaultValue={order.existingGraphicsStatus ?? ""}
+                options={[
+                  { value: "", label: "— unset —" },
+                  { value: "NEW_IMAGE", label: "New image" },
+                  { value: "EXISTING", label: "Existing" },
+                  { value: "DAMAGED", label: "Damaged" },
+                  { value: "NOT_EXISTING", label: "Not existing" },
+                ]}
+              />
+              <SelectField
+                label="Designer"
+                name="designerId"
+                defaultValue={order.designerId ?? ""}
+                options={[{ value: "", label: "Unassigned" }, ...designers.map((d) => ({ value: d.id, label: d.name }))]}
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm text-neutral-700">
+              <input type="checkbox" name="verifiedSizes" defaultChecked={order.verifiedSizes} className="h-4 w-4 rounded border-neutral-300" />
+              Sizes verified
+            </label>
+            <div>
+              <Button variant="secondary">Save production detail</Button>
+            </div>
+          </form>
         </Card>
 
         <Card className="p-6">
@@ -366,6 +458,51 @@ export default async function ArtworkOrderPage({
             <form action={markDeliveredWithId}>
               <Button>Mark arrived / delivered to booth</Button>
             </form>
+          </Card>
+        )}
+
+        {order.status === "DELIVERED_AT_SHOW" && (
+          <Card className="p-6">
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Post-show</h2>
+            <p className="mb-3 text-xs text-neutral-500">
+              What physically happened to this piece after the show -- re-recordable, so a mis-entered condition can
+              be corrected later.
+            </p>
+            <form action={recordPostShowDispositionWithId} className="flex flex-wrap items-end gap-3">
+              <div className="min-w-48">
+                <SelectField
+                  label="Post-show status"
+                  name="postShowStatus"
+                  required
+                  defaultValue={order.postShowStatus ?? ""}
+                  options={[
+                    { value: "", label: "Select a status…" },
+                    { value: "NOT_RECEIVED", label: "Not received" },
+                    { value: "EXPO_STORAGE", label: "Expo storage" },
+                    { value: "SHIP_TO_CLIENT", label: "Ship to client" },
+                    { value: "DISCARDED", label: "Discarded" },
+                  ]}
+                />
+              </div>
+              <div className="min-w-48">
+                <SelectField
+                  label="Condition"
+                  name="postShowCondition"
+                  defaultValue={order.postShowCondition ?? ""}
+                  options={[
+                    { value: "", label: "— unset —" },
+                    { value: "OK_TO_REUSE", label: "Ok to reuse" },
+                    { value: "DAMAGED", label: "Damaged" },
+                    { value: "DIRTY", label: "Dirty" },
+                    { value: "PRODUCT", label: "Product" },
+                  ]}
+                />
+              </div>
+              <Button variant="secondary">Save</Button>
+            </form>
+            {order.postShowRecordedAt && (
+              <p className="mt-3 text-xs text-neutral-400">Last recorded {order.postShowRecordedAt.toLocaleString()}.</p>
+            )}
           </Card>
         )}
 

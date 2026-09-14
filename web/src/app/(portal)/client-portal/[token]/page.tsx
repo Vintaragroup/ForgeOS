@@ -63,6 +63,12 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
       files: { where: { deletedAt: null, kind: "CLIENT_ARTWORK" }, orderBy: { createdAt: "desc" }, take: 1 },
     },
   });
+  // A CLIENT-role invite (validated above) only ever exists for an
+  // opportunity-scoped order -- a Show-owned Hub/hanging-sign piece has no
+  // client contact to invite in the first place. Narrows opportunity to
+  // non-null for the rest of this page.
+  if (!order.opportunity) notFound();
+
   const latestProof = await db.artworkFile.findFirst({
     where: { artworkOrderId: order.id, kind: "PROOF", deletedAt: null },
     orderBy: { round: "desc" },

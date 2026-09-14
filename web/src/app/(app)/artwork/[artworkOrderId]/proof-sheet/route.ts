@@ -35,6 +35,12 @@ export async function GET(request: Request, { params }: RouteContext<"/artwork/[
   });
   if (!order) notFound();
   if (!(await canAccessArtworkOrder(user, order.opportunityId))) notFound();
+  // A Show-owned Hub/hanging-sign piece (ArtworkOrder.showId, opportunityId
+  // null) has no client, booth, or company -- the branded proof sheet is a
+  // client-facing artifact that doesn't exist for one. No UI links here
+  // for such an order; this guards the route directly against a hand-typed
+  // URL.
+  if (!order.opportunity) notFound();
 
   const file = fileIdParam
     ? order.files.find((f) => f.id === fileIdParam)

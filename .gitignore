@@ -46,6 +46,13 @@ __pycache__/
 # above. web/scripts/generate-catalog-expansion.ts reads this locally and
 # writes its output to the committed web/prisma/seed-data/ instead.
 /data/Catalog_Data/
+
+# The Graphics team's real PGA-show control log -- real client names,
+# vendors, and booth-graphic production detail. Same "never goes to the
+# public remote" reasoning as the other data/ entries above.
+# web/scripts/import-pga-graphics-log.ts reads this locally.
+/data/Graphics-operations/
+
 .vercel
 .env*
 data/Screenshot 2026-09-02 at 1.22.38 PM.png

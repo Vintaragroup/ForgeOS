@@ -28,6 +28,16 @@ function actor(identity: PortalIdentity) {
   return { type: "CLIENT" as const, email: identity.email };
 }
 
+// A CLIENT-role ArtworkPortalInvite (the only way requireClientIdentity
+// above ever succeeds) only ever exists for an opportunity-scoped order --
+// a Show-owned Hub/hanging-sign piece (ArtworkOrder.showId, opportunityId
+// null) has no client contact to invite in the first place. Asserted here,
+// not silently cast, so a future change to that invariant fails loudly.
+function requireOpportunityId(opportunityId: string | null): string {
+  if (opportunityId == null) throw new Error("Client-portal action reached an order with no opportunity.");
+  return opportunityId;
+}
+
 // Opens a fresh draft (from Invited) or reopens one after a rejection (from
 // Rejected) -- both are legal edges to OrderDrafted in the same table, the
 // only difference is the action label recorded on the audit event.
@@ -82,7 +92,7 @@ export async function finalizeArtworkUploadAction(
 export async function submitOrderAction(token: string) {
   const identity = await requireClientIdentity(token);
   const { artworkOrder } = await submitArtworkOrder(identity.artworkOrderId, actor(identity));
-  await notifyReviewersOfSubmission(artworkOrder.opportunityId, artworkOrder.jobCode);
+  await notifyReviewersOfSubmission(requireOpportunityId(artworkOrder.opportunityId), artworkOrder.jobCode);
   revalidatePath(`/client-portal/${token}`);
 }
 
@@ -109,7 +119,7 @@ export async function reportProofMismatchAction(token: string, formData: FormDat
     { note },
   );
   if (escalated) {
-    await notifyReviewersEscalation(artworkOrder.opportunityId, artworkOrder.jobCode);
+    await notifyReviewersEscalation(requireOpportunityId(artworkOrder.opportunityId), artworkOrder.jobCode);
   } else {
     const vendorInvite = await db.artworkPortalInvite.findFirst({
       where: { artworkOrderId: identity.artworkOrderId, role: "VENDOR" },

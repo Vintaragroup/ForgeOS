@@ -73,7 +73,7 @@ describe("notifyClientInvited", () => {
   it("returns the real client-portal link -- the only moment it's ever recoverable, since only its hash is persisted", async () => {
     const company = await db.company.create({ data: { name: "Test Co 5" } });
     const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
-    const order = await createArtworkOrder(opportunity.id);
+    const order = await createArtworkOrder({ opportunityId: opportunity.id });
 
     const link = await notifyClientInvited(order.id, "client@example.com");
 

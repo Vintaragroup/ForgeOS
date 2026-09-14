@@ -20,7 +20,7 @@ afterAll(async () => {
 async function makeArtworkOrder() {
   const company = await db.company.create({ data: { name: "Test Co" } });
   const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
-  return createArtworkOrder(opportunity.id);
+  return createArtworkOrder({ opportunityId: opportunity.id });
 }
 
 async function makeValidPdf(): Promise<Buffer> {

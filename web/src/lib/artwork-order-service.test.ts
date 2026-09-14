@@ -7,10 +7,13 @@ import {
   acceptCustomSizeQuote,
   assertValidTransition,
   assignVendor,
+  cancelArtworkOrder,
   canStartArtworkOnboarding,
   computeSlaDueAt,
   createArtworkOrder,
+  recordPostShowDisposition,
   setCustomSizeQuote,
+  setProductionDetail,
   setProductionSpec,
   submitArtworkOrder,
   transitionArtworkOrder,
@@ -39,7 +42,7 @@ async function makeArtworkOrder(eventStartDate: Date | null = null) {
   const opportunity = await db.opportunity.create({
     data: { companyId: company.id, showName: "Test Show", eventStartDate },
   });
-  return createArtworkOrder(opportunity.id);
+  return createArtworkOrder({ opportunityId: opportunity.id });
 }
 
 const EXPO_ACTOR = { type: "EXPO" as const, userId: "user-1" };
@@ -489,5 +492,130 @@ describe("updateArtworkOrderDraft", () => {
     await transitionArtworkOrder(order.id, "ORDER_DRAFTED", "OPEN_PORTAL", CLIENT_ACTOR);
     await transitionArtworkOrder(order.id, "SUBMITTED", "SUBMIT", CLIENT_ACTOR);
     await expect(updateArtworkOrderDraft(order.id, { material: "Vinyl" })).rejects.toThrow(/only be edited/);
+  });
+});
+
+// Walks an order straight to IN_PRODUCTION for the Graphics Production Hub
+// tests below -- same steps as the "walks the full happy path" test above,
+// just stopping earlier.
+async function advanceToInProduction(orderId: string) {
+  await transitionArtworkOrder(orderId, "ORDER_DRAFTED", "OPEN_PORTAL", CLIENT_ACTOR);
+  await transitionArtworkOrder(orderId, "SUBMITTED", "SUBMIT", CLIENT_ACTOR);
+  await transitionArtworkOrder(orderId, "UNDER_ART_REVIEW", "AUTO_ROUTE", { type: "SYSTEM" });
+  await transitionArtworkOrder(orderId, "ACCEPTED", "APPROVE", EXPO_ACTOR);
+  await transitionArtworkOrder(orderId, "VENDOR_ASSIGNED", "ASSIGN_VENDOR", EXPO_ACTOR);
+  await transitionArtworkOrder(orderId, "PROOF_IN_PROGRESS", "VENDOR_NOTIFIED", { type: "SYSTEM" });
+  await transitionArtworkOrder(orderId, "PROOF_SUBMITTED", "UPLOAD_PROOF", VENDOR_ACTOR);
+  await transitionArtworkOrder(orderId, "EXPO_PROOF_CHECK", "QUEUE_FOR_CHECK", { type: "SYSTEM" });
+  await transitionArtworkOrder(orderId, "PROOF_UNDER_REVIEW", "CONFIRM_MATCH", EXPO_ACTOR);
+  await transitionArtworkOrder(orderId, "PROOF_APPROVED", "CLIENT_SIGN_OFF", CLIENT_ACTOR);
+  await transitionArtworkOrder(orderId, "PRODUCTION_GO_AHEAD", "ISSUE_GO_AHEAD", EXPO_ACTOR);
+  await transitionArtworkOrder(orderId, "IN_PRODUCTION", "SENT_TO_PRODUCTION", VENDOR_ACTOR);
+}
+
+describe("Graphics Production Hub: new production waypoints", () => {
+  it("allows the optional RECEIVED_FROM_VENDOR -> INSPECTED -> PACKAGED_READY path", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToInProduction(order.id);
+    await transitionArtworkOrder(order.id, "RECEIVED_FROM_VENDOR", "RECEIVED", EXPO_ACTOR);
+    await transitionArtworkOrder(order.id, "INSPECTED", "INSPECT", EXPO_ACTOR);
+    const { artworkOrder } = await transitionArtworkOrder(order.id, "PACKAGED_READY", "PACKAGED", VENDOR_ACTOR);
+    expect(artworkOrder.status).toBe("PACKAGED_READY");
+  });
+
+  it("still allows skipping straight to PACKAGED_READY (matches most historical data)", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToInProduction(order.id);
+    const { artworkOrder } = await transitionArtworkOrder(order.id, "PACKAGED_READY", "PACKAGED", VENDOR_ACTOR);
+    expect(artworkOrder.status).toBe("PACKAGED_READY");
+  });
+
+  it("REPRINT_REQUESTED loops back to IN_PRODUCTION", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToInProduction(order.id);
+    await transitionArtworkOrder(order.id, "REPRINT_REQUESTED", "REPRINT", EXPO_ACTOR);
+    const { artworkOrder } = await transitionArtworkOrder(order.id, "IN_PRODUCTION", "SENT_TO_PRODUCTION", VENDOR_ACTOR);
+    expect(artworkOrder.status).toBe("IN_PRODUCTION");
+  });
+});
+
+describe("cancelArtworkOrder", () => {
+  it("cancels an order from a pre-delivery status without an edge in ARTWORK_TRANSITIONS", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToInProduction(order.id);
+    const { artworkOrder, event } = await cancelArtworkOrder(order.id, EXPO_ACTOR, "Client pulled out of the show");
+    expect(artworkOrder.status).toBe("CANCELLED");
+    expect(event.action).toBe("CANCEL");
+    expect(event.note).toBe("Client pulled out of the show");
+  });
+
+  it("refuses to cancel an order that's already DELIVERED_AT_SHOW", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToInProduction(order.id);
+    await transitionArtworkOrder(order.id, "PACKAGED_READY", "PACKAGED", VENDOR_ACTOR);
+    await transitionArtworkOrder(order.id, "SHIPPED_TO_SHOW", "SHIPPED", VENDOR_ACTOR);
+    await transitionArtworkOrder(order.id, "DELIVERED_AT_SHOW", "DELIVERED", EXPO_ACTOR);
+    await expect(cancelArtworkOrder(order.id, EXPO_ACTOR)).rejects.toThrow(/Cannot cancel/);
+  });
+
+  it("refuses to cancel an order that's already cancelled", async () => {
+    const order = await makeArtworkOrder();
+    await cancelArtworkOrder(order.id, EXPO_ACTOR);
+    await expect(cancelArtworkOrder(order.id, EXPO_ACTOR)).rejects.toThrow(/Cannot cancel/);
+  });
+});
+
+describe("setProductionDetail", () => {
+  it("sets the new per-piece fields and leaves the order's status unchanged", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToInProduction(order.id);
+    const { artworkOrder } = await setProductionDetail(
+      order.id,
+      { graphicCode: "A1", finishingDetails: "SEG", verifiedSizes: true, existingGraphicsStatus: "NEW_IMAGE" },
+      EXPO_ACTOR,
+    );
+    expect(artworkOrder.status).toBe("IN_PRODUCTION");
+    expect(artworkOrder.graphicCode).toBe("A1");
+    expect(artworkOrder.finishingDetails).toBe("SEG");
+    expect(artworkOrder.verifiedSizes).toBe(true);
+    expect(artworkOrder.existingGraphicsStatus).toBe("NEW_IMAGE");
+  });
+
+  it("leaves an omitted field unchanged", async () => {
+    const order = await makeArtworkOrder();
+    await setProductionDetail(order.id, { graphicCode: "A1" }, EXPO_ACTOR);
+    const { artworkOrder } = await setProductionDetail(order.id, { finishingDetails: "Grommets" }, EXPO_ACTOR);
+    expect(artworkOrder.graphicCode).toBe("A1");
+    expect(artworkOrder.finishingDetails).toBe("Grommets");
+  });
+});
+
+describe("recordPostShowDisposition", () => {
+  async function advanceToDelivered(orderId: string) {
+    await advanceToInProduction(orderId);
+    await transitionArtworkOrder(orderId, "PACKAGED_READY", "PACKAGED", VENDOR_ACTOR);
+    await transitionArtworkOrder(orderId, "SHIPPED_TO_SHOW", "SHIPPED", VENDOR_ACTOR);
+    await transitionArtworkOrder(orderId, "DELIVERED_AT_SHOW", "DELIVERED", EXPO_ACTOR);
+  }
+
+  it("records post-show status/condition once delivered", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToDelivered(order.id);
+    const { artworkOrder } = await recordPostShowDisposition(
+      order.id,
+      { postShowStatus: "EXPO_STORAGE", postShowCondition: "OK_TO_REUSE" },
+      EXPO_ACTOR,
+    );
+    expect(artworkOrder.postShowStatus).toBe("EXPO_STORAGE");
+    expect(artworkOrder.postShowCondition).toBe("OK_TO_REUSE");
+    expect(artworkOrder.postShowRecordedAt).not.toBeNull();
+  });
+
+  it("refuses to record a disposition before the order has been delivered", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToInProduction(order.id);
+    await expect(
+      recordPostShowDisposition(order.id, { postShowStatus: "DISCARDED", postShowCondition: null }, EXPO_ACTOR),
+    ).rejects.toThrow(/only be recorded once/);
   });
 });

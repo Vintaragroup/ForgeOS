@@ -28,7 +28,7 @@ async function makeOrderInProofCheck(opts: {
 }) {
   const company = await db.company.create({ data: { name: "Test Co" } });
   const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
-  const order = await createArtworkOrder(opportunity.id);
+  const order = await createArtworkOrder({ opportunityId: opportunity.id });
 
   const enteredAt = new Date(Date.now() - opts.enteredHoursAgo * HOUR_MS);
   const slaDueAt = new Date(enteredAt.getTime() + opts.windowHours * HOUR_MS);

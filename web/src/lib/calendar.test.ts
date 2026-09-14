@@ -198,7 +198,7 @@ describe("getCalendarItems -- Task scoping", () => {
 describe("getCalendarItems -- ArtworkOrder SLA", () => {
   async function makeArtworkOrderFixture(ownerId: string | null) {
     const opportunity = await makeOpportunity({ ownerId });
-    const order = await createArtworkOrder(opportunity.id);
+    const order = await createArtworkOrder({ opportunityId: opportunity.id });
     return db.artworkOrder.update({
       where: { id: order.id },
       data: { status: "EXPO_PROOF_CHECK", slaDueAt: addDays(new Date(), 1) },
@@ -207,7 +207,7 @@ describe("getCalendarItems -- ArtworkOrder SLA", () => {
 
   it("only surfaces while status is EXPO_PROOF_CHECK", async () => {
     const opportunity = await makeOpportunity();
-    const order = await createArtworkOrder(opportunity.id);
+    const order = await createArtworkOrder({ opportunityId: opportunity.id });
     await db.artworkOrder.update({ where: { id: order.id }, data: { slaDueAt: addDays(new Date(), 1) } }); // status stays INVITED
 
     const items = await getCalendarItems(ADMIN_USER, RANGE_START, RANGE_END);

@@ -21,7 +21,7 @@ afterAll(async () => {
 async function makeArtworkFile() {
   const company = await db.company.create({ data: { name: "Test Co" } });
   const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
-  const order = await createArtworkOrder(opportunity.id);
+  const order = await createArtworkOrder({ opportunityId: opportunity.id });
   return db.artworkFile.create({
     data: {
       artworkOrderId: order.id,

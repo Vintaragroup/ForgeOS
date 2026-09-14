@@ -9,7 +9,13 @@
 // who acted.
 import { randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
-import { ArtworkOrderStatus, type ArtworkActorType } from "@/generated/prisma/enums";
+import {
+  ArtworkOrderStatus,
+  type ArtworkActorType,
+  type ExistingGraphicsStatus,
+  type PostShowStatus,
+  type PostShowCondition,
+} from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 
 export const MAX_REVISION_ROUNDS = 2;
@@ -33,6 +39,18 @@ export function canStartArtworkOnboarding(opportunity: { stage: string; showId: 
 // Mirrors the exact edges in the spec's Section 2 state diagram, including
 // both loop-backs (Rejected -> OrderDrafted, Escalated -> ProofInProgress).
 // A status with no legal outgoing edge (DeliveredAtShow) maps to [].
+//
+// Graphics Production Hub additions: RECEIVED_FROM_VENDOR/INSPECTED are
+// optional receiving/QC waypoints -- IN_PRODUCTION can still go straight to
+// PACKAGED_READY for a piece that skips them (matches most of the real
+// historical data), or step through either/both first.
+// REPRINT_REQUESTED loops back to IN_PRODUCTION, same shape as
+// PROOF_REVISION_REQUESTED's own loop earlier in the pipeline.
+// CANCELLED is deliberately NOT listed as an edge on every entry below --
+// it's reachable from any pre-DELIVERED_AT_SHOW state via the dedicated
+// cancelArtworkOrder() below, mirroring how transitionArtworkOrder already
+// special-cases escalation/SLA logic rather than encoding every rule as a
+// transition-table edge.
 export const ARTWORK_TRANSITIONS: Record<ArtworkOrderStatus, ArtworkOrderStatus[]> = {
   INVITED: ["ORDER_DRAFTED"],
   ORDER_DRAFTED: ["SUBMITTED"],
@@ -49,10 +67,14 @@ export const ARTWORK_TRANSITIONS: Record<ArtworkOrderStatus, ArtworkOrderStatus[
   PROOF_UNDER_REVIEW: ["PROOF_REVISION_REQUESTED", "PROOF_APPROVED"],
   PROOF_APPROVED: ["PRODUCTION_GO_AHEAD"],
   PRODUCTION_GO_AHEAD: ["IN_PRODUCTION"],
-  IN_PRODUCTION: ["PACKAGED_READY"],
+  IN_PRODUCTION: ["RECEIVED_FROM_VENDOR", "INSPECTED", "PACKAGED_READY", "REPRINT_REQUESTED"],
+  RECEIVED_FROM_VENDOR: ["INSPECTED", "PACKAGED_READY", "REPRINT_REQUESTED"],
+  INSPECTED: ["PACKAGED_READY", "REPRINT_REQUESTED"],
+  REPRINT_REQUESTED: ["IN_PRODUCTION"],
   PACKAGED_READY: ["SHIPPED_TO_SHOW"],
   SHIPPED_TO_SHOW: ["DELIVERED_AT_SHOW"],
   DELIVERED_AT_SHOW: [],
+  CANCELLED: [],
 };
 
 export function assertValidTransition(from: ArtworkOrderStatus, to: ArtworkOrderStatus): void {
@@ -85,15 +107,22 @@ function generateJobCode(): string {
   return `EXPO-${randomBytes(4).toString("hex").toUpperCase()}`;
 }
 
+// owner is a discriminated union rather than two optional params -- the
+// type system itself makes "neither" or "both" of opportunityId/showId
+// impossible to pass, not just a runtime check. Every pre-existing
+// client-onboarding caller passes { opportunityId }; the Graphics
+// Production Hub's own Hub/hanging-sign creation path (no client, no
+// opportunity) passes { showId } instead -- see ArtworkOrder.showId's
+// schema comment.
 export async function createArtworkOrder(
-  opportunityId: string,
+  owner: { opportunityId: string } | { showId: string },
   data: { sizeTierId?: string | null; material?: string | null; qty?: number } = {},
 ) {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       return await db.artworkOrder.create({
         data: {
-          opportunityId,
+          ...("opportunityId" in owner ? { opportunityId: owner.opportunityId } : { showId: owner.showId }),
           jobCode: generateJobCode(),
           sizeTierId: data.sizeTierId ?? null,
           material: data.material ?? null,
@@ -131,16 +160,31 @@ export async function transitionArtworkOrder(
   actor: ArtworkActor,
   opts: TransitionOptions = {},
 ) {
+  // opportunity is null for a Show-owned Hub/hanging-sign piece (see
+  // ArtworkOrder.showId's schema comment) -- eventStartDate then falls
+  // back to the Show's own, matching computeSlaDueAt's existing
+  // no-date-yet fallback either way.
   const current = await db.artworkOrder.findUniqueOrThrow({
     where: { id: artworkOrderId },
-    include: { opportunity: { select: { eventStartDate: true } } },
+    include: {
+      opportunity: { select: { eventStartDate: true } },
+      show: { select: { eventStartDate: true } },
+    },
   });
+  const eventStartDate = current.opportunity?.eventStartDate ?? current.show?.eventStartDate ?? null;
 
   let effectiveToStatus: ArtworkOrderStatus = toStatus;
   let revisionRound = current.revisionRound;
   let escalated = false;
 
-  if (toStatus === "PROOF_REVISION_REQUESTED" && current.status !== "PROOF_REVISION_REQUESTED") {
+  if (toStatus === "CANCELLED") {
+    // Bypasses ARTWORK_TRANSITIONS entirely -- CANCELLED is reachable from
+    // any pre-DELIVERED_AT_SHOW state, which isn't worth encoding as an
+    // edge on every single entry in that table (see its own comment).
+    if (current.status === "DELIVERED_AT_SHOW" || current.status === "CANCELLED") {
+      throw new Error(`Cannot cancel an artwork order in status ${current.status}.`);
+    }
+  } else if (toStatus === "PROOF_REVISION_REQUESTED" && current.status !== "PROOF_REVISION_REQUESTED") {
     assertValidTransition(current.status, "PROOF_REVISION_REQUESTED");
     const nextRound = current.revisionRound + 1;
     if (nextRound > MAX_REVISION_ROUNDS) {
@@ -177,7 +221,7 @@ export async function transitionArtworkOrder(
 
   let slaDueAt = current.slaDueAt;
   if (effectiveToStatus === "EXPO_PROOF_CHECK") {
-    slaDueAt = computeSlaDueAt(new Date(), current.opportunity.eventStartDate);
+    slaDueAt = computeSlaDueAt(new Date(), eventStartDate);
   }
 
   const [, event] = await db.$transaction([
@@ -266,6 +310,82 @@ export async function setProductionSpec(
   });
 }
 
+// Graphics Production Hub: the per-piece production detail Expo/Graphics
+// staff fill in and correct during production -- material/qty were
+// previously only editable client-side via updateArtworkOrderDraft
+// (ORDER_DRAFTED/REJECTED only), so there was no way to correct either
+// once production actually started. Same shape as setProductionSpec
+// above: a guarded field update, logged via a same-status
+// transitionArtworkOrder call rather than a real status change.
+// `undefined` means "leave unchanged"; `null` means "clear it" (except
+// `qty`, which has no meaningful null).
+export async function setProductionDetail(
+  artworkOrderId: string,
+  detail: {
+    material?: string | null;
+    qty?: number;
+    graphicCode?: string | null;
+    finishingDetails?: string | null;
+    artDueDate?: Date | null;
+    existingGraphicsStatus?: ExistingGraphicsStatus | null;
+    verifiedSizes?: boolean;
+    designerId?: string | null;
+  },
+  actor: ArtworkActor,
+) {
+  const data: Prisma.ArtworkOrderUpdateInput = {};
+  const eventDetail: Record<string, unknown> = {};
+  for (const key of [
+    "material",
+    "qty",
+    "graphicCode",
+    "finishingDetails",
+    "artDueDate",
+    "existingGraphicsStatus",
+    "verifiedSizes",
+    "designerId",
+  ] as const) {
+    if (detail[key] === undefined) continue;
+    (data as Record<string, unknown>)[key] = detail[key];
+    eventDetail[key] = detail[key] instanceof Date ? detail[key].toISOString() : detail[key];
+  }
+  await db.artworkOrder.update({ where: { id: artworkOrderId }, data });
+  const current = await db.artworkOrder.findUniqueOrThrow({ where: { id: artworkOrderId } });
+  return transitionArtworkOrder(artworkOrderId, current.status, "SET_PRODUCTION_DETAIL", actor, {
+    detail: eventDetail as Prisma.InputJsonValue,
+  });
+}
+
+// Graphics Production Hub: what physically happened to a piece after the
+// show. Only meaningful once delivered -- postShowStatus/Condition are
+// facts recorded once, not more ArtworkOrderStatus states (see those
+// enums' own schema comments), so this is a same-status transition, same
+// as setProductionSpec/setProductionDetail above, not a real status
+// change. Re-callable (a Graphics staffer correcting a mis-recorded
+// condition doesn't need a new "un-received" state to exist).
+export async function recordPostShowDisposition(
+  artworkOrderId: string,
+  disposition: { postShowStatus: PostShowStatus; postShowCondition: PostShowCondition | null },
+  actor: ArtworkActor,
+) {
+  const current = await db.artworkOrder.findUniqueOrThrow({ where: { id: artworkOrderId } });
+  if (current.status !== "DELIVERED_AT_SHOW") {
+    throw new Error("Post-show disposition can only be recorded once an order has been delivered at the show.");
+  }
+  await db.artworkOrder.update({
+    where: { id: artworkOrderId },
+    data: {
+      postShowStatus: disposition.postShowStatus,
+      postShowCondition: disposition.postShowCondition,
+      postShowRecordedAt: new Date(),
+      postShowRecordedByUserId: actor.userId ?? null,
+    },
+  });
+  return transitionArtworkOrder(artworkOrderId, current.status, "RECORD_POST_SHOW_DISPOSITION", actor, {
+    detail: disposition as unknown as Prisma.InputJsonValue,
+  });
+}
+
 // Enforces the same hard gate at the actual submission point (not just at
 // quote-accept time) -- a client could otherwise request a custom size,
 // never accept the quote, and still submit if this weren't checked here
@@ -315,6 +435,14 @@ export async function assignVendor(artworkOrderId: string, vendorId: string, act
 export async function uploadProof(artworkOrderId: string, actor: ArtworkActor) {
   await transitionArtworkOrder(artworkOrderId, "PROOF_SUBMITTED", "UPLOAD_PROOF", actor);
   return transitionArtworkOrder(artworkOrderId, "EXPO_PROOF_CHECK", "QUEUE_FOR_CHECK", { type: "SYSTEM" });
+}
+
+// Thin wrapper -- the real "reachable from any pre-DELIVERED_AT_SHOW
+// state" logic lives inside transitionArtworkOrder's own CANCELLED
+// special-case above, keeping it the sole writer of ArtworkOrderEvent rows
+// rather than duplicating that transaction here.
+export async function cancelArtworkOrder(artworkOrderId: string, actor: ArtworkActor, note?: string | null) {
+  return transitionArtworkOrder(artworkOrderId, "CANCELLED", "CANCEL", actor, { note: note ?? null });
 }
 
 // A guarded field update, not a status transition -- the order form's

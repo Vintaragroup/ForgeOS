@@ -76,9 +76,9 @@ enum SystemRole {
 }
 
 model User {
-  id                String     @id @default(cuid())
+  id                String      @id @default(cuid())
   name              String
-  email             String     @unique
+  email             String      @unique
   role              String? // job title, e.g. "Estimator" -- not access control
   // Deprecated free-text field, kept (not dropped) until
   // scripts/backfill-user-department-codes.ts's mapping is reviewed --
@@ -90,7 +90,7 @@ model User {
   department        String?
   departmentCode    String?
   departmentRef     Department? @relation(fields: [departmentCode], references: [code])
-  systemRole        SystemRole @default(EMPLOYEE)
+  systemRole        SystemRole  @default(EMPLOYEE)
   // scrypt "salt:hash" pair, set via `npm run set-password` -- never through
   // a web form, so there is no unauthenticated password-set endpoint. Null
   // until set, meaning the account can't log in yet. See src/lib/auth.ts.
@@ -111,11 +111,12 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  contactLinks       Contact[]                 @relation("UserContact")
-  opportunities      Opportunity[]             @relation("OpportunityOwner")
-  salesRepOn         Opportunity[]             @relation("OpportunitySalesRep")
-  collaboratingOn    OpportunityCollaborator[] @relation("OpportunityCollaborator")
-  escalationContactFor Show[]                  @relation("ShowEscalationContact")
+  contactLinks            Contact[]                 @relation("UserContact")
+  opportunities           Opportunity[]             @relation("OpportunityOwner")
+  salesRepOn              Opportunity[]             @relation("OpportunitySalesRep")
+  collaboratingOn         OpportunityCollaborator[] @relation("OpportunityCollaborator")
+  escalationContactFor    Show[]                    @relation("ShowEscalationContact")
+  designerOnArtworkOrders ArtworkOrder[]            @relation("ArtworkOrderDesigner")
 
   approvedEstimateVersions EstimateVersion[]      @relation("EstimateVersionApprover")
   uploadedAttachments      Attachment[]
@@ -265,13 +266,16 @@ model Show {
   // this is null). Deliberately scoped to escalation only, not every
   // notification type -- see getEscalationNotifyEmails's own comment.
   escalationContactId String?
-  escalationContact    User?   @relation("ShowEscalationContact", fields: [escalationContactId], references: [id])
+  escalationContact   User?   @relation("ShowEscalationContact", fields: [escalationContactId], references: [id])
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
   opportunities Opportunity[]
+  // Hub/hanging-sign artwork pieces not owned by any one client's
+  // Opportunity -- see ArtworkOrder.showId's own comment.
+  artworkOrders ArtworkOrder[]
 
   @@map("shows")
 }
@@ -317,7 +321,7 @@ model Opportunity {
   // job), so this stays nullable; showName above is still the field every
   // existing display/PDF/report reads.
   showId        String?
-  show          Show?     @relation(fields: [showId], references: [id])
+  show          Show?            @relation(fields: [showId], references: [id])
   boothNumber   String?
   targetMoveIn  DateTime?
   targetMoveOut DateTime?
@@ -2351,7 +2355,7 @@ model Task {
   description    String
   departmentCode String?
   department     Department? @relation(fields: [departmentCode], references: [code])
-  status         TaskStatus @default(TODO)
+  status         TaskStatus  @default(TODO)
   dueDate        DateTime?
 
   assignedToId String?
@@ -2463,6 +2467,9 @@ model Vendor {
   name        String
   contactInfo String?
   category    String?
+  // Short display code for dense Production Hub tables ("SPEEDPRO",
+  // "OLFP", "RIOT"...) -- Vendor.name already holds the full name.
+  initials    String? @unique
 
   // Added for the artwork approval pipeline (ArtworkPortalInvite) --
   // needed to send a vendor its magic-link portal invite. Nothing else in
@@ -2514,9 +2521,56 @@ enum ArtworkOrderStatus {
   PROOF_APPROVED
   PRODUCTION_GO_AHEAD
   IN_PRODUCTION
+  // Optional receiving/QC waypoints between IN_PRODUCTION and
+  // PACKAGED_READY -- added for the Graphics Production Hub (see that
+  // plan's own header comment for the full rationale). Both are skippable:
+  // ARTWORK_TRANSITIONS still lets IN_PRODUCTION go straight to
+  // PACKAGED_READY for a piece that never gets a formal receive/inspect
+  // step, matching most of the real historical data.
+  RECEIVED_FROM_VENDOR
+  INSPECTED
   PACKAGED_READY
   SHIPPED_TO_SHOW
   DELIVERED_AT_SHOW
+  // A bad print, loops back to IN_PRODUCTION for a reprint -- same shape
+  // as PROOF_REVISION_REQUESTED's own loop earlier in this pipeline.
+  REPRINT_REQUESTED
+  // Terminal outcome, reachable from any pre-DELIVERED_AT_SHOW state via
+  // cancelArtworkOrder() in artwork-order-service.ts rather than being
+  // added as an edge on every single entry in ARTWORK_TRANSITIONS.
+  CANCELLED
+}
+
+// Where a delivered piece physically ended up after the show -- recorded
+// once, after DELIVERED_AT_SHOW. Deliberately NOT more ArtworkOrderStatus
+// states: this is a fact about the piece's disposition, not another rung
+// on the approval/production ladder, and (unlike every step above it) can
+// be corrected/re-recorded without that meaning "the order un-shipped."
+enum PostShowStatus {
+  NOT_RECEIVED
+  EXPO_STORAGE
+  SHIP_TO_CLIENT
+  DISCARDED
+}
+
+enum PostShowCondition {
+  OK_TO_REUSE
+  DAMAGED
+  DIRTY
+  // Meaning confirmed ambiguous from the source spreadsheet alone -- kept
+  // as-is pending confirmation from the Graphics team on what this
+  // actually denotes before this ships.
+  PRODUCT
+}
+
+// New-image vs. reused-from-a-prior-show vs. damaged-and-needs-replacing --
+// the production-planning decision made per piece, independent of
+// ArtworkOrderStatus's own approval-pipeline progress.
+enum ExistingGraphicsStatus {
+  NEW_IMAGE
+  EXISTING
+  DAMAGED
+  NOT_EXISTING
 }
 
 // Who performed an action or uploaded a file -- distinct from SystemRole,
@@ -2564,9 +2618,20 @@ model ArtworkSizeTier {
 }
 
 model ArtworkOrder {
-  id            String      @id @default(cuid())
-  opportunityId String
-  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  id String @id @default(cuid())
+
+  // Nullable + showId below, for the Graphics Production Hub's "PGA Hub" /
+  // hanging-sign items -- a shared/common-area piece that isn't owned by
+  // any one client's deal. Enforced at the service layer (not a DB CHECK
+  // constraint, matching this codebase's usual cross-field validation
+  // style): exactly one of opportunityId/showId must be set, never both,
+  // never neither. Every pre-existing client-facing ArtworkOrder keeps
+  // opportunityId set and showId null.
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  showId String?
+  show   Show?   @relation(fields: [showId], references: [id])
 
   status ArtworkOrderStatus @default(INVITED)
 
@@ -2594,6 +2659,30 @@ model ArtworkOrder {
   material String?
   qty      Int     @default(1)
 
+  // -- Graphics Production Hub fields (post-approval production detail) --
+  // The piece's short code within its booth ("A1", "Door panel") -- the
+  // legacy spreadsheet's "GRAPHIC NAME" column, renamed here since it
+  // isn't a human title, it's a per-piece code.
+  graphicCode            String?
+  // Free text ("SEG", "Grommets", "M-F Low Pro Velcro"...) -- plain
+  // string, not a lookup table, matching how `material` above is itself
+  // already a plain string rather than an FK/enum.
+  finishingDetails       String?
+  artDueDate             DateTime?
+  existingGraphicsStatus ExistingGraphicsStatus?
+  verifiedSizes          Boolean                 @default(false)
+
+  designerId String?
+  designer   User?   @relation("ArtworkOrderDesigner", fields: [designerId], references: [id])
+
+  // -- Post-show disposition -- set once, after DELIVERED_AT_SHOW. See
+  // PostShowStatus/PostShowCondition's own comments for why these are
+  // fields, not more ArtworkOrderStatus states.
+  postShowStatus           PostShowStatus?
+  postShowCondition        PostShowCondition?
+  postShowRecordedAt       DateTime?
+  postShowRecordedByUserId String?
+
   // Fee is computed from ArtworkSizeTier.expoProducedFee at the moment
   // Expo accepts the artwork (Accepted transition), not at order-draft
   // time -- the size tier could theoretically change before then.
@@ -2617,7 +2706,7 @@ model ArtworkOrder {
   // Set when entering ExpoProofCheck: 24h normally, 4h if the show's
   // eventStartDate is within its final week. Now read by the active
   // SLA-warning cron (see slaWarningNotifiedAt below).
-  slaDueAt DateTime?
+  slaDueAt             DateTime?
   // Dedupe guard for the SLA-warning cron -- set once the halfway-point
   // warning email has actually gone out, so an order isn't re-notified on
   // every hourly tick until it clears EXPO_PROOF_CHECK. Cleared implicitly
@@ -2637,6 +2726,8 @@ model ArtworkOrder {
 
   @@index([opportunityId])
   @@index([vendorId])
+  @@index([showId])
+  @@index([designerId])
   @@map("artwork_orders")
 }
 
@@ -2645,10 +2736,10 @@ model ArtworkFile {
   artworkOrderId String
   artworkOrder   ArtworkOrder @relation(fields: [artworkOrderId], references: [id])
 
-  kind ArtworkFileKind
+  kind  ArtworkFileKind
   // Proof revision round this file belongs to (matches ArtworkOrder.
   // revisionRound at upload time); 0 for the client's original artwork.
-  round Int @default(0)
+  round Int             @default(0)
 
   // System-assigned display name (e.g. "proof-round-1.pdf") -- NEVER the
   // uploader's original filename. This is the concrete mechanism behind
@@ -2778,9 +2869,9 @@ model ArtworkOrderEvent {
 // session.ts (separate secret, separate cookie, no shared code) because
 // these actors never get a real ForgeOS account.
 model ArtworkPortalInvite {
-  id             String            @id @default(cuid())
+  id             String       @id @default(cuid())
   artworkOrderId String
-  artworkOrder   ArtworkOrder      @relation(fields: [artworkOrderId], references: [id])
+  artworkOrder   ArtworkOrder @relation(fields: [artworkOrderId], references: [id])
 
   role  ArtworkPortalRole
   email String

@@ -120,7 +120,13 @@ export async function notifyVendorAssigned(artworkOrderId: string, email: string
 
 // Row 7a: vendor uploads proof -> Account Rep (Expo) ONLY -- client is
 // explicitly not notified yet at this point.
-export async function notifyReviewersProofReady(opportunityId: string, jobCode: string) {
+// opportunityId is null for a Show-owned Hub/hanging-sign piece (see
+// ArtworkOrder.showId's schema comment) -- unlike the client-portal
+// notify* functions, this one IS reachable for a Hub item (it still has a
+// vendor producing it, even with no client), so this is a graceful no-op
+// rather than an asserted invariant.
+export async function notifyReviewersProofReady(opportunityId: string | null, jobCode: string) {
+  if (opportunityId == null) return;
   const artworkOrderUrl = `${getAppBaseUrl()}/artwork`;
   for (const email of await getInternalNotifyEmails(opportunityId)) {
     await sendEmail({
@@ -156,7 +162,13 @@ export async function notifyVendorRevisionRequested(artworkOrderId: string, emai
 
 // Row 8a: a 3rd revision round would be required -> Account Rep (Expo) --
 // the auto-escalation alert.
-export async function notifyReviewersEscalation(opportunityId: string, jobCode: string) {
+// opportunityId is null for a Show-owned Hub/hanging-sign piece -- unlike
+// notifyReviewersOfSubmission (client-only reachable), this one is also
+// called from the Expo-side requestProofRevisionAction, which a Hub item
+// CAN reach (no client involved, but still a real proof-review cycle), so
+// this stays a graceful no-op rather than an asserted invariant.
+export async function notifyReviewersEscalation(opportunityId: string | null, jobCode: string) {
+  if (opportunityId == null) return;
   const artworkOrderUrl = `${getAppBaseUrl()}/artwork`;
   for (const email of await getEscalationNotifyEmails(opportunityId)) {
     await sendEmail({
@@ -172,7 +184,12 @@ export async function notifyReviewersEscalation(opportunityId: string, jobCode: 
 // cron. Reuses getEscalationNotifyEmails rather than getInternalNotifyEmails
 // since the people expected to act on an approaching SLA are the same ones
 // who'd be paged if it actually escalates.
-export async function notifySlaWarning(opportunityId: string, jobCode: string, slaDueAt: Date) {
+// opportunityId is null for a Show-owned Hub/hanging-sign piece (see
+// ArtworkOrder.showId's schema comment) -- there's no opportunity-based
+// recipient to resolve in that case, so this is an honest no-op rather
+// than a crash (the unattended SLA-sweep cron must never throw on this).
+export async function notifySlaWarning(opportunityId: string | null, jobCode: string, slaDueAt: Date) {
+  if (opportunityId == null) return;
   const artworkOrderUrl = `${getAppBaseUrl()}/artwork`;
   for (const email of await getEscalationNotifyEmails(opportunityId)) {
     await sendEmail({
@@ -199,9 +216,21 @@ export async function notifyVendorGoAhead(artworkOrderId: string, email: string)
 }
 
 // Row 12: vendor marks shipped -> Account Rep, Client (Expo-branded).
-export async function notifyShipped(opportunityId: string, artworkOrderId: string, jobCode: string, clientEmail: string) {
-  for (const email of await getInternalNotifyEmails(opportunityId)) {
-    await sendEmail({ to: email, subject: `Shipped to show (${jobCode})`, text: `Job ${jobCode} has shipped to the show.` });
+// opportunityId is null for a Show-owned Hub/hanging-sign piece -- see
+// notifyReviewersProofReady's own comment above. The call site only ever
+// invokes this once a client invite already exists (which in practice
+// means a real opportunity), but the internal-notify loop below stays
+// null-tolerant regardless, matching that same defensive pattern.
+export async function notifyShipped(
+  opportunityId: string | null,
+  artworkOrderId: string,
+  jobCode: string,
+  clientEmail: string,
+) {
+  if (opportunityId != null) {
+    for (const email of await getInternalNotifyEmails(opportunityId)) {
+      await sendEmail({ to: email, subject: `Shipped to show (${jobCode})`, text: `Job ${jobCode} has shipped to the show.` });
+    }
   }
   const link = await clientPortalLink(artworkOrderId, clientEmail);
   await sendEmail({

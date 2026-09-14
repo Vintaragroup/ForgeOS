@@ -388,7 +388,7 @@ export async function getCalendarItems(
       dateStart: a.slaDueAt,
       href: `/artwork/${a.id}`,
       tone: "critical",
-      opportunityId: a.opportunityId,
+      opportunityId: a.opportunityId ?? undefined,
     });
   }
 

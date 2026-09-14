@@ -5,10 +5,13 @@ import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
 import {
   acceptArtworkOrder,
   assignVendor,
+  recordPostShowDisposition,
   setCustomSizeQuote,
+  setProductionDetail,
   setProductionSpec,
   transitionArtworkOrder,
 } from "@/lib/artwork-order-service";
+import type { ExistingGraphicsStatus, PostShowCondition, PostShowStatus } from "@/generated/prisma/enums";
 import {
   notifyClientAccepted,
   notifyClientDelivered,
@@ -96,6 +99,45 @@ export async function setProductionSpecAction(artworkOrderId: string, formData: 
   revalidatePath(`/artwork/${artworkOrderId}`);
 }
 
+const EXISTING_GRAPHICS_STATUS_VALUES: readonly ExistingGraphicsStatus[] = [
+  "NEW_IMAGE",
+  "EXISTING",
+  "DAMAGED",
+  "NOT_EXISTING",
+];
+
+// Same "a plain edit form always resubmits everything together" posture as
+// setProductionSpecAction just above -- a blank field means "clear it,"
+// not "leave unchanged" (there's no way for a submitted HTML form to
+// signal that distinction), so every field here is always written, never
+// left as `undefined`.
+export async function setProductionDetailAction(artworkOrderId: string, formData: FormData) {
+  const actor = await expoActor(artworkOrderId);
+  const rawExistingStatus = String(formData.get("existingGraphicsStatus") ?? "").trim();
+  const rawArtDue = String(formData.get("artDueDate") ?? "").trim();
+  const rawQty = String(formData.get("qty") ?? "").trim();
+  const qty = rawQty ? Number(rawQty) : 1;
+  if (!Number.isFinite(qty) || qty < 1) throw new Error("Enter a valid quantity.");
+
+  await setProductionDetail(
+    artworkOrderId,
+    {
+      material: String(formData.get("material") ?? "").trim() || null,
+      qty,
+      graphicCode: String(formData.get("graphicCode") ?? "").trim() || null,
+      finishingDetails: String(formData.get("finishingDetails") ?? "").trim() || null,
+      artDueDate: rawArtDue ? new Date(rawArtDue) : null,
+      existingGraphicsStatus: EXISTING_GRAPHICS_STATUS_VALUES.includes(rawExistingStatus as ExistingGraphicsStatus)
+        ? (rawExistingStatus as ExistingGraphicsStatus)
+        : null,
+      verifiedSizes: formData.get("verifiedSizes") === "on",
+      designerId: String(formData.get("designerId") ?? "").trim() || null,
+    },
+    actor,
+  );
+  revalidatePath(`/artwork/${artworkOrderId}`);
+}
+
 export async function assignVendorAction(artworkOrderId: string, formData: FormData) {
   const actor = await expoActor(artworkOrderId);
   const vendorId = String(formData.get("vendorId") ?? "").trim();
@@ -169,6 +211,33 @@ export async function markDeliveredAction(artworkOrderId: string) {
   await transitionArtworkOrder(artworkOrderId, "DELIVERED_AT_SHOW", "DELIVERED", actor);
   const clientEmail = await latestInviteEmail(artworkOrderId, "CLIENT");
   if (clientEmail) await notifyClientDelivered(artworkOrderId, clientEmail);
+  revalidatePath(`/artwork/${artworkOrderId}`);
+}
+
+const POST_SHOW_STATUS_VALUES: readonly PostShowStatus[] = ["NOT_RECEIVED", "EXPO_STORAGE", "SHIP_TO_CLIENT", "DISCARDED"];
+const POST_SHOW_CONDITION_VALUES: readonly PostShowCondition[] = ["OK_TO_REUSE", "DAMAGED", "DIRTY", "PRODUCT"];
+
+// Post-show disposition is only ever recorded once an order has been
+// delivered -- recordPostShowDisposition itself enforces that gate;
+// re-callable, so a Graphics staffer correcting a mis-recorded condition
+// doesn't need this to be a one-shot action.
+export async function recordPostShowDispositionAction(artworkOrderId: string, formData: FormData) {
+  const actor = await expoActor(artworkOrderId);
+  const rawStatus = String(formData.get("postShowStatus") ?? "").trim();
+  const rawCondition = String(formData.get("postShowCondition") ?? "").trim();
+  if (!POST_SHOW_STATUS_VALUES.includes(rawStatus as PostShowStatus)) {
+    throw new Error("Select a post-show status.");
+  }
+  await recordPostShowDisposition(
+    artworkOrderId,
+    {
+      postShowStatus: rawStatus as PostShowStatus,
+      postShowCondition: POST_SHOW_CONDITION_VALUES.includes(rawCondition as PostShowCondition)
+        ? (rawCondition as PostShowCondition)
+        : null,
+    },
+    actor,
+  );
   revalidatePath(`/artwork/${artworkOrderId}`);
 }
 
