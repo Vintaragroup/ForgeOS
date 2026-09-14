@@ -323,6 +323,20 @@ export default async function CalendarPage({
             <Link href={qs({ date: nextDate })} className={NAV_LINK_CLASS}>
               Next →
             </Link>
+            <form method="get" className="flex items-center gap-1">
+              {view !== "month" && <input type="hidden" name="view" value={view} />}
+              {showParams !== undefined && showParams.map((g) => <input key={g} type="hidden" name="show" value={g} />)}
+              <input
+                type="date"
+                name="date"
+                defaultValue={dateParam ?? fmtDayParam(today)}
+                aria-label="Jump to date"
+                className="rounded-md border border-neutral-300 bg-white px-2 py-[5px] text-sm text-neutral-700"
+              />
+              <button type="submit" className={NAV_LINK_CLASS}>
+                Go
+              </button>
+            </form>
           </div>
         }
       />
