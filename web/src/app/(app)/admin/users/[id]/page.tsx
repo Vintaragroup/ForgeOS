@@ -61,6 +61,19 @@ export default async function AdminUserDetailPage(props: PageProps<"/admin/users
             defaultValue={user.departmentCode ?? ""}
             options={[{ value: "", label: "Unassigned" }, ...departments.map((d) => ({ value: d.code, label: d.name }))]}
           />
+          <label className="flex items-center gap-2 text-sm text-neutral-700">
+            <input
+              type="checkbox"
+              name="isDepartmentHead"
+              defaultChecked={user.isDepartmentHead}
+              className="h-4 w-4 rounded border-neutral-300"
+            />
+            Department head
+          </label>
+          <p className="-mt-2 text-xs text-neutral-500">
+            Gates whole-department oversight views (a dashboard&apos;s &ldquo;Department&rdquo; mode, its Analytics view) --
+            everyday access to that department&apos;s own work is unaffected either way.
+          </p>
           <div>
             <Button>Save changes</Button>
           </div>

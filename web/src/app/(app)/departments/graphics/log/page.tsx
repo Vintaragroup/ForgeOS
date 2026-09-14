@@ -2,11 +2,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
-import { getGraphicsOrders, type GraphicsOrder } from "@/lib/artwork-hub";
+import { getGraphicsOrders } from "@/lib/artwork-hub";
+import { STATUS_GROUPS, clientLabelOf, getGraphicsBreakdowns } from "@/lib/graphics-breakdowns";
 import { PageHeader, Card, StatusChip, EmptyState, SelectField, Button } from "@/components/ui";
 import { OrderIdentity } from "@/components/artwork-order-identity";
-import { BarBreakdown, type BarBreakdownRow } from "@/components/bar-breakdown";
-import type { ArtworkOrderStatus } from "@/generated/prisma/enums";
+import { BarBreakdown } from "@/components/bar-breakdown";
 
 // Same "always fresh" reasoning as the Graphics landing dashboard this page
 // was split out of.
@@ -24,40 +24,6 @@ const PRODUCTION_LOG_STATUS_TONE: Record<string, "neutral" | "info" | "warning" 
   DELIVERED_AT_SHOW: "good",
   PACKAGED_READY: "good",
 };
-
-// Buckets the pipeline's 23 raw statuses into 6 stages a human actually
-// thinks in -- the raw enum is unreadable as a chart with that many bars.
-// Purely a navigation grouping for the chart below; the exact-status
-// dropdown in the filter form still exists for picking one precise value.
-const STATUS_GROUPS: Record<string, { label: string; statuses: ArtworkOrderStatus[] }> = {
-  review: { label: "In review", statuses: ["INVITED", "ORDER_DRAFTED", "SUBMITTED", "UNDER_ART_REVIEW", "REJECTED"] },
-  proofing: {
-    label: "Proofing",
-    statuses: [
-      "ACCEPTED",
-      "VENDOR_ASSIGNED",
-      "PROOF_IN_PROGRESS",
-      "PROOF_SUBMITTED",
-      "EXPO_PROOF_CHECK",
-      "PROOF_REVISION_REQUESTED",
-      "ESCALATED",
-      "PROOF_UNDER_REVIEW",
-      "PROOF_APPROVED",
-    ],
-  },
-  production: {
-    label: "In production",
-    statuses: ["PRODUCTION_GO_AHEAD", "IN_PRODUCTION", "RECEIVED_FROM_VENDOR", "INSPECTED", "REPRINT_REQUESTED"],
-  },
-  shipped: { label: "Packed & shipped", statuses: ["PACKAGED_READY", "SHIPPED_TO_SHOW"] },
-  delivered: { label: "Delivered", statuses: ["DELIVERED_AT_SHOW"] },
-  cancelled: { label: "Cancelled", statuses: ["CANCELLED"] },
-};
-
-// How many rows the Vendor/Client breakdown charts show before truncating
-// -- these lists can run long (dozens of clients), and a chart with that
-// many bars stops being scannable at a glance.
-const TOP_N = 8;
 
 export default async function GraphicsProductionLogPage({
   searchParams,
@@ -85,14 +51,13 @@ export default async function GraphicsProductionLogPage({
 
   const orders = await getGraphicsOrders(user);
 
-  const clientLabel = (o: GraphicsOrder) => (o.opportunity ? o.opportunity.company.name : "PGA Hub");
-  const distinctClients = [...new Set(orders.map(clientLabel))].sort();
+  const distinctClients = [...new Set(orders.map(clientLabelOf))].sort();
   const distinctVendors = [...new Set(orders.flatMap((o) => (o.vendor ? [o.vendor.name] : [])))].sort();
   const distinctMaterials = [...new Set(orders.flatMap((o) => (o.material ? [o.material] : [])))].sort();
   const distinctStatuses = [...new Set(orders.map((o) => o.status))].sort();
 
   const productionLogOrders = orders.filter((o) => {
-    if (logClient && clientLabel(o) !== logClient) return false;
+    if (logClient && clientLabelOf(o) !== logClient) return false;
     if (logStatus && o.status !== logStatus) return false;
     if (logStatusGroup && !(STATUS_GROUPS[logStatusGroup]?.statuses.includes(o.status) ?? false)) return false;
     if (logVendor && o.vendor?.name !== logVendor) return false;
@@ -105,34 +70,16 @@ export default async function GraphicsProductionLogPage({
   // whatever's already filtered. Every row's own href replaces the filter
   // entirely (a fresh "show me all of X"), rather than merging with
   // whatever's currently applied.
-  const statusGroupRows: BarBreakdownRow[] = Object.entries(STATUS_GROUPS).map(([key, group]) => ({
-    label: group.label,
-    count: orders.filter((o) => group.statuses.includes(o.status)).length,
-    href: `/departments/graphics/log?logStatusGroup=${key}`,
-  }));
-
-  function topNRows(counts: Map<string, number>, param: string): BarBreakdownRow[] {
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, TOP_N)
-      .map(([label, count]) => ({ label, count, href: `/departments/graphics/log?${param}=${encodeURIComponent(label)}` }));
-  }
-
-  const vendorCounts = new Map<string, number>();
-  for (const o of orders) {
-    const key = o.vendor?.name ?? "No vendor assigned";
-    vendorCounts.set(key, (vendorCounts.get(key) ?? 0) + 1);
-  }
-  const vendorRows = topNRows(vendorCounts, "logVendor");
-
-  const clientCounts = new Map<string, number>();
-  for (const o of orders) {
-    const key = clientLabel(o);
-    clientCounts.set(key, (clientCounts.get(key) ?? 0) + 1);
-  }
-  const clientRows = topNRows(clientCounts, "logClient");
+  const { statusGroupRows, vendorRows, clientRows } = getGraphicsBreakdowns(orders);
 
   const hasActiveFilter = Boolean(logClient || logStatus || logStatusGroup || logVendor || logMaterial);
+  const exportQuery = new URLSearchParams();
+  if (logClient) exportQuery.set("logClient", logClient);
+  if (logStatus) exportQuery.set("logStatus", logStatus);
+  if (logStatusGroup) exportQuery.set("logStatusGroup", logStatusGroup);
+  if (logVendor) exportQuery.set("logVendor", logVendor);
+  if (logMaterial) exportQuery.set("logMaterial", logMaterial);
+  const exportHref = `/departments/graphics/log/export${exportQuery.toString() ? `?${exportQuery}` : ""}`;
 
   return (
     <>
@@ -147,9 +94,14 @@ export default async function GraphicsProductionLogPage({
         </Card>
 
         <Card className="p-5">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Production log ({productionLogOrders.length} of {orders.length})
-          </h2>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
+              Production log ({productionLogOrders.length} of {orders.length})
+            </h2>
+            <Link href={exportHref} className="text-sm font-medium text-neutral-600 hover:underline">
+              Export CSV{hasActiveFilter ? " (filtered)" : ""} →
+            </Link>
+          </div>
           <form method="get" className="mb-4 flex flex-wrap items-end gap-3">
             <div className="min-w-48">
               <SelectField

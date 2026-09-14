@@ -22,3 +22,21 @@ export interface DepartmentUser {
 export function canAccessArtworkOrdersViaDepartment(user: DepartmentUser): boolean {
   return user.departmentCode === "GR";
 }
+
+export interface OversightUser extends DepartmentUser {
+  isDepartmentHead: boolean;
+  systemRole: "SUPER_ADMIN" | "ADMIN" | "EMPLOYEE";
+}
+
+// A narrower grant than canAccessArtworkOrdersViaDepartment above --
+// everyday operational access (working any piece, covering for a teammate)
+// stays department-wide for every GR member, unchanged. This gates only the
+// aggregate, whole-department VIEWS (the dashboard's "Department" toggle,
+// the Analytics page) to an admin or a user this department has actually
+// designated as a head via User.isDepartmentHead -- "person or persons
+// overseeing the department," not "anyone who happens to work in it." See
+// User.isDepartmentHead's own schema comment.
+export function canViewDepartmentOversight(user: OversightUser): boolean {
+  const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
+  return isAdmin || (canAccessArtworkOrdersViaDepartment(user) && user.isDepartmentHead);
+}

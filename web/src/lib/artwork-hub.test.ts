@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { getMyClientGraphicsSummary, rolloverShow } from "@/lib/artwork-hub";
+import { getMyClientGraphicsSummary, getWeeklyDeliveredCounts, rolloverShow } from "@/lib/artwork-hub";
 
 const EXPO_ACTOR = { type: "EXPO" as const, userId: "user-1" };
 
@@ -64,7 +64,7 @@ describe("getMyClientGraphicsSummary", () => {
     expect(summary[0]).toMatchObject({ totalPieces: 3, artReceivedCount: 1 });
   });
 
-  it("excludes an opportunity where the caller isn't the assigned sales rep", async () => {
+  it("excludes an opportunity where the caller isn't the assigned sales rep or owner", async () => {
     const ae = await makeUser("ae3@test.com");
     const someoneElse = await makeUser("someone3@test.com");
     const company = await db.company.create({ data: { name: "Test Co 3" } });
@@ -75,6 +75,20 @@ describe("getMyClientGraphicsSummary", () => {
 
     const summary = await getMyClientGraphicsSummary({ id: ae.id });
     expect(summary).toHaveLength(0);
+  });
+
+  it("returns a client's graphics summary for a PM who is only the opportunity owner, not the sales rep", async () => {
+    const pm = await makeUser("pm@test.com");
+    const salesRep = await makeUser("salesrep@test.com");
+    const company = await db.company.create({ data: { name: "Test Co PM" } });
+    const opportunity = await db.opportunity.create({
+      data: { companyId: company.id, showName: "Test Show PM", ownerId: pm.id, salesRepId: salesRep.id, stage: "WON" },
+    });
+    await makeArtworkOrder(opportunity.id, "SUBMITTED");
+
+    const summary = await getMyClientGraphicsSummary({ id: pm.id });
+    expect(summary).toHaveLength(1);
+    expect(summary[0]).toMatchObject({ opportunityId: opportunity.id, companyName: "Test Co PM" });
   });
 
   it("excludes an opportunity with no artwork orders yet", async () => {
@@ -176,5 +190,64 @@ describe("rolloverShow", () => {
 
     const pieces = await db.artworkOrder.findMany({ where: { opportunityId: existingTargetOpp.id } });
     expect(pieces).toHaveLength(2);
+  });
+});
+
+describe("getWeeklyDeliveredCounts", () => {
+  const grUser = { id: "gr-user", systemRole: "EMPLOYEE" as const, departmentCode: "GR" };
+
+  async function makeDeliveredEvent(createdAt: Date) {
+    const company = await db.company.create({ data: { name: `Co ${Math.random()}` } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+    jobCodeCounter += 1;
+    const order = await db.artworkOrder.create({
+      data: { opportunityId: opportunity.id, status: "DELIVERED_AT_SHOW", jobCode: `TEST-${jobCodeCounter}` },
+    });
+    await db.artworkOrderEvent.create({
+      data: {
+        artworkOrderId: order.id,
+        toStatus: "DELIVERED_AT_SHOW",
+        action: "DELIVERED",
+        actorType: "EXPO",
+        createdAt,
+      },
+    });
+  }
+
+  it("returns exactly `weeks` buckets, oldest first, with the current week last", async () => {
+    const buckets = await getWeeklyDeliveredCounts(grUser, 4);
+    expect(buckets).toHaveLength(4);
+    expect(buckets.every((b) => b.count === 0)).toBe(true);
+    for (let i = 1; i < buckets.length; i++) {
+      expect(buckets[i].weekStart.getTime()).toBeGreaterThan(buckets[i - 1].weekStart.getTime());
+    }
+  });
+
+  it("counts a delivery from the current, still-in-progress week -- not silently dropped", async () => {
+    await makeDeliveredEvent(new Date());
+
+    const buckets = await getWeeklyDeliveredCounts(grUser, 4);
+    const total = buckets.reduce((sum, b) => sum + b.count, 0);
+    expect(total).toBe(1);
+    expect(buckets[buckets.length - 1].count).toBe(1);
+  });
+
+  it("buckets an older delivery into the correct earlier week", async () => {
+    const threeWeeksAgo = new Date(Date.now() - 3 * 7 * 24 * 60 * 60 * 1000);
+    await makeDeliveredEvent(threeWeeksAgo);
+
+    const buckets = await getWeeklyDeliveredCounts(grUser, 6);
+    const total = buckets.reduce((sum, b) => sum + b.count, 0);
+    expect(total).toBe(1);
+    // Not in the current (last) bucket -- it actually landed a few weeks back.
+    expect(buckets[buckets.length - 1].count).toBe(0);
+  });
+
+  it("ignores events outside the requested window", async () => {
+    const wayBack = new Date(Date.now() - 52 * 7 * 24 * 60 * 60 * 1000);
+    await makeDeliveredEvent(wayBack);
+
+    const buckets = await getWeeklyDeliveredCounts(grUser, 4);
+    expect(buckets.reduce((sum, b) => sum + b.count, 0)).toBe(0);
   });
 });

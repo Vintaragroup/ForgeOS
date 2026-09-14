@@ -90,6 +90,17 @@ model User {
   department        String?
   departmentCode    String?
   departmentRef     Department? @relation(fields: [departmentCode], references: [code])
+  // Oversight of the WHOLE department (department-wide dashboards, the
+  // Analytics view) is restricted to designated head(s), not open to every
+  // member of the department -- see department-access.ts's
+  // canViewDepartmentOversight. Deliberately a plain boolean rather than a
+  // join table: "person or persons" just means any number of users in a
+  // department can carry it, no separate model needed. Distinct from
+  // departmentCode's own existing grant (canAccessArtworkOrdersViaDepartment),
+  // which is everyday operational access and stays unchanged by this field
+  // -- a regular department member can still work any piece, they just
+  // don't get the aggregate oversight view.
+  isDepartmentHead  Boolean     @default(false)
   systemRole        SystemRole  @default(EMPLOYEE)
   // scrypt "salt:hash" pair, set via `npm run set-password` -- never through
   // a web form, so there is no unauthenticated password-set endpoint. Null

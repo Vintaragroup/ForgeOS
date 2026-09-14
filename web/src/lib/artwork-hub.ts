@@ -25,22 +25,26 @@ export interface ClientGraphicsSummary {
   artReceivedCount: number;
 }
 
-// "My clients" for an Account Executive -- filters directly on
-// Opportunity.salesRepId === user.id, completely independent of
-// opportunityAccessWhere (see this file's own header comment and
-// ArtworkOrder.designerId's schema-adjacent discussion: salesRepId is
-// deliberately never used for the owner/collaborator access axis, only
-// for commission math and now this summary). Mirrors getTasksForUser's
-// own `mineOnly` pattern (src/lib/tasks.ts) -- an AE sees their assigned
-// clients' graphics even on an opportunity they don't own or collaborate
-// on. Read-only: no drill-in to the restricted /artwork/[id] page, same
-// as the source spreadsheet's own "Account Executive Dashboard" tab,
-// which is itself just a rollup with no per-piece links either.
+// "My clients" for an Account Executive OR a PM/deal owner -- filters on
+// Opportunity.salesRepId === user.id OR ownerId === user.id, completely
+// independent of opportunityAccessWhere (see this file's own header
+// comment and ArtworkOrder.designerId's schema-adjacent discussion:
+// salesRepId is deliberately never used for the owner/collaborator access
+// axis, only for commission math and now this summary). Widened to also
+// match ownerId (the Graphics Dashboard v2 plan's own "PM" role) rather
+// than building a second, separate rollup -- same restriction either way:
+// only opportunities THIS user is personally assigned to, never
+// department-wide. Mirrors getTasksForUser's own `mineOnly` pattern
+// (src/lib/tasks.ts) -- either role sees their assigned clients' graphics
+// even on an opportunity they don't otherwise own/collaborate on via that
+// separate axis. Read-only: no drill-in to the restricted /artwork/[id]
+// page, same as the source spreadsheet's own "Account Executive Dashboard"
+// tab, which is itself just a rollup with no per-piece links either.
 export async function getMyClientGraphicsSummary(user: { id: string }): Promise<ClientGraphicsSummary[]> {
   const opportunities = await db.opportunity.findMany({
     where: {
       deletedAt: null,
-      salesRepId: user.id,
+      OR: [{ salesRepId: user.id }, { ownerId: user.id }],
       artworkOrders: { some: { deletedAt: null } },
     },
     select: {
@@ -88,6 +92,72 @@ export async function getGraphicsOrders(user: { id: string; systemRole: SystemRo
 }
 
 export type GraphicsOrder = Awaited<ReturnType<typeof getGraphicsOrders>>[number];
+
+export interface WeeklyDeliveredCount {
+  weekStart: Date;
+  count: number;
+}
+
+// Throughput trend for the Department-mode dashboard's sparkline and the
+// Analytics view's fuller chart -- "pieces actually delivered per week,"
+// not a point-in-time snapshot like the status/vendor/client breakdowns
+// above. Reads ArtworkOrderEvent (the audit trail), not
+// ArtworkOrder.updatedAt, since updatedAt can move for reasons unrelated to
+// delivery (a later field edit) -- the event's own createdAt is the actual
+// moment the order transitioned to DELIVERED_AT_SHOW, matching how
+// artwork-hub's own rejectedEvents logic (departments/graphics/page.tsx)
+// already prefers the event trail over updatedAt for the same reason.
+// weeks buckets are Sunday-start, oldest first, always `weeks` entries long
+// even if some weeks had zero deliveries (a real gap in the trend, not a
+// missing data point).
+export async function getWeeklyDeliveredCounts(
+  user: { id: string; systemRole: SystemRole; departmentCode: string | null },
+  weeks: number,
+): Promise<WeeklyDeliveredCount[]> {
+  const now = new Date();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const rangeStart = new Date(now.getTime() - weeks * 7 * DAY_MS);
+
+  const events = await db.artworkOrderEvent.findMany({
+    where: {
+      toStatus: "DELIVERED_AT_SHOW",
+      createdAt: { gte: rangeStart },
+      artworkOrder: {
+        deletedAt: null,
+        ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }),
+      },
+    },
+    select: { createdAt: true },
+  });
+
+  // Sunday of the current week, at local midnight -- the anchor every
+  // bucket's own start is computed backward from, so "this week" is always
+  // the last bucket regardless of what day `now` falls on.
+  const currentWeekStart = new Date(now);
+  currentWeekStart.setHours(0, 0, 0, 0);
+  currentWeekStart.setDate(currentWeekStart.getDate() - currentWeekStart.getDay());
+
+  const buckets: WeeklyDeliveredCount[] = [];
+  for (let i = weeks - 1; i >= 0; i--) {
+    const weekStart = new Date(currentWeekStart);
+    weekStart.setDate(weekStart.getDate() - i * 7);
+    buckets.push({ weekStart, count: 0 });
+  }
+
+  // Direct range membership per event, not an arithmetic offset -- the
+  // offset version got this wrong for the in-progress current week (a
+  // createdAt after currentWeekStart makes that subtraction negative,
+  // which floors toward -Infinity and lands one bucket past the end of the
+  // array, silently dropping every delivery from the current week).
+  for (const event of events) {
+    const bucket = buckets.find(
+      (b) => event.createdAt >= b.weekStart && event.createdAt.getTime() < b.weekStart.getTime() + 7 * DAY_MS,
+    );
+    if (bucket) bucket.count += 1;
+  }
+
+  return buckets;
+}
 
 export interface RolloverShowResult {
   opportunitiesCreated: number;

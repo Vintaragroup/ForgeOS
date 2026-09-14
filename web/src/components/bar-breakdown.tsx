@@ -9,7 +9,12 @@ import Link from "next/link";
 export interface BarBreakdownRow {
   label: string;
   count: number;
-  href: string;
+  // Omit for a row with no real drill-down target (e.g. the Analytics
+  // view's revision-rounds/existing-vs-new splits, which have no matching
+  // Production Log filter to jump to) -- rendered as a plain non-clickable
+  // row rather than a Link to somewhere that wouldn't actually filter
+  // anything.
+  href?: string;
 }
 
 export function BarBreakdown({
@@ -29,25 +34,38 @@ export function BarBreakdown({
         <p className="text-sm text-neutral-400">{emptyMessage ?? "No data."}</p>
       ) : (
         <ul className="flex flex-col gap-1.5">
-          {rows.map((row) => (
-            <li key={row.label}>
-              <Link
-                href={row.href}
-                className="relative flex items-center justify-between overflow-hidden rounded-md border border-neutral-200 px-2.5 py-1.5 text-sm hover:border-neutral-400"
-              >
-                {/* Bar fill sits behind the text via z-index stacking, not
-                    layout -- the label/count are always fully readable
-                    regardless of bar length, even at the shortest bars. */}
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-y-0 left-0 bg-brand-teal-pale"
-                  style={{ width: `${Math.max((row.count / max) * 100, 4)}%` }}
-                />
+          {rows.map((row) => {
+            const barFill = (
+              <span
+                aria-hidden="true"
+                className="absolute inset-y-0 left-0 bg-brand-teal-pale"
+                style={{ width: `${Math.max((row.count / max) * 100, 4)}%` }}
+              />
+            );
+            const inner = (
+              <>
+                {barFill}
                 <span className="relative truncate pr-2 font-medium text-neutral-800">{row.label}</span>
                 <span className="relative shrink-0 tabular-nums text-neutral-500">{row.count}</span>
-              </Link>
-            </li>
-          ))}
+              </>
+            );
+            return (
+              <li key={row.label}>
+                {row.href ? (
+                  <Link
+                    href={row.href}
+                    className="relative flex items-center justify-between overflow-hidden rounded-md border border-neutral-200 px-2.5 py-1.5 text-sm hover:border-neutral-400"
+                  >
+                    {inner}
+                  </Link>
+                ) : (
+                  <div className="relative flex items-center justify-between overflow-hidden rounded-md border border-neutral-200 px-2.5 py-1.5 text-sm">
+                    {inner}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

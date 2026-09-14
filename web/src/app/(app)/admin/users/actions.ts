@@ -68,6 +68,7 @@ export async function updateUserProfile(id: string, formData: FormData) {
       name,
       role: emptyToNull(formData.get("role")),
       departmentCode: emptyToNull(formData.get("departmentCode")),
+      isDepartmentHead: formData.get("isDepartmentHead") === "on",
     },
   });
 
