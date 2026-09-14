@@ -158,6 +158,14 @@
   --dash-chip-info-text: #8a5a05;
   --dash-chip-neutral-bg: #eeeeef;
   --dash-chip-neutral-text: var(--dash-text-soft);
+  /* Navy-tinted variant -- the calendar's own "info" tone (OPPORTUNITY
+     dates, tone: "info") is navy-based on /calendar's TONE_PILL, distinct
+     from this dashboard's tangerine-based dash-chip-info (which matches
+     the calendar's "warning" tone instead). Kept as its own token pair
+     rather than reusing dash-chip-info, so the dashboard's calendar
+     widget can actually match /calendar's own color-per-type coding. */
+  --dash-chip-accent-bg: rgba(0, 27, 108, 0.08);
+  --dash-chip-accent-text: var(--dash-navy);
 
   --dash-shadow: 0 1px 2px rgba(24, 23, 19, 0.04), 0 8px 24px rgba(24, 23, 19, 0.06);
   --dash-dot-opacity: 0.07;
@@ -190,6 +198,8 @@
   --dash-chip-info-text: #ffcf7a;
   --dash-chip-neutral-bg: rgba(255, 255, 255, 0.06);
   --dash-chip-neutral-text: var(--dash-text-soft);
+  --dash-chip-accent-bg: rgba(123, 147, 255, 0.16);
+  --dash-chip-accent-text: var(--dash-navy);
 
   --dash-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   --dash-dot-opacity: 0.14;
@@ -489,6 +499,12 @@
 .dash-row:last-child { border-bottom: none; }
 .dash-row:is(a):hover { background: var(--dash-bg); }
 .dash-row-title { font-weight: 600; font-size: 0.90625rem; }
+/* Spacing when a dash-chip sits directly under a row title -- the
+   dashboard's calendar widget uses a tone-colored chip in place of the
+   plain dash-row-sub text other rows use, and the chip's own padding
+   needs a touch more breathing room above it than dash-row-sub's plain
+   text did. */
+.dash-row-title + .dash-chip { display: inline-block; margin-top: 0.3125rem; }
 .dash-row-sub { font-size: 0.8125rem; color: var(--dash-text-soft); margin-top: 0.125rem; }
 .dash-row-date { font-size: 0.8125rem; color: var(--dash-text-soft); white-space: nowrap; }
 
@@ -504,6 +520,7 @@
 .dash-chip.dash-good { background: var(--dash-chip-good-bg); color: var(--dash-chip-good-text); }
 .dash-chip.dash-info { background: var(--dash-chip-info-bg); color: var(--dash-chip-info-text); }
 .dash-chip.dash-neutral { background: var(--dash-chip-neutral-bg); color: var(--dash-chip-neutral-text); }
+.dash-chip.dash-accent { background: var(--dash-chip-accent-bg); color: var(--dash-chip-accent-text); }
 
 /* admin overview */
 

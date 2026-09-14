@@ -15,6 +15,7 @@ import {
 } from "@/lib/calendar";
 import { hasActiveCalendarFeedToken } from "@/lib/calendar-feed";
 import { PageHeader, Card, Field, SelectField, Button } from "@/components/ui";
+import { SubmitButton } from "@/components/submit-button";
 import { CopyLinkBanner } from "@/components/copy-link-banner";
 import { createCalendarEventAction, deleteCalendarEventAction, issueCalendarFeedTokenAction } from "./actions";
 
@@ -400,7 +401,7 @@ export default async function CalendarPage({
                   return (
                   <li key={item.id} className="flex items-start justify-between gap-2 text-sm">
                     <div className="min-w-0">
-                      <Link href={item.href} className="block truncate font-medium text-neutral-900 hover:underline">
+                      <Link href={item.href} className="link-underline block truncate font-medium text-neutral-900">
                         {item.title}
                       </Link>
                       <div className="text-xs text-neutral-500">
@@ -477,7 +478,9 @@ export default async function CalendarPage({
                   { value: "MONTHLY", label: "Monthly" },
                 ]}
               />
-              <Button>Add to calendar</Button>
+              <SubmitButton variant="primary" pendingText="Adding…">
+                Add to calendar
+              </SubmitButton>
             </form>
           </Card>
         </div>

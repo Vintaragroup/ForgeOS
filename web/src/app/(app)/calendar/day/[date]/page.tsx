@@ -3,7 +3,8 @@ import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getCalendarItems, isOverdueItem, utcAddDays, utcToday, CALENDAR_ITEM_TYPE_LABELS, type CalendarItem, type CalendarItemTone } from "@/lib/calendar";
-import { PageHeader, Card, Field, SelectField, Button } from "@/components/ui";
+import { PageHeader, Card, Field, SelectField } from "@/components/ui";
+import { SubmitButton } from "@/components/submit-button";
 import { createCalendarEventAction, updateCalendarEventAction, deleteCalendarEventAction } from "../../actions";
 
 export const dynamic = "force-dynamic";
@@ -136,7 +137,7 @@ export default async function CalendarDayPage({
                       <span className={`mr-2 inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${TONE_PILL[item.tone]}`}>
                         {CALENDAR_ITEM_TYPE_LABELS[item.type]}
                       </span>
-                      <Link href={item.href} className="font-medium text-neutral-900 hover:underline">
+                      <Link href={item.href} className="link-underline font-medium text-neutral-900">
                         {item.title}
                       </Link>
                       {overdue && (
@@ -180,7 +181,9 @@ export default async function CalendarDayPage({
               ]}
             />
             <SelectField label="Repeats" name="recurrence" defaultValue="NONE" options={RECURRENCE_OPTIONS} />
-            <Button>Add to calendar</Button>
+            <SubmitButton variant="primary" pendingText="Adding…">
+              Add to calendar
+            </SubmitButton>
           </form>
         </Card>
       </div>
@@ -219,7 +222,9 @@ function EditNoteForm({
         />
         <SelectField label="Repeats" name="recurrence" defaultValue={event.recurrence} options={RECURRENCE_OPTIONS} />
         <div className="flex items-center gap-2">
-          <Button>Save changes</Button>
+          <SubmitButton variant="primary" pendingText="Saving…">
+            Save changes
+          </SubmitButton>
           <Link href={`/calendar/day/${dayKeyStr}`} className="text-sm text-neutral-500 hover:underline">
             Cancel
           </Link>

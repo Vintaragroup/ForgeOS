@@ -2,7 +2,15 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getDashboardData, type UpcomingDeadline } from "@/lib/dashboard";
 import { getAdminAnalytics, getRecentAnalysisFailures } from "@/lib/admin-analytics";
-import { getUpcomingWithOverdue, isOverdueItem, utcToday, CALENDAR_ITEM_TYPE_LABELS, WORK_ORDER_ITEM_TYPES, RFP_ITEM_TYPES } from "@/lib/calendar";
+import {
+  getUpcomingWithOverdue,
+  isOverdueItem,
+  utcToday,
+  CALENDAR_ITEM_TYPE_LABELS,
+  WORK_ORDER_ITEM_TYPES,
+  RFP_ITEM_TYPES,
+  type CalendarItemTone,
+} from "@/lib/calendar";
 import { getTasksForUser } from "@/lib/tasks";
 import { getCurrentUser } from "@/lib/auth";
 import { DEPARTMENT_HOME } from "@/lib/department-home";
@@ -12,6 +20,20 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { CLOSE_REASON_LABELS } from "@/components/stage-change-fields";
 
 export const dynamic = "force-dynamic";
+
+// Maps a CalendarItem's tone (the same vocabulary /calendar's own
+// TONE_PILL uses) to one of this dashboard's dash-chip color variants --
+// "warning" reuses dash-info (tangerine/tan) since that's the dash system's
+// only amber slot; "info" gets its own dash-accent (navy) variant instead
+// of colliding with it, since /calendar's "info" tone is navy-based, not
+// tangerine-based.
+const DASH_CHIP_TONE: Record<CalendarItemTone, string> = {
+  neutral: "dash-neutral",
+  info: "dash-accent",
+  warning: "dash-info",
+  good: "dash-good",
+  critical: "dash-critical",
+};
 
 const STAGE_LABELS: Record<string, string> = {
   NEW: "New",
@@ -234,7 +256,7 @@ export default async function DashboardPage() {
                 <Link key={item.id} href={item.href} className="dash-row" style={{ color: "inherit", textDecoration: "none" }}>
                   <div>
                     <div className="dash-row-title">{item.title}</div>
-                    <div className="dash-row-sub">{CALENDAR_ITEM_TYPE_LABELS[item.type]}</div>
+                    <span className={`dash-chip ${DASH_CHIP_TONE[item.tone]}`}>{CALENDAR_ITEM_TYPE_LABELS[item.type]}</span>
                   </div>
                   {isOverdueItem(item, calendarToday) ? (
                     <span className="dash-chip dash-critical">Overdue — {fmtDate(item.dateStart)}</span>
