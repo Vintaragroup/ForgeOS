@@ -12,7 +12,7 @@ import {
 import { PageHeader, Card, Stat, StatusChip, EmptyState, SelectField, Field, Button } from "@/components/ui";
 import { CompanyFieldWithCreate } from "@/components/company-field-with-create";
 import { OrderIdentity } from "@/components/artwork-order-identity";
-import { getMyClientGraphicsSummary } from "@/lib/artwork-hub";
+import { getMyClientGraphicsSummary, getGraphicsOrders } from "@/lib/artwork-hub";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
 // generic Artwork review queue this page is a Graphics-specific front door
@@ -29,34 +29,15 @@ const UPCOMING_SHOW_WINDOW_DAYS = 14;
 const STALLED_REJECTION_DAYS = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Tone map for the Production Log table's status chip -- every status not
-// listed here (the bulk of the pipeline's mid-proof states) reads as
-// neutral, which is the right default for "just moving through the normal
-// steps, nothing to flag."
-const PRODUCTION_LOG_STATUS_TONE: Record<string, "neutral" | "info" | "warning" | "good" | "critical"> = {
-  ESCALATED: "critical",
-  CANCELLED: "critical",
-  REJECTED: "warning",
-  REPRINT_REQUESTED: "warning",
-  DELIVERED_AT_SHOW: "good",
-  PACKAGED_READY: "good",
-};
-
 export default async function GraphicsHomePage({
   searchParams,
 }: {
-  searchParams: Promise<{
-    opportunityId?: string;
-    logClient?: string;
-    logStatus?: string;
-    logVendor?: string;
-    logMaterial?: string;
-  }>;
+  searchParams: Promise<{ opportunityId?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const { opportunityId: selectedOpportunityId, logClient, logStatus, logVendor, logMaterial } = await searchParams;
+  const { opportunityId: selectedOpportunityId } = await searchParams;
   const isGrDept = canAccessArtworkOrdersViaDepartment(user);
 
   // Gates "Onboard a new client" below -- matches
@@ -187,26 +168,10 @@ export default async function GraphicsHomePage({
       : Promise.resolve([]),
   ]);
 
-  // Same query artwork/page.tsx uses, including the department-wide
-  // widening (a Graphics user sees every ArtworkOrder, not just ones on
-  // opportunities they own/collaborate on) -- reused rather than
-  // reinvented since this page is a Graphics-specific front door onto the
-  // exact same queue, not a different data set.
-  const orders = await db.artworkOrder.findMany({
-    where: {
-      deletedAt: null,
-      ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }),
-    },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      opportunity: { include: { company: true, show: { select: { id: true, name: true } } } },
-      // Only set for a Hub/hanging-sign piece with no opportunity -- see
-      // ArtworkOrder.showId's schema comment.
-      show: { select: { id: true, name: true, eventStartDate: true } },
-      vendor: { select: { name: true } },
-      designer: { select: { name: true } },
-    },
-  });
+  // Shared with the Production Log page (departments/graphics/log/page.tsx)
+  // -- same department-wide widening for a GR user, one query definition
+  // so the two pages' data can't silently drift apart.
+  const orders = await getGraphicsOrders(user);
 
   // Both Show pickers below default to it when there's exactly one show in
   // the system -- nothing to disambiguate yet, so don't make every single
@@ -267,26 +232,9 @@ export default async function GraphicsHomePage({
     .filter(({ rejectedAt }) => now.getTime() - rejectedAt.getTime() >= STALLED_REJECTION_DAYS * DAY_MS)
     .sort((a, b) => a.rejectedAt.getTime() - b.rejectedAt.getTime());
 
-  // Production log: a full, filterable view of every graphic piece --
-  // distinct from the action-oriented triage buckets above (escalated/
-  // upcoming/stalled), this is the department's own running list, the
-  // direct replacement for the spreadsheet's own "Graphics Log" master
-  // tab. Reuses the `orders` fetch already made above rather than a
-  // second query -- filter option lists are derived from the actual data
-  // present, so a dropdown never offers a value that couldn't match
-  // anything.
-  const clientLabel = (o: (typeof orders)[number]) => (o.opportunity ? o.opportunity.company.name : "PGA Hub");
-  const distinctClients = [...new Set(orders.map(clientLabel))].sort();
-  const distinctVendors = [...new Set(orders.flatMap((o) => (o.vendor ? [o.vendor.name] : [])))].sort();
-  const distinctMaterials = [...new Set(orders.flatMap((o) => (o.material ? [o.material] : [])))].sort();
-  const distinctStatuses = [...new Set(orders.map((o) => o.status))].sort();
-  const productionLogOrders = orders.filter((o) => {
-    if (logClient && clientLabel(o) !== logClient) return false;
-    if (logStatus && o.status !== logStatus) return false;
-    if (logVendor && o.vendor?.name !== logVendor) return false;
-    if (logMaterial && o.material !== logMaterial) return false;
-    return true;
-  });
+  // In-flight count for the Production Log teaser card below -- everything
+  // not yet delivered or cancelled.
+  const inFlightLogCount = orders.filter((o) => o.status !== "DELIVERED_AT_SHOW" && o.status !== "CANCELLED").length;
 
   return (
     <>
@@ -529,96 +477,21 @@ export default async function GraphicsHomePage({
         </Card>
 
         <Card className="p-5">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            Production log ({productionLogOrders.length} of {orders.length})
-          </h2>
-          <form method="get" className="mb-4 flex flex-wrap items-end gap-3">
-            <div className="min-w-48">
-              <SelectField
-                label="Client"
-                name="logClient"
-                defaultValue={logClient ?? ""}
-                options={[{ value: "", label: "All clients" }, ...distinctClients.map((c) => ({ value: c, label: c }))]}
-              />
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">Production log</h2>
+              <p className="mt-1 text-sm text-neutral-600">
+                <span className="font-medium text-neutral-900">{orders.length}</span> pieces tracked,{" "}
+                <span className="font-medium text-neutral-900">{inFlightLogCount}</span> in flight.
+              </p>
             </div>
-            <div className="min-w-44">
-              <SelectField
-                label="Status"
-                name="logStatus"
-                defaultValue={logStatus ?? ""}
-                options={[
-                  { value: "", label: "All statuses" },
-                  ...distinctStatuses.map((s) => ({ value: s, label: s.replaceAll("_", " ") })),
-                ]}
-              />
-            </div>
-            <div className="min-w-40">
-              <SelectField
-                label="Vendor"
-                name="logVendor"
-                defaultValue={logVendor ?? ""}
-                options={[{ value: "", label: "All vendors" }, ...distinctVendors.map((v) => ({ value: v, label: v }))]}
-              />
-            </div>
-            <div className="min-w-48">
-              <SelectField
-                label="Material"
-                name="logMaterial"
-                defaultValue={logMaterial ?? ""}
-                options={[{ value: "", label: "All materials" }, ...distinctMaterials.map((m) => ({ value: m, label: m }))]}
-              />
-            </div>
-            <Button variant="secondary" type="submit">
-              Apply
-            </Button>
-            {(logClient || logStatus || logVendor || logMaterial) && (
-              <Link href="/departments/graphics" className="text-sm text-neutral-500 hover:underline">
-                Clear
-              </Link>
-            )}
-          </form>
-          {productionLogOrders.length === 0 ? (
-            <EmptyState message="No graphic pieces match these filters." />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-neutral-200 text-xs uppercase tracking-wide text-neutral-500">
-                    <th className="py-2 pr-3">Client</th>
-                    <th className="py-2 pr-3">Piece</th>
-                    <th className="py-2 pr-3">Material</th>
-                    <th className="py-2 pr-3">Vendor</th>
-                    <th className="py-2 pr-3">Status</th>
-                    <th className="py-2 pr-3">Art due</th>
-                    <th className="py-2 pr-3">Designer</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {productionLogOrders.map((order) => (
-                    <tr key={order.id} className="border-b border-neutral-100">
-                      <td className="py-2 pr-3">
-                        <Link href={`/artwork/${order.id}`} className="flex items-center gap-2 hover:underline">
-                          <OrderIdentity order={order} />
-                        </Link>
-                      </td>
-                      <td className="py-2 pr-3">{order.graphicCode ?? "—"}</td>
-                      <td className="py-2 pr-3">{order.material ?? "—"}</td>
-                      <td className="py-2 pr-3">{order.vendor?.name ?? "—"}</td>
-                      <td className="py-2 pr-3">
-                        <StatusChip tone={PRODUCTION_LOG_STATUS_TONE[order.status] ?? "neutral"}>
-                          {order.status.replaceAll("_", " ")}
-                        </StatusChip>
-                      </td>
-                      <td className="py-2 pr-3">
-                        {order.artDueDate ? order.artDueDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
-                      </td>
-                      <td className="py-2 pr-3">{order.designer?.name ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+            <Link
+              href="/departments/graphics/log"
+              className="rounded-md bg-brand-black px-4 py-2 text-sm font-medium text-white hover:bg-brand-navy"
+            >
+              View full production log →
+            </Link>
+          </div>
         </Card>
 
         <div className="flex flex-wrap gap-4 text-sm">

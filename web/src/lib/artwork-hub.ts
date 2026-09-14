@@ -4,7 +4,9 @@
 // separate scoping rule, not a widening of either.
 
 import { db } from "@/lib/db";
-import type { ArtworkOrderStatus } from "@/generated/prisma/enums";
+import type { ArtworkOrderStatus, SystemRole } from "@/generated/prisma/enums";
+import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
+import { opportunityAccessWhere } from "@/lib/opportunity-access";
 
 // A piece hasn't had its artwork received yet while it's still sitting in
 // the client's own hands -- INVITED (not even started) or ORDER_DRAFTED/
@@ -57,3 +59,31 @@ export async function getMyClientGraphicsSummary(user: { id: string }): Promise<
     artReceivedCount: o.artworkOrders.filter((a) => !ART_NOT_YET_RECEIVED_STATUSES.has(a.status)).length,
   }));
 }
+
+// Every non-deleted ArtworkOrder this user can see -- department-wide for a
+// GR user (or admin, via opportunityAccessWhere's own isAdmin bypass),
+// otherwise scoped to opportunities they own/collaborate on. Shared by the
+// Graphics landing dashboard (departments/graphics/page.tsx, for its
+// triage sections) and the Production Log page
+// (departments/graphics/log/page.tsx, for the full filterable table +
+// chart breakdowns) -- one query definition so the two pages' data can't
+// silently drift apart.
+export async function getGraphicsOrders(user: { id: string; systemRole: SystemRole; departmentCode: string | null }) {
+  return db.artworkOrder.findMany({
+    where: {
+      deletedAt: null,
+      ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }),
+    },
+    orderBy: { updatedAt: "desc" },
+    include: {
+      opportunity: { include: { company: true, show: { select: { id: true, name: true } } } },
+      // Only set for a Hub/hanging-sign piece with no opportunity -- see
+      // ArtworkOrder.showId's schema comment.
+      show: { select: { id: true, name: true, eventStartDate: true } },
+      vendor: { select: { name: true } },
+      designer: { select: { name: true } },
+    },
+  });
+}
+
+export type GraphicsOrder = Awaited<ReturnType<typeof getGraphicsOrders>>[number];
