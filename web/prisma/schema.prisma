@@ -2406,6 +2406,20 @@ enum CalendarEventVisibility {
   ORG
 }
 
+// Whole-series recurrence only -- one CalendarEvent row IS the series,
+// there is no per-occurrence exception/edit the way Google Calendar has
+// ("this event" vs "this and following" vs "all"). Editing or deleting a
+// recurring note always acts on the whole series. No stored end date --
+// repeats indefinitely, implicitly bounded by whatever range a given
+// view or the ICS feed actually queries (see calendar.ts's expansion
+// logic). Deliberately simple: this is a personal-reminder feature, not
+// a full calendar product.
+enum CalendarEventRecurrence {
+  NONE
+  WEEKLY
+  MONTHLY
+}
+
 // Freeform calendar entries for things with no existing home in the data
 // model (an internal meeting, a reminder) -- everything else on the
 // calendar (show dates, move-in/out, ship dates, WorkOrder milestones,
@@ -2422,6 +2436,7 @@ model CalendarEvent {
   dateEnd DateTime?
 
   visibility CalendarEventVisibility @default(PRIVATE)
+  recurrence CalendarEventRecurrence @default(NONE)
 
   createdByUserId String
   createdBy       User   @relation(fields: [createdByUserId], references: [id])

@@ -74,6 +74,31 @@ export const WORK_ORDER_ITEM_TYPES: readonly CalendarItemType[] = [
 // too. /calendar itself keeps every type.
 export const RFP_ITEM_TYPES: readonly CalendarItemType[] = ["RFP_DEADLINE", "RFP_MILESTONE"];
 
+// One shared definition of "what the /calendar filter checkboxes mean" --
+// the page (and anything else later) reads this rather than each
+// hardcoding its own grouping, so "Shows" or "Production" can't drift out
+// of sync between two places. calendar.test.ts asserts every
+// CalendarItemType appears in exactly one group, so a newly added type
+// can't silently fall through ungrouped.
+export const CALENDAR_FILTER_GROUPS: Record<string, { label: string; types: CalendarItemType[] }> = {
+  shows: { label: "Shows", types: ["OPPORTUNITY_EVENT_WINDOW", "OPPORTUNITY_MOVE_WINDOW", "OPPORTUNITY_SHIP_DATE"] },
+  production: { label: "Production", types: [...WORK_ORDER_ITEM_TYPES] },
+  tasks: { label: "Tasks", types: ["TASK_DUE"] },
+  artwork: { label: "Artwork", types: ["ARTWORK_SLA_DUE"] },
+  rfp: { label: "RFP", types: [...RFP_ITEM_TYPES] },
+  notes: { label: "Notes", types: ["CUSTOM"] },
+};
+
+// shownGroups === null means "no `show` param at all" -- unfiltered, show
+// everything. An empty (but non-null) Set is a real, reachable "show
+// nothing" state -- see the page's own comment on the __submitted__
+// marker for why that distinction needs an extra signal beyond plain
+// checkbox presence.
+export function isGroupShown(type: CalendarItemType, shownGroups: Set<string> | null): boolean {
+  if (shownGroups === null) return true;
+  return Object.entries(CALENDAR_FILTER_GROUPS).some(([key, group]) => group.types.includes(type) && shownGroups.has(key));
+}
+
 export interface CalendarItem {
   // Stable + unique across every source: `${type}:${sourceRowId}`.
   id: string;
@@ -115,6 +140,17 @@ export function utcToday(): Date {
 
 export function utcAddDays(d: Date, days: number): Date {
   return new Date(d.getTime() + days * 86_400_000);
+}
+
+const RECURRENCE_OCCURRENCE_CAP = 366;
+
+// Clamped "add one calendar month" -- Jan 31 + 1 month lands on the last
+// real day of February (28 or 29), not March 3.
+function utcAddMonthClamped(d: Date, months: number): Date {
+  const targetMonthIndex = d.getUTCMonth() + months;
+  const daysInTargetMonth = new Date(Date.UTC(d.getUTCFullYear(), targetMonthIndex + 1, 0)).getUTCDate();
+  const day = Math.min(d.getUTCDate(), daysInTargetMonth);
+  return new Date(Date.UTC(d.getUTCFullYear(), targetMonthIndex, day));
 }
 
 // Item kinds that represent a deadline someone owes work against --
@@ -223,14 +259,26 @@ export async function getCalendarItems(
       // gets its own OR bucket, combined with AND. A single where object
       // can't hold two different `OR` keys; the second would silently
       // clobber the first via last-write-wins on the duplicate key.
+      //
+      // A recurring row (recurrence !== NONE) always matches the first
+      // bucket regardless of its own date/dateEnd -- its occurrences are
+      // expanded and range-checked in JS below, so the SQL date filter
+      // isn't the right gate for it. Without this, a weekly note created
+      // in January would never even be fetched when viewing a July month.
       where: {
         deletedAt: null,
         AND: [
-          { OR: [{ date: { gte: rangeStart, lte: rangeEnd } }, { dateEnd: { gte: rangeStart, lte: rangeEnd } }] },
+          {
+            OR: [
+              { date: { gte: rangeStart, lte: rangeEnd } },
+              { dateEnd: { gte: rangeStart, lte: rangeEnd } },
+              { recurrence: { not: "NONE" } },
+            ],
+          },
           isAdmin(user) ? {} : { OR: [{ visibility: "ORG" as const }, { createdByUserId: user.id }] },
         ],
       },
-      select: { id: true, title: true, date: true, dateEnd: true, opportunityId: true, createdByUserId: true },
+      select: { id: true, title: true, date: true, dateEnd: true, opportunityId: true, createdByUserId: true, recurrence: true },
     }),
     // No date filter in SQL -- extractedSummary is JSON, same reasoning
     // dashboard.ts's own getDashboardData already has for its identical
@@ -345,17 +393,46 @@ export async function getCalendarItems(
   }
 
   for (const e of customEvents) {
-    items.push({
-      id: `CUSTOM:${e.id}`,
-      type: "CUSTOM",
-      title: e.title,
-      dateStart: e.date,
-      dateEnd: e.dateEnd ?? undefined,
-      href: `/calendar#event-${e.id}`,
-      tone: "neutral",
-      opportunityId: e.opportunityId ?? undefined,
-      ownerId: e.createdByUserId,
-    });
+    if (e.recurrence === "NONE") {
+      items.push({
+        id: `CUSTOM:${e.id}`,
+        type: "CUSTOM",
+        title: e.title,
+        dateStart: e.date,
+        dateEnd: e.dateEnd ?? undefined,
+        href: `/calendar#event-${e.id}`,
+        tone: "neutral",
+        opportunityId: e.opportunityId ?? undefined,
+        ownerId: e.createdByUserId,
+      });
+      continue;
+    }
+
+    // Recurrence and dateEnd are mutually exclusive (enforced in
+    // actions.ts), so every occurrence below is a point item. Forward-only
+    // stepping from the anchor date: naturally yields zero occurrences
+    // when the anchor is after rangeEnd (a future series viewed in a past
+    // range), and walks as far forward as needed -- capped for safety --
+    // when the anchor is old and rangeEnd is far out.
+    const step = (n: number): Date =>
+      e.recurrence === "WEEKLY" ? utcAddDays(e.date, 7 * n) : utcAddMonthClamped(e.date, n);
+
+    for (let n = 0; n < RECURRENCE_OCCURRENCE_CAP; n++) {
+      const cur = step(n);
+      if (cur > rangeEnd) break;
+      if (cur < rangeStart) continue;
+      items.push({
+        id: `CUSTOM:${e.id}:${cur.toISOString().slice(0, 10)}`,
+        type: "CUSTOM",
+        title: e.title,
+        dateStart: cur,
+        dateEnd: undefined,
+        href: `/calendar#event-${e.id}`,
+        tone: "neutral",
+        opportunityId: e.opportunityId ?? undefined,
+        ownerId: e.createdByUserId,
+      });
+    }
   }
 
   // Two documents from the same RFP package routinely restate the same

@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { addDays, subDays } from "date-fns";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
-import { getCalendarItems, getUpcomingWithOverdue, isOverdueItem, utcToday } from "@/lib/calendar";
+import { getCalendarItems, getUpcomingWithOverdue, isOverdueItem, utcToday, CALENDAR_ITEM_TYPE_LABELS, CALENDAR_FILTER_GROUPS } from "@/lib/calendar";
 import { createArtworkOrder } from "@/lib/artwork-order-service";
 import { convertOpportunityToProject, startWorkOrder } from "@/lib/project-service";
 
@@ -393,5 +393,75 @@ describe("getCalendarItems -- RFP key dates", () => {
 
     const items = await getCalendarItems(ADMIN_USER, RANGE_START, RANGE_END);
     expect(items.some((i) => i.title === "Far future")).toBe(false);
+  });
+});
+
+describe("getCalendarItems -- CalendarEvent recurrence", () => {
+  it("a non-recurring event is completely unaffected -- exactly one item, unchanged id", async () => {
+    const creator = await makeUser({ email: "norecur@test.com" });
+    const event = await db.calendarEvent.create({
+      data: { title: "One-off", date: addDays(new Date(), 2), visibility: "ORG", createdByUserId: creator.id },
+    });
+    const items = await getCalendarItems(ADMIN_USER, RANGE_START, RANGE_END);
+    const matches = items.filter((i) => i.id.startsWith(`CUSTOM:${event.id}`));
+    expect(matches).toHaveLength(1);
+    expect(matches[0].id).toBe(`CUSTOM:${event.id}`);
+  });
+
+  it("a WEEKLY series generates the right occurrences across a month boundary", async () => {
+    const creator = await makeUser({ email: "weekly@test.com" });
+    const anchor = new Date(Date.UTC(2026, 0, 15)); // Jan 15, 2026
+    const event = await db.calendarEvent.create({
+      data: { title: "Standup", date: anchor, visibility: "ORG", recurrence: "WEEKLY", createdByUserId: creator.id },
+    });
+    const rangeStart = new Date(Date.UTC(2026, 0, 1));
+    const rangeEnd = new Date(Date.UTC(2026, 1, 28));
+    const items = await getCalendarItems(ADMIN_USER, rangeStart, rangeEnd);
+    const occurrences = items
+      .filter((i) => i.id.startsWith(`CUSTOM:${event.id}:`))
+      .map((i) => i.dateStart.getTime())
+      .sort((a, b) => a - b);
+    const expected: number[] = [];
+    for (let d = anchor; d <= rangeEnd; d = new Date(d.getTime() + 7 * 86_400_000)) expected.push(d.getTime());
+    expect(occurrences).toEqual(expected);
+  });
+
+  it("a MONTHLY series anchored Jan 31 clamps to Feb 28 when viewed in February", async () => {
+    const creator = await makeUser({ email: "monthly@test.com" });
+    const anchor = new Date(Date.UTC(2026, 0, 31));
+    const event = await db.calendarEvent.create({
+      data: { title: "Rent", date: anchor, visibility: "ORG", recurrence: "MONTHLY", createdByUserId: creator.id },
+    });
+    const rangeStart = new Date(Date.UTC(2026, 1, 1));
+    const rangeEnd = new Date(Date.UTC(2026, 1, 28));
+    const items = await getCalendarItems(ADMIN_USER, rangeStart, rangeEnd);
+    const feb = items.find((i) => i.id.startsWith(`CUSTOM:${event.id}:`));
+    expect(feb).toBeDefined();
+    expect(feb!.dateStart.getUTCDate()).toBe(28);
+    expect(feb!.dateStart.getUTCMonth()).toBe(1);
+  });
+
+  it("an anchor date in the future relative to the query range generates zero occurrences", async () => {
+    const creator = await makeUser({ email: "future@test.com" });
+    const anchor = new Date(Date.UTC(2026, 5, 1)); // June
+    const event = await db.calendarEvent.create({
+      data: { title: "Future series", date: anchor, visibility: "ORG", recurrence: "WEEKLY", createdByUserId: creator.id },
+    });
+    const rangeStart = new Date(Date.UTC(2026, 0, 1));
+    const rangeEnd = new Date(Date.UTC(2026, 2, 31)); // Jan-Mar, entirely before the anchor
+    const items = await getCalendarItems(ADMIN_USER, rangeStart, rangeEnd);
+    expect(items.some((i) => i.id.startsWith(`CUSTOM:${event.id}`))).toBe(false);
+  });
+});
+
+describe("CALENDAR_FILTER_GROUPS", () => {
+  it("every CalendarItemType appears in exactly one filter group", () => {
+    const allTypes = Object.keys(CALENDAR_ITEM_TYPE_LABELS);
+    const grouped = Object.values(CALENDAR_FILTER_GROUPS).flatMap((g) => g.types);
+    for (const type of allTypes) {
+      const count = grouped.filter((t) => t === type).length;
+      expect(count, `${type} should appear in exactly one group, found in ${count}`).toBe(1);
+    }
+    expect(grouped).toHaveLength(allTypes.length);
   });
 });
