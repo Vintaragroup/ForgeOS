@@ -2683,6 +2683,18 @@ model ArtworkOrder {
   postShowRecordedAt       DateTime?
   postShowRecordedByUserId String?
 
+  // Set by the Show rollover action (src/app/(app)/shows/actions.ts's
+  // rolloverShowAction) -- a rolled-over piece is a brand-new
+  // ArtworkOrder for a new show occurrence, not a continuation of last
+  // year's pipeline state, but this link lets its own detail page show
+  // "based on [last year's order]" for context. Self-relation, so the
+  // prior year's order can also be read the other direction
+  // (rolledOverTo) for free, though nothing in this slice renders that
+  // side yet.
+  rolledOverFromId String?
+  rolledOverFrom   ArtworkOrder?  @relation("ArtworkOrderRollover", fields: [rolledOverFromId], references: [id])
+  rolledOverTo     ArtworkOrder[] @relation("ArtworkOrderRollover")
+
   // Fee is computed from ArtworkSizeTier.expoProducedFee at the moment
   // Expo accepts the artwork (Accepted transition), not at order-draft
   // time -- the size tier could theoretically change before then.
@@ -2728,6 +2740,7 @@ model ArtworkOrder {
   @@index([vendorId])
   @@index([showId])
   @@index([designerId])
+  @@index([rolledOverFromId])
   @@map("artwork_orders")
 }
 

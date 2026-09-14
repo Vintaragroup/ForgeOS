@@ -54,6 +54,9 @@ export default async function ArtworkOrderPage({
       vendor: true,
       sizeTier: true,
       designer: { select: { name: true } },
+      // Only set on a piece created by a Show rollover -- see
+      // rolloverArtworkOrder's own comment in artwork-order-service.ts.
+      rolledOverFrom: { select: { id: true, jobCode: true, graphicCode: true } },
       files: { where: { deletedAt: null }, orderBy: { createdAt: "asc" } },
       events: { orderBy: { createdAt: "desc" } },
     },
@@ -184,6 +187,16 @@ export default async function ArtworkOrderPage({
             />
             <ReadOnlyField label="Sizes verified" value={order.verifiedSizes ? "Yes" : "No"} />
             <ReadOnlyField label="Designer" value={order.designer?.name} />
+            {order.rolledOverFrom && (
+              <ReadOnlyField
+                label="Rolled over from"
+                value={
+                  <Link href={`/artwork/${order.rolledOverFrom.id}`} className="hover:underline">
+                    {order.rolledOverFrom.graphicCode ?? order.rolledOverFrom.jobCode}
+                  </Link>
+                }
+              />
+            )}
           </div>
         </Card>
 

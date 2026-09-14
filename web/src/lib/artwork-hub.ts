@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import type { ArtworkOrderStatus, SystemRole } from "@/generated/prisma/enums";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
+import { rolloverArtworkOrder, type ArtworkActor } from "@/lib/artwork-order-service";
 
 // A piece hasn't had its artwork received yet while it's still sitting in
 // the client's own hands -- INVITED (not even started) or ORDER_DRAFTED/
@@ -87,3 +88,82 @@ export async function getGraphicsOrders(user: { id: string; systemRole: SystemRo
 }
 
 export type GraphicsOrder = Awaited<ReturnType<typeof getGraphicsOrders>>[number];
+
+export interface RolloverShowResult {
+  opportunitiesCreated: number;
+  piecesCreated: number;
+}
+
+// Bulk-creates a fresh Opportunity + ArtworkOrder set under `targetShowId`
+// for every returning client on `sourceShowId` -- the actual business logic
+// behind the Show detail page's "Roll over clients" action
+// (shows/actions.ts's rolloverShowAction). Pulled out into this plain,
+// explicit-actor function -- rather than left inlined in the Server Action
+// -- for the same reason every function in artwork-order-service.ts already
+// takes an explicit actor: this codebase has no getCurrentUser() mocking
+// precedent anywhere in its test suite, so auth-dependent Server Actions
+// stay thin wrappers and the real logic lives here where it can be unit
+// tested directly.
+//
+// Idempotent -- safe to call twice. A returning client already rolled into
+// the target show (matched by companyId) is skipped, and within that
+// opportunity each piece is deduped by graphicCode, so a partial prior run
+// (or someone already having drafted artwork orders on the target
+// opportunity by hand) doesn't get duplicated.
+export async function rolloverShow(
+  { sourceShowId, targetShowId }: { sourceShowId: string; targetShowId: string },
+  actor: ArtworkActor,
+): Promise<RolloverShowResult> {
+  const sourceOpportunities = await db.opportunity.findMany({
+    where: { deletedAt: null, showId: sourceShowId },
+    include: { artworkOrders: { where: { deletedAt: null } } },
+  });
+
+  let opportunitiesCreated = 0;
+  let piecesCreated = 0;
+
+  for (const source of sourceOpportunities) {
+    const alreadyRolled = await db.opportunity.findFirst({
+      where: { deletedAt: null, showId: targetShowId, companyId: source.companyId },
+    });
+    let targetOpportunityId = alreadyRolled?.id;
+    if (!targetOpportunityId) {
+      const created = await db.opportunity.create({
+        data: {
+          companyId: source.companyId,
+          showId: targetShowId,
+          showName: source.showName,
+          salesRepId: source.salesRepId,
+          ownerId: source.ownerId,
+        },
+      });
+      targetOpportunityId = created.id;
+      opportunitiesCreated++;
+    }
+
+    for (const piece of source.artworkOrders) {
+      const alreadyRolledPiece = await db.artworkOrder.findFirst({
+        where: { deletedAt: null, opportunityId: targetOpportunityId, graphicCode: piece.graphicCode },
+      });
+      if (alreadyRolledPiece) continue;
+      await rolloverArtworkOrder(piece, { opportunityId: targetOpportunityId }, actor);
+      piecesCreated++;
+    }
+  }
+
+  // Hub/hanging-sign pieces -- no opportunity, tied directly to the show
+  // itself (see ArtworkOrder.showId's own schema comment).
+  const sourceHubPieces = await db.artworkOrder.findMany({
+    where: { deletedAt: null, showId: sourceShowId, opportunityId: null },
+  });
+  for (const piece of sourceHubPieces) {
+    const alreadyRolledPiece = await db.artworkOrder.findFirst({
+      where: { deletedAt: null, showId: targetShowId, opportunityId: null, graphicCode: piece.graphicCode },
+    });
+    if (alreadyRolledPiece) continue;
+    await rolloverArtworkOrder(piece, { showId: targetShowId }, actor);
+    piecesCreated++;
+  }
+
+  return { opportunitiesCreated, piecesCreated };
+}

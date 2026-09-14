@@ -12,6 +12,7 @@ import {
   computeSlaDueAt,
   createArtworkOrder,
   recordPostShowDisposition,
+  rolloverArtworkOrder,
   setCustomSizeQuote,
   setProductionDetail,
   setProductionSpec,
@@ -30,6 +31,7 @@ afterEach(async () => {
   await db.artworkSizeTier.deleteMany();
   await db.vendor.deleteMany();
   await db.opportunity.deleteMany();
+  await db.show.deleteMany();
   await db.company.deleteMany();
 });
 
@@ -617,5 +619,67 @@ describe("recordPostShowDisposition", () => {
     await expect(
       recordPostShowDisposition(order.id, { postShowStatus: "DISCARDED", postShowCondition: null }, EXPO_ACTOR),
     ).rejects.toThrow(/only be recorded once/);
+  });
+});
+
+describe("rolloverArtworkOrder", () => {
+  it("copies a prior piece's fields into a new order, marks it EXISTING, and links rolledOverFromId", async () => {
+    const company = await db.company.create({ data: { name: "Test Co" } });
+    const vendor = await db.vendor.create({ data: { name: "Test Vendor" } });
+    const sourceOpportunity = await db.opportunity.create({
+      data: { companyId: company.id, showName: "PGA Show 2026" },
+    });
+    const targetOpportunity = await db.opportunity.create({
+      data: { companyId: company.id, showName: "PGA Show 2027" },
+    });
+    const source = await db.artworkOrder.create({
+      data: {
+        opportunityId: sourceOpportunity.id,
+        jobCode: "EXPO-SOURCE1",
+        material: "Vinyl",
+        qty: 3,
+        graphicCode: "GC-001",
+        finishingDetails: "Grommets",
+        customWidth: 48,
+        customHeight: 96,
+        vendorId: vendor.id,
+      },
+    });
+
+    const rolled = await rolloverArtworkOrder(source, { opportunityId: targetOpportunity.id }, EXPO_ACTOR);
+
+    expect(rolled.opportunityId).toBe(targetOpportunity.id);
+    expect(rolled.jobCode).not.toBe(source.jobCode);
+    expect(rolled.material).toBe("Vinyl");
+    expect(rolled.qty).toBe(3);
+    expect(rolled.graphicCode).toBe("GC-001");
+    expect(rolled.finishingDetails).toBe("Grommets");
+    expect(rolled.vendorId).toBe(vendor.id);
+    expect(Number(rolled.customWidth)).toBe(48);
+    expect(Number(rolled.customHeight)).toBe(96);
+    expect(rolled.existingGraphicsStatus).toBe("EXISTING");
+    expect(rolled.rolledOverFromId).toBe(source.id);
+    expect(rolled.status).toBe("INVITED");
+
+    const event = await db.artworkOrderEvent.findFirst({ where: { artworkOrderId: rolled.id } });
+    expect(event?.action).toBe("ROLLED_OVER_FROM_PRIOR_SHOW");
+    expect(event?.fromStatus).toBe("INVITED");
+    expect(event?.toStatus).toBe("INVITED");
+    expect(event?.detail).toMatchObject({ fromArtworkOrderId: source.id });
+  });
+
+  it("rolls a Hub/hanging-sign piece (no opportunity) directly under the target show", async () => {
+    const sourceShow = await db.show.create({ data: { name: "PGA Show 2026" } });
+    const targetShow = await db.show.create({ data: { name: "PGA Show 2027" } });
+    const source = await db.artworkOrder.create({
+      data: { showId: sourceShow.id, jobCode: "EXPO-HUB1", graphicCode: "HUB-01", qty: 1 },
+    });
+
+    const rolled = await rolloverArtworkOrder(source, { showId: targetShow.id }, EXPO_ACTOR);
+
+    expect(rolled.showId).toBe(targetShow.id);
+    expect(rolled.opportunityId).toBeNull();
+    expect(rolled.existingGraphicsStatus).toBe("EXISTING");
+    expect(rolled.rolledOverFromId).toBe(source.id);
   });
 });

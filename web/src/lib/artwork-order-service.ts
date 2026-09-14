@@ -248,6 +248,75 @@ export async function transitionArtworkOrder(
   return { artworkOrder: await db.artworkOrder.findUniqueOrThrow({ where: { id: artworkOrderId } }), event, escalated };
 }
 
+export interface RolloverSource {
+  id: string;
+  material: string | null;
+  qty: number;
+  graphicCode: string | null;
+  finishingDetails: string | null;
+  customWidth: Prisma.Decimal | null;
+  customHeight: Prisma.Decimal | null;
+  vendorId: string | null;
+  designerId: string | null;
+  sizeTierId: string | null;
+}
+
+// Rolls one prior-show piece forward into a new show occurrence -- the
+// Graphics team's own annual pattern (returning clients reuse last year's
+// artwork unless something changed), and the whole reason
+// existingGraphicsStatus exists as a field. See shows/actions.ts's
+// rolloverShowAction, the only caller. Reuses generateJobCode() and the
+// same create-with-retry-on-collision shape createArtworkOrder already
+// uses (this function lives in the same file for exactly that reason,
+// even though it can't call createArtworkOrder directly -- that function's
+// own `data` param doesn't accept the extra fields a rollover needs to
+// copy). Then logs a same-status INVITED -> INVITED transition via
+// transitionArtworkOrder, matching setProductionDetail's own pattern, so
+// the rollover shows up in the new order's own audit trail instead of
+// looking like an unexplained pre-filled row.
+export async function rolloverArtworkOrder(
+  source: RolloverSource,
+  target: { opportunityId: string } | { showId: string },
+  actor: ArtworkActor,
+) {
+  let created: Prisma.ArtworkOrderGetPayload<Record<string, never>> | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      created = await db.artworkOrder.create({
+        data: {
+          ...("opportunityId" in target ? { opportunityId: target.opportunityId } : { showId: target.showId }),
+          jobCode: generateJobCode(),
+          material: source.material,
+          qty: source.qty,
+          graphicCode: source.graphicCode,
+          finishingDetails: source.finishingDetails,
+          customWidth: source.customWidth,
+          customHeight: source.customHeight,
+          vendorId: source.vendorId,
+          designerId: source.designerId,
+          sizeTierId: source.sizeTierId,
+          // The whole point of rollover -- last year's piece is being
+          // reused, not freshly designed, unless Graphics staff changes
+          // this after the fact.
+          existingGraphicsStatus: "EXISTING",
+          rolledOverFromId: source.id,
+        },
+      });
+      break;
+    } catch (err) {
+      const isUniqueConflict = typeof err === "object" && err !== null && "code" in err && err.code === "P2002";
+      if (!isUniqueConflict || attempt === 4) throw err;
+    }
+  }
+  if (!created) throw new Error("Failed to generate a unique artwork order job code after 5 attempts.");
+
+  await transitionArtworkOrder(created.id, "INVITED", "ROLLED_OVER_FROM_PRIOR_SHOW", actor, {
+    detail: { fromArtworkOrderId: source.id } as Prisma.InputJsonValue,
+  });
+
+  return created;
+}
+
 // The domain-action functions below wrap transitionArtworkOrder for the
 // handful of actions with real extra logic beyond a single status change
 // (a data field to set, a fee to compute, or a SYSTEM step that always

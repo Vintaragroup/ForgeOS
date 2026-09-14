@@ -3,15 +3,16 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
-import { assignOpportunityToShowAction, deleteShow, updateShow } from "../actions";
+import { assignOpportunityToShowAction, deleteShow, rolloverShowAction, updateShow } from "../actions";
 import { inviteToArtworkPortalAction } from "@/app/(app)/opportunities/[id]/artwork-actions";
-import { Button, Card, EmptyState, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
+import { Button, Card, EmptyState, Field, PageHeader, SelectField, StatusBanner, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 
 export const dynamic = "force-dynamic";
 
 export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
   const { id } = await props.params;
+  const { rolledOverOpportunities, rolledOverPieces } = await props.searchParams;
   const user = await getCurrentUser();
   if (!user) notFound();
 
@@ -38,13 +39,38 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
 
   const users = await db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } });
 
+  // Rollover sources -- every OTHER show that actually has something to
+  // roll over: a client Opportunity OR a Hub/hanging-sign piece with no
+  // opportunity (see ArtworkOrder.showId's own comment -- rolloverShow
+  // handles both, so the picker has to offer both too, not just the
+  // opportunity case). A show with neither would just be a no-op
+  // selection. Soonest-event-first, same ordering convention the Graphics
+  // dashboard's own show pickers already use.
+  const rolloverSourceShows = await db.show.findMany({
+    where: {
+      deletedAt: null,
+      id: { not: show.id },
+      OR: [{ opportunities: { some: { deletedAt: null } } }, { artworkOrders: { some: { deletedAt: null } } }],
+    },
+    orderBy: { eventStartDate: { sort: "asc", nulls: "last" } },
+    select: { id: true, name: true },
+  });
+
   const updateShowWithId = updateShow.bind(null, show.id);
   const deleteShowWithId = deleteShow.bind(null, show.id);
   const assignWithId = assignOpportunityToShowAction.bind(null, show.id);
+  const rolloverWithId = rolloverShowAction.bind(null, show.id);
 
   return (
     <div className="flex flex-col gap-8">
       <PageHeader title={show.name} backHref="/shows" backLabel="Shows" />
+
+      {rolledOverOpportunities !== undefined && rolledOverPieces !== undefined && (
+        <StatusBanner kind="success">
+          Rolled over {rolledOverOpportunities} client{rolledOverOpportunities === "1" ? "" : "s"} and{" "}
+          {rolledOverPieces} graphic piece{rolledOverPieces === "1" ? "" : "s"} into this show.
+        </StatusBanner>
+      )}
 
       <Card className="p-6">
         <form action={updateShowWithId} className="flex flex-col gap-4">
@@ -175,6 +201,41 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
           </Link>{" "}
           directly under this show.
         </p>
+      </Card>
+
+      <Card className="p-6">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          Roll over clients from a previous show
+        </h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          For a returning show occurrence -- creates a new client + graphics set here for every company on the
+          source show, pre-filled from their prior pieces (material, vendor, dimensions, finishing) and marked as
+          reusing existing artwork. Nothing is sent to a client automatically; inviting them to the Artwork Portal
+          is still its own separate step per client, same as always. Safe to run more than once -- a client already
+          rolled over here won&apos;t be duplicated.
+        </p>
+        {rolloverSourceShows.length === 0 ? (
+          <p className="text-sm text-neutral-500">No other show with clients on it exists yet to roll over from.</p>
+        ) : (
+          <ConfirmForm
+            action={rolloverWithId}
+            confirmMessage="Roll over every client and graphic piece from the selected show into this one? This creates new draft records -- it doesn't send anything to clients."
+            className="flex flex-wrap items-end gap-3"
+          >
+            <div className="min-w-64">
+              <SelectField
+                label="Source show"
+                name="sourceShowId"
+                options={[
+                  { value: "", label: "Select a show…" },
+                  ...rolloverSourceShows.map((s) => ({ value: s.id, label: s.name })),
+                ]}
+                required
+              />
+            </div>
+            <Button variant="secondary">Roll over clients</Button>
+          </ConfirmForm>
+        )}
       </Card>
     </div>
   );
