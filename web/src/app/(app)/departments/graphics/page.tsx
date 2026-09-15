@@ -278,6 +278,7 @@ export default async function GraphicsHomePage({
   // In-flight count for the Production Log teaser card below -- everything
   // not yet delivered or cancelled.
   const inFlightLogCount = orders.filter((o) => o.status !== "DELIVERED_AT_SHOW" && o.status !== "CANCELLED").length;
+  const needsPostShowReviewCount = orders.filter((o) => o.status === "DELIVERED_AT_SHOW" && o.postShowStatus === null).length;
 
   // Department-mode-only data -- deliberately fetched/computed ONLY when
   // canSeeOversight is true, not fetched-but-hidden. A Tabs child's
@@ -414,6 +415,25 @@ export default async function GraphicsHomePage({
             className="rounded-md bg-brand-black px-4 py-2 text-sm font-medium text-white hover:bg-brand-navy"
           >
             View full production log →
+          </Link>
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">Post-show</h2>
+            <p className="mt-1 text-sm text-neutral-600">
+              <span className="font-medium text-neutral-900">{needsPostShowReviewCount}</span> need
+              {needsPostShowReviewCount === 1 ? "s" : ""} review — plus damaged/aging pieces awaiting client or sales
+              follow-up.
+            </p>
+          </div>
+          <Link
+            href="/departments/graphics/post-show"
+            className="rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            View post-show →
           </Link>
         </div>
       </Card>

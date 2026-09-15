@@ -249,3 +249,83 @@ export async function notifyClientDelivered(artworkOrderId: string, email: strin
     text: `Your graphics have arrived and been delivered to your booth.\n\n${link}`,
   });
 }
+
+// Not rows in the spec's original notification matrix -- post-show
+// disposition tracking, added later. Two genuinely different recipient
+// sets, deliberately not the owner/salesRep pair getInternalNotifyEmails
+// already resolves: a damaged piece is whole-department Graphics
+// operations, not this one opportunity's own rep; an aging piece is
+// specifically a sales conversation, never Graphics.
+
+// Every active GR-department user -- damage discovery isn't scoped to one
+// opportunity's own rep, it's department-wide operational awareness (same
+// department axis department-access.ts already grants view access on, just
+// applied to notification recipients here instead of a query filter).
+export async function getGraphicsDepartmentEmails(): Promise<string[]> {
+  const users = await db.user.findMany({
+    where: { deletedAt: null, departmentCode: "GR" },
+    select: { email: true },
+  });
+  return users.map((u) => u.email);
+}
+
+// salesRepId specifically, not owner -- an aging-asset conversation with
+// the client is a sales relationship question, distinct from
+// getInternalNotifyEmails' owner+salesRep pair (used for art-review/
+// production notifications, where either role is a fine recipient). Falls
+// back to owner only when no salesRep is assigned at all, so this never
+// silently resolves to zero recipients for an opportunity that has SOME
+// assigned internal contact.
+export async function getSalesNotifyEmails(opportunityId: string): Promise<string[]> {
+  const opportunity = await db.opportunity.findUniqueOrThrow({
+    where: { id: opportunityId },
+    select: { salesRep: { select: { email: true } }, owner: { select: { email: true } } },
+  });
+  const email = opportunity.salesRep?.email ?? opportunity.owner?.email;
+  return email ? [email] : [];
+}
+
+// A piece is recorded DAMAGED -> whole Graphics department. Deliberately
+// does NOT also notify the client -- that's notifyClientOfDamagedAsset
+// below, a separate, staff-triggered action, matching the requirement that
+// Graphics reviews the damage first and decides whether/how to loop the
+// client in, rather than an automatic client-facing alert firing the
+// instant a condition gets recorded.
+export async function notifyGraphicsOfDamagedAsset(artworkOrderId: string, jobCode: string, note: string) {
+  const artworkOrderUrl = `${getAppBaseUrl()}/artwork/${artworkOrderId}`;
+  for (const email of await getGraphicsDepartmentEmails()) {
+    await sendEmail({
+      to: email,
+      subject: `Damaged post-show condition recorded (${jobCode})`,
+      text: `A post-show condition of Damaged was recorded for ${jobCode}:\n\n"${note}"\n\nReview reference photos and details:\n${artworkOrderUrl}`,
+    });
+  }
+}
+
+// The deliberate, staff-triggered follow-up to the notification above --
+// separate from it, not chained automatically, per this feature's own
+// "notify graphics, which in turn gives them the ability to notify the
+// client" design.
+export async function notifyClientOfDamagedAsset(artworkOrderId: string, email: string, note: string) {
+  const link = await clientPortalLink(artworkOrderId, email);
+  await sendEmail({
+    to: email,
+    subject: "An update on your stored graphics",
+    text: `One of your graphics from a previous show needs your attention:\n\n"${note}"\n\nView details here:\n${link}`,
+  });
+}
+
+// A piece is recorded AGING -> the opportunity's sales rep (not Graphics)
+// -- distinct from a damaged piece, this isn't a Graphics-operations
+// concern, it's "does the client want to keep using a piece that's
+// starting to show wear, or is it time for a new one."
+export async function notifySalesOfAgingAsset(opportunityId: string, jobCode: string, note: string) {
+  const artworkOrderUrl = `${getAppBaseUrl()}/artwork`;
+  for (const email of await getSalesNotifyEmails(opportunityId)) {
+    await sendEmail({
+      to: email,
+      subject: `Graphic showing wear -- client follow-up needed (${jobCode})`,
+      text: `${jobCode} was recorded as Aging in post-show review:\n\n"${note}"\n\nReach out to the client -- they can choose to keep it in circulation or have a new one produced:\n${artworkOrderUrl}`,
+    });
+  }
+}

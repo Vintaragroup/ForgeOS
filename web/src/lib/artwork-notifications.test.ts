@@ -1,6 +1,11 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { getEscalationNotifyEmails, notifyClientInvited } from "@/lib/artwork-notifications";
+import {
+  getEscalationNotifyEmails,
+  getGraphicsDepartmentEmails,
+  getSalesNotifyEmails,
+  notifyClientInvited,
+} from "@/lib/artwork-notifications";
 import { createArtworkOrder } from "@/lib/artwork-order-service";
 
 afterEach(async () => {
@@ -83,5 +88,51 @@ describe("notifyClientInvited", () => {
     // The raw token itself is never persisted (only tokenHash) -- can't
     // assert the link's token half against anything stored, only that a
     // real invite row backs the id half of the link that was returned.
+  });
+});
+
+describe("getGraphicsDepartmentEmails", () => {
+  it("returns every active GR-department user, not just one recipient", async () => {
+    await db.user.create({ data: { name: "GR One", email: "gr1@example.com", departmentCode: "GR" } });
+    await db.user.create({ data: { name: "GR Two", email: "gr2@example.com", departmentCode: "GR" } });
+    await db.user.create({ data: { name: "Not GR", email: "sales@example.com", departmentCode: "SL" } });
+
+    const emails = await getGraphicsDepartmentEmails();
+    expect(new Set(emails)).toEqual(new Set(["gr1@example.com", "gr2@example.com"]));
+  });
+
+  it("returns an empty array when nobody is in the GR department", async () => {
+    await db.user.create({ data: { name: "Not GR", email: "sales@example.com", departmentCode: "SL" } });
+    expect(await getGraphicsDepartmentEmails()).toEqual([]);
+  });
+});
+
+describe("getSalesNotifyEmails", () => {
+  it("prefers the assigned sales rep over the owner", async () => {
+    const owner = await makeUser("owner-sn@example.com");
+    const salesRep = await makeUser("salesrep-sn@example.com");
+    const company = await db.company.create({ data: { name: "Test Co SN" } });
+    const opportunity = await db.opportunity.create({
+      data: { companyId: company.id, showName: "Test Show", ownerId: owner.id, salesRepId: salesRep.id },
+    });
+
+    expect(await getSalesNotifyEmails(opportunity.id)).toEqual(["salesrep-sn@example.com"]);
+  });
+
+  it("falls back to the owner when no sales rep is assigned", async () => {
+    const owner = await makeUser("owner-sn2@example.com");
+    const company = await db.company.create({ data: { name: "Test Co SN2" } });
+    const opportunity = await db.opportunity.create({
+      data: { companyId: company.id, showName: "Test Show", ownerId: owner.id },
+    });
+
+    expect(await getSalesNotifyEmails(opportunity.id)).toEqual(["owner-sn2@example.com"]);
+  });
+
+  it("returns an empty array when neither a sales rep nor an owner is assigned", async () => {
+    const company = await db.company.create({ data: { name: "Test Co SN3" } });
+    const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
+
+    expect(await getSalesNotifyEmails(opportunity.id)).toEqual([]);
   });
 });

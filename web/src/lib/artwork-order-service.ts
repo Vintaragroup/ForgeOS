@@ -15,6 +15,7 @@ import {
   type ExistingGraphicsStatus,
   type PostShowStatus,
   type PostShowCondition,
+  type PostShowDiscardReason,
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -432,20 +433,79 @@ export async function setProductionDetail(
 // as setProductionSpec/setProductionDetail above, not a real status
 // change. Re-callable (a Graphics staffer correcting a mis-recorded
 // condition doesn't need a new "un-received" state to exist).
+export interface PostShowDisposition {
+  postShowStatus: PostShowStatus;
+  postShowCondition: PostShowCondition | null;
+  // Effectively required (enforced below, not just a UI nicety) whenever
+  // condition is DAMAGED/AGING or a discard reason is set at all -- "why"
+  // always needs a real explanation, not just the category.
+  postShowConditionNote?: string | null;
+  // Only valid alongside postShowStatus DISCARDED -- see
+  // PostShowDiscardReason's own schema comment for why this is a separate
+  // field from condition.
+  postShowDiscardReason?: PostShowDiscardReason | null;
+  // Required alongside discardReason CLIENT_APPROVED_DISPOSAL specifically
+  // -- a name/contact, turning "the client said we could throw it away"
+  // into an actual attributed record instead of an opaque label.
+  postShowDisposalApprovedBy?: string | null;
+}
+
+// Re-callable (a Graphics staffer correcting a mis-recorded disposition
+// doesn't need a new "un-received" state to exist). Validates the
+// condition/discard-reason/approver/photo relationships explicitly rather
+// than trusting the UI to only ever submit a consistent combination --
+// this is the sole writer for post-show data, same posture as
+// transitionArtworkOrder is for status.
 export async function recordPostShowDisposition(
   artworkOrderId: string,
-  disposition: { postShowStatus: PostShowStatus; postShowCondition: PostShowCondition | null },
+  disposition: PostShowDisposition,
   actor: ArtworkActor,
 ) {
   const current = await db.artworkOrder.findUniqueOrThrow({ where: { id: artworkOrderId } });
   if (current.status !== "DELIVERED_AT_SHOW") {
     throw new Error("Post-show disposition can only be recorded once an order has been delivered at the show.");
   }
+
+  const hasDiscardReason = disposition.postShowDiscardReason != null;
+  if (disposition.postShowStatus === "DISCARDED" && !hasDiscardReason) {
+    throw new Error("A discard reason is required when marking a piece Discarded.");
+  }
+  if (disposition.postShowStatus !== "DISCARDED" && hasDiscardReason) {
+    throw new Error("A discard reason only applies when the disposition is Discarded.");
+  }
+
+  const isClientApproved = disposition.postShowDiscardReason === "CLIENT_APPROVED_DISPOSAL";
+  if (isClientApproved && !disposition.postShowDisposalApprovedBy?.trim()) {
+    throw new Error("Record who approved the disposal when the reason is client-approved.");
+  }
+  if (!isClientApproved && disposition.postShowDisposalApprovedBy) {
+    throw new Error("An approver name only applies to a client-approved disposal.");
+  }
+
+  const needsNote =
+    disposition.postShowCondition === "DAMAGED" || disposition.postShowCondition === "AGING" || hasDiscardReason;
+  if (needsNote && !disposition.postShowConditionNote?.trim()) {
+    throw new Error("A note is required for a damaged, aging, or discarded piece -- explain what's going on.");
+  }
+
+  const needsPhoto = disposition.postShowCondition === "DAMAGED" || disposition.postShowDiscardReason === "DAMAGED_BEYOND_REPAIR";
+  if (needsPhoto) {
+    const photoCount = await db.artworkFile.count({
+      where: { artworkOrderId, kind: "POST_SHOW_CONDITION_PHOTO", deletedAt: null },
+    });
+    if (photoCount === 0) {
+      throw new Error("Upload at least one reference photo before recording a damaged condition.");
+    }
+  }
+
   await db.artworkOrder.update({
     where: { id: artworkOrderId },
     data: {
       postShowStatus: disposition.postShowStatus,
       postShowCondition: disposition.postShowCondition,
+      postShowConditionNote: disposition.postShowConditionNote?.trim() || null,
+      postShowDiscardReason: disposition.postShowDiscardReason ?? null,
+      postShowDisposalApprovedBy: disposition.postShowDisposalApprovedBy?.trim() || null,
       postShowRecordedAt: new Date(),
       postShowRecordedByUserId: actor.userId ?? null,
     },
@@ -453,6 +513,35 @@ export async function recordPostShowDisposition(
   return transitionArtworkOrder(artworkOrderId, current.status, "RECORD_POST_SHOW_DISPOSITION", actor, {
     detail: disposition as unknown as Prisma.InputJsonValue,
   });
+}
+
+// A same-status audit event only -- no ArtworkOrder field changes. Keeping
+// AGING itself and its eventual resolution as two separate, deliberate
+// steps: this just records that someone reviewed an AGING-flagged piece
+// and made a call. "Keep in circulation" needs nothing further. "Mark for
+// replacement" doesn't itself discard the old piece or create the new one
+// -- those stay their own explicit actions (recordPostShowDisposition with
+// discardReason AGED_OUT once the old piece is actually retired; the
+// ordinary Create Order flow, pre-filled to this client, for the new one)
+// so this function isn't guessing at a business decision (discard now?
+// keep as backup until the replacement ships?) nobody's actually made yet.
+export async function recordAgingDecision(
+  artworkOrderId: string,
+  decision: "KEEP_IN_CIRCULATION" | "MARK_FOR_REPLACEMENT",
+  actor: ArtworkActor,
+  note?: string | null,
+) {
+  const current = await db.artworkOrder.findUniqueOrThrow({ where: { id: artworkOrderId } });
+  if (current.postShowCondition !== "AGING") {
+    throw new Error("This piece isn't currently flagged as aging.");
+  }
+  return transitionArtworkOrder(
+    artworkOrderId,
+    current.status,
+    decision === "KEEP_IN_CIRCULATION" ? "AGING_KEPT_IN_CIRCULATION" : "AGING_MARKED_FOR_REPLACEMENT",
+    actor,
+    { detail: { note: note ?? null } as Prisma.InputJsonValue },
+  );
 }
 
 // Enforces the same hard gate at the actual submission point (not just at

@@ -7,12 +7,16 @@ import { getArtworkFileBytes } from "@/lib/artwork-file-service";
 import { getPdfPageDimensionsInInches } from "@/lib/document-view-service";
 import { Card, PageHeader, StatusChip, Field, SelectField, TextareaField, Button, ReadOnlyField, EmptyState } from "@/components/ui";
 import { CopyLinkBanner } from "@/components/copy-link-banner";
+import { PostShowPhotoUploadForm } from "@/components/post-show-photo-upload-form";
 import {
   assignVendorAction,
   confirmProofMatchAction,
+  finalizePostShowPhotoUploadAction,
   issueCustomQuoteAction,
   issueProductionGoAheadAction,
   markDeliveredAction,
+  notifyClientOfDamageAction,
+  recordAgingDecisionAction,
   recordPostShowDispositionAction,
   requestProofRevisionAction,
   resolveEscalationAction,
@@ -84,6 +88,10 @@ export default async function ArtworkOrderPage({
   const setProductionSpecWithId = setProductionSpecAction.bind(null, order.id);
   const setProductionDetailWithId = setProductionDetailAction.bind(null, order.id);
   const recordPostShowDispositionWithId = recordPostShowDispositionAction.bind(null, order.id);
+  const notifyClientOfDamageWithId = notifyClientOfDamageAction.bind(null, order.id);
+  const recordAgingDecisionWithId = recordAgingDecisionAction.bind(null, order.id);
+  const finalizePostShowPhotoUploadWithId = finalizePostShowPhotoUploadAction.bind(null, order.id);
+  const postShowPhotos = order.files.filter((f) => f.kind === "POST_SHOW_CONDITION_PHOTO");
 
   const clientArtworkFile = order.files.find((f) => f.kind === "CLIENT_ARTWORK");
   const latestProof = [...order.files].reverse().find((f) => f.kind === "PROOF");
@@ -479,42 +487,124 @@ export default async function ArtworkOrderPage({
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Post-show</h2>
             <p className="mb-3 text-xs text-neutral-500">
               What physically happened to this piece after the show -- re-recordable, so a mis-entered condition can
-              be corrected later.
+              be corrected later. For a Damaged condition or a Damaged-beyond-repair discard, upload a reference
+              photo below first -- the form won&apos;t accept either without at least one on file.
             </p>
-            <form action={recordPostShowDispositionWithId} className="flex flex-wrap items-end gap-3">
-              <div className="min-w-48">
-                <SelectField
-                  label="Post-show status"
-                  name="postShowStatus"
-                  required
-                  defaultValue={order.postShowStatus ?? ""}
-                  options={[
-                    { value: "", label: "Select a status…" },
-                    { value: "NOT_RECEIVED", label: "Not received" },
-                    { value: "EXPO_STORAGE", label: "Expo storage" },
-                    { value: "SHIP_TO_CLIENT", label: "Ship to client" },
-                    { value: "DISCARDED", label: "Discarded" },
-                  ]}
-                />
+
+            {postShowPhotos.length > 0 && (
+              <div className="mb-4 flex flex-wrap gap-2">
+                {postShowPhotos.map((f) => (
+                  <span key={f.id} className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-600">
+                    📷 {f.filename}
+                  </span>
+                ))}
               </div>
-              <div className="min-w-48">
-                <SelectField
-                  label="Condition"
-                  name="postShowCondition"
-                  defaultValue={order.postShowCondition ?? ""}
-                  options={[
-                    { value: "", label: "— unset —" },
-                    { value: "OK_TO_REUSE", label: "Ok to reuse" },
-                    { value: "DAMAGED", label: "Damaged" },
-                    { value: "DIRTY", label: "Dirty" },
-                    { value: "PRODUCT", label: "Product" },
-                  ]}
-                />
+            )}
+            <div className="mb-5 max-w-md">
+              <PostShowPhotoUploadForm
+                artworkOrderId={order.id}
+                photoCount={postShowPhotos.length}
+                finalizeUpload={finalizePostShowPhotoUploadWithId}
+              />
+            </div>
+
+            <form action={recordPostShowDispositionWithId} className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-48">
+                  <SelectField
+                    label="Post-show status"
+                    name="postShowStatus"
+                    required
+                    defaultValue={order.postShowStatus ?? ""}
+                    options={[
+                      { value: "", label: "Select a status…" },
+                      { value: "NOT_RECEIVED", label: "Not received" },
+                      { value: "EXPO_STORAGE", label: "Expo storage" },
+                      { value: "SHIP_TO_CLIENT", label: "Ship to client" },
+                      { value: "DISCARDED", label: "Discarded" },
+                    ]}
+                  />
+                </div>
+                <div className="min-w-48">
+                  <SelectField
+                    label="Condition"
+                    name="postShowCondition"
+                    defaultValue={order.postShowCondition === "PRODUCT" ? "" : (order.postShowCondition ?? "")}
+                    options={[
+                      { value: "", label: "— unset —" },
+                      { value: "NEW", label: "New — first time in storage" },
+                      { value: "OK_TO_REUSE", label: "Ok to reuse" },
+                      { value: "AGING", label: "Aging — still usable, showing wear" },
+                      { value: "DAMAGED", label: "Damaged" },
+                      { value: "DIRTY", label: "Dirty" },
+                    ]}
+                  />
+                </div>
+                <div className="min-w-48">
+                  <SelectField
+                    label="Discard reason"
+                    name="postShowDiscardReason"
+                    defaultValue={order.postShowDiscardReason ?? ""}
+                    options={[
+                      { value: "", label: "— only if Discarded —" },
+                      { value: "DAMAGED_BEYOND_REPAIR", label: "Damaged beyond repair" },
+                      { value: "CLIENT_APPROVED_DISPOSAL", label: "Client approved disposal" },
+                      { value: "AGED_OUT", label: "Aged out (replacement made)" },
+                    ]}
+                  />
+                </div>
               </div>
-              <Button variant="secondary">Save</Button>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-64 flex-1">
+                  <Field
+                    label="Approved by"
+                    name="postShowDisposalApprovedBy"
+                    defaultValue={order.postShowDisposalApprovedBy ?? ""}
+                    placeholder="Client contact name -- only for client-approved disposal"
+                  />
+                </div>
+              </div>
+              <TextareaField
+                label="Note"
+                name="postShowConditionNote"
+                rows={3}
+                defaultValue={order.postShowConditionNote ?? ""}
+                placeholder="What's going on with this piece? Required for Damaged, Aging, or any discard reason."
+              />
+              <div>
+                <Button variant="secondary">Save</Button>
+              </div>
             </form>
             {order.postShowRecordedAt && (
               <p className="mt-3 text-xs text-neutral-400">Last recorded {order.postShowRecordedAt.toLocaleString()}.</p>
+            )}
+
+            {order.postShowCondition === "DAMAGED" && (
+              <form action={notifyClientOfDamageWithId} className="mt-4 border-t border-neutral-200 pt-4">
+                <p className="mb-2 text-xs text-neutral-500">
+                  Graphics was already notified automatically when this was recorded. Notifying the client is a
+                  separate, deliberate step -- only do it once you&apos;re ready for them to hear about it.
+                </p>
+                <Button variant="secondary">Notify client about this damage</Button>
+              </form>
+            )}
+
+            {order.postShowCondition === "AGING" && (
+              <div className="mt-4 border-t border-neutral-200 pt-4">
+                <p className="mb-2 text-xs text-neutral-500">
+                  Sales was already notified automatically. Once they&apos;ve heard back from the client:
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  <form action={recordAgingDecisionWithId}>
+                    <input type="hidden" name="decision" value="KEEP_IN_CIRCULATION" />
+                    <Button variant="secondary">Keep in circulation</Button>
+                  </form>
+                  <form action={recordAgingDecisionWithId}>
+                    <input type="hidden" name="decision" value="MARK_FOR_REPLACEMENT" />
+                    <Button variant="secondary">Mark for replacement</Button>
+                  </form>
+                </div>
+              </div>
             )}
           </Card>
         )}
@@ -528,7 +618,16 @@ export default async function ArtworkOrderPage({
               {order.files.map((f) => (
                 <li key={f.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
                   <span>
-                    {f.filename} <span className="text-neutral-400">({f.kind === "PROOF" ? `proof round ${f.round}` : "client artwork"})</span>
+                    {f.filename}{" "}
+                    <span className="text-neutral-400">
+                      (
+                      {f.kind === "PROOF"
+                        ? `proof round ${f.round}`
+                        : f.kind === "POST_SHOW_CONDITION_PHOTO"
+                          ? "post-show condition photo"
+                          : "client artwork"}
+                      )
+                    </span>
                     {f.previewable === false && (
                       <span className="ml-2">
                         <StatusChip tone="warning">Preview unavailable</StatusChip>

@@ -11,6 +11,7 @@ import {
   canStartArtworkOnboarding,
   computeSlaDueAt,
   createArtworkOrder,
+  recordAgingDecision,
   recordPostShowDisposition,
   rolloverArtworkOrder,
   setCustomSizeQuote,
@@ -619,6 +620,181 @@ describe("recordPostShowDisposition", () => {
     await expect(
       recordPostShowDisposition(order.id, { postShowStatus: "DISCARDED", postShowCondition: null }, EXPO_ACTOR),
     ).rejects.toThrow(/only be recorded once/);
+  });
+
+  it("refuses to mark a piece Discarded with no discard reason", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToDelivered(order.id);
+    await expect(
+      recordPostShowDisposition(order.id, { postShowStatus: "DISCARDED", postShowCondition: null }, EXPO_ACTOR),
+    ).rejects.toThrow(/discard reason is required/);
+  });
+
+  it("refuses a discard reason on a non-Discarded disposition", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToDelivered(order.id);
+    await expect(
+      recordPostShowDisposition(
+        order.id,
+        {
+          postShowStatus: "EXPO_STORAGE",
+          postShowCondition: "OK_TO_REUSE",
+          postShowDiscardReason: "DAMAGED_BEYOND_REPAIR",
+          postShowConditionNote: "n/a",
+        },
+        EXPO_ACTOR,
+      ),
+    ).rejects.toThrow(/only applies when the disposition is Discarded/);
+  });
+
+  it("refuses a client-approved disposal with no approver recorded", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToDelivered(order.id);
+    await expect(
+      recordPostShowDisposition(
+        order.id,
+        {
+          postShowStatus: "DISCARDED",
+          postShowCondition: "OK_TO_REUSE",
+          postShowDiscardReason: "CLIENT_APPROVED_DISPOSAL",
+          postShowConditionNote: "client said toss it",
+        },
+        EXPO_ACTOR,
+      ),
+    ).rejects.toThrow(/who approved/);
+  });
+
+  it("refuses an approver name on a non-client-approved discard reason", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToDelivered(order.id);
+    await expect(
+      recordPostShowDisposition(
+        order.id,
+        {
+          postShowStatus: "DISCARDED",
+          postShowCondition: "DAMAGED",
+          postShowDiscardReason: "DAMAGED_BEYOND_REPAIR",
+          postShowConditionNote: "torn beyond repair",
+          postShowDisposalApprovedBy: "Someone",
+        },
+        EXPO_ACTOR,
+      ),
+    ).rejects.toThrow(/approver name only applies/);
+  });
+
+  it("refuses Damaged or Aging condition with no note explaining it", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToDelivered(order.id);
+    await db.artworkFile.create({
+      data: {
+        artworkOrderId: order.id,
+        kind: "POST_SHOW_CONDITION_PHOTO",
+        filename: "photo-1.jpg",
+        mimeType: "image/jpeg",
+        sizeBytes: 1000,
+        storageKey: "test/photo-1.jpg",
+        uploadedByType: "EXPO",
+      },
+    });
+    await expect(
+      recordPostShowDisposition(order.id, { postShowStatus: "EXPO_STORAGE", postShowCondition: "DAMAGED" }, EXPO_ACTOR),
+    ).rejects.toThrow(/note is required/);
+
+    const aeOrder = await makeArtworkOrder();
+    await advanceToDelivered(aeOrder.id);
+    await expect(
+      recordPostShowDisposition(aeOrder.id, { postShowStatus: "EXPO_STORAGE", postShowCondition: "AGING" }, EXPO_ACTOR),
+    ).rejects.toThrow(/note is required/);
+  });
+
+  it("refuses a Damaged condition with no reference photo on file", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToDelivered(order.id);
+    await expect(
+      recordPostShowDisposition(
+        order.id,
+        { postShowStatus: "EXPO_STORAGE", postShowCondition: "DAMAGED", postShowConditionNote: "torn corner" },
+        EXPO_ACTOR,
+      ),
+    ).rejects.toThrow(/Upload at least one reference photo/);
+  });
+
+  it("records a full Damaged disposition once a photo and note are both present", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToDelivered(order.id);
+    await db.artworkFile.create({
+      data: {
+        artworkOrderId: order.id,
+        kind: "POST_SHOW_CONDITION_PHOTO",
+        filename: "photo-1.jpg",
+        mimeType: "image/jpeg",
+        sizeBytes: 1000,
+        storageKey: "test/photo-1.jpg",
+        uploadedByType: "EXPO",
+      },
+    });
+    const { artworkOrder } = await recordPostShowDisposition(
+      order.id,
+      { postShowStatus: "EXPO_STORAGE", postShowCondition: "DAMAGED", postShowConditionNote: "torn corner, still usable" },
+      EXPO_ACTOR,
+    );
+    expect(artworkOrder.postShowCondition).toBe("DAMAGED");
+    expect(artworkOrder.postShowConditionNote).toBe("torn corner, still usable");
+  });
+
+  it("records a client-approved disposal with the approver's name", async () => {
+    const order = await makeArtworkOrder();
+    await advanceToDelivered(order.id);
+    const { artworkOrder } = await recordPostShowDisposition(
+      order.id,
+      {
+        postShowStatus: "DISCARDED",
+        postShowCondition: "OK_TO_REUSE",
+        postShowDiscardReason: "CLIENT_APPROVED_DISPOSAL",
+        postShowConditionNote: "client confirmed on call",
+        postShowDisposalApprovedBy: "Jane Client",
+      },
+      EXPO_ACTOR,
+    );
+    expect(artworkOrder.postShowDiscardReason).toBe("CLIENT_APPROVED_DISPOSAL");
+    expect(artworkOrder.postShowDisposalApprovedBy).toBe("Jane Client");
+  });
+});
+
+describe("recordAgingDecision", () => {
+  async function makeAgingOrder() {
+    const order = await makeArtworkOrder();
+    await advanceToInProduction(order.id);
+    await transitionArtworkOrder(order.id, "PACKAGED_READY", "PACKAGED", VENDOR_ACTOR);
+    await transitionArtworkOrder(order.id, "SHIPPED_TO_SHOW", "SHIPPED", VENDOR_ACTOR);
+    await transitionArtworkOrder(order.id, "DELIVERED_AT_SHOW", "DELIVERED", EXPO_ACTOR);
+    await recordPostShowDisposition(
+      order.id,
+      { postShowStatus: "EXPO_STORAGE", postShowCondition: "AGING", postShowConditionNote: "edges fraying" },
+      EXPO_ACTOR,
+    );
+    return order;
+  }
+
+  it("refuses when the piece isn't currently flagged Aging", async () => {
+    const order = await makeArtworkOrder();
+    await expect(recordAgingDecision(order.id, "KEEP_IN_CIRCULATION", EXPO_ACTOR)).rejects.toThrow(
+      /isn't currently flagged as aging/,
+    );
+  });
+
+  it("logs a keep-in-circulation decision without changing any disposition fields", async () => {
+    const order = await makeAgingOrder();
+    const { event } = await recordAgingDecision(order.id, "KEEP_IN_CIRCULATION", EXPO_ACTOR, "client wants to keep using it");
+    expect(event.action).toBe("AGING_KEPT_IN_CIRCULATION");
+    const reloaded = await db.artworkOrder.findUniqueOrThrow({ where: { id: order.id } });
+    expect(reloaded.postShowCondition).toBe("AGING");
+  });
+
+  it("logs a mark-for-replacement decision", async () => {
+    const order = await makeAgingOrder();
+    const { event } = await recordAgingDecision(order.id, "MARK_FOR_REPLACEMENT", EXPO_ACTOR, "client wants a fresh one");
+    expect(event.action).toBe("AGING_MARKED_FOR_REPLACEMENT");
   });
 });
 

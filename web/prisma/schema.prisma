@@ -2564,14 +2564,51 @@ enum PostShowStatus {
   DISCARDED
 }
 
+// The physical/quality state of the piece -- deliberately NOT "why it was
+// discarded" (see PostShowDiscardReason below). Splitting these was a
+// direct fix: the source spreadsheet's own "Product" condition value
+// turned out (confirmed by cross-tabbing every row's status against
+// condition -- Discarded pieces are ALWAYS either "Product" or "Damaged",
+// never anything else) to actually mean "approved-for-disposal, not
+// damage-driven," not a real physical condition at all. Forcing a
+// disposal-reason into the condition field is exactly the confusion this
+// split exists to prevent going forward.
 enum PostShowCondition {
+  // First time in storage, never used at a show yet -- distinct from
+  // OK_TO_REUSE, which implies it's already been through at least one
+  // show-and-store cycle.
+  NEW
   OK_TO_REUSE
+  // Still usable, but showing wear worth flagging before the next show --
+  // notifies sales (not Graphics) so the client can be given the choice to
+  // keep it in circulation or have a new one produced. See
+  // recordAgingDecision in artwork-order-service.ts.
+  AGING
   DAMAGED
   DIRTY
-  // Meaning confirmed ambiguous from the source spreadsheet alone -- kept
-  // as-is pending confirmation from the Graphics team on what this
-  // actually denotes before this ships.
+  // Deprecated -- kept only so historical rows keep resolving to a real
+  // enum value after scripts/backfill-post-show-product-condition.ts moves
+  // every live PRODUCT row to OK_TO_REUSE + a real
+  // PostShowDiscardReason.CLIENT_APPROVED_DISPOSAL. Never written by new
+  // code; not offered anywhere in the UI.
   PRODUCT
+}
+
+// Only meaningful (and only ever asked for) when PostShowStatus is
+// DISCARDED -- the reason a piece was thrown away, kept separate from
+// PostShowCondition so "what state is it in" and "why did it leave
+// circulation" are two different, independently-honest questions instead
+// of one overloaded field.
+enum PostShowDiscardReason {
+  DAMAGED_BEYOND_REPAIR
+  // Recorded with a name (postShowDisposalApprovedBy) and a timestamp
+  // (postShowRecordedAt) -- an actual attributed approval record, not just
+  // an opaque code, since "the client said we could throw it away" is
+  // exactly the kind of claim that needs to be checkable later.
+  CLIENT_APPROVED_DISPOSAL
+  // The end state of an AGING piece once sales/the client decide against
+  // keeping it in circulation -- see recordAgingDecision.
+  AGED_OUT
 }
 
 // New-image vs. reused-from-a-prior-show vs. damaged-and-needs-replacing --
@@ -2599,6 +2636,13 @@ enum ArtworkActorType {
 enum ArtworkFileKind {
   CLIENT_ARTWORK
   PROOF
+  // Reference photo of a piece's actual post-show condition -- required
+  // (at the UI/action layer, not a DB constraint) whenever
+  // PostShowCondition is DAMAGED or PostShowDiscardReason is
+  // DAMAGED_BEYOND_REPAIR. Uploaded by internal staff only, via a
+  // non-portal upload-token route -- unlike CLIENT_ARTWORK/PROOF, no
+  // external client or vendor ever supplies one of these.
+  POST_SHOW_CONDITION_PHOTO
 }
 
 enum ArtworkPortalRole {
@@ -2693,6 +2737,21 @@ model ArtworkOrder {
   postShowCondition        PostShowCondition?
   postShowRecordedAt       DateTime?
   postShowRecordedByUserId String?
+  // Free-text staff description of the condition/reason -- effectively
+  // required (at the UI/action layer) whenever condition is DAMAGED or
+  // AGING, or discardReason is set at all, so there's always a real
+  // explanation behind the category, not just a bare label.
+  postShowConditionNote String?
+  // Only meaningful when postShowStatus is DISCARDED -- see
+  // PostShowDiscardReason's own comment.
+  postShowDiscardReason PostShowDiscardReason?
+  // Who approved a CLIENT_APPROVED_DISPOSAL specifically -- a name/contact,
+  // not a User relation, since this is very often the CLIENT's own
+  // decision, not an internal staff member's. Null for every other
+  // discard reason and for legacy PRODUCT-condition rows migrated by
+  // scripts/backfill-post-show-product-condition.ts, which predate this
+  // field and have no real approver on record.
+  postShowDisposalApprovedBy String?
 
   // Set by the Show rollover action (src/app/(app)/shows/actions.ts's
   // rolloverShowAction) -- a rolled-over piece is a brand-new

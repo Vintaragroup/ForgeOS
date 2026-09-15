@@ -5,24 +5,34 @@ import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
 import {
   acceptArtworkOrder,
   assignVendor,
+  recordAgingDecision,
   recordPostShowDisposition,
   setCustomSizeQuote,
   setProductionDetail,
   setProductionSpec,
   transitionArtworkOrder,
 } from "@/lib/artwork-order-service";
-import type { ExistingGraphicsStatus, PostShowCondition, PostShowStatus } from "@/generated/prisma/enums";
+import type {
+  ExistingGraphicsStatus,
+  PostShowCondition,
+  PostShowDiscardReason,
+  PostShowStatus,
+} from "@/generated/prisma/enums";
 import {
   notifyClientAccepted,
   notifyClientDelivered,
+  notifyClientOfDamagedAsset,
   notifyClientProofReady,
   notifyClientRejected,
+  notifyGraphicsOfDamagedAsset,
   notifyReviewersEscalation,
+  notifySalesOfAgingAsset,
   notifyVendorAssigned,
   notifyVendorGoAhead,
   notifyVendorRevisionRequested,
 } from "@/lib/artwork-notifications";
 import { createAnnotation, resolveAnnotation } from "@/lib/artwork-annotation-service";
+import { finalizeArtworkUpload } from "@/lib/artwork-file-service";
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ArtworkPortalRole } from "@/generated/prisma/enums";
@@ -215,29 +225,113 @@ export async function markDeliveredAction(artworkOrderId: string) {
 }
 
 const POST_SHOW_STATUS_VALUES: readonly PostShowStatus[] = ["NOT_RECEIVED", "EXPO_STORAGE", "SHIP_TO_CLIENT", "DISCARDED"];
-const POST_SHOW_CONDITION_VALUES: readonly PostShowCondition[] = ["OK_TO_REUSE", "DAMAGED", "DIRTY", "PRODUCT"];
+// PRODUCT deliberately excluded -- deprecated, never offered as a choice
+// going forward (see PostShowCondition's own schema comment).
+const POST_SHOW_CONDITION_VALUES: readonly PostShowCondition[] = ["NEW", "OK_TO_REUSE", "AGING", "DAMAGED", "DIRTY"];
+const POST_SHOW_DISCARD_REASON_VALUES: readonly PostShowDiscardReason[] = [
+  "DAMAGED_BEYOND_REPAIR",
+  "CLIENT_APPROVED_DISPOSAL",
+  "AGED_OUT",
+];
 
 // Post-show disposition is only ever recorded once an order has been
-// delivered -- recordPostShowDisposition itself enforces that gate;
-// re-callable, so a Graphics staffer correcting a mis-recorded condition
-// doesn't need this to be a one-shot action.
+// delivered -- recordPostShowDisposition itself enforces that gate (along
+// with the note/discard-reason/approver/photo relationships); re-callable,
+// so a Graphics staffer correcting a mis-recorded condition doesn't need
+// this to be a one-shot action.
+//
+// Notifying the Graphics department on a Damaged condition, and sales on
+// an Aging one, happen automatically here -- distinct from notifying the
+// CLIENT about damage, which stays its own separate, deliberate action
+// (notifyClientOfDamageAction below) per this feature's own "notify
+// Graphics, which in turn gives them the ability to notify the client"
+// design.
 export async function recordPostShowDispositionAction(artworkOrderId: string, formData: FormData) {
   const actor = await expoActor(artworkOrderId);
   const rawStatus = String(formData.get("postShowStatus") ?? "").trim();
   const rawCondition = String(formData.get("postShowCondition") ?? "").trim();
+  const rawDiscardReason = String(formData.get("postShowDiscardReason") ?? "").trim();
+  const note = String(formData.get("postShowConditionNote") ?? "").trim();
+  const approvedBy = String(formData.get("postShowDisposalApprovedBy") ?? "").trim();
   if (!POST_SHOW_STATUS_VALUES.includes(rawStatus as PostShowStatus)) {
     throw new Error("Select a post-show status.");
   }
-  await recordPostShowDisposition(
+  const condition = POST_SHOW_CONDITION_VALUES.includes(rawCondition as PostShowCondition)
+    ? (rawCondition as PostShowCondition)
+    : null;
+
+  const { artworkOrder } = await recordPostShowDisposition(
     artworkOrderId,
     {
       postShowStatus: rawStatus as PostShowStatus,
-      postShowCondition: POST_SHOW_CONDITION_VALUES.includes(rawCondition as PostShowCondition)
-        ? (rawCondition as PostShowCondition)
+      postShowCondition: condition,
+      postShowConditionNote: note || null,
+      postShowDiscardReason: POST_SHOW_DISCARD_REASON_VALUES.includes(rawDiscardReason as PostShowDiscardReason)
+        ? (rawDiscardReason as PostShowDiscardReason)
         : null,
+      postShowDisposalApprovedBy: approvedBy || null,
     },
     actor,
   );
+
+  if (condition === "DAMAGED") {
+    await notifyGraphicsOfDamagedAsset(artworkOrderId, artworkOrder.jobCode, note);
+  } else if (condition === "AGING" && artworkOrder.opportunityId) {
+    await notifySalesOfAgingAsset(artworkOrder.opportunityId, artworkOrder.jobCode, note);
+  }
+
+  revalidatePath(`/artwork/${artworkOrderId}`);
+}
+
+// Deliberate, staff-triggered follow-up -- only reachable once the
+// current condition is actually Damaged, so this can't fire on a piece
+// nothing was recorded about.
+export async function notifyClientOfDamageAction(artworkOrderId: string) {
+  const actor = await expoActor(artworkOrderId);
+  const order = await db.artworkOrder.findUniqueOrThrow({ where: { id: artworkOrderId } });
+  if (order.postShowCondition !== "DAMAGED") {
+    throw new Error("This piece isn't currently recorded as Damaged.");
+  }
+  const clientEmail = await latestInviteEmail(artworkOrderId, "CLIENT");
+  if (!clientEmail) throw new Error("No client contact on file to notify.");
+  await notifyClientOfDamagedAsset(artworkOrderId, clientEmail, order.postShowConditionNote ?? "");
+  // A same-status audit event, same pattern as every other post-show
+  // action -- the Post-Show dashboard's own "damaged, awaiting client
+  // notice" bucket is exactly "DAMAGED with no NOTIFIED_CLIENT_OF_DAMAGE
+  // event yet," so this is what actually moves a piece out of that list.
+  await transitionArtworkOrder(artworkOrderId, order.status, "NOTIFIED_CLIENT_OF_DAMAGE", actor);
+  revalidatePath(`/artwork/${artworkOrderId}`);
+}
+
+export async function recordAgingDecisionAction(artworkOrderId: string, formData: FormData) {
+  const actor = await expoActor(artworkOrderId);
+  const decision = String(formData.get("decision") ?? "").trim();
+  if (decision !== "KEEP_IN_CIRCULATION" && decision !== "MARK_FOR_REPLACEMENT") {
+    throw new Error("Unknown aging decision.");
+  }
+  const note = String(formData.get("note") ?? "").trim() || null;
+  await recordAgingDecision(artworkOrderId, decision, actor, note);
+  revalidatePath(`/artwork/${artworkOrderId}`);
+}
+
+// Finalizes an already-uploaded post-show reference photo -- the file's
+// bytes already landed in Blob storage via post-show-photo-upload-token/
+// route.ts by the time this runs; this just records the ArtworkFile row.
+export async function finalizePostShowPhotoUploadAction(
+  artworkOrderId: string,
+  data: { storageKey: string; filename: string; mimeType: string; sizeBytes: number; round: number },
+) {
+  const user = await requireArtworkOrderAccess(artworkOrderId);
+  await finalizeArtworkUpload(artworkOrderId, {
+    storageKey: data.storageKey,
+    kind: "POST_SHOW_CONDITION_PHOTO",
+    round: data.round,
+    originalFilename: data.filename,
+    mimeType: data.mimeType,
+    sizeBytes: data.sizeBytes,
+    uploadedByType: "EXPO",
+    uploadedByUserId: user.id,
+  });
   revalidatePath(`/artwork/${artworkOrderId}`);
 }
 

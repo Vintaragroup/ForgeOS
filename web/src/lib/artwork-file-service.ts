@@ -14,7 +14,13 @@ import type { ArtworkActorType, ArtworkFileKind } from "@/generated/prisma/enums
 
 function systemAssignedFilename(kind: ArtworkFileKind, round: number, originalFilename: string): string {
   const ext = path.extname(originalFilename).toLowerCase() || ".pdf";
-  return kind === "PROOF" ? `proof-round-${round}${ext}` : `artwork${ext}`;
+  if (kind === "PROOF") return `proof-round-${round}${ext}`;
+  // round doubles as a 1-based photo index here (the caller passes the
+  // current photo count for this order, same way PROOF's caller passes a
+  // revision round) -- multiple reference photos on one piece would
+  // otherwise all collide on the same generic "artwork.jpg" name.
+  if (kind === "POST_SHOW_CONDITION_PHOTO") return `post-show-condition-${round}${ext}`;
+  return `artwork${ext}`;
 }
 
 // Checked once, here, rather than trusting the browser-reported mimeType --
