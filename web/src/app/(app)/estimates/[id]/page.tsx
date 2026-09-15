@@ -1685,14 +1685,35 @@ function LineItemsTab({
   // estimator unable to tell which option was the group they'd just
   // renamed (the move itself still worked -- the raw name never changed
   // underneath -- but there was no way to recognize it from the list).
-  // Picks the first override found for a section regardless of which
-  // category it was set from -- a tagged booth's H2 only ever resolves
-  // into one category anyway, so there's at most one to find.
+  // Picks the one override found for a section across every category it
+  // was set from -- correct for a tagged booth's H2, which only ever
+  // resolves into one category, so there's at most one to find. NOT
+  // correct for an untagged, multi-category section (e.g. a drawing
+  // import's single catch-all "Booth Structure" component spanning
+  // Structure/Furniture/Custom Build/Labor/Flooring/Other all at once) --
+  // confirmed live as a real bug: that section's Flooring-tab override
+  // ("Custom flooring installation") was the only one that happened to
+  // get approved, so it won here and showed up as this section's ONLY
+  // "Move to group"/"Merge into" option, even from the Custom Build tab
+  // where it's actively misleading (nothing being moved there has
+  // anything to do with flooring). When a section's own overrides
+  // genuinely disagree across categories like this, there's no single
+  // correct label to show -- falls through to the raw, category-neutral
+  // section name instead of guessing whichever override happened to be
+  // found first.
   const sectionDisplayNameById = new Map<string, string>();
+  const sectionDisplayNamesDisagree = new Set<string>();
   for (const d of sectionCategoryDescriptions) {
-    if (d.description && !sectionDisplayNameById.has(d.sectionId)) {
+    if (!d.description) continue;
+    const existing = sectionDisplayNameById.get(d.sectionId);
+    if (existing === undefined) {
       sectionDisplayNameById.set(d.sectionId, d.description);
+    } else if (existing !== d.description) {
+      sectionDisplayNamesDisagree.add(d.sectionId);
     }
+  }
+  for (const sectionId of sectionDisplayNamesDisagree) {
+    sectionDisplayNameById.delete(sectionId);
   }
   const lineItemGroupLabels: Record<string, string | null> = {};
   const sectionNamesByGroupLabel: Record<string, { value: string; label: string }[]> = {};

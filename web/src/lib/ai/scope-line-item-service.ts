@@ -855,15 +855,30 @@ export async function commitScopeLineItems(estimateVersionId: string, documentId
         // isAlwaysGraphicsDescription's own comment -- same bug pattern
         // already fixed in design-cost-estimate-import-service.ts).
         // Otherwise prefer a confident catalog match's own category over
-        // the AI's coarser scope bucket, and fall back to the
-        // description heuristic only if neither resolved.
+        // the AI's coarser scope bucket, and fall back to the description
+        // heuristic before finally trusting the scope bucket itself.
+        // "Other" gets the SAME "coarse bucket loses to real content"
+        // treatment SEG already gets above, not just skipped by ?? like
+        // every other scope category: confirmed live (Kacey dining table,
+        // "AFR outsource supplier" -- no catalog match, so nothing upstream
+        // of this ever resolved) that the AI's own "Other" bucket resolves
+        // to a real, live "Other" category on its own, so it used to win
+        // outright via ?? and never even let inferCategoryFromDescription's
+        // unambiguous "table" -> Furniture pattern run. Every OTHER scope
+        // bucket (Structure, Custom Build, ...) still wins over the
+        // description heuristic as before -- only "Other" specifically is
+        // this untrustworthy, since it's the AI's own "nothing else fit"
+        // catch-all, not a real positive signal like the rest.
+        const scopeCategory = mapScopeCategoryToCanonical(category, liveCategories);
+        const isScopeCategoryOther = category.trim().toLowerCase() === "other";
         const resolvedCategory =
           isCompoundAssemblyDescription(item.description)
             ? resolveCategoryNameFromKey(liveCategories, CUSTOM_BUILD_CATEGORY_KEY)
             : (isAlwaysGraphicsDescription(item.description) ? resolveCategoryNameFromKey(liveCategories, "graphics") : null) ??
               mapCatalogCategoryToCanonical(catalogMatch?.category, liveCategories) ??
-              mapScopeCategoryToCanonical(category, liveCategories) ??
-              inferCategoryFromDescription(item.description, liveCategories);
+              (isScopeCategoryOther ? null : scopeCategory) ??
+              inferCategoryFromDescription(item.description, liveCategories) ??
+              scopeCategory;
         return {
           lineType: item.lineType,
           description,

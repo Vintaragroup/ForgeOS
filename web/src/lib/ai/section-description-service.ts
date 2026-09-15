@@ -46,14 +46,31 @@ export async function suggestSectionDescription(
   const section = await db.estimateSection.findUniqueOrThrow({
     where: { id: sectionId },
     include: {
-      lineItems: { select: { description: true }, take: MAX_ITEM_DESCRIPTIONS },
+      lineItems: { select: { description: true, category: true } },
       estimateVersion: { select: { estimate: { select: { opportunityId: true } } } },
     },
   });
   await assertUnlocked(section.estimateVersionId);
 
+  // A section can surface its own H1 card under several different category
+  // tabs at once (see this function's own header comment) -- e.g. one
+  // "Booth Structure" section spanning Structure, Furniture, Custom Build,
+  // and Labor line items all at once. Confirmed live: without this filter,
+  // every one of those tabs' own "AI generate" button sent the model the
+  // EXACT SAME full, unfiltered materials list (this section's every line
+  // item regardless of category), so clicking it from different category
+  // tabs produced the same or near-identical title every time, correct for
+  // none of them specifically. Scoped down to just this tab's own category
+  // before ever building the prompt -- same resolveEffectiveCategory this
+  // function's category-tier sibling (suggestCategorySummary) already uses.
+  const [categories, category] = await Promise.all([
+    db.category.findMany({ where: { deletedAt: null } }),
+    db.category.findUniqueOrThrow({ where: { id: categoryId } }),
+  ]);
+  const categoryLineItems = section.lineItems.filter((li) => resolveEffectiveCategory(li, section, categories) === category.name);
+
   const client = getOpenAiClient();
-  const itemList = section.lineItems.map((li) => `- ${li.description}`).join("\n");
+  const itemList = categoryLineItems.map((li) => `- ${li.description}`).slice(0, MAX_ITEM_DESCRIPTIONS).join("\n");
 
   const completion = await client.chat.completions.create({
     model: BASIC_MODEL,

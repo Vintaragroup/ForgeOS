@@ -480,6 +480,51 @@ describe("commitScopeLineItems", () => {
     expect(golfTee?.category).toBe("Graphics");
   });
 
+  it("resolves an unambiguous furniture item to Furniture even though the AI filed it under its own Other bucket", async () => {
+    // Confirmed against a real committed item ("Kacey dining table (AFR
+    // outsource supplier)", no catalog match since AFR is an outsource
+    // supplier not in the internal catalog): the AI's own "Other" scope
+    // bucket resolves to a real, live "Other" category on its own, so it
+    // used to win outright via mapScopeCategoryToCanonical before
+    // inferCategoryFromDescription's unambiguous "table" -> Furniture
+    // pattern ever ran -- same bug shape as the SEG case above, but "Other"
+    // specifically needs its own carve-out since (unlike every other scope
+    // bucket) it's the AI's "nothing else fit" catch-all, not a real
+    // positive signal.
+    await db.category.createMany({
+      data: [
+        { name: "Furniture", key: "furniture" },
+        { name: "Other", key: "other" },
+      ],
+    });
+    const document = await makeAnalyzedDocument("some scope text");
+    const proposed: ProposedLineItem[] = [
+      {
+        description: "Kacey dining table (AFR outsource supplier)",
+        qty: 2,
+        qtyIsExplicit: true,
+        unit: "EA",
+        lineType: "MATERIAL",
+        category: "Other",
+        sourceQuote: "some scope text",
+        elementName: "Booth Structure",
+        subElementName: "Furniture",
+      },
+    ];
+    await db.document.update({
+      where: { id: document.id },
+      data: { proposedLineItems: proposed as unknown as Prisma.InputJsonValue },
+    });
+    const opportunity = await db.opportunity.findFirstOrThrow();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await createEstimateVersion(estimate.id, 0);
+
+    await commitScopeLineItems(version.id, document.id);
+
+    const table = await db.lineItem.findFirstOrThrow({ where: { documentId: document.id } });
+    expect(table.category).toBe("Furniture");
+  });
+
   it("uses a model-reported pageNumber directly when present, bypassing text-search page lookup -- the drawing-sourced case", async () => {
     // A DOCX-mime document (no PDF page text at all) proves this isn't
     // accidentally working via locateQuotePage -- drawing-line-item-
