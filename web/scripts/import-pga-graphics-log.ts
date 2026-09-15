@@ -328,6 +328,7 @@ interface Tally {
   vendorsCreated: Set<string>;
   opportunitiesCreated: number;
   unmatchedAe: Set<string>;
+  showIdBackfilled: number;
 }
 
 function newTally(): Tally {
@@ -339,6 +340,7 @@ function newTally(): Tally {
     vendorsCreated: new Set(),
     opportunitiesCreated: 0,
     unmatchedAe: new Set(),
+    showIdBackfilled: 0,
   };
 }
 
@@ -366,6 +368,7 @@ async function resolveVendorId(initials: string, tally: Tally, vendorCache: Map<
 async function resolveOpportunityId(
   clientName: string,
   salesRepId: string | null,
+  showId: string | null,
   tally: Tally,
   opportunityCache: Map<string, string>,
 ): Promise<string | null> {
@@ -398,7 +401,14 @@ async function resolveOpportunityId(
       return opportunityCache.get(key)!;
     }
     const created = await db.opportunity.create({
-      data: { companyId: company!.id, showName: SHOW_NAME, stage: "WON", salesRepId },
+      // showId links this deal to the real Show record -- without it, this
+      // Opportunity is only findable by matching showName's free text
+      // against "PGA Show", not by any real relation. That's exactly the
+      // gap discovered after the fact: the original version of this import
+      // never set it, leaving hundreds of real client Opportunities
+      // invisible to anything that queries by Show.opportunities (the
+      // rollover feature, the Analytics view's show comparison, etc.).
+      data: { companyId: company!.id, showName: SHOW_NAME, showId, stage: "WON", salesRepId },
     });
     opportunityCache.set(key, created.id);
     return created.id;
@@ -408,6 +418,15 @@ async function resolveOpportunityId(
     // Backfill only -- never overwrite a salesRepId someone already set
     // deliberately (same posture as scripts/backfill-user-department-codes.ts).
     await db.opportunity.update({ where: { id: opportunity.id }, data: { salesRepId } });
+  }
+  if (showId && !opportunity.showId && APPLY) {
+    // Same backfill-only posture -- re-running this script (now fixed)
+    // against data imported by the original, buggy version fills in the
+    // missing link without touching anything a person set by hand since.
+    tally.showIdBackfilled++;
+    await db.opportunity.update({ where: { id: opportunity.id }, data: { showId } });
+  } else if (showId && !opportunity.showId && !APPLY) {
+    tally.showIdBackfilled++;
   }
   opportunityCache.set(key, opportunity.id);
   return opportunity.id;
@@ -454,7 +473,7 @@ async function importSheet(
     let graphicCode = parsed.graphicCode || null;
     if (mode === "client") {
       const salesRepId = await resolveSalesRepId(parsed.accountExecutive, tally, caches.user);
-      opportunityId = await resolveOpportunityId(parsed.client, salesRepId, tally, caches.opportunity);
+      opportunityId = await resolveOpportunityId(parsed.client, salesRepId, showId, tally, caches.opportunity);
     } else {
       // PGA Hub 2026's own "CLIENT" column is an internal program/area
       // name, not a real exhibiting company -- see this script's header
@@ -547,6 +566,7 @@ async function main() {
   console.log(`Skipped (no client name): ${tally.skippedNoClient}`);
   console.log(`Companies created: ${tally.companiesCreated.size}`);
   console.log(`Opportunities created: ${tally.opportunitiesCreated}`);
+  console.log(`Existing opportunities backfilled with the real showId (were text-matched only): ${tally.showIdBackfilled}`);
   console.log(`Vendors created: ${tally.vendorsCreated.size}${tally.vendorsCreated.size ? ` (${[...tally.vendorsCreated].join(", ")})` : ""}`);
   if (tally.unmatchedAe.size > 0) {
     console.log(
