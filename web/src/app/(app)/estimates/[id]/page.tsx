@@ -4067,47 +4067,46 @@ function CategoryTabContent({
                     {section?.excludedFromTotals ? "Include in totals" : "Exclude from totals"}
                   </button>
                 </form>
-                {/* Whole-section reparent to an arbitrary, different booth
-                    -- not the category-only "Move section" form below, and
-                    not MoveToGroupBar's own per-item move (deliberately
-                    same-booth-only, see its header comment). Exists for a
-                    section that has no correct booth at all right now --
-                    most often restoreLineItem's own shared recovery
-                    section (see its "section no longer exists" fallback
-                    comment) -- so an estimator who recognizes where these
-                    items actually belong can put them there by hand; the
-                    temporary container itself is deleted once empty
-                    (moveSectionToGroup's own comment). Booth left blank
-                    keeps/returns items to the project-wide bucket -- same
-                    "" = no booth convention MoveToGroupBar's own group
-                    picker uses. Tucked behind SectionMoveMenu's own kebab
-                    (same reasoning as BoothActionsMenu's) instead of
-                    sitting inline -- two always-visible text inputs plus
-                    this button used to force Hide/Summarize/Exclude's own
-                    labels to wrap onto extra lines, the real cause of a
-                    standalone section's header reading "taller" than a
-                    tagged booth's despite identical font-size. Applies to
-                    both isStandalone and the untagged-booth case -- either
-                    way, group.sectionId is a real section that can be
-                    reparented. Placed BEFORE +Group below, same position
-                    a real booth's own kebab (BoothActionsMenu) takes
-                    relative to ITS +Group -- these used to sit in the
-                    opposite order from each other, one real, visible
-                    inconsistency in an otherwise-identical header. */}
-                <SectionMoveMenu moveAction={moveSectionToGroupAction.bind(null, estimateId, version.id, group.sectionId)} />
-                {/* Whole-group merge into a DIFFERENT H2, anywhere on this
-                    version -- see mergeSectionIntoAnotherSection's own
-                    header comment. A standalone/untagged section renders
-                    with the same H1 treatment as a real booth (this
-                    block's own header comment above), but it IS just a
-                    single H2 underneath -- so it's a valid merge SOURCE
-                    the same way it's already a valid merge TARGET for a
-                    real booth's own H1-level merge tool (see
-                    mergeTargetOptions' own "section:<id>" case). */}
-                <ElementGroupActionsMenu
+                {/* One kebab for both of this H1's rare whole-section
+                    tools -- reparent to an arbitrary, different booth (not
+                    the category-only "Move section" form below, and not
+                    MoveToGroupBar's own per-item move, deliberately same-
+                    booth-only, see its header comment), and merge this
+                    whole group into a DIFFERENT H2 anywhere on this
+                    version (see mergeSectionIntoAnotherSection's own
+                    header comment) -- a standalone/untagged section
+                    renders with the same H1 treatment as a real booth
+                    (this block's own header comment above), but it IS
+                    just a single H2 underneath, so it's a valid merge
+                    SOURCE the same way it's already a valid merge TARGET
+                    for a real booth's own H1-level merge tool (see
+                    mergeTargetOptions' own "section:<id>" case). Move
+                    exists for a section that has no correct booth at all
+                    right now -- most often restoreLineItem's own shared
+                    recovery section (see its "section no longer exists"
+                    fallback comment) -- so an estimator who recognizes
+                    where these items actually belong can put them there by
+                    hand; the temporary container itself is deleted once
+                    empty (moveSectionToGroup's own comment). Booth left
+                    blank keeps/returns items to the project-wide bucket --
+                    same "" = no booth convention MoveToGroupBar's own
+                    group picker uses. Used to be TWO separate kebabs
+                    (this one plus its own ElementGroupActionsMenu) sitting
+                    side by side -- confirmed live as a real inconsistency:
+                    a real tagged booth's H1 already bundles its own
+                    move+merge pair into one kebab (BoothActionsMenu), so a
+                    standalone section's H1 showing two identical-looking
+                    "..." buttons for the same two-tool shape was the odd
+                    one out, not the norm. Folded together here instead.
+                    Applies to both isStandalone and the untagged-booth
+                    case -- either way, group.sectionId is a real section
+                    that can be reparented or merged. Placed BEFORE +Group
+                    below, same position a real booth's own kebab
+                    (BoothActionsMenu) takes relative to ITS +Group. */}
+                <SectionMoveMenu
+                  moveAction={moveSectionToGroupAction.bind(null, estimateId, version.id, group.sectionId)}
                   mergeAction={mergeSectionAction.bind(null, estimateId, version.id, group.sectionId)}
                   targetGroupOptions={mergeSectionTargetOptions.filter((opt) => opt.value !== group.sectionId)}
-                  theme="dark"
                 />
                 {/* +Group -- for a section that isn't part of a fully-
                     tagged booth yet (this section's own groupLabel is
