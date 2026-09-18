@@ -919,6 +919,7 @@ model Category {
   marginOverrides     CategoryMarginOverride[]
   proposalSummaries   EstimateCategorySummary[]
   sectionDescriptions EstimateSectionCategoryDescription[]
+  catalogCategories   CatalogCategory[]
 
   @@map("categories")
 }
@@ -1164,6 +1165,179 @@ model RentalItem {
   deletedAt DateTime?
 
   @@map("rental_items")
+}
+
+// ---------------------------------------------------------------------------
+// Unified catalog (catalog redesign, phase 1). Replaces the separate
+// Material / RentalItem tables above with one numbered catalog -- those two
+// stay in place, untouched, until the app has been cut over to CatalogItem
+// and verified in production (expand/contract: this migration only ADDS).
+// scripts/migrate-catalog-to-unified.ts populates these from the legacy
+// tables; see that script's header for the numbering order.
+// ---------------------------------------------------------------------------
+
+// One row per physical office. Orlando's catalog is the company standard
+// (isStandard) -- the other offices' own inventories get mapped onto it in
+// a later phase rather than each keeping a parallel catalog. `code` is a
+// short stable identifier (ORL/MIA/LAX), same posture as Department.code.
+model Office {
+  code       String  @id
+  name       String
+  isStandard Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  catalogItemAliases CatalogItemAlias[]
+
+  @@map("offices")
+}
+
+// What a catalog item fundamentally is -- also the first letter of its
+// catalog number (R-/M-/S-). SERVICE covers the non-physical rows that
+// used to live in the rental list (design time, shipping).
+enum CatalogItemType {
+  RENTAL
+  MATERIAL
+  SERVICE
+}
+
+// The middle segment of a catalog number (e.g. FUR in R-FUR-0001). Not
+// tied to a type: BMX is used for both BeMatrix purchase stock (M-BMX-…)
+// and BeMatrix rental frames (R-BMX-…), which is why number sequences are
+// per (type, code), not per code alone.
+//
+// estimateCategoryKey links to the estimate-side Category tree (Furniture,
+// Structure, Audio/Visual...) so an item added to an estimate from the
+// catalog can land in the right tab without re-guessing from its text.
+// Left null where a catalog category doesn't map to one estimate category
+// on its own (raw sheet goods can end up in any custom build).
+model CatalogCategory {
+  code                String    @id
+  name                String
+  sortOrder           Int       @default(0)
+  estimateCategoryKey String?
+  estimateCategory    Category? @relation(fields: [estimateCategoryKey], references: [key])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  items CatalogItem[]
+
+  @@map("catalog_categories")
+}
+
+// Atomic per-(type, category) counter behind catalog number allocation --
+// see src/lib/catalog-number.ts. A row's lastValue only ever increases, so
+// a number retired with its item (soft delete) is never handed out again.
+model CatalogNumberSequence {
+  itemType     CatalogItemType
+  categoryCode String
+  lastValue    Int             @default(0)
+
+  @@id([itemType, categoryCode])
+  @@map("catalog_number_sequences")
+}
+
+model CatalogItem {
+  id            String          @id @default(cuid())
+  // e.g. "R-FUR-0001". Assigned once at creation, never changed and never
+  // reused -- not on rename, not on recategorizing. An identifier, not a
+  // description, so estimates/POs/labels that quote it stay valid forever.
+  catalogNumber String          @unique
+  itemType      CatalogItemType
+  categoryCode  String
+  category      CatalogCategory @relation(fields: [categoryCode], references: [code])
+  name          String
+  description   String?
+  unit          String?
+  // What it costs US (purchase/material cost) vs. what we CHARGE (rental
+  // or sell price). The legacy tables each only had one of these --
+  // Material.currentUnitCost / RentalItem.unitPrice -- so migrated rows
+  // have exactly one set; both exist so a single item (e.g. a BeMatrix
+  // frame we both buy and rent out) can eventually carry both.
+  unitCost      Decimal?        @db.Decimal(10, 2)
+  unitPrice     Decimal?        @db.Decimal(10, 2)
+  // Where a price came from -- merges Material.sourceNote and
+  // RentalItem.priceDerivationNote (same purpose, two names).
+  sourceNote    String?
+
+  // Cut-list stock dimensions, carried over verbatim from Material -- see
+  // Material's own comments for their meaning. Null on anything that isn't
+  // real cuttable stock.
+  materialType          MaterialType?
+  stockWidth            Decimal?      @db.Decimal(8, 3)
+  stockLength           Decimal?      @db.Decimal(8, 3)
+  thickness             Decimal?      @db.Decimal(8, 3)
+  defaultKerf           Decimal?      @db.Decimal(6, 3)
+  grainDirectionMatters Boolean       @default(false)
+
+  // Migration trace back to the row this was created from -- @unique so
+  // the migration script is idempotent (a re-run finds the existing item
+  // instead of minting a second number). Dropped with the legacy tables.
+  legacyMaterialId   String? @unique
+  legacyRentalItemId String? @unique
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  tags    CatalogItemTag[]
+  aliases CatalogItemAlias[]
+
+  @@index([categoryCode])
+  @@map("catalog_items")
+}
+
+// Controlled vocabulary for search/filter chips (standard-rate, fr-rated,
+// ada...) -- deliberately NOT how line items link to the catalog (that's a
+// direct catalogItemId, phase 2). Tags describe; the FK identifies.
+model CatalogTag {
+  id   String @id @default(cuid())
+  // Lowercase slug, e.g. "standard-rate".
+  name String @unique
+
+  createdAt DateTime @default(now())
+
+  items CatalogItemTag[]
+
+  @@map("catalog_tags")
+}
+
+model CatalogItemTag {
+  catalogItemId String
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id])
+  tagId         String
+  tag           CatalogTag  @relation(fields: [tagId], references: [id])
+
+  @@id([catalogItemId, tagId])
+  @@map("catalog_item_tags")
+}
+
+// Other names the same item goes by -- another office's legacy name for
+// it, a spelling seen on past estimates. Feeds catalog matching and the
+// Miami/LA import review. Not unique on its own: an ambiguous name can
+// legitimately point at more than one item, and the matcher should see
+// that ambiguity rather than have it hidden by a constraint.
+model CatalogItemAlias {
+  id              String      @id @default(cuid())
+  catalogItemId   String
+  catalogItem     CatalogItem @relation(fields: [catalogItemId], references: [id])
+  alias           String
+  // significantTokens()-style normalization, for lookup.
+  normalizedAlias String
+  officeCode      String?
+  office          Office?     @relation(fields: [officeCode], references: [code])
+  // Free-text provenance, e.g. "MIA inventory sheet 2026-09".
+  source          String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([catalogItemId, normalizedAlias])
+  @@index([normalizedAlias])
+  @@map("catalog_item_aliases")
 }
 
 enum SectionType {
@@ -2733,18 +2907,18 @@ model ArtworkOrder {
   // -- Post-show disposition -- set once, after DELIVERED_AT_SHOW. See
   // PostShowStatus/PostShowCondition's own comments for why these are
   // fields, not more ArtworkOrderStatus states.
-  postShowStatus           PostShowStatus?
-  postShowCondition        PostShowCondition?
-  postShowRecordedAt       DateTime?
-  postShowRecordedByUserId String?
+  postShowStatus             PostShowStatus?
+  postShowCondition          PostShowCondition?
+  postShowRecordedAt         DateTime?
+  postShowRecordedByUserId   String?
   // Free-text staff description of the condition/reason -- effectively
   // required (at the UI/action layer) whenever condition is DAMAGED or
   // AGING, or discardReason is set at all, so there's always a real
   // explanation behind the category, not just a bare label.
-  postShowConditionNote String?
+  postShowConditionNote      String?
   // Only meaningful when postShowStatus is DISCARDED -- see
   // PostShowDiscardReason's own comment.
-  postShowDiscardReason PostShowDiscardReason?
+  postShowDiscardReason      PostShowDiscardReason?
   // Who approved a CLIENT_APPROVED_DISPOSAL specifically -- a name/contact,
   // not a User relation, since this is very often the CLIENT's own
   // decision, not an internal staff member's. Null for every other
