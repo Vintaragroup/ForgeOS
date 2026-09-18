@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
+import { UserError } from "@/lib/user-error";
 import {
   ARTWORK_TRANSITIONS,
   MAX_REVISION_ROUNDS,
@@ -705,6 +706,11 @@ describe("recordPostShowDisposition", () => {
     await expect(
       recordPostShowDisposition(aeOrder.id, { postShowStatus: "EXPO_STORAGE", postShowCondition: "AGING" }, EXPO_ACTOR),
     ).rejects.toThrow(/note is required/);
+    // A UserError specifically, not a plain Error -- that's what lets the
+    // form surface this message in production instead of a redacted one.
+    await expect(
+      recordPostShowDisposition(aeOrder.id, { postShowStatus: "EXPO_STORAGE", postShowCondition: "AGING" }, EXPO_ACTOR),
+    ).rejects.toBeInstanceOf(UserError);
   });
 
   it("refuses a Damaged condition with no reference photo on file", async () => {

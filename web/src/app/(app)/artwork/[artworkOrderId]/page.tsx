@@ -8,6 +8,7 @@ import { getPdfPageDimensionsInInches } from "@/lib/document-view-service";
 import { Card, PageHeader, StatusChip, Field, SelectField, TextareaField, Button, ReadOnlyField, EmptyState } from "@/components/ui";
 import { CopyLinkBanner } from "@/components/copy-link-banner";
 import { PostShowPhotoUploadForm } from "@/components/post-show-photo-upload-form";
+import { ActionForm } from "@/components/action-form";
 import {
   assignVendorAction,
   confirmProofMatchAction,
@@ -508,7 +509,7 @@ export default async function ArtworkOrderPage({
               />
             </div>
 
-            <form action={recordPostShowDispositionWithId} className="flex flex-col gap-4">
+            <ActionForm action={recordPostShowDispositionWithId} className="flex flex-col gap-4">
               <div className="flex flex-wrap items-end gap-3">
                 <div className="min-w-48">
                   <SelectField
@@ -574,7 +575,7 @@ export default async function ArtworkOrderPage({
               <div>
                 <Button variant="secondary">Save</Button>
               </div>
-            </form>
+            </ActionForm>
             {order.postShowRecordedAt && (
               <p className="mt-3 text-xs text-neutral-400">Last recorded {order.postShowRecordedAt.toLocaleString()}.</p>
             )}

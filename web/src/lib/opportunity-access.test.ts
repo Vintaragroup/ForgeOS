@@ -129,6 +129,20 @@ describe("canAccessArtworkOrder", () => {
 
     expect(await canAccessArtworkOrder(owner, opportunity.id)).toBe(true);
   });
+
+  it("grants an admin with no department access to a Hub piece (null opportunityId)", async () => {
+    const admin = await makeUser("ADMIN");
+    const superAdmin = await makeUser("SUPER_ADMIN");
+
+    expect(await canAccessArtworkOrder(admin, null)).toBe(true);
+    expect(await canAccessArtworkOrder(superAdmin, null)).toBe(true);
+  });
+
+  it("denies a Hub piece (null opportunityId) to a non-admin, non-Graphics employee", async () => {
+    const employee = await makeUser();
+
+    expect(await canAccessArtworkOrder(employee, null)).toBe(false);
+  });
 });
 
 describe("opportunityAccessWhere", () => {

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
+import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
 import {
   acceptArtworkOrder,
   assignVendor,
@@ -246,7 +247,20 @@ const POST_SHOW_DISCARD_REASON_VALUES: readonly PostShowDiscardReason[] = [
 // (notifyClientOfDamageAction below) per this feature's own "notify
 // Graphics, which in turn gives them the ability to notify the client"
 // design.
-export async function recordPostShowDispositionAction(artworkOrderId: string, formData: FormData) {
+//
+// Returns an ActionResult rather than throwing its validation errors --
+// rendered through ActionForm, so "upload a photo first" / "a note is
+// required" actually reach the user in production instead of Next's
+// redacted error boundary (see src/lib/user-error.ts).
+export async function recordPostShowDispositionAction(
+  artworkOrderId: string,
+  _prevState: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  return catchUserError(() => recordPostShowDispositionFromForm(artworkOrderId, formData));
+}
+
+async function recordPostShowDispositionFromForm(artworkOrderId: string, formData: FormData) {
   const actor = await expoActor(artworkOrderId);
   const rawStatus = String(formData.get("postShowStatus") ?? "").trim();
   const rawCondition = String(formData.get("postShowCondition") ?? "").trim();
@@ -254,7 +268,7 @@ export async function recordPostShowDispositionAction(artworkOrderId: string, fo
   const note = String(formData.get("postShowConditionNote") ?? "").trim();
   const approvedBy = String(formData.get("postShowDisposalApprovedBy") ?? "").trim();
   if (!POST_SHOW_STATUS_VALUES.includes(rawStatus as PostShowStatus)) {
-    throw new Error("Select a post-show status.");
+    throw new UserError("Select a post-show status.");
   }
   const condition = POST_SHOW_CONDITION_VALUES.includes(rawCondition as PostShowCondition)
     ? (rawCondition as PostShowCondition)

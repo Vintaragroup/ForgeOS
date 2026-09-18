@@ -9,6 +9,7 @@
 // who acted.
 import { randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
+import { UserError } from "@/lib/user-error";
 import {
   ArtworkOrderStatus,
   type ArtworkActorType,
@@ -463,29 +464,29 @@ export async function recordPostShowDisposition(
 ) {
   const current = await db.artworkOrder.findUniqueOrThrow({ where: { id: artworkOrderId } });
   if (current.status !== "DELIVERED_AT_SHOW") {
-    throw new Error("Post-show disposition can only be recorded once an order has been delivered at the show.");
+    throw new UserError("Post-show disposition can only be recorded once an order has been delivered at the show.");
   }
 
   const hasDiscardReason = disposition.postShowDiscardReason != null;
   if (disposition.postShowStatus === "DISCARDED" && !hasDiscardReason) {
-    throw new Error("A discard reason is required when marking a piece Discarded.");
+    throw new UserError("A discard reason is required when marking a piece Discarded.");
   }
   if (disposition.postShowStatus !== "DISCARDED" && hasDiscardReason) {
-    throw new Error("A discard reason only applies when the disposition is Discarded.");
+    throw new UserError("A discard reason only applies when the disposition is Discarded.");
   }
 
   const isClientApproved = disposition.postShowDiscardReason === "CLIENT_APPROVED_DISPOSAL";
   if (isClientApproved && !disposition.postShowDisposalApprovedBy?.trim()) {
-    throw new Error("Record who approved the disposal when the reason is client-approved.");
+    throw new UserError("Record who approved the disposal when the reason is client-approved.");
   }
   if (!isClientApproved && disposition.postShowDisposalApprovedBy) {
-    throw new Error("An approver name only applies to a client-approved disposal.");
+    throw new UserError("An approver name only applies to a client-approved disposal.");
   }
 
   const needsNote =
     disposition.postShowCondition === "DAMAGED" || disposition.postShowCondition === "AGING" || hasDiscardReason;
   if (needsNote && !disposition.postShowConditionNote?.trim()) {
-    throw new Error("A note is required for a damaged, aging, or discarded piece -- explain what's going on.");
+    throw new UserError("A note is required for a damaged, aging, or discarded piece -- explain what's going on.");
   }
 
   const needsPhoto = disposition.postShowCondition === "DAMAGED" || disposition.postShowDiscardReason === "DAMAGED_BEYOND_REPAIR";
@@ -494,7 +495,7 @@ export async function recordPostShowDisposition(
       where: { artworkOrderId, kind: "POST_SHOW_CONDITION_PHOTO", deletedAt: null },
     });
     if (photoCount === 0) {
-      throw new Error("Upload at least one reference photo before recording a damaged condition.");
+      throw new UserError("Upload at least one reference photo before recording a damaged condition.");
     }
   }
 

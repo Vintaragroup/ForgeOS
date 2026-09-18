@@ -128,12 +128,16 @@ export async function requireProjectAccess(projectId: string) {
 //
 // opportunityId is null for a Show-owned Hub/hanging-sign piece (see
 // ArtworkOrder.showId's schema comment) -- there's no owner/collaborator
-// to check in that case, so access is department-only.
+// to check in that case, so access is admin- or department-only. The
+// explicit isAdmin check matters exactly there: canAccessOpportunity's own
+// admin bypass is never reached for a null opportunityId, so without it a
+// SUPER_ADMIN with no departmentCode 404'd on every Hub piece even though
+// the list pages (opportunityAccessWhere -> {}) already showed it to them.
 export async function canAccessArtworkOrder(
   user: DepartmentUser & AccessUser,
   opportunityId: string | null,
 ): Promise<boolean> {
-  if (canAccessArtworkOrdersViaDepartment(user)) return true;
+  if (isAdmin(user) || canAccessArtworkOrdersViaDepartment(user)) return true;
   return opportunityId != null && (await canAccessOpportunity(user, opportunityId));
 }
 
