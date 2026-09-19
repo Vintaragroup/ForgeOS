@@ -12,6 +12,9 @@ import {
   type CalendarItemTone,
 } from "@/lib/calendar";
 import { getTasksForUser } from "@/lib/tasks";
+import { db } from "@/lib/db";
+import { loadCompanyAging } from "@/lib/company-aging";
+import { ageLabel, isStale } from "@/lib/contact-aging";
 import { getCurrentUser } from "@/lib/auth";
 import { DEPARTMENT_HOME } from "@/lib/department-home";
 import { recordDeadlineActionAction, routeDashboardQueryAction } from "./dashboard-actions";
@@ -114,6 +117,32 @@ function groupDeadlinesByOpportunity(deadlines: UpcomingDeadline[]) {
 // Card/Stat/StatusChip components here, since making those theme-aware
 // would ripple into every other page that uses them, well beyond the
 // scope of this one page's redesign.
+// Salesmate customers nobody has contacted in GOING_COLD_DAYS+ days (or
+// ever), oldest first -- see company-aging.ts for where the dates come
+// from. Customers only: a lead going quiet is normal, a paying client
+// going quiet is the one to act on.
+const GOING_COLD_DAYS = 90;
+const GOING_COLD_SHOWN = 6;
+
+async function getGoingColdCustomers() {
+  const agingById = await loadCompanyAging();
+  const coldIds = [...agingById.entries()]
+    .filter(([, a]) => a.salesmateType === "Customer" && isStale(a.lastContacted?.at, GOING_COLD_DAYS))
+    .sort(([, a], [, b]) => (a.lastContacted?.at.getTime() ?? -Infinity) - (b.lastContacted?.at.getTime() ?? -Infinity))
+    .map(([id]) => id);
+  const companies = await db.company.findMany({
+    where: { id: { in: coldIds.slice(0, GOING_COLD_SHOWN) }, deletedAt: null },
+    select: { id: true, name: true },
+  });
+  const byId = new Map(companies.map((c) => [c.id, c]));
+  return {
+    total: coldIds.length,
+    companies: coldIds
+      .slice(0, GOING_COLD_SHOWN)
+      .flatMap((id) => (byId.has(id) ? [{ company: byId.get(id)!, aging: agingById.get(id)! }] : [])),
+  };
+}
+
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -128,10 +157,11 @@ export default async function DashboardPage() {
 
   const today = new Date();
   const calendarToday = utcToday();
-  const [{ pipeline, upcomingDeadlines, recentProposals, flaggedForReview }, rawCalendarItems, myTasks] = await Promise.all([
+  const [{ pipeline, upcomingDeadlines, recentProposals, flaggedForReview }, rawCalendarItems, myTasks, goingCold] = await Promise.all([
     getDashboardData(user),
     getUpcomingWithOverdue(user, calendarToday, 7),
     getTasksForUser(user, { mineOnly: true, includeCompleted: false }),
+    getGoingColdCustomers(),
   ]);
   // WorkOrder milestones and RFP key dates are already covered by
   // UPCOMING DEADLINES below (same fields, via dashboard.ts's own
@@ -366,6 +396,34 @@ export default async function DashboardPage() {
             </div>
           )}
         </div>
+
+        {goingCold.total > 0 && (
+          <div className="dash-section">
+            <div className="dash-section-head">
+              <h2 className="dash-section-title">GOING COLD</h2>
+              <Link href={`/companies?type=Customer&stale=${GOING_COLD_DAYS}&sort=contacted`} className="dash-section-link">
+                All {goingCold.total} →
+              </Link>
+            </div>
+            <div className="dash-card">
+              {goingCold.companies.map(({ company, aging }) => (
+                <Link key={company.id} href={`/companies/${company.id}`} className="dash-row">
+                  <div>
+                    <div className="dash-row-title">{company.name}</div>
+                    <div className="dash-row-sub">
+                      {aging.lastContacted
+                        ? `Customer not contacted in ${GOING_COLD_DAYS}+ days${aging.lastContacted.by ? ` — last by ${aging.lastContacted.by}` : ""}`
+                        : "Customer with no contact logged in Salesmate"}
+                    </div>
+                  </div>
+                  <span className={`dash-chip ${aging.lastContacted ? "dash-critical" : "dash-neutral"}`}>
+                    {ageLabel(aging.lastContacted?.at)}
+                  </span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
 
         {flaggedForReview.length > 0 && (
           <div className="dash-section">

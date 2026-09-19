@@ -143,6 +143,7 @@ model User {
   vendorMatchApplyLogs     VendorMatchApplyLog[]
   calendarEvents           CalendarEvent[]
   calendarFeedTokens       CalendarFeedToken[]
+  salesmateSyncRuns        SalesmateSyncRun[]
 
   @@map("users")
 }
@@ -166,6 +167,11 @@ model Company {
 
   contacts      Contact[]
   opportunities Opportunity[]
+
+  // Salesmate sync -- see SalesmateCompany. Null until an admin (or the
+  // exact-name auto-link) connects this company to its Salesmate record.
+  salesmateCompany SalesmateCompany?
+  salesmateDeals   SalesmateDeal[]
 
   @@map("companies")
 }
@@ -193,7 +199,21 @@ model Contact {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  opportunitiesAsPrimary Opportunity[] @relation("OpportunityPrimaryContact")
+  opportunitiesAsPrimary Opportunity[]   @relation("OpportunityPrimaryContact")
+  salesmateDeals         SalesmateDeal[]
+
+  // Salesmate sync (src/lib/salesmate-sync.ts). salesmateId links this row
+  // to its Salesmate contact for good once matched. title/mobile only
+  // fill in when empty (a ForgeOS edit is never overwritten); the
+  // lastContacted* fields are Salesmate-owned and refreshed every sync --
+  // reps log their communication in Salesmate, not here.
+  salesmateId       String?   @unique
+  title             String?
+  mobile            String?
+  lastContactedAt   DateTime?
+  lastContactedMode String?
+  lastContactedBy   String?
+  salesmateSyncedAt DateTime?
 
   @@map("contacts")
 }
@@ -412,6 +432,7 @@ model Opportunity {
   deadlineActions DeadlineAction[]
   aiUsageEvents   AiUsageEvent[]
   calendarEvents  CalendarEvent[]
+  salesmateDeals  SalesmateDeal[]
 
   @@map("opportunities")
 }
@@ -3326,4 +3347,112 @@ model RateLimitBucket {
   resetAt DateTime
 
   @@map("rate_limit_buckets")
+}
+
+// ---------------------------------------------------------------------------
+// Salesmate sync (src/lib/salesmate-sync.ts). One-way: Salesmate -> ForgeOS,
+// never the reverse -- reps keep working in Salesmate, ForgeOS mirrors it.
+// ---------------------------------------------------------------------------
+
+// A mirror of every Salesmate company, refreshed each sync, whether or not
+// it's linked to a ForgeOS Company yet. Linking is deliberately separate
+// from mirroring: 42 ForgeOS companies (from the PGA graphics log and
+// estimates) are spelled differently in Salesmate ("Arena Event Services
+// Inc." vs "Arena"), so a name-only match would create duplicates. Only an
+// exact normalized-name match to exactly one unlinked Company auto-links;
+// everything else waits on /admin/integrations/salesmate for an admin to
+// link it or create it as a new company.
+model SalesmateCompany {
+  salesmateId String  @id
+  name        String
+  // Customer / Lead / Prospect / Partner / "" -- Salesmate's own field.
+  type        String?
+  phone       String?
+  website     String?
+  address     String?
+  ownerName   String?
+
+  lastCommunicationAt   DateTime?
+  lastCommunicationMode String?
+  lastCommunicationBy   String?
+
+  companyId String?   @unique
+  company   Company?  @relation(fields: [companyId], references: [id])
+  // An admin looked at this row and chose NOT to bring it into ForgeOS
+  // (e.g. Expo's own company record) -- keeps it out of the review queue.
+  ignoredAt DateTime?
+
+  // Set when a sync no longer sees this company in Salesmate (deleted or
+  // merged there). Kept, not deleted, so links and history survive.
+  removedAt DateTime?
+  syncedAt  DateTime
+
+  @@map("salesmate_companies")
+}
+
+// Read-only mirror of Salesmate deals, shown as deal history on a company.
+// Deliberately NOT turned into Opportunities: Salesmate splits one job
+// across pipelines (Sales-Orlando -> PRODUCTION-Orlando) and records each
+// change order as its own deal, so a 1:1 import would duplicate what
+// ForgeOS already has. opportunityId is for linking to a ForgeOS
+// opportunity by hand when they're the same job.
+model SalesmateDeal {
+  salesmateId        String       @id
+  salesmateCompanyId String?
+  companyId          String?
+  company            Company?     @relation(fields: [companyId], references: [id])
+  contactId          String?
+  contact            Contact?     @relation(fields: [contactId], references: [id])
+  opportunityId      String?
+  opportunity        Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  title     String
+  // Won / Lost / Open -- Salesmate's own status.
+  status    String
+  pipeline  String?
+  stage     String?
+  value     Decimal? @db.Decimal(14, 2)
+  ownerName String?
+
+  salesmateCreatedAt  DateTime?
+  closedAt            DateTime?
+  estimatedCloseAt    DateTime?
+  lastCommunicationAt DateTime?
+
+  removedAt DateTime?
+  syncedAt  DateTime
+
+  @@index([companyId])
+  @@index([salesmateCompanyId])
+  @@map("salesmate_deals")
+}
+
+enum SalesmateSyncTrigger {
+  CRON
+  MANUAL
+  SCRIPT
+}
+
+enum SalesmateSyncStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+// One row per sync attempt -- what /admin/integrations/salesmate reads to
+// answer "is the connection actually working?".
+model SalesmateSyncRun {
+  id                String               @id @default(cuid())
+  trigger           SalesmateSyncTrigger
+  status            SalesmateSyncStatus  @default(RUNNING)
+  triggeredByUserId String?
+  triggeredBy       User?                @relation(fields: [triggeredByUserId], references: [id])
+  // Counts per entity: fetched / created / updated / linked / waiting.
+  stats             Json?
+  error             String?
+  startedAt         DateTime             @default(now())
+  finishedAt        DateTime?
+
+  @@index([startedAt])
+  @@map("salesmate_sync_runs")
 }

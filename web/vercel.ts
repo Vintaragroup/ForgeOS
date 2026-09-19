@@ -6,5 +6,12 @@
 import type { VercelConfig } from "@vercel/config/v1";
 
 export const config: VercelConfig = {
-  crons: [{ path: "/api/cron/artwork-sla-warnings", schedule: "0 * * * *" }],
+  crons: [
+    { path: "/api/cron/artwork-sla-warnings", schedule: "0 * * * *" },
+    // Salesmate -> ForgeOS (src/lib/salesmate-sync.ts). Daily is enough for
+    // "last contacted" aging measured in days; admins can also run it on
+    // demand from /admin/integrations/salesmate. 10:00 UTC = 6am Eastern,
+    // before the Orlando team starts.
+    { path: "/api/cron/salesmate-sync", schedule: "0 10 * * *" },
+  ],
 };

@@ -1,0 +1,239 @@
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { db } from "@/lib/db";
+import type { SalesmateCompanyRow, SalesmateContactRow, SalesmateDealRow, SalesmateFetcher } from "@/lib/salesmate-client";
+import {
+  createCompanyFromSalesmate,
+  ignoreSalesmateCompany,
+  linkSalesmateCompany,
+  normalizeCompanyName,
+  runSalesmateSync,
+  suggestCompanyMatches,
+  type SalesmateSyncStats,
+} from "@/lib/salesmate-sync";
+
+afterEach(async () => {
+  await db.salesmateDeal.deleteMany();
+  await db.salesmateSyncRun.deleteMany();
+  await db.salesmateCompany.deleteMany();
+  await db.opportunity.deleteMany();
+  await db.contact.deleteMany();
+  await db.company.deleteMany();
+});
+
+afterAll(async () => {
+  await db.$disconnect();
+});
+
+// 2026-09-18 12:00:00 UTC, in Salesmate's unix-seconds format.
+const SEPT_18 = 1789732800;
+
+function company(id: number, name: string, extra: Partial<SalesmateCompanyRow> = {}): SalesmateCompanyRow {
+  return {
+    id, name, type: "Customer", phone: null, website: null,
+    billingAddressLine1: null, billingAddressLine2: null, billingCity: null, billingState: null, billingZipCode: null, billingCountry: null,
+    owner: { id: 1, name: "Terry Genovese" },
+    lastCommunicationAt: SEPT_18, lastCommunicationMode: "Email", lastCommunicationBy: "Terry Genovese",
+    ...extra,
+  };
+}
+
+function contact(id: number, companyId: number, name: string, extra: Partial<SalesmateContactRow> = {}): SalesmateContactRow {
+  return {
+    id, name, email: null, phone: null, mobile: null, designation: null,
+    company: { id: companyId, name: "" },
+    lastCommunicationAt: SEPT_18, lastCommunicationMode: "Email", lastCommunicationBy: "Tim Morris",
+    ...extra,
+  };
+}
+
+function deal(id: number, companyId: number, title: string, extra: Partial<SalesmateDealRow> = {}): SalesmateDealRow {
+  return {
+    id, title, status: "Won", pipeline: "Pipeline 2026", stage: "January", dealValue: "12500.5000",
+    owner: { id: 1, name: "Terry Genovese" }, primaryCompany: { id: companyId, name: "" }, primaryContact: null,
+    createdAt: SEPT_18, closedDate: SEPT_18, estimatedCloseDate: "2026-01-20T00:00:00.000Z", lastCommunicationAt: null,
+    ...extra,
+  };
+}
+
+function fakeSalesmate(data: { companies?: SalesmateCompanyRow[]; contacts?: SalesmateContactRow[]; deals?: SalesmateDealRow[] }): SalesmateFetcher {
+  return {
+    companies: async () => data.companies ?? [],
+    contacts: async () => data.contacts ?? [],
+    deals: async () => data.deals ?? [],
+  };
+}
+
+async function sync(data: Parameters<typeof fakeSalesmate>[0]) {
+  const run = await runSalesmateSync({ trigger: "SCRIPT", fetcher: fakeSalesmate(data) });
+  return { run, stats: run.stats as unknown as SalesmateSyncStats };
+}
+
+describe("runSalesmateSync -- companies", () => {
+  it("mirrors every company and auto-links only an unambiguous exact-name match", async () => {
+    const clubGlove = await db.company.create({ data: { name: "Club Glove, Inc." } });
+    await db.company.create({ data: { name: "Arena Event Services Inc." } });
+    // Two ForgeOS companies normalize to the same name -> ambiguous, must not auto-link.
+    await db.company.create({ data: { name: "Titleist" } });
+    await db.company.create({ data: { name: "TITLEIST" } });
+
+    const { run, stats } = await sync({
+      companies: [
+        company(1, "club glove inc", { phone: "407-555-0100", billingCity: "Orlando", billingState: "FL" }),
+        company(2, "Arena"),
+        company(3, "Titleist"),
+        company(4, "Brand New Prospect", { type: "Prospect" }),
+      ],
+    });
+
+    expect(run.status).toBe("SUCCEEDED");
+    expect(stats.companies).toMatchObject({ fetched: 4, created: 4, autoLinked: 1, linked: 1, waitingReview: 3 });
+    const mirror = await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "1" } });
+    expect(mirror).toMatchObject({ companyId: clubGlove.id, phone: "407-555-0100", address: "Orlando, FL", type: "Customer" });
+    expect(mirror.lastCommunicationAt?.toISOString()).toBe("2026-09-18T12:00:00.000Z");
+    // Nothing was created in ForgeOS itself -- unmatched companies wait for review.
+    expect(await db.company.count()).toBe(4);
+  });
+
+  it("marks a company Salesmate stopped returning as removed -- but never on an empty response", async () => {
+    await sync({ companies: [company(1, "Keep Me"), company(2, "Gone Soon")] });
+
+    await sync({ companies: [] });
+    expect(await db.salesmateCompany.count({ where: { removedAt: { not: null } } })).toBe(0);
+
+    const { stats } = await sync({ companies: [company(1, "Keep Me")] });
+    expect(stats.companies.removed).toBe(1);
+    expect((await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "2" } })).removedAt).not.toBeNull();
+  });
+
+  it("records a failed run with the error, and writes nothing, when Salesmate errors", async () => {
+    const run = await runSalesmateSync({
+      trigger: "MANUAL",
+      fetcher: { ...fakeSalesmate({}), deals: async () => Promise.reject(new Error("Salesmate deal search failed: HTTP 401")) },
+    });
+    expect(run.status).toBe("FAILED");
+    expect(run.error).toContain("HTTP 401");
+    expect(run.finishedAt).not.toBeNull();
+    expect(await db.salesmateCompany.count()).toBe(0);
+  });
+});
+
+describe("runSalesmateSync -- contacts", () => {
+  it("creates contacts under linked companies and counts the rest as waiting", async () => {
+    await db.company.create({ data: { name: "Club Glove" } });
+    const { stats } = await sync({
+      companies: [company(1, "Club Glove"), company(2, "Unlinked Co")],
+      contacts: [
+        contact(10, 1, "Dana Reyes", { email: "dana@clubglove.com", designation: "Marketing Director", mobile: "555-1111" }),
+        contact(11, 2, "Waiting Person"),
+      ],
+    });
+
+    expect(stats.contacts).toMatchObject({ fetched: 2, created: 1, waitingOnCompany: 1 });
+    const dana = await db.contact.findUniqueOrThrow({ where: { salesmateId: "10" } });
+    expect(dana).toMatchObject({ name: "Dana Reyes", email: "dana@clubglove.com", title: "Marketing Director", role: "CLIENT_CONTACT", lastContactedBy: "Tim Morris" });
+    expect(dana.lastContactedAt?.toISOString()).toBe("2026-09-18T12:00:00.000Z");
+  });
+
+  it("adopts a hand-entered contact by email, fills only empty fields, and never resurrects a deleted one", async () => {
+    const co = await db.company.create({ data: { name: "Club Glove" } });
+    const handEntered = await db.contact.create({
+      data: { name: "Dana R.", email: "DANA@clubglove.com", phone: "edited-in-forgeos", role: "CLIENT_CONTACT", companyId: co.id },
+    });
+    const deleted = await db.contact.create({
+      data: { name: "Old Contact", role: "CLIENT_CONTACT", companyId: co.id, deletedAt: new Date() },
+    });
+
+    const { stats } = await sync({
+      companies: [company(1, "Club Glove")],
+      contacts: [
+        contact(10, 1, "Dana Reyes", { email: "dana@clubglove.com", phone: "from-salesmate", designation: "Director" }),
+        contact(11, 1, "Old Contact"),
+      ],
+    });
+
+    // Dana adopted (not duplicated); "Old Contact" wasn't matched because the
+    // hand-entered row is deleted -- a fresh one is created instead.
+    expect(stats.contacts).toMatchObject({ adopted: 1, created: 1 });
+    const dana = await db.contact.findUniqueOrThrow({ where: { id: handEntered.id } });
+    expect(dana).toMatchObject({ salesmateId: "10", name: "Dana R.", phone: "edited-in-forgeos", title: "Director" });
+    expect((await db.contact.findUniqueOrThrow({ where: { id: deleted.id } })).deletedAt).not.toBeNull();
+
+    // Deleting a synced contact in ForgeOS sticks across the next sync too.
+    await db.contact.update({ where: { id: handEntered.id }, data: { deletedAt: new Date() } });
+    await sync({ companies: [company(1, "Club Glove")], contacts: [contact(10, 1, "Dana Reyes")] });
+    expect((await db.contact.findUniqueOrThrow({ where: { id: handEntered.id } })).deletedAt).not.toBeNull();
+  });
+});
+
+describe("runSalesmateSync -- deals", () => {
+  it("mirrors deals with value and dates, attached to linked companies and synced contacts", async () => {
+    const co = await db.company.create({ data: { name: "Club Glove" } });
+    const { stats } = await sync({
+      companies: [company(1, "Club Glove"), company(2, "Unlinked Co")],
+      contacts: [contact(10, 1, "Dana Reyes")],
+      deals: [
+        deal(100, 1, "Club Glove - PGA 2026 - 20x20 - Orlando", { primaryContact: { id: 10, name: "Dana Reyes" } }),
+        deal(101, 2, "Unlinked - Some Show", { status: "Lost", dealValue: "0.0000" }),
+      ],
+    });
+
+    expect(stats.deals).toMatchObject({ fetched: 2, created: 2, onLinkedCompanies: 1 });
+    const won = await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "100" }, include: { contact: true } });
+    expect(won).toMatchObject({ companyId: co.id, status: "Won", pipeline: "Pipeline 2026", ownerName: "Terry Genovese" });
+    expect(won.value?.toString()).toBe("12500.5");
+    expect(won.estimatedCloseAt?.toISOString()).toBe("2026-01-20T00:00:00.000Z");
+    expect(won.contact?.name).toBe("Dana Reyes");
+    expect((await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "101" } })).companyId).toBeNull();
+  });
+
+  it("keeps a hand-made opportunity link across re-syncs", async () => {
+    const co = await db.company.create({ data: { name: "Club Glove" } });
+    const opp = await db.opportunity.create({ data: { companyId: co.id, showName: "PGA Show" } });
+    const data = { companies: [company(1, "Club Glove")], deals: [deal(100, 1, "Club Glove - PGA 2026")] };
+    await sync(data);
+    await db.salesmateDeal.update({ where: { salesmateId: "100" }, data: { opportunityId: opp.id } });
+
+    const { stats } = await sync({ ...data, deals: [deal(100, 1, "Club Glove - PGA 2026 (renamed)")] });
+    expect(stats.deals.updated).toBe(1);
+    expect(await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "100" } })).toMatchObject({
+      opportunityId: opp.id,
+      title: "Club Glove - PGA 2026 (renamed)",
+    });
+  });
+});
+
+describe("company-link review", () => {
+  it("suggests the likely ForgeOS match for a differently-spelled company", () => {
+    const companies = [
+      { id: "a", name: "Arena Event Services Inc." },
+      { id: "b", name: "Titleist" },
+      { id: "c", name: "Club Glove" },
+    ];
+    expect(suggestCompanyMatches("Arena", companies)[0]).toMatchObject({ id: "a" });
+    expect(suggestCompanyMatches("Zzz Unrelated", companies)).toEqual([]);
+    expect(normalizeCompanyName("Club Glove, Inc.")).toBe("clubgloveinc");
+  });
+
+  it("linking reattaches deals immediately and brings contacts on the next sync; create-new and ignore work too", async () => {
+    const arena = await db.company.create({ data: { name: "Arena Event Services Inc." } });
+    const data = {
+      companies: [company(2, "Arena"), company(3, "Brand New Prospect", { billingCity: "Miami", billingState: "FL" }), company(4, "Expo CCI", { type: "Partner" })],
+      contacts: [contact(20, 2, "Arena Person")],
+      deals: [deal(200, 2, "ARENA - RFP 3 - LA")],
+    };
+    await sync(data);
+
+    await linkSalesmateCompany("2", arena.id);
+    expect((await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "200" } })).companyId).toBe(arena.id);
+    await expect(linkSalesmateCompany("3", arena.id)).rejects.toThrow(/already linked/);
+
+    const created = await createCompanyFromSalesmate("3");
+    expect(created).toMatchObject({ name: "Brand New Prospect", billingAddress: "Miami, FL" });
+    await ignoreSalesmateCompany("4");
+
+    const { stats } = await sync(data);
+    expect(stats.companies).toMatchObject({ linked: 2, waitingReview: 0 });
+    expect(stats.contacts.created).toBe(1);
+    expect((await db.contact.findUniqueOrThrow({ where: { salesmateId: "20" } })).companyId).toBe(arena.id);
+  });
+});

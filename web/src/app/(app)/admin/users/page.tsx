@@ -19,6 +19,9 @@ export default async function AdminUsersPage() {
         title="Users"
         action={
           <div className="flex items-center gap-2">
+            <LinkButton href="/admin/integrations/salesmate" variant="secondary">
+              Salesmate
+            </LinkButton>
             <LinkButton href="/admin/audit-log" variant="secondary">
               Audit log
             </LinkButton>

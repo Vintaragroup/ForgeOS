@@ -34,6 +34,10 @@ export async function updateContact(id: string, formData: FormData) {
       name,
       email: emptyToNull(formData.get("email")),
       phone: emptyToNull(formData.get("phone")),
+      // Title/mobile also arrive from Salesmate, which only fills them when
+      // empty (salesmate-sync.ts) -- so an edit here sticks.
+      title: emptyToNull(formData.get("title")),
+      mobile: emptyToNull(formData.get("mobile")),
       role: String(formData.get("role")) as ContactRole,
       companyId: emptyToNull(formData.get("companyId")),
     },
