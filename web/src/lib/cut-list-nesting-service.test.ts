@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
+import { clearTestCatalog, createTestCatalogItem } from "@/test/catalog-fixtures";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import { updateCutListSettings } from "@/lib/cut-list-settings-service";
 import {
@@ -23,7 +24,7 @@ afterEach(async () => {
   await db.lineItemAuditLog.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
-  await db.material.deleteMany();
+  await clearTestCatalog();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
   // optimizeNestingForMaterial lazily creates the CutListSettings
@@ -50,28 +51,26 @@ async function makeVersion() {
 // matches how this material type is actually described in the real
 // catalog seed data (prisma/seed.ts).
 async function makeSheetMaterial(overrides: { stockWidth?: number; stockLength?: number; defaultKerf?: number } = {}) {
-  return db.material.create({
-    data: {
+  return createTestCatalogItem({
       name: "3/4in Plywood",
-      currentUnitCost: 80,
+      unitCost: 80,
       materialType: "SHEET",
       stockWidth: overrides.stockWidth ?? 48,
       stockLength: overrides.stockLength ?? 96,
       thickness: 0.75,
       defaultKerf: overrides.defaultKerf ?? 0.125,
-    },
-  });
+    });
 }
 
 async function makePart(
   estimateVersionId: string,
-  materialId: string,
+  catalogItemId: string,
   data: { description: string; width: number; length: number; qty?: number; grainConstrained?: boolean },
 ) {
   return db.cutListPart.create({
     data: {
       estimateVersionId,
-      materialId,
+      catalogItemId,
       description: data.description,
       width: data.width,
       length: data.length,
@@ -99,7 +98,7 @@ describe("optimizeNestingForMaterial", () => {
     }
     expect(new Set(sheets[0].map((p) => p.cutListPartId))).toEqual(new Set([partA.id, partB.id]));
 
-    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: version.id, materialId: material.id } });
+    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: version.id, catalogItemId: material.id } });
     expect(stored).toHaveLength(1);
     expect(stored[0].sheetNumber).toBe(1);
   });
@@ -157,7 +156,7 @@ describe("optimizeNestingForMaterial", () => {
 
   it("throws a clear error for a material that isn't set up as sheet stock yet", async () => {
     const version = await makeVersion();
-    const material = await db.material.create({ data: { name: "Contact cement", currentUnitCost: 12 } });
+    const material = await createTestCatalogItem({ name: "Contact cement", unitCost: 12 });
     await makePart(version.id, material.id, { description: "n/a", width: 1, length: 1 });
 
     await expect(optimizeNestingForMaterial(version.id, material.id)).rejects.toThrow(/isn't set up as sheet stock/);
@@ -167,7 +166,7 @@ describe("optimizeNestingForMaterial", () => {
     const version = await makeVersion();
     const material = await makeSheetMaterial();
     await db.cutListPart.create({
-      data: { estimateVersionId: version.id, materialId: material.id, description: "No width set", length: 10, qty: 1 },
+      data: { estimateVersionId: version.id, catalogItemId: material.id, description: "No width set", length: 10, qty: 1 },
     });
 
     await expect(optimizeNestingForMaterial(version.id, material.id)).rejects.toThrow(/has no width set/);
@@ -181,7 +180,7 @@ describe("optimizeNestingForMaterial", () => {
     await optimizeNestingForMaterial(version.id, material.id);
     await optimizeNestingForMaterial(version.id, material.id);
 
-    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: version.id, materialId: material.id } });
+    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: version.id, catalogItemId: material.id } });
     expect(stored).toHaveLength(1);
   });
 
@@ -195,7 +194,7 @@ describe("optimizeNestingForMaterial", () => {
     const sheets = await optimizeNestingForMaterial(version.id, material.id);
 
     expect(sheets).toEqual([]);
-    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: version.id, materialId: material.id } });
+    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: version.id, catalogItemId: material.id } });
     expect(stored).toHaveLength(0);
   });
 
@@ -224,7 +223,7 @@ describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
 
     await optimizeNestingForMaterial(version.id, material.id);
 
-    const remnants = await db.materialRemnant.findMany({ where: { materialId: material.id } });
+    const remnants = await db.materialRemnant.findMany({ where: { catalogItemId: material.id } });
     expect(remnants).toHaveLength(1);
     expect(remnants[0].width.toNumber()).toBeGreaterThanOrEqual(6);
     expect(remnants[0].length.toNumber()).toBeGreaterThanOrEqual(6);
@@ -241,7 +240,7 @@ describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
 
     await optimizeNestingForMaterial(version.id, material.id);
 
-    const remnants = await db.materialRemnant.findMany({ where: { materialId: material.id } });
+    const remnants = await db.materialRemnant.findMany({ where: { catalogItemId: material.id } });
     expect(remnants).toHaveLength(0);
   });
 
@@ -251,7 +250,7 @@ describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
     await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
     await optimizeNestingForMaterial(versionA.id, material.id);
 
-    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { catalogItemId: material.id } });
     const remnantWidth = remnant.width.toNumber();
     const remnantLength = remnant.length.toNumber();
 
@@ -267,7 +266,7 @@ describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
     const sheets = await optimizeNestingForMaterial(versionB.id, material.id);
     expect(sheets).toHaveLength(1);
 
-    const storedB = await db.cutSheet.findMany({ where: { estimateVersionId: versionB.id, materialId: material.id } });
+    const storedB = await db.cutSheet.findMany({ where: { estimateVersionId: versionB.id, catalogItemId: material.id } });
     expect(storedB).toHaveLength(1);
     expect(storedB[0].consumedRemnantId).toBe(remnant.id);
 
@@ -282,10 +281,10 @@ describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
     // independently of whichever job originally generated it.
     const seedVersion = await makeVersion();
     const seedSheet = await db.cutSheet.create({
-      data: { estimateVersionId: seedVersion.id, materialId: material.id, sheetNumber: 1, layout: [] },
+      data: { estimateVersionId: seedVersion.id, catalogItemId: material.id, sheetNumber: 1, layout: [] },
     });
     const smallRemnant = await db.materialRemnant.create({
-      data: { materialId: material.id, width: 6, length: 6, generatedByCutSheetId: seedSheet.id },
+      data: { catalogItemId: material.id, width: 6, length: 6, generatedByCutSheetId: seedSheet.id },
     });
 
     const version = await makeVersion();
@@ -294,7 +293,7 @@ describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
     const sheets = await optimizeNestingForMaterial(version.id, material.id);
     expect(sheets).toHaveLength(1);
 
-    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: version.id, materialId: material.id } });
+    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: version.id, catalogItemId: material.id } });
     expect(stored[0].consumedRemnantId).toBeNull();
 
     const refreshedSmallRemnant = await db.materialRemnant.findUniqueOrThrow({ where: { id: smallRemnant.id } });
@@ -307,7 +306,7 @@ describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
     await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
     await optimizeNestingForMaterial(versionA.id, material.id);
 
-    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { catalogItemId: material.id } });
     const remnantWidth = remnant.width.toNumber();
     const remnantLength = remnant.length.toNumber();
 
@@ -319,13 +318,13 @@ describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
     });
     await optimizeNestingForMaterial(versionB.id, material.id);
 
-    const remnantIdsBefore = (await db.materialRemnant.findMany({ where: { materialId: material.id } }))
+    const remnantIdsBefore = (await db.materialRemnant.findMany({ where: { catalogItemId: material.id } }))
       .map((r) => r.id)
       .sort();
 
     await optimizeNestingForMaterial(versionB.id, material.id);
 
-    const remnantsAfter = await db.materialRemnant.findMany({ where: { materialId: material.id } });
+    const remnantsAfter = await db.materialRemnant.findMany({ where: { catalogItemId: material.id } });
     expect(remnantsAfter.map((r) => r.id).sort()).toEqual(remnantIdsBefore);
 
     const reConsumedRemnant = await db.materialRemnant.findUniqueOrThrow({ where: { id: remnant.id } });
@@ -338,7 +337,7 @@ describe("optimizeNestingForMaterial -- remnant reuse (Phase 5)", () => {
     await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
     await optimizeNestingForMaterial(versionA.id, material.id);
 
-    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { catalogItemId: material.id } });
     const versionB = await makeVersion();
     await makePart(versionB.id, material.id, {
       description: "Fits the remnant",
@@ -363,15 +362,15 @@ describe("optimizeNestingForVersion", () => {
   it("optimizes every distinct material used, reporting sheet counts, and skips a material that isn't set up as stock", async () => {
     const version = await makeVersion();
     const plywood = await makeSheetMaterial();
-    const cement = await db.material.create({ data: { name: "Contact cement", currentUnitCost: 12 } });
+    const cement = await createTestCatalogItem({ name: "Contact cement", unitCost: 12 });
     await makePart(version.id, plywood.id, { description: "Panel", width: 20, length: 20 });
     await makePart(version.id, cement.id, { description: "n/a", width: 1, length: 1 });
 
     const result = await optimizeNestingForVersion(version.id);
 
-    expect(result.optimized).toEqual([{ materialId: plywood.id, materialName: plywood.name, sheetCount: 1 }]);
+    expect(result.optimized).toEqual([{ catalogItemId: plywood.id, materialName: plywood.name, sheetCount: 1 }]);
     expect(result.skipped).toHaveLength(1);
-    expect(result.skipped[0].materialId).toBe(cement.id);
+    expect(result.skipped[0].catalogItemId).toBe(cement.id);
     expect(result.skipped[0].reason).toMatch(/isn't set up as sheet stock/);
   });
 });
@@ -426,16 +425,14 @@ describe("getMaterialWasteReport", () => {
     // 48x96 = 4608 sq in per sheet, $100/sheet. One 48x48 part (2304 sq
     // in) easily fits on a single sheet -- hand-computable expected
     // result: 1 sheet, $100 cost, exactly 50% waste.
-    const material = await db.material.create({
-      data: {
+    const material = await createTestCatalogItem({
         name: "3/4in Plywood",
-        currentUnitCost: 100,
+        unitCost: 100,
         materialType: "SHEET",
         stockWidth: 48,
         stockLength: 96,
         defaultKerf: 0,
-      },
-    });
+      });
     await makePart(version.id, material.id, { description: "Half sheet", width: 48, length: 48 });
     await optimizeNestingForMaterial(version.id, material.id);
 
@@ -450,9 +447,7 @@ describe("getMaterialWasteReport", () => {
 
   it("scales cost and stock area with the number of sheets actually used", async () => {
     const version = await makeVersion();
-    const material = await db.material.create({
-      data: { name: "MDF", currentUnitCost: 50, materialType: "SHEET", stockWidth: 20, stockLength: 20, defaultKerf: 0 },
-    });
+    const material = await createTestCatalogItem({ name: "MDF", unitCost: 50, materialType: "SHEET", stockWidth: 20, stockLength: 20, defaultKerf: 0 });
     // Two 18x18 parts can't share one 20x20 sheet -- forces 2 sheets.
     await makePart(version.id, material.id, { description: "Panel A", width: 18, length: 18 });
     await makePart(version.id, material.id, { description: "Panel B", width: 18, length: 18 });
@@ -477,12 +472,8 @@ describe("getMaterialWasteReport", () => {
 describe("getCutListCostReport", () => {
   it("rolls up every optimized material's cost and sheet count", async () => {
     const version = await makeVersion();
-    const plywood = await db.material.create({
-      data: { name: "Plywood", currentUnitCost: 100, materialType: "SHEET", stockWidth: 48, stockLength: 96, defaultKerf: 0 },
-    });
-    const mdf = await db.material.create({
-      data: { name: "MDF", currentUnitCost: 50, materialType: "SHEET", stockWidth: 48, stockLength: 96, defaultKerf: 0 },
-    });
+    const plywood = await createTestCatalogItem({ name: "Plywood", unitCost: 100, materialType: "SHEET", stockWidth: 48, stockLength: 96, defaultKerf: 0 });
+    const mdf = await createTestCatalogItem({ name: "MDF", unitCost: 50, materialType: "SHEET", stockWidth: 48, stockLength: 96, defaultKerf: 0 });
     await makePart(version.id, plywood.id, { description: "Panel", width: 20, length: 20 });
     await makePart(version.id, mdf.id, { description: "Panel", width: 20, length: 20 });
     await optimizeNestingForMaterial(version.id, plywood.id);
@@ -565,8 +556,8 @@ describe("clearStaleCutSheets", () => {
     await makePart(version.id, material.id, { description: "Small block", width: 10, length: 10 });
     await optimizeNestingForMaterial(version.id, material.id);
 
-    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
-    const sheet = await db.cutSheet.findFirstOrThrow({ where: { estimateVersionId: version.id, materialId: material.id } });
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { catalogItemId: material.id } });
+    const sheet = await db.cutSheet.findFirstOrThrow({ where: { estimateVersionId: version.id, catalogItemId: material.id } });
     expect(remnant.generatedByCutSheetId).toBe(sheet.id);
 
     // This is the exact call addCutListPartAction/deleteCutListPartAction
@@ -583,7 +574,7 @@ describe("clearStaleCutSheets", () => {
     await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
     await optimizeNestingForMaterial(versionA.id, material.id);
 
-    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { catalogItemId: material.id } });
     const versionB = await makeVersion();
     await makePart(versionB.id, material.id, {
       description: "Fits the remnant",
@@ -613,9 +604,7 @@ describe("optimizeNestingForMaterial -- CutListSettings integration (Phase 7)", 
     const version = await makeVersion();
     // Explicitly null, unlike makeSheetMaterial's own default of 0.125 --
     // this material has never been given a real kerf value.
-    const material = await db.material.create({
-      data: { name: "No-kerf plywood", currentUnitCost: 80, materialType: "SHEET", stockWidth: 40, stockLength: 40, defaultKerf: null },
-    });
+    const material = await createTestCatalogItem({ name: "No-kerf plywood", unitCost: 80, materialType: "SHEET", stockWidth: 40, stockLength: 40, defaultKerf: null });
     // 20 + 5 (global default kerf) + 20 = 45 > 40 -- doesn't fit either
     // axis once the GLOBAL kerf is actually applied; would fit trivially
     // (20+20=40) if the fallback were still the old hardcoded 0.
@@ -653,7 +642,7 @@ describe("optimizeNestingForMaterial -- CutListSettings integration (Phase 7)", 
 
     await optimizeNestingForMaterial(version.id, material.id);
 
-    const remnants = await db.materialRemnant.findMany({ where: { materialId: material.id } });
+    const remnants = await db.materialRemnant.findMany({ where: { catalogItemId: material.id } });
     expect(remnants).toHaveLength(1);
     expect(remnants[0].width.toNumber()).toBeGreaterThanOrEqual(1);
   });
@@ -666,7 +655,7 @@ describe("optimizeNestingForMaterial -- locked sheets + cost/waste mode (Phase 8
     await makePart(version.id, material.id, { description: "Panel", width: 10, length: 10, qty: 3 });
     await optimizeNestingForMaterial(version.id, material.id);
 
-    const sheetBefore = await db.cutSheet.findFirstOrThrow({ where: { estimateVersionId: version.id, materialId: material.id } });
+    const sheetBefore = await db.cutSheet.findFirstOrThrow({ where: { estimateVersionId: version.id, catalogItemId: material.id } });
     expect((sheetBefore.layout as unknown[]).length).toBe(3);
     await db.cutSheet.update({ where: { id: sheetBefore.id }, data: { locked: true } });
 
@@ -678,7 +667,7 @@ describe("optimizeNestingForMaterial -- locked sheets + cost/waste mode (Phase 8
     expect(sheetAfter.locked).toBe(true);
 
     const allSheets = await db.cutSheet.findMany({
-      where: { estimateVersionId: version.id, materialId: material.id },
+      where: { estimateVersionId: version.id, catalogItemId: material.id },
       orderBy: { sheetNumber: "asc" },
     });
     expect(allSheets).toHaveLength(2);
@@ -694,7 +683,7 @@ describe("optimizeNestingForMaterial -- locked sheets + cost/waste mode (Phase 8
     await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
     await optimizeNestingForMaterial(versionA.id, material.id);
 
-    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { catalogItemId: material.id } });
     const versionB = await makeVersion();
     await makePart(versionB.id, material.id, {
       description: "Fits the remnant",
@@ -704,7 +693,7 @@ describe("optimizeNestingForMaterial -- locked sheets + cost/waste mode (Phase 8
 
     await optimizeNestingForMaterial(versionB.id, material.id, "waste");
 
-    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: versionB.id, materialId: material.id } });
+    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: versionB.id, catalogItemId: material.id } });
     expect(stored[0].consumedRemnantId).toBeNull();
     const stillAvailable = await db.materialRemnant.findUniqueOrThrow({ where: { id: remnant.id } });
     expect(stillAvailable.consumedAt).toBeNull();
@@ -716,7 +705,7 @@ describe("optimizeNestingForMaterial -- locked sheets + cost/waste mode (Phase 8
     await makePart(versionA.id, material.id, { description: "Small block", width: 10, length: 10 });
     await optimizeNestingForMaterial(versionA.id, material.id);
 
-    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { materialId: material.id } });
+    const remnant = await db.materialRemnant.findFirstOrThrow({ where: { catalogItemId: material.id } });
     const versionB = await makeVersion();
     await makePart(versionB.id, material.id, {
       description: "Fits the remnant",
@@ -726,7 +715,7 @@ describe("optimizeNestingForMaterial -- locked sheets + cost/waste mode (Phase 8
 
     await optimizeNestingForMaterial(versionB.id, material.id, "cost");
 
-    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: versionB.id, materialId: material.id } });
+    const stored = await db.cutSheet.findMany({ where: { estimateVersionId: versionB.id, catalogItemId: material.id } });
     expect(stored[0].consumedRemnantId).toBe(remnant.id);
   });
 });
@@ -738,7 +727,7 @@ describe("clearStaleCutSheets -- locked sheets (Phase 8)", () => {
     await makePart(version.id, material.id, { description: "Panel", width: 10, length: 10 });
     await optimizeNestingForMaterial(version.id, material.id);
 
-    const sheet = await db.cutSheet.findFirstOrThrow({ where: { estimateVersionId: version.id, materialId: material.id } });
+    const sheet = await db.cutSheet.findFirstOrThrow({ where: { estimateVersionId: version.id, catalogItemId: material.id } });
     const generatedRemnant = await db.materialRemnant.findFirst({ where: { generatedByCutSheetId: sheet.id } });
     await db.cutSheet.update({ where: { id: sheet.id }, data: { locked: true } });
 
@@ -768,10 +757,10 @@ describe("optimizeNestingForMaterial -- remnant race, fail clean (Phase 9)", () 
     // tests above already use.
     const seedVersion = await makeVersion();
     const seedSheet = await db.cutSheet.create({
-      data: { estimateVersionId: seedVersion.id, materialId: material.id, sheetNumber: 1, layout: [] },
+      data: { estimateVersionId: seedVersion.id, catalogItemId: material.id, sheetNumber: 1, layout: [] },
     });
     const remnant = await db.materialRemnant.create({
-      data: { materialId: material.id, width: 20, length: 20, generatedByCutSheetId: seedSheet.id },
+      data: { catalogItemId: material.id, width: 20, length: 20, generatedByCutSheetId: seedSheet.id },
     });
     // Simulates the exact DB state a real concurrent optimize race
     // leaves behind for one brief window: another sheet already holds
@@ -783,7 +772,7 @@ describe("optimizeNestingForMaterial -- remnant race, fail clean (Phase 9)", () 
     await db.cutSheet.create({
       data: {
         estimateVersionId: version.id,
-        materialId: material.id,
+        catalogItemId: material.id,
         sheetNumber: 1,
         layout: [],
         consumedRemnantId: remnant.id,

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
+import { clearTestCatalog, createTestCatalogItem } from "@/test/catalog-fixtures";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import {
@@ -26,8 +27,7 @@ afterEach(async () => {
   await db.document.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
-  await db.rentalItem.deleteMany();
-  await db.material.deleteMany();
+  await clearTestCatalog();
   await db.category.deleteMany();
 });
 
@@ -217,7 +217,7 @@ describe("commitScopeLineItems", () => {
   });
 
   it("groups proposed items into sections by category, seeds a catalog-matched rate, and flags an inferred quantity in the description", async () => {
-    await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
+    await createTestCatalogItem({ itemType: "RENTAL", categoryCode: "STR", name: "Doors", unitPrice: 150 });
     const document = await makeAnalyzedDocument("some scope text");
 
     const proposed: ProposedLineItem[] = [

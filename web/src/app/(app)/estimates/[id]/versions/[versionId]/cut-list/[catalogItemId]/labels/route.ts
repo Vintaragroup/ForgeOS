@@ -13,9 +13,9 @@ import { buildCutListLabels, CutListLabelsDocument } from "@/lib/cut-list-labels
 
 export async function GET(
   _request: Request,
-  { params }: RouteContext<"/estimates/[id]/versions/[versionId]/cut-list/[materialId]/labels">,
+  { params }: RouteContext<"/estimates/[id]/versions/[versionId]/cut-list/[catalogItemId]/labels">,
 ) {
-  const { id, versionId, materialId } = await params;
+  const { id, versionId, catalogItemId } = await params;
 
   const user = await getCurrentUser();
   if (!user) notFound();
@@ -29,13 +29,13 @@ export async function GET(
 
   let data;
   try {
-    data = await getCutSheetDiagramData(versionId, materialId);
+    data = await getCutSheetDiagramData(versionId, catalogItemId);
   } catch {
     notFound();
   }
 
   const grainRows = await db.cutListPart.findMany({
-    where: { estimateVersionId: versionId, materialId },
+    where: { estimateVersionId: versionId, catalogItemId },
     select: { id: true, grainConstrained: true },
   });
   const labels = buildCutListLabels(

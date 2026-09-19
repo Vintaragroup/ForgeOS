@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
+import { clearTestCatalog, createTestCatalogItem } from "@/test/catalog-fixtures";
 import { uploadDocument } from "@/lib/document-service";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import { commitPricingImport, previewPricingImport, type PricingImportPreview } from "@/lib/pricing-import-service";
@@ -79,8 +80,7 @@ afterEach(async () => {
   await db.document.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
-  await db.rentalItem.deleteMany();
-  await db.material.deleteMany();
+  await clearTestCatalog();
 });
 
 afterAll(async () => {
@@ -128,18 +128,27 @@ describe("previewPricingImport", () => {
   });
 
   it("suggests a catalog rate when a row's description confidently matches a real catalog entry", async () => {
-    await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
+    await createTestCatalogItem({ itemType: "RENTAL", categoryCode: "STR", name: "Doors", unitPrice: 150 });
     const { opportunity, document } = await makeDocument();
 
     const preview = await previewFlatSchedule(document.id, opportunity.id);
     const doorRow = preview.rows.find((r) => r.description.toLowerCase().includes("compliant door"));
 
     expect(doorRow).toBeDefined();
-    expect(doorRow?.catalogMatch).toEqual({ source: "Rental", name: "Doors", unitCost: 150, category: null });
+    // The match now also identifies WHICH catalog item it is (number + id),
+    // not just a name and price -- what phase 2's line-item link builds on.
+    expect(doorRow?.catalogMatch).toMatchObject({
+      source: "Rental",
+      name: "Doors",
+      unitCost: 150,
+      category: "STR",
+      catalogNumber: "R-STR-0001",
+    });
+    expect(doorRow?.catalogMatch?.catalogItemId).toEqual(expect.any(String));
   });
 
   it("leaves catalogMatch null for a turnkey line description with no real catalog vocabulary overlap", async () => {
-    await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
+    await createTestCatalogItem({ itemType: "RENTAL", categoryCode: "STR", name: "Doors", unitPrice: 150 });
     const { opportunity, document } = await makeDocument();
 
     const preview = await previewFlatSchedule(document.id, opportunity.id);
@@ -233,7 +242,7 @@ describe("commitPricingImport", () => {
   });
 
   it("seeds unitCost from a confident catalog match instead of leaving it at $0", async () => {
-    await db.rentalItem.create({ data: { name: "Doors", unitPrice: 150 } });
+    await createTestCatalogItem({ itemType: "RENTAL", categoryCode: "STR", name: "Doors", unitPrice: 150 });
     const { opportunity, document } = await makeDocument();
     const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
     const version = await createEstimateVersion(estimate.id, 0);

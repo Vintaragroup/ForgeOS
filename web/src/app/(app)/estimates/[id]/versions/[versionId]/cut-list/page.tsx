@@ -63,14 +63,14 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
   const [cutListParts, sheetMaterials, lineItems, costReport, settings] = await Promise.all([
     db.cutListPart.findMany({
       where: { estimateVersionId: versionId, deletedAt: null },
-      include: { material: true, lineItem: true },
+      include: { catalogItem: true, lineItem: true },
       orderBy: { createdAt: "asc" },
     }),
     // Only materials actually set up as nestable stock (see the Cut-list
-    // stock setup section on a Material's catalog page) are valid targets
+    // stock setup section on a material catalog item's page) are valid targets
     // for a new part -- an empty list here means nothing's been set up
     // yet, not that the catalog itself is empty.
-    db.material.findMany({
+    db.catalogItem.findMany({
       where: { deletedAt: null, materialType: "SHEET", stockWidth: { not: null }, stockLength: { not: null } },
       orderBy: { name: "asc" },
     }),
@@ -93,16 +93,16 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
     description: li.description,
   }));
 
-  const wasteByMaterialId = new Map(costReport.materials.map((m) => [m.materialId, m]));
+  const wasteByMaterialId = new Map(costReport.materials.map((m) => [m.catalogItemId, m]));
 
   const partsByMaterial = new Map<string, typeof cutListParts>();
   for (const part of cutListParts) {
-    const list = partsByMaterial.get(part.materialId) ?? [];
+    const list = partsByMaterial.get(part.catalogItemId) ?? [];
     list.push(part);
-    partsByMaterial.set(part.materialId, list);
+    partsByMaterial.set(part.catalogItemId, list);
   }
   const materialGroups = [...partsByMaterial.entries()]
-    .map(([materialId, parts]) => ({ materialId, material: parts[0].material, parts }))
+    .map(([catalogItemId, parts]) => ({ catalogItemId, material: parts[0].catalogItem, parts }))
     .sort((a, b) => a.material.name.localeCompare(b.material.name));
 
   // Only for materials that have actually been optimized (real CutSheet
@@ -113,8 +113,8 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
   // for printing and CNC.
   const diagramEntries = await Promise.all(
     materialGroups
-      .filter(({ materialId }) => wasteByMaterialId.has(materialId))
-      .map(async ({ materialId }) => [materialId, await getCutSheetDiagramData(versionId, materialId)] as const),
+      .filter(({ catalogItemId }) => wasteByMaterialId.has(catalogItemId))
+      .map(async ({ catalogItemId }) => [catalogItemId, await getCutSheetDiagramData(versionId, catalogItemId)] as const),
   );
   const diagramDataByMaterialId = new Map(diagramEntries);
 
@@ -235,7 +235,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
           {sheetMaterials.length === 0 ? (
             <Notice
               message="No materials are set up as cuttable sheet stock yet."
-              actionHref="/catalog/materials"
+              actionHref="/catalog/items?type=MATERIAL"
               actionLabel="Set one up"
             />
           ) : (
@@ -244,7 +244,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
               <div className="col-span-2 sm:order-2 sm:w-56">
                 <SelectField
                   label="Material"
-                  name="materialId"
+                  name="catalogItemId"
                   required
                   options={sheetMaterials.map((m) => ({
                     value: m.id,
@@ -318,13 +318,13 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
         </form>
       )}
 
-      {materialGroups.map(({ materialId, material, parts }) => {
-        const waste = wasteByMaterialId.get(materialId);
-        const diagramData = diagramDataByMaterialId.get(materialId);
-        const optimizeWithIds = optimizeMaterialAction.bind(null, id, versionId, materialId);
+      {materialGroups.map(({ catalogItemId, material, parts }) => {
+        const waste = wasteByMaterialId.get(catalogItemId);
+        const diagramData = diagramDataByMaterialId.get(catalogItemId);
+        const optimizeWithIds = optimizeMaterialAction.bind(null, id, versionId, catalogItemId);
         const deleteWithIds = deleteCutListPartAction.bind(null, id, versionId);
         return (
-          <CollapsibleSection key={materialId} title={`${material.name} (${parts.length} part${parts.length === 1 ? "" : "s"})`}>
+          <CollapsibleSection key={catalogItemId} title={`${material.name} (${parts.length} part${parts.length === 1 ? "" : "s"})`}>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm text-neutral-500">
                 Stock: {material.stockWidth?.toString()}x{material.stockLength?.toString()}
@@ -370,14 +370,14 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                   <strong>{(waste.wastePct * 100).toFixed(1)}%</strong> waste
                 </span>
                 <Link
-                  href={`/estimates/${id}/versions/${versionId}/cut-list/${materialId}/diagram`}
+                  href={`/estimates/${id}/versions/${versionId}/cut-list/${catalogItemId}/diagram`}
                   target="_blank"
                   className="text-brand-navy hover:underline"
                 >
                   View diagram (PDF)
                 </Link>
                 <Link
-                  href={`/estimates/${id}/versions/${versionId}/cut-list/${materialId}/labels`}
+                  href={`/estimates/${id}/versions/${versionId}/cut-list/${catalogItemId}/labels`}
                   target="_blank"
                   className="text-brand-navy hover:underline"
                 >
@@ -387,7 +387,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                   {Array.from({ length: waste.sheetsUsed }, (_, i) => i + 1).map((sheetNum) => (
                     <a
                       key={sheetNum}
-                      href={`/estimates/${id}/versions/${versionId}/cut-list/${materialId}/sheets/${sheetNum}/dxf`}
+                      href={`/estimates/${id}/versions/${versionId}/cut-list/${catalogItemId}/sheets/${sheetNum}/dxf`}
                       className="text-brand-navy hover:underline"
                     >
                       Sheet {sheetNum} DXF
@@ -405,7 +405,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                       key={sheet.sheetNumber}
                       estimateId={id}
                       versionId={versionId}
-                      materialId={materialId}
+                      catalogItemId={catalogItemId}
                       sheet={sheet}
                       sheetCount={diagramData.sheets.length}
                       versionLocked={version.isLocked}
@@ -415,7 +415,7 @@ export default async function CutListPage(props: PageProps<"/estimates/[id]/vers
                       key={sheet.sheetNumber}
                       estimateId={id}
                       versionId={versionId}
-                      materialId={materialId}
+                      catalogItemId={catalogItemId}
                       sheet={sheet}
                       sheetCount={diagramData.sheets.length}
                       gridSnap={settings.dragGridSnap.toNumber()}

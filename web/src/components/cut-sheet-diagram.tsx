@@ -16,14 +16,14 @@ const DIAGRAM_MAX_HEIGHT = 380;
 export function CutSheetDiagram({
   estimateId,
   versionId,
-  materialId,
+  catalogItemId,
   sheet,
   sheetCount,
   versionLocked = false,
 }: {
   estimateId: string;
   versionId: string;
-  materialId: string;
+  catalogItemId: string;
   sheet: CutSheetDiagramData["sheets"][number];
   sheetCount: number;
   // The lock/unlock toggle is a cut-list EDIT (gated by assertUnlocked
@@ -44,8 +44,8 @@ export function CutSheetDiagram({
   // Phase 8: plain <form action> toggles -- no client-side interactivity
   // needed for a simple flip, matching every other server-action button
   // in this app. Works fine in this still-plain server component.
-  const toggleLockWithIds = toggleCutSheetLockAction.bind(null, estimateId, versionId, materialId, sheet.sheetNumber);
-  const toggleCutWithIds = toggleCutSheetCutAction.bind(null, estimateId, versionId, materialId, sheet.sheetNumber);
+  const toggleLockWithIds = toggleCutSheetLockAction.bind(null, estimateId, versionId, catalogItemId, sheet.sheetNumber);
+  const toggleCutWithIds = toggleCutSheetCutAction.bind(null, estimateId, versionId, catalogItemId, sheet.sheetNumber);
 
   return (
     <div className="flex flex-col items-center gap-1">

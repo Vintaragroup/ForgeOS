@@ -44,7 +44,7 @@ const trimmedString = z.any().optional().transform((v) => String(v ?? "").trim()
 // message for a value that coerced fine but fails the range check.
 const AddCutListPartSchema = z.object({
   description: trimmedString.pipe(z.string().min(1, "Part description is required")),
-  materialId: trimmedString.pipe(z.string().min(1, "Choose a material")),
+  catalogItemId: trimmedString.pipe(z.string().min(1, "Choose a material")),
   width: z.coerce.number({ error: "Width must be a positive number" }).positive("Width must be a positive number"),
   length: z.coerce.number({ error: "Length must be a positive number" }).positive("Length must be a positive number"),
   qty: z.coerce.number({ error: "Qty must be at least 1" }).min(1, "Qty must be at least 1"),
@@ -85,7 +85,7 @@ export async function addCutListPartAction(estimateId: string, versionId: string
   try {
     await assertUnlocked(versionId);
 
-    const { description, materialId, width, length, qty, grainConstrained, edgeBanding, lineItemId: lineItemIdRaw } =
+    const { description, catalogItemId, width, length, qty, grainConstrained, edgeBanding, lineItemId: lineItemIdRaw } =
       parseFormData(formData, AddCutListPartSchema);
 
     // Optional -- ties this part back to the specific priced LineItem
@@ -100,7 +100,7 @@ export async function addCutListPartAction(estimateId: string, versionId: string
     }
 
     await db.cutListPart.create({
-      data: { estimateVersionId: versionId, materialId, description, width, length, qty, grainConstrained, edgeBanding, lineItemId },
+      data: { estimateVersionId: versionId, catalogItemId, description, width, length, qty, grainConstrained, edgeBanding, lineItemId },
     });
     // Any existing CutSheet layout for this material was computed from
     // the old part list -- it's now stale (missing this new part
@@ -114,7 +114,7 @@ export async function addCutListPartAction(estimateId: string, versionId: string
     // this material already had an optimized layout that had generated a
     // shop-wide remnant, since that remnant's generatedByCutSheetId FK
     // (ON DELETE RESTRICT) was never cleared first.
-    await clearStaleCutSheets(versionId, materialId);
+    await clearStaleCutSheets(versionId, catalogItemId);
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : String(err);
   }
@@ -167,7 +167,7 @@ export async function deleteCutListPartAction(estimateId: string, versionId: str
     // answer is worse than a visible gap" posture the catalog-match
     // scorer's own header comment argues for elsewhere in this app.
     const lockedSheets = await db.cutSheet.findMany({
-      where: { estimateVersionId: versionId, materialId: part.materialId, locked: true },
+      where: { estimateVersionId: versionId, catalogItemId: part.catalogItemId, locked: true },
     });
     const isOnLockedSheet = lockedSheets.some((s) =>
       (s.layout as unknown as PlacedPart[]).some((p) => p.cutListPartId === partId),
@@ -182,7 +182,7 @@ export async function deleteCutListPartAction(estimateId: string, versionId: str
     // material's old sheet count/cost/waste after its only part was
     // deleted, computed from parts that no longer exist. Same
     // clearStaleCutSheets fix as addCutListPartAction, same bug.
-    await clearStaleCutSheets(versionId, part.materialId);
+    await clearStaleCutSheets(versionId, part.catalogItemId);
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : String(err);
   }
@@ -198,13 +198,13 @@ export async function deleteCutListPartAction(estimateId: string, versionId: str
 // Error, since buildFullEstimateFromDocumentsAction already established
 // that pattern for a materially identical case (an action whose outcome
 // is worth showing, not just success/fail).
-export async function optimizeMaterialAction(estimateId: string, versionId: string, materialId: string, formData: FormData) {
+export async function optimizeMaterialAction(estimateId: string, versionId: string, catalogItemId: string, formData: FormData) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   try {
     await assertUnlocked(versionId);
-    await optimizeNestingForMaterial(versionId, materialId, readMode(formData));
+    await optimizeNestingForMaterial(versionId, catalogItemId, readMode(formData));
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : String(err);
   }
@@ -249,7 +249,7 @@ export async function optimizeAllMaterialsAction(estimateId: string, versionId: 
 export async function updateCutSheetLayoutAction(
   estimateId: string,
   versionId: string,
-  materialId: string,
+  catalogItemId: string,
   sheetNumber: number,
   parts: PlacedPart[],
 ): Promise<void> {
@@ -258,12 +258,12 @@ export async function updateCutSheetLayoutAction(
   await assertUnlocked(versionId);
 
   const sheet = await db.cutSheet.findFirst({
-    where: { estimateVersionId: versionId, materialId, sheetNumber },
+    where: { estimateVersionId: versionId, catalogItemId, sheetNumber },
     include: { consumedRemnant: true },
   });
   if (!sheet) throw new Error(`Sheet ${sheetNumber} not found -- it may have been re-optimized since this page loaded.`);
 
-  const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
+  const material = await db.catalogItem.findUniqueOrThrow({ where: { id: catalogItemId } });
   const sheetWidth = sheet.consumedRemnant ? sheet.consumedRemnant.width.toNumber() : material.stockWidth!.toNumber();
   const sheetLength = sheet.consumedRemnant ? sheet.consumedRemnant.length.toNumber() : material.stockLength!.toNumber();
 
@@ -288,13 +288,13 @@ export async function updateCutSheetLayoutAction(
 // version's own lock state. Gated by assertUnlocked same as every other
 // cut-list edit -- unlike toggleCutSheetCutAction below, this changes
 // how the cut list itself behaves, not just a production status flag.
-export async function toggleCutSheetLockAction(estimateId: string, versionId: string, materialId: string, sheetNumber: number) {
+export async function toggleCutSheetLockAction(estimateId: string, versionId: string, catalogItemId: string, sheetNumber: number) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   try {
     await assertUnlocked(versionId);
-    const sheet = await db.cutSheet.findFirst({ where: { estimateVersionId: versionId, materialId, sheetNumber } });
+    const sheet = await db.cutSheet.findFirst({ where: { estimateVersionId: versionId, catalogItemId, sheetNumber } });
     if (!sheet) throw new Error(`Sheet ${sheetNumber} not found -- it may have been re-optimized since this page loaded.`);
     await db.cutSheet.update({ where: { id: sheet.id }, data: { locked: !sheet.locked } });
   } catch (err) {
@@ -309,12 +309,12 @@ export async function toggleCutSheetLockAction(estimateId: string, versionId: st
 // Cutting happens BECAUSE an estimate version is locked/accepted;
 // blocking this once the version is locked would be backwards. This
 // never changes the layout/geometry, only records production progress.
-export async function toggleCutSheetCutAction(estimateId: string, versionId: string, materialId: string, sheetNumber: number) {
+export async function toggleCutSheetCutAction(estimateId: string, versionId: string, catalogItemId: string, sheetNumber: number) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   let errorMessage: string | null = null;
   try {
-    const sheet = await db.cutSheet.findFirst({ where: { estimateVersionId: versionId, materialId, sheetNumber } });
+    const sheet = await db.cutSheet.findFirst({ where: { estimateVersionId: versionId, catalogItemId, sheetNumber } });
     if (!sheet) throw new Error(`Sheet ${sheetNumber} not found -- it may have been re-optimized since this page loaded.`);
     await db.cutSheet.update({ where: { id: sheet.id }, data: { cutAt: sheet.cutAt ? null : new Date() } });
   } catch (err) {

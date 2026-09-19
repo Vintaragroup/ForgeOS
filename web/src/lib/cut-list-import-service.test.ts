@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
+import { clearTestCatalog, createTestCatalogItem } from "@/test/catalog-fixtures";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import Papa from "papaparse";
 import { parseCutListCsvRows, importCutListPartsFromCsv, buildCsvTemplate, CUT_LIST_CSV_HEADERS } from "@/lib/cut-list-import-service";
@@ -11,7 +12,7 @@ afterEach(async () => {
   await db.lineItemAuditLog.deleteMany();
   await db.estimateVersion.deleteMany();
   await db.estimate.deleteMany();
-  await db.material.deleteMany();
+  await clearTestCatalog();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
 });
@@ -28,9 +29,7 @@ async function makeVersion() {
 }
 
 async function makeSheetMaterial(name: string) {
-  return db.material.create({
-    data: { name, currentUnitCost: 80, materialType: "SHEET", stockWidth: 48, stockLength: 96, thickness: 0.75 },
-  });
+  return createTestCatalogItem({ name, unitCost: 80, materialType: "SHEET", stockWidth: 48, stockLength: 96, thickness: 0.75 });
 }
 
 describe("parseCutListCsvRows", () => {
@@ -88,8 +87,8 @@ describe("importCutListPartsFromCsv", () => {
     const result = await importCutListPartsFromCsv(version.id, csv);
     expect(result).toEqual({ imported: 3, errors: [] });
 
-    const plywoodParts = await db.cutListPart.findMany({ where: { estimateVersionId: version.id, materialId: plywood.id } });
-    const foamParts = await db.cutListPart.findMany({ where: { estimateVersionId: version.id, materialId: foam.id } });
+    const plywoodParts = await db.cutListPart.findMany({ where: { estimateVersionId: version.id, catalogItemId: plywood.id } });
+    const foamParts = await db.cutListPart.findMany({ where: { estimateVersionId: version.id, catalogItemId: foam.id } });
     expect(plywoodParts).toHaveLength(2);
     expect(foamParts).toHaveLength(1);
   });

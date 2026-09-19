@@ -11,9 +11,9 @@ import { getCutSheetDiagramData } from "@/lib/cut-list-nesting-service";
 
 export async function GET(
   _request: Request,
-  { params }: RouteContext<"/estimates/[id]/versions/[versionId]/cut-list/[materialId]/sheets/[sheetNumber]/dxf">,
+  { params }: RouteContext<"/estimates/[id]/versions/[versionId]/cut-list/[catalogItemId]/sheets/[sheetNumber]/dxf">,
 ) {
-  const { id, versionId, materialId, sheetNumber } = await params;
+  const { id, versionId, catalogItemId, sheetNumber } = await params;
   const sheetNum = Number(sheetNumber);
   if (!Number.isInteger(sheetNum) || sheetNum < 1) return new Response("Invalid sheet number", { status: 400 });
 
@@ -30,7 +30,7 @@ export async function GET(
   let content: string;
   let materialName: string;
   try {
-    const data = await getCutSheetDiagramData(versionId, materialId);
+    const data = await getCutSheetDiagramData(versionId, catalogItemId);
     content = generateCutSheetDxf(data, sheetNum);
     materialName = data.materialName;
   } catch {

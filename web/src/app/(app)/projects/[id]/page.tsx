@@ -204,7 +204,7 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
           </div>
           <ul className="flex flex-col divide-y divide-neutral-200 text-sm">
             {cutListReport.materials.map((m) => (
-              <li key={m.materialId} className="flex flex-wrap items-center gap-4 py-2">
+              <li key={m.catalogItemId} className="flex flex-wrap items-center gap-4 py-2">
                 <span className="flex-1 font-medium">{m.materialName}</span>
                 <span>
                   <strong>{m.sheetsUsed}</strong> sheet{m.sheetsUsed === 1 ? "" : "s"}
@@ -221,7 +221,7 @@ export default async function ProjectDetailPage(props: PageProps<"/projects/[id]
                 </span>
                 <span className="text-neutral-500">{(m.wastePct * 100).toFixed(1)}% waste</span>
                 <Link
-                  href={`/estimates/${lockedVersion.estimateId}/versions/${lockedVersion.id}/cut-list/${m.materialId}/diagram`}
+                  href={`/estimates/${lockedVersion.estimateId}/versions/${lockedVersion.id}/cut-list/${m.catalogItemId}/diagram`}
                   target="_blank"
                   className="text-brand-navy hover:underline"
                 >

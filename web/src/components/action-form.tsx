@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useActionState, type FormEvent, type ReactNode } from "react";
+import { startTransition, useActionState, useEffect, useRef, type FormEvent, type ReactNode } from "react";
 import { StatusBanner } from "@/components/ui";
 import type { ActionResult } from "@/lib/user-error";
 
@@ -24,22 +24,36 @@ import type { ActionResult } from "@/lib/user-error";
 export function ActionForm({
   action,
   className,
+  resetOnSuccess = false,
   children,
 }: {
   action: (prevState: ActionResult, formData: FormData) => Promise<ActionResult>;
   className?: string;
+  // For "add another" forms (an alias, a tag) that should come back empty
+  // after a successful submit. Off by default: an edit form should keep
+  // showing the values that were just saved.
+  resetOnSuccess?: boolean;
   children: ReactNode;
 }) {
   const [state, dispatch, pending] = useActionState(action, undefined);
+  const formRef = useRef<HTMLFormElement>(null);
+  const submittedRef = useRef(false);
+
+  useEffect(() => {
+    if (pending || !submittedRef.current) return;
+    submittedRef.current = false;
+    if (resetOnSuccess && !state?.error) formRef.current?.reset();
+  }, [pending, state, resetOnSuccess]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
+    submittedRef.current = true;
     startTransition(() => dispatch(formData));
   }
 
   return (
-    <form onSubmit={handleSubmit} className={className}>
+    <form ref={formRef} onSubmit={handleSubmit} className={className}>
       {state?.error && (
         <div role="alert" aria-live="polite">
           <StatusBanner kind="error">{state.error}</StatusBanner>

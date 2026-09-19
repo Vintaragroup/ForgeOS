@@ -33,7 +33,7 @@ export async function GET(
   if (costReport.materials.length === 0) notFound();
 
   const diagramDataByMaterial = await Promise.all(
-    costReport.materials.map((m) => getCutSheetDiagramData(versionId, m.materialId)),
+    costReport.materials.map((m) => getCutSheetDiagramData(versionId, m.catalogItemId)),
   );
 
   const workbook = new ExcelJS.Workbook();

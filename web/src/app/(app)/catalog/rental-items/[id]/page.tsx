@@ -1,49 +1,15 @@
-import { notFound } from "next/navigation";
+// Catalog redesign push 2: Materials and Rental Items merged into one
+// numbered catalog at /catalog/items. These old URLs stay alive only as
+// redirects, so bookmarks and links in old emails still land somewhere
+// sensible. Removed with the legacy tables in push 3.
+import { notFound, redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { deleteRentalItem, updateRentalItem } from "../actions";
-import { Button, Card, Field, PageHeader } from "@/components/ui";
-import { ConfirmForm } from "@/components/confirm-form";
 
-export default async function RentalItemDetailPage(props: PageProps<"/catalog/rental-items/[id]">) {
+// The id in the old URL is the legacy row's id -- scripts/migrate-catalog-
+// to-unified.ts recorded which catalog item each one became.
+export default async function LegacyDetailRedirect(props: PageProps<"/catalog/rental-items/[id]">) {
   const { id } = await props.params;
-  const item = await db.rentalItem.findFirst({ where: { id, deletedAt: null } });
+  const item = await db.catalogItem.findUnique({ where: { legacyRentalItemId: id }, select: { id: true } });
   if (!item) notFound();
-
-  const updateRentalItemWithId = updateRentalItem.bind(null, item.id);
-  const deleteRentalItemWithId = deleteRentalItem.bind(null, item.id);
-
-  return (
-    <div>
-      <PageHeader title={item.name} backHref="/catalog/rental-items" backLabel="Rental items" />
-      <Card className="p-6">
-        <form action={updateRentalItemWithId} className="flex flex-col gap-4">
-          <Field label="Item name" name="name" defaultValue={item.name} required />
-          <Field label="Category" name="category" defaultValue={item.category ?? ""} placeholder="e.g. Furniture, A/V, BeMatrix System" />
-          <Field
-            label="Unit price ($)"
-            name="unitPrice"
-            type="number"
-            defaultValue={item.unitPrice.toString()}
-            required
-          />
-          <Field
-            label="Price derivation note"
-            name="priceDerivationNote"
-            defaultValue={item.priceDerivationNote ?? ""}
-            placeholder="How this price was calculated, if not a flat rate"
-          />
-          <div className="flex gap-3">
-            <Button>Save changes</Button>
-          </div>
-        </form>
-        <ConfirmForm
-          action={deleteRentalItemWithId}
-          confirmMessage="Delete this rental item? This can't be undone."
-          className="mt-4 border-t border-neutral-200 pt-4"
-        >
-          <Button variant="danger">Delete rental item</Button>
-        </ConfirmForm>
-      </Card>
-    </div>
-  );
+  redirect(`/catalog/items/${item.id}`);
 }

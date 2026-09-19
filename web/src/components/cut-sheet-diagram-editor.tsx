@@ -121,14 +121,14 @@ export function computeAlignedPosition(
 export function CutSheetDiagramEditor({
   estimateId,
   versionId,
-  materialId,
+  catalogItemId,
   sheet,
   sheetCount,
   gridSnap,
 }: {
   estimateId: string;
   versionId: string;
-  materialId: string;
+  catalogItemId: string;
   sheet: CutSheetDiagramData["sheets"][number];
   sheetCount: number;
   // CutListSettings.dragGridSnap -- a shop-configurable value (see
@@ -285,7 +285,7 @@ export function CutSheetDiagramEditor({
     setError(null);
     startTransition(async () => {
       try {
-        await updateCutSheetLayoutAction(estimateId, versionId, materialId, sheet.sheetNumber, parts);
+        await updateCutSheetLayoutAction(estimateId, versionId, catalogItemId, sheet.sheetNumber, parts);
         setBaseline(parts);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save the layout.");
@@ -301,8 +301,8 @@ export function CutSheetDiagramEditor({
   // (see cut-list/page.tsx's render branch), so there's no "Unlock"
   // case to handle here -- locking flips this sheet over to the
   // read-only CutSheetDiagram on the next render.
-  const toggleLockWithIds = toggleCutSheetLockAction.bind(null, estimateId, versionId, materialId, sheet.sheetNumber);
-  const toggleCutWithIds = toggleCutSheetCutAction.bind(null, estimateId, versionId, materialId, sheet.sheetNumber);
+  const toggleLockWithIds = toggleCutSheetLockAction.bind(null, estimateId, versionId, catalogItemId, sheet.sheetNumber);
+  const toggleCutWithIds = toggleCutSheetCutAction.bind(null, estimateId, versionId, catalogItemId, sheet.sheetNumber);
 
   return (
     <div className="flex flex-col items-center gap-2">

@@ -8,8 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function CatalogPage() {
   const [
     laborRateCount,
-    materialCount,
-    rentalItemCount,
+    catalogItemCount,
     taxRateCount,
     categoryCount,
     proposalTemplateCount,
@@ -17,8 +16,7 @@ export default async function CatalogPage() {
     artworkSizeTierCount,
   ] = await Promise.all([
     db.laborRate.count({ where: { deletedAt: null } }),
-    db.material.count({ where: { deletedAt: null } }),
-    db.rentalItem.count({ where: { deletedAt: null } }),
+    db.catalogItem.count({ where: { deletedAt: null } }),
     db.taxRate.count({ where: { deletedAt: null } }),
     db.category.count({ where: { deletedAt: null } }),
     db.proposalTemplate.count({ where: { deletedAt: null } }),
@@ -28,8 +26,9 @@ export default async function CatalogPage() {
 
   const sections = [
     { href: "/catalog/labor-rates", label: "Labor rates", count: laborRateCount },
-    { href: "/catalog/materials", label: "Materials", count: materialCount },
-    { href: "/catalog/rental-items", label: "Rental items", count: rentalItemCount },
+    // Rentals, materials, and services -- one numbered catalog since the
+    // catalog redesign (was separate Materials / Rental items lists).
+    { href: "/catalog/items", label: "Catalog items", count: catalogItemCount },
     { href: "/catalog/tax-rates", label: "Tax rates", count: taxRateCount },
     { href: "/catalog/categories", label: "Categories", count: categoryCount },
     { href: "/catalog/proposal-templates", label: "Proposal templates", count: proposalTemplateCount },

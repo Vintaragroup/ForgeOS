@@ -37,4 +37,26 @@ describe("matchDescription", () => {
     expect(matchDescription("", catalog)).toBeNull();
     expect(matchDescription("---", catalog)).toBeNull();
   });
+
+  it("matches on an alias and reports the catalog item it belongs to", () => {
+    const withAlias: CatalogEntry[] = [
+      {
+        source: "Rental",
+        name: "Premium Carpet w/ 1/2in Pad",
+        unitCost: 5.7,
+        category: "Flooring",
+        catalogItemId: "item-1",
+        catalogNumber: "R-FLR-0003",
+        aliases: ["FR Carpet"],
+      },
+    ];
+    expect(matchDescription("FR Carpet", withAlias)).toEqual({
+      source: "Rental",
+      name: "Premium Carpet w/ 1/2in Pad",
+      unitCost: 5.7,
+      category: "Flooring",
+      catalogItemId: "item-1",
+      catalogNumber: "R-FLR-0003",
+    });
+  });
 });

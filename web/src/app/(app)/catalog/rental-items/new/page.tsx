@@ -1,25 +1,9 @@
-import { createRentalItem } from "../actions";
-import { Button, Card, Field, PageHeader } from "@/components/ui";
+// Catalog redesign push 2: Materials and Rental Items merged into one
+// numbered catalog at /catalog/items. These old URLs stay alive only as
+// redirects, so bookmarks and links in old emails still land somewhere
+// sensible. Removed with the legacy tables in push 3.
+import { redirect } from "next/navigation";
 
-export default function NewRentalItemPage() {
-  return (
-    <div>
-      <PageHeader title="New rental item" backHref="/catalog/rental-items" backLabel="Rental items" />
-      <Card className="p-6">
-        <form action={createRentalItem} className="flex flex-col gap-4">
-          <Field label="Item name" name="name" required />
-          <Field label="Category" name="category" placeholder="e.g. Furniture, A/V, BeMatrix System" />
-          <Field label="Unit price ($)" name="unitPrice" type="number" required />
-          <Field
-            label="Price derivation note"
-            name="priceDerivationNote"
-            placeholder="How this price was calculated, if not a flat rate"
-          />
-          <div>
-            <Button>Create rental item</Button>
-          </div>
-        </form>
-      </Card>
-    </div>
-  );
+export default function LegacyNewRedirect() {
+  redirect("/catalog/items/new?type=RENTAL");
 }

@@ -1,5 +1,6 @@
-// Copies catalog-style reference data (Materials, Labor Rates, Tax Rates,
-// Rental Items, Categories, Vendors, Proposal Templates) from one database
+// Copies catalog-style reference data (the unified catalog -- offices,
+// catalog categories, items, tags, aliases -- plus Labor Rates, Tax Rates,
+// Categories, Vendors, Proposal Templates) from one database
 // to another, matching each model's own natural key so it's safe to
 // re-run -- an existing row gets its fields updated, not duplicated.
 //
@@ -135,15 +136,78 @@ async function syncTaxRates(): Promise<Tally> {
   return tally;
 }
 
-async function syncMaterials(): Promise<Tally> {
-  const tally: Tally = { model: "Material", created: 0, updated: 0, unchanged: 0 };
-  const rows = await source.material.findMany({ where: { deletedAt: null } });
-  for (const row of rows) {
-    const existing = await target.material.findFirst({ where: { name: row.name, deletedAt: null } });
+// Unified catalog (catalog redesign): replaces the old per-table
+// Material / RentalItem sync. Keyed by catalogNumber -- the catalog's own
+// permanent identifier, the same reason syncCategories keys on `key`, not
+// `name`: a renamed item is still the same item. A number that exists on
+// both sides under different names is updated (treated as a rename) but
+// also printed, since it could instead mean both databases minted the
+// same number for different items -- worth a human look either way.
+async function syncCatalog(): Promise<Tally[]> {
+  const offices: Tally = { model: "Office", created: 0, updated: 0, unchanged: 0 };
+  for (const row of await source.office.findMany({ where: { deletedAt: null } })) {
+    const existing = await target.office.findUnique({ where: { code: row.code } });
+    const data = { name: row.name, isStandard: row.isStandard };
+    if (!existing) {
+      if (APPLY) await target.office.create({ data: { code: row.code, ...data } });
+      offices.created++;
+    } else if (existing.name !== data.name || existing.isStandard !== data.isStandard) {
+      if (APPLY) await target.office.update({ where: { code: row.code }, data });
+      offices.updated++;
+    } else offices.unchanged++;
+  }
+
+  const categories: Tally = { model: "CatalogCategory", created: 0, updated: 0, unchanged: 0 };
+  const targetCategoryKeys = new Set((await target.category.findMany({ select: { key: true } })).map((c) => c.key));
+  for (const row of await source.catalogCategory.findMany({ where: { deletedAt: null } })) {
+    const existing = await target.catalogCategory.findUnique({ where: { code: row.code } });
     const data = {
+      name: row.name,
+      sortOrder: row.sortOrder,
+      // Only link an estimate category the target actually has.
+      estimateCategoryKey: row.estimateCategoryKey && targetCategoryKeys.has(row.estimateCategoryKey) ? row.estimateCategoryKey : null,
+    };
+    if (!existing) {
+      if (APPLY) await target.catalogCategory.create({ data: { code: row.code, ...data } });
+      categories.created++;
+    } else if (
+      existing.name !== data.name ||
+      existing.sortOrder !== data.sortOrder ||
+      existing.estimateCategoryKey !== data.estimateCategoryKey
+    ) {
+      if (APPLY) await target.catalogCategory.update({ where: { code: row.code }, data });
+      categories.updated++;
+    } else categories.unchanged++;
+  }
+
+  // Sequences before items: the target's counter must never end up BELOW
+  // a number it now holds, or its next allocation would collide.
+  for (const row of await source.catalogNumberSequence.findMany()) {
+    const key = { itemType: row.itemType, categoryCode: row.categoryCode };
+    const existing = await target.catalogNumberSequence.findUnique({ where: { itemType_categoryCode: key } });
+    if (APPLY && (!existing || existing.lastValue < row.lastValue)) {
+      await target.catalogNumberSequence.upsert({
+        where: { itemType_categoryCode: key },
+        create: { ...key, lastValue: row.lastValue },
+        update: { lastValue: row.lastValue },
+      });
+    }
+  }
+
+  const items: Tally = { model: "CatalogItem", created: 0, updated: 0, unchanged: 0 };
+  const sourceItems = await source.catalogItem.findMany({
+    where: { deletedAt: null },
+    include: { tags: { include: { tag: true } }, aliases: true },
+  });
+  for (const row of sourceItems) {
+    const data = {
+      itemType: row.itemType,
+      categoryCode: row.categoryCode,
+      name: row.name,
+      description: row.description,
       unit: row.unit,
-      currentUnitCost: row.currentUnitCost,
-      category: row.category,
+      unitCost: row.unitCost,
+      unitPrice: row.unitPrice,
       sourceNote: row.sourceNote,
       materialType: row.materialType,
       stockWidth: row.stockWidth,
@@ -152,36 +216,56 @@ async function syncMaterials(): Promise<Tally> {
       defaultKerf: row.defaultKerf,
       grainDirectionMatters: row.grainDirectionMatters,
     };
-    if (existing) {
-      const changed = !existing.currentUnitCost.equals(data.currentUnitCost) || existing.category !== data.category;
-      if (changed && APPLY) await target.material.update({ where: { id: existing.id }, data });
-      if (changed) tally.updated++;
-      else tally.unchanged++;
+    const existing = await target.catalogItem.findUnique({ where: { catalogNumber: row.catalogNumber } });
+    let targetId = existing?.id;
+    if (!existing) {
+      if (APPLY) targetId = (await target.catalogItem.create({ data: { catalogNumber: row.catalogNumber, ...data } })).id;
+      items.created++;
     } else {
-      if (APPLY) await target.material.create({ data: { name: row.name, ...data } });
-      tally.created++;
+      const decimalChanged = (a: Prisma.Decimal | null, b: Prisma.Decimal | null) => (a == null || b == null ? a != b : !a.equals(b));
+      const changed =
+        existing.name !== data.name ||
+        existing.categoryCode !== data.categoryCode ||
+        existing.unit !== data.unit ||
+        existing.description !== data.description ||
+        existing.sourceNote !== data.sourceNote ||
+        existing.materialType !== data.materialType ||
+        decimalChanged(existing.unitCost, data.unitCost) ||
+        decimalChanged(existing.unitPrice, data.unitPrice) ||
+        decimalChanged(existing.stockWidth, data.stockWidth) ||
+        decimalChanged(existing.stockLength, data.stockLength);
+      if (existing.name !== data.name) {
+        console.log(`  ! ${row.catalogNumber}: "${existing.name}" -> "${data.name}" (rename, or a number minted twice?)`);
+      }
+      if (changed && APPLY) await target.catalogItem.update({ where: { id: existing.id }, data: { ...data, deletedAt: null } });
+      if (changed) items.updated++;
+      else items.unchanged++;
+    }
+    if (!APPLY || !targetId) continue;
+    for (const { tag } of row.tags) {
+      const targetTag = await target.catalogTag.upsert({ where: { name: tag.name }, create: { name: tag.name }, update: {} });
+      await target.catalogItemTag.upsert({
+        where: { catalogItemId_tagId: { catalogItemId: targetId, tagId: targetTag.id } },
+        create: { catalogItemId: targetId, tagId: targetTag.id },
+        update: {},
+      });
+    }
+    for (const alias of row.aliases) {
+      await target.catalogItemAlias.upsert({
+        where: { catalogItemId_normalizedAlias: { catalogItemId: targetId, normalizedAlias: alias.normalizedAlias } },
+        create: {
+          catalogItemId: targetId,
+          alias: alias.alias,
+          normalizedAlias: alias.normalizedAlias,
+          officeCode: alias.officeCode,
+          source: alias.source,
+        },
+        update: { alias: alias.alias, officeCode: alias.officeCode, source: alias.source },
+      });
     }
   }
-  return tally;
-}
 
-async function syncRentalItems(): Promise<Tally> {
-  const tally: Tally = { model: "RentalItem", created: 0, updated: 0, unchanged: 0 };
-  const rows = await source.rentalItem.findMany({ where: { deletedAt: null } });
-  for (const row of rows) {
-    const existing = await target.rentalItem.findFirst({ where: { name: row.name, deletedAt: null } });
-    const data = { unitPrice: row.unitPrice, priceDerivationNote: row.priceDerivationNote, category: row.category };
-    if (existing) {
-      const changed = !existing.unitPrice.equals(data.unitPrice) || existing.category !== data.category;
-      if (changed && APPLY) await target.rentalItem.update({ where: { id: existing.id }, data });
-      if (changed) tally.updated++;
-      else tally.unchanged++;
-    } else {
-      if (APPLY) await target.rentalItem.create({ data: { name: row.name, ...data } });
-      tally.created++;
-    }
-  }
-  return tally;
+  return [offices, categories, items];
 }
 
 async function syncVendors(): Promise<Tally> {
@@ -280,8 +364,7 @@ async function main() {
   const tallies = [
     await syncCategories(),
     await syncTaxRates(),
-    await syncMaterials(),
-    await syncRentalItems(),
+    ...(await syncCatalog()),
     await syncVendors(),
     await syncProposalTemplates(),
     await syncLaborRates(),

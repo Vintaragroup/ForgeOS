@@ -134,12 +134,15 @@ export function leafCategoryKey(typeKey: string, method: SectionBuildType | null
 // fallback; an unresolved Method just means "not split yet," not "no
 // category at all."
 export function resolveAcquisitionMethod(input: {
-  catalogSource?: "Material" | "Rental";
+  catalogSource?: "Material" | "Rental" | "Service";
   category?: string | null;
   description: string;
 }): SectionBuildType | null {
   const text = `${input.category ?? ""} ${input.description}`;
   if (/\bbematrix\b|\bbe[\s-]matrix\b|\bb-matrix\b/i.test(text)) return "RENTAL";
+  // A Service match (design time, shipping) has no acquisition method --
+  // it isn't rented, bought, or fabricated.
+  if (input.catalogSource === "Service") return null;
   if (input.catalogSource === "Rental") return "RENTAL";
   if (/\brental\b/i.test(text)) return "RENTAL";
   if (/\bpurchase(d)?\b/i.test(text)) return "PURCHASE";
@@ -166,6 +169,9 @@ const CATALOG_CATEGORY_KEY_MAP: Record<string, string> = {
   "accessories": "accessories",
   "a/v": "audio_visual",
   "a/v (standard rate)": "audio_visual",
+  // CatalogCategory.name for AVL (unified catalog) -- same category as the
+  // legacy "A/V" string above.
+  "audio/visual": "audio_visual",
   "graphics package": "graphics",
   "printing substrates": "graphics",
   "hanging sign": "signage",
@@ -173,6 +179,7 @@ const CATALOG_CATEGORY_KEY_MAP: Record<string, string> = {
   "electrical": CUSTOM_BUILD_CATEGORY_KEY,
   "acrylic": CUSTOM_BUILD_CATEGORY_KEY,
   "wood & sheet goods": CUSTOM_BUILD_CATEGORY_KEY,
+  "dimensioned lumber": CUSTOM_BUILD_CATEGORY_KEY,
   "hardware & fasteners": CUSTOM_BUILD_CATEGORY_KEY,
   "custom fabrication & millwork": CUSTOM_BUILD_CATEGORY_KEY,
   "metal & extrusion": CUSTOM_BUILD_CATEGORY_KEY,
@@ -451,7 +458,7 @@ export function resolveComposedCategory(
   input: {
     explicit?: string | null;
     catalogCategory?: string | null;
-    catalogSource?: "Material" | "Rental";
+    catalogSource?: "Material" | "Rental" | "Service";
     description: string;
     // An explicit Method override (a tagged section's own buildType) --
     // when provided, wins outright and per-item inference never runs.

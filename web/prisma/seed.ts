@@ -14,6 +14,7 @@ import {
   CATALOG_EXPANSION_RENTAL_ITEMS,
 } from "./seed-data/catalog-expansion";
 import { CUTLIST_SEED_MATERIALS } from "./seed-data/cutlist-materials";
+import { migrateLegacyCatalog } from "../src/lib/catalog-migration";
 
 const adapter = new PrismaPg(process.env.DATABASE_URL!);
 const db = new PrismaClient({ adapter });
@@ -308,6 +309,15 @@ async function main() {
     }
   }
   console.log(`Seeded ${CUTLIST_SEED_MATERIALS.length} cut-list materials (real shop data).`);
+
+  // The app reads the unified numbered catalog (catalog_items), not the
+  // materials/rental_items rows seeded above -- build it from them the
+  // same way every existing database was migrated, so a fresh database
+  // ends up with the same catalog numbers. Idempotent, like the rest of
+  // this file. (Push 3 of the catalog redesign seeds the catalog directly
+  // and drops the legacy tables.)
+  const catalog = await migrateLegacyCatalog(db);
+  console.log(`Unified catalog: ${catalog.created.length} created, ${catalog.totalItems} total (checksum ${catalog.checksum.slice(0, 12)}…).`);
 }
 
 main()

@@ -236,12 +236,12 @@ function packOneBin(
 // read) -- promoted here so every caller that clears a material's old
 // CutSheet rows goes through the same one cleanup, not a second
 // (previously missing) copy.
-export async function clearStaleCutSheets(estimateVersionId: string, materialId: string): Promise<void> {
+export async function clearStaleCutSheets(estimateVersionId: string, catalogItemId: string): Promise<void> {
   // locked: false -- a locked sheet (Phase 8, CutList Plus's "pinned
   // diagrams") is never superseded by this cleanup, regardless of what
   // else changed for this material. Its consumed/generated remnants stay
   // exactly as they are too.
-  const oldSheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId, locked: false } });
+  const oldSheets = await db.cutSheet.findMany({ where: { estimateVersionId, catalogItemId, locked: false } });
   if (oldSheets.length === 0) return;
   const oldConsumedRemnantIds = oldSheets.map((s) => s.consumedRemnantId).filter((id): id is string => id != null);
   const oldSheetIds = oldSheets.map((s) => s.id);
@@ -257,7 +257,7 @@ export async function clearStaleCutSheets(estimateVersionId: string, materialId:
 
 export async function optimizeNestingForMaterial(
   estimateVersionId: string,
-  materialId: string,
+  catalogItemId: string,
   // Phase 8: "cost" (default, today's behavior) tries shop-wide remnants
   // first; "waste" skips remnant consumption entirely and packs every
   // instance onto clean fresh stock -- for a job where oddly-shaped
@@ -267,7 +267,7 @@ export async function optimizeNestingForMaterial(
   // something "waste" mode has a reason to skip.
   mode: "cost" | "waste" = "cost",
 ): Promise<PlacedPart[][]> {
-  const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
+  const material = await db.catalogItem.findUniqueOrThrow({ where: { id: catalogItemId } });
   if (material.materialType !== "SHEET" || !material.stockWidth || !material.stockLength) {
     throw new Error(
       `"${material.name}" isn't set up as sheet stock yet -- set its material type to Sheet and fill in stock width/length first.`,
@@ -284,7 +284,7 @@ export async function optimizeNestingForMaterial(
   const minRemnantDimension = settings.minRemnantDimension.toNumber();
 
   const parts = await db.cutListPart.findMany({
-    where: { estimateVersionId, materialId, deletedAt: null },
+    where: { estimateVersionId, catalogItemId, deletedAt: null },
   });
 
   // Every old CutSheet for this material+version is about to be
@@ -299,7 +299,7 @@ export async function optimizeNestingForMaterial(
   // remnant this same material's previous run had consumed (now given
   // back here) or, worse, let a new CutSheet reference a remnant this
   // cleanup is about to delete, violating the FK.
-  await clearStaleCutSheets(estimateVersionId, materialId);
+  await clearStaleCutSheets(estimateVersionId, catalogItemId);
 
   // Locked sheets survived that cleanup untouched -- fetch them fresh
   // (post-cleanup, so this reflects the real "what's already placed and
@@ -307,7 +307,7 @@ export async function optimizeNestingForMaterial(
   // already account for. Re-optimizing after locking a sheet is
   // additive: only the un-accounted-for quantity gets packed again, not
   // every instance from scratch.
-  const lockedSheets = await db.cutSheet.findMany({ where: { estimateVersionId, materialId, locked: true } });
+  const lockedSheets = await db.cutSheet.findMany({ where: { estimateVersionId, catalogItemId, locked: true } });
   const lockedCountByPartId = new Map<string, number>();
   for (const sheet of lockedSheets) {
     for (const p of sheet.layout as unknown as PlacedPart[]) {
@@ -347,7 +347,7 @@ export async function optimizeNestingForMaterial(
     mode === "waste"
       ? []
       : await db.materialRemnant.findMany({
-          where: { materialId, consumedAt: null },
+          where: { catalogItemId, consumedAt: null },
           orderBy: [{ width: "asc" }, { length: "asc" }],
         });
 
@@ -418,7 +418,7 @@ export async function optimizeNestingForMaterial(
         const sheet = await tx.cutSheet.create({
           data: {
             estimateVersionId,
-            materialId,
+            catalogItemId,
             sheetNumber: nextSheetNumber + i,
             layout: bin.placed as unknown as Prisma.InputJsonValue,
             consumedRemnantId: bin.consumedRemnantId,
@@ -430,7 +430,7 @@ export async function optimizeNestingForMaterial(
         if (bin.generatedRemnant) {
           await tx.materialRemnant.create({
             data: {
-              materialId,
+              catalogItemId,
               width: bin.generatedRemnant.width,
               length: bin.generatedRemnant.length,
               generatedByCutSheetId: sheet.id,
@@ -460,8 +460,8 @@ export async function optimizeNestingForMaterial(
 // than 2D sheet nesting) or a part on a material that isn't set up as
 // stock yet is reported as skipped rather than failing the whole run.
 export interface OptimizeAllResult {
-  optimized: { materialId: string; materialName: string; sheetCount: number }[];
-  skipped: { materialId: string; materialName: string; reason: string }[];
+  optimized: { catalogItemId: string; materialName: string; sheetCount: number }[];
+  skipped: { catalogItemId: string; materialName: string; reason: string }[];
 }
 
 export async function optimizeNestingForVersion(
@@ -470,20 +470,20 @@ export async function optimizeNestingForVersion(
 ): Promise<OptimizeAllResult> {
   const materialIds = await db.cutListPart.findMany({
     where: { estimateVersionId, deletedAt: null },
-    select: { materialId: true },
-    distinct: ["materialId"],
+    select: { catalogItemId: true },
+    distinct: ["catalogItemId"],
   });
 
   const optimized: OptimizeAllResult["optimized"] = [];
   const skipped: OptimizeAllResult["skipped"] = [];
 
-  for (const { materialId } of materialIds) {
-    const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
+  for (const { catalogItemId } of materialIds) {
+    const material = await db.catalogItem.findUniqueOrThrow({ where: { id: catalogItemId } });
     try {
-      const sheets = await optimizeNestingForMaterial(estimateVersionId, materialId, mode);
-      optimized.push({ materialId, materialName: material.name, sheetCount: sheets.length });
+      const sheets = await optimizeNestingForMaterial(estimateVersionId, catalogItemId, mode);
+      optimized.push({ catalogItemId, materialName: material.name, sheetCount: sheets.length });
     } catch (err) {
-      skipped.push({ materialId, materialName: material.name, reason: err instanceof Error ? err.message : String(err) });
+      skipped.push({ catalogItemId, materialName: material.name, reason: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -522,11 +522,11 @@ export interface CutSheetDiagramData {
 
 export async function getCutSheetDiagramData(
   estimateVersionId: string,
-  materialId: string,
+  catalogItemId: string,
 ): Promise<CutSheetDiagramData> {
-  const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
+  const material = await db.catalogItem.findUniqueOrThrow({ where: { id: catalogItemId } });
   const sheets = await db.cutSheet.findMany({
-    where: { estimateVersionId, materialId },
+    where: { estimateVersionId, catalogItemId },
     orderBy: { sheetNumber: "asc" },
     include: { consumedRemnant: true },
   });
@@ -534,7 +534,7 @@ export async function getCutSheetDiagramData(
     throw new Error(`No cutting diagram for "${material.name}" yet -- run Optimize first.`);
   }
 
-  const parts = await db.cutListPart.findMany({ where: { estimateVersionId, materialId } });
+  const parts = await db.cutListPart.findMany({ where: { estimateVersionId, catalogItemId } });
   const descriptionById = new Map(parts.map((p) => [p.id, p.description]));
 
   return {
@@ -564,7 +564,7 @@ export async function getCutSheetDiagramData(
 // replace -- this is just the real report, buildable now because
 // optimizeNestingForMaterial already produces exact placements to sum.
 export interface MaterialWasteReport {
-  materialId: string;
+  catalogItemId: string;
   materialName: string;
   sheetsUsed: number;
   // Phase 5: a remnant-based sheet is already-owned material -- $0, not
@@ -577,7 +577,7 @@ export interface MaterialWasteReport {
   // visibility into cutting progress, shown alongside the cost/waste
   // stats it's computed next to.
   sheetsCut: number;
-  // freshSheetsUsed * currentUnitCost -- material cost only, no labor/
+  // freshSheetsUsed * unitCost -- material cost only, no labor/
   // kerf-loss-as-a-dollar-figure; kerf is already reflected physically
   // in sheetsUsed (more kerf spacing can push a layout onto an extra
   // sheet).
@@ -596,11 +596,11 @@ export interface MaterialWasteReport {
 
 export async function getMaterialWasteReport(
   estimateVersionId: string,
-  materialId: string,
+  catalogItemId: string,
 ): Promise<MaterialWasteReport> {
-  const material = await db.material.findUniqueOrThrow({ where: { id: materialId } });
+  const material = await db.catalogItem.findUniqueOrThrow({ where: { id: catalogItemId } });
   const sheets = await db.cutSheet.findMany({
-    where: { estimateVersionId, materialId },
+    where: { estimateVersionId, catalogItemId },
     include: { consumedRemnant: true },
   });
   if (sheets.length === 0) {
@@ -609,7 +609,10 @@ export async function getMaterialWasteReport(
 
   const stockWidth = material.stockWidth!.toNumber();
   const stockLength = material.stockLength!.toNumber();
-  const unitCost = material.currentUnitCost.toNumber();
+  // CatalogItem.unitCost is nullable (a rental/service row has none); a
+  // cuttable sheet material without a cost yet reports $0 rather than
+  // failing the whole waste report.
+  const unitCost = material.unitCost?.toNumber() ?? 0;
 
   const freshSheetsUsed = sheets.filter((s) => !s.consumedRemnant).length;
   const remnantSheetsUsed = sheets.length - freshSheetsUsed;
@@ -625,7 +628,7 @@ export async function getMaterialWasteReport(
   }, 0);
 
   return {
-    materialId,
+    catalogItemId,
     materialName: material.name,
     sheetsUsed: sheets.length,
     freshSheetsUsed,
@@ -652,12 +655,12 @@ export interface CutListCostReport {
 export async function getCutListCostReport(estimateVersionId: string): Promise<CutListCostReport> {
   const materialIds = await db.cutSheet.findMany({
     where: { estimateVersionId },
-    select: { materialId: true },
-    distinct: ["materialId"],
+    select: { catalogItemId: true },
+    distinct: ["catalogItemId"],
   });
 
   const materials = await Promise.all(
-    materialIds.map(({ materialId }) => getMaterialWasteReport(estimateVersionId, materialId)),
+    materialIds.map(({ catalogItemId }) => getMaterialWasteReport(estimateVersionId, catalogItemId)),
   );
 
   return {

@@ -71,8 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/catalog", label: "All catalog" },
       { href: "/catalog/labor-rates", label: "Labor rates" },
-      { href: "/catalog/materials", label: "Materials" },
-      { href: "/catalog/rental-items", label: "Rental items" },
+      { href: "/catalog/items", label: "Catalog items" },
       { href: "/catalog/proposal-templates", label: "Proposal templates" },
       { href: "/catalog/vendors", label: "Vendors" },
       { href: "/catalog/artwork-size-tiers", label: "Artwork size tiers" },

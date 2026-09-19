@@ -126,7 +126,7 @@ export function parseCutListCsvRows(csvText: string): { rows: ParsedCutListRow[]
 export async function importCutListPartsFromCsv(estimateVersionId: string, csvText: string): Promise<CutListImportResult> {
   const { rows, errors } = parseCutListCsvRows(csvText);
 
-  const materials = await db.material.findMany({
+  const materials = await db.catalogItem.findMany({
     where: { deletedAt: null, materialType: "SHEET", stockWidth: { not: null }, stockLength: { not: null } },
     select: { id: true, name: true },
   });
@@ -138,7 +138,7 @@ export async function importCutListPartsFromCsv(estimateVersionId: string, csvTe
     materialsByLowerName.set(key, list);
   }
 
-  const toCreate: { materialId: string; description: string; width: number; length: number; qty: number; grainConstrained: boolean }[] = [];
+  const toCreate: { catalogItemId: string; description: string; width: number; length: number; qty: number; grainConstrained: boolean }[] = [];
   for (const row of rows) {
     const matches = materialsByLowerName.get(row.materialName.toLowerCase()) ?? [];
     if (matches.length === 0) {
@@ -153,7 +153,7 @@ export async function importCutListPartsFromCsv(estimateVersionId: string, csvTe
       continue;
     }
     toCreate.push({
-      materialId: matches[0].id,
+      catalogItemId: matches[0].id,
       description: row.description,
       width: row.width,
       length: row.length,
@@ -164,9 +164,9 @@ export async function importCutListPartsFromCsv(estimateVersionId: string, csvTe
 
   if (toCreate.length > 0) {
     await db.cutListPart.createMany({ data: toCreate.map((r) => ({ ...r, estimateVersionId })) });
-    const touchedMaterialIds = new Set(toCreate.map((r) => r.materialId));
-    for (const materialId of touchedMaterialIds) {
-      await clearStaleCutSheets(estimateVersionId, materialId);
+    const touchedMaterialIds = new Set(toCreate.map((r) => r.catalogItemId));
+    for (const catalogItemId of touchedMaterialIds) {
+      await clearStaleCutSheets(estimateVersionId, catalogItemId);
     }
   }
 

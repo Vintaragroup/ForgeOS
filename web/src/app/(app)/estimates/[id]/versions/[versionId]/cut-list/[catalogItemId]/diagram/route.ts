@@ -13,9 +13,9 @@ import { CutSheetDiagramDocument } from "@/lib/cut-sheet-pdf";
 
 export async function GET(
   _request: Request,
-  { params }: RouteContext<"/estimates/[id]/versions/[versionId]/cut-list/[materialId]/diagram">,
+  { params }: RouteContext<"/estimates/[id]/versions/[versionId]/cut-list/[catalogItemId]/diagram">,
 ) {
-  const { id, versionId, materialId } = await params;
+  const { id, versionId, catalogItemId } = await params;
 
   const user = await getCurrentUser();
   if (!user) notFound();
@@ -29,7 +29,7 @@ export async function GET(
 
   let data;
   try {
-    data = await getCutSheetDiagramData(versionId, materialId);
+    data = await getCutSheetDiagramData(versionId, catalogItemId);
   } catch {
     // No CutSheet rows yet for this material (never optimized, or since
     // deleted) -- a 404 is more honest than a 500 for "this doesn't

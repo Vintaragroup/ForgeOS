@@ -1287,6 +1287,10 @@ model CatalogItem {
   tags    CatalogItemTag[]
   aliases CatalogItemAlias[]
 
+  cutListParts     CutListPart[]
+  cutSheets        CutSheet[]
+  materialRemnants MaterialRemnant[]
+
   @@index([categoryCode])
   @@map("catalog_items")
 }
@@ -2016,9 +2020,15 @@ model InternalCost {
 // optionally points back at the LineItem it's costed under, but doesn't
 // replace it.
 model CutListPart {
-  id         String   @id @default(cuid())
-  materialId String
-  material   Material @relation(fields: [materialId], references: [id])
+  id            String      @id @default(cuid())
+  // Catalog redesign push 2: the part/sheet/remnant's stock now points at
+  // the unified CatalogItem. materialId is the legacy link, kept nullable
+  // and no longer written only so push 2's code can be rolled back safely;
+  // dropped with the legacy materials table in push 3.
+  catalogItemId String
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id])
+  materialId    String?
+  material      Material?   @relation(fields: [materialId], references: [id])
 
   description String
   qty         Int      @default(1)
@@ -2074,8 +2084,14 @@ model CutSheet {
   id                String          @id @default(cuid())
   estimateVersionId String
   estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
-  materialId        String
-  material          Material        @relation(fields: [materialId], references: [id])
+  // Catalog redesign push 2: the part/sheet/remnant's stock now points at
+  // the unified CatalogItem. materialId is the legacy link, kept nullable
+  // and no longer written only so push 2's code can be rolled back safely;
+  // dropped with the legacy materials table in push 3.
+  catalogItemId     String
+  catalogItem       CatalogItem     @relation(fields: [catalogItemId], references: [id])
+  materialId        String?
+  material          Material?       @relation(fields: [materialId], references: [id])
 
   sheetNumber Int
   // PlacedPart[] (cut-list-nesting-service.ts): { cutListPartId, x, y,
@@ -2131,11 +2147,17 @@ model CutSheet {
 // persisting more than one per sheet would risk double-booking the same
 // physical scrap as two different "available" remnants.
 model MaterialRemnant {
-  id         String   @id @default(cuid())
-  materialId String
-  material   Material @relation(fields: [materialId], references: [id])
-  width      Decimal  @db.Decimal(8, 3)
-  length     Decimal  @db.Decimal(8, 3)
+  id            String      @id @default(cuid())
+  // Catalog redesign push 2: the part/sheet/remnant's stock now points at
+  // the unified CatalogItem. materialId is the legacy link, kept nullable
+  // and no longer written only so push 2's code can be rolled back safely;
+  // dropped with the legacy materials table in push 3.
+  catalogItemId String
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id])
+  materialId    String?
+  material      Material?   @relation(fields: [materialId], references: [id])
+  width         Decimal     @db.Decimal(8, 3)
+  length        Decimal     @db.Decimal(8, 3)
 
   // Deleted (not orphaned) when this CutSheet is deleted on a
   // re-optimize -- otherwise every re-run piles up duplicate stale
