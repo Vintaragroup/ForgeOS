@@ -161,6 +161,7 @@ model User {
   opportunitiesDesigning   Opportunity[]          @relation("OpportunityDesigner")
   opportunitiesEstimating  Opportunity[]          @relation("OpportunityEstimator")
   opportunityNotes         OpportunityNote[]
+  chatThreads              ChatThread[]
 
   // Salesmate sync: this person's Salesmate user id, matched once by email
   // (then name) so deal/company ownership survives a rename -- see
@@ -480,7 +481,7 @@ model Opportunity {
   estimates     Estimate[]
   projects      Project[]
   documents     Document[]
-  chatThread    ChatThread?
+  chatThreads   ChatThread[]
   artworkOrders ArtworkOrder[]
 
   // Access control: an owner always has access; a collaborator is anyone
@@ -3336,15 +3337,43 @@ model AdminAuditLog {
 // ingestion happens pre-estimate, before a Project can exist. "Chat with
 // a project" in casual usage means this thread, not literal Project
 // model data (WorkOrder/Task/Shipment aren't in its context).
+// What a conversation is about. OPPORTUNITY threads are the original
+// per-job chat (opportunityId set); SALES threads are a rep's own
+// assistant over their book (userId set, no opportunity).
+enum ChatThreadScope {
+  OPPORTUNITY
+  SALES
+}
+
 model ChatThread {
-  id            String      @id @default(cuid())
-  opportunityId String      @unique
-  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  id    String          @id @default(cuid())
+  scope ChatThreadScope @default(OPPORTUNITY)
+
+  // Set for OPPORTUNITY threads. No longer unique: one job can hold
+  // several conversations, the way a Claude/ChatGPT project does
+  // ("pricing questions", "client call prep").
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  // Set for SALES threads -- whose assistant this is. Access is checked
+  // against this, so a thread is only ever readable by its owner (plus
+  // admins, as everywhere else).
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  // First few words of the opening question, so a thread list reads as
+  // something other than a column of dates. Editable later.
+  title         String?
+  // Denormalised so a thread list can sort without loading messages.
+  lastMessageAt DateTime?
+  archivedAt    DateTime?
 
   createdAt DateTime @default(now())
 
   messages ChatMessage[]
 
+  @@index([opportunityId, lastMessageAt])
+  @@index([userId, lastMessageAt])
   @@map("chat_threads")
 }
 

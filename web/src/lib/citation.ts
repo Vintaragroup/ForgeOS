@@ -9,6 +9,12 @@
 // search behavior), a DOCX text-search highlight (?q=<quote>#hl), or an
 // XLSX cell highlight (?q=<quote>#hl, same fragment convention as DOCX).
 import { DOCX_MIME, PDF_MIME, XLSX_MIME } from "@/lib/ai/text-extraction";
+import {
+  documentCitation,
+  lineItemCitation,
+  renderCitationTokens,
+  type CitationTarget,
+} from "@/lib/ai/citation-tokens";
 
 // A long sourceQuote shown in full to the chat model would eat into the
 // same character budget every document competes for (chat-context-
@@ -214,3 +220,40 @@ export function linkifyMentions(
 
   return result;
 }
+
+// Everything a chat reply needs to become clickable, in the right order:
+//
+// 1. [[token]] citations the model was explicitly given (citation-tokens.ts)
+//    -- these work regardless of how it phrased the sentence.
+// 2. linkifyMentions for anything it happened to quote verbatim.
+//
+// Step 2 only runs on the text OUTSIDE the links step 1 produced: a
+// filename is both a citation label and a linkify candidate, so running it
+// over the whole string would nest a link inside a link and render as
+// broken markdown.
+export function renderChatContent(
+  content: string,
+  opportunityId: string,
+  documents: { id: string; filename: string }[],
+  lineItems: CitableLineItem[] = [],
+  quotes: CitableQuote[] = [],
+): string {
+  const targets: CitationTarget[] = [
+    ...documents.map((doc) => documentCitation(opportunityId, doc)),
+    ...lineItems.map((item) => lineItemCitation(item)),
+  ];
+  const withTokens = renderCitationTokens(content, targets);
+
+  const MARKDOWN_LINK = /\[[^\]]*\]\([^)]*\)/g;
+  let result = "";
+  let lastIndex = 0;
+  for (const match of withTokens.matchAll(MARKDOWN_LINK)) {
+    const start = match.index ?? 0;
+    result += linkifyMentions(withTokens.slice(lastIndex, start), opportunityId, documents, lineItems, quotes);
+    result += match[0];
+    lastIndex = start + match[0].length;
+  }
+  result += linkifyMentions(withTokens.slice(lastIndex), opportunityId, documents, lineItems, quotes);
+  return result;
+}
+

@@ -36,7 +36,8 @@ describe("sendMessage", () => {
 
     await expect(sendMessage(opportunity.id, "user-1", "hello")).rejects.toBeInstanceOf(AiNotConfiguredError);
 
-    expect(await db.chatThread.findUnique({ where: { opportunityId: opportunity.id } })).toBeNull();
+    // findFirst, not findUnique: an opportunity can hold several threads now.
+    expect(await db.chatThread.findFirst({ where: { opportunityId: opportunity.id } })).toBeNull();
     expect(await db.chatMessage.count()).toBe(0);
   });
 

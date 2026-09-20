@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { citationHref, linkifyMentions, parseFreeTextDate, truncateForCitation } from "@/lib/citation";
+import { citationHref, linkifyMentions, parseFreeTextDate, truncateForCitation, renderChatContent } from "@/lib/citation";
 
 describe("parseFreeTextDate", () => {
   it("parses a plain date the Date constructor already understands", () => {
@@ -208,3 +208,28 @@ describe("linkifyMentions", () => {
     );
   });
 });
+
+describe("renderChatContent", () => {
+  const documents = [{ id: "doc1", filename: "Schedule A - SBLXI - 006. Final.pdf" }];
+  const lineItems = [{ id: "li1", estimateId: "est1", description: '36 x 84" Compliant Door - with Key' }];
+
+  it("links a citation token even when the model paraphrased the document's name", () => {
+    const reply = 'The RFP (titled "SBLXI Temporary Booth Build") [[doc:doc1]] sets the move-in date.';
+    const rendered = renderChatContent(reply, "opp1", documents, lineItems);
+    expect(rendered).toContain("(/opportunities/opp1/documents/doc1/view)");
+  });
+
+  it("still links a verbatim mention with no token, the old way", () => {
+    const reply = 'See Schedule A - SBLXI - 006. Final.pdf for the schedule.';
+    expect(renderChatContent(reply, "opp1", documents, lineItems)).toContain("(/opportunities/opp1/documents/doc1/view)");
+  });
+
+  it("never nests a link inside a link when a token's label is also a linkify candidate", () => {
+    const reply = "Per [[doc:doc1]], the door is [[item:li1]].";
+    const rendered = renderChatContent(reply, "opp1", documents, lineItems);
+    // Two links, and no "](...)](" which is what nesting would produce.
+    expect(rendered.match(/\]\(/g)).toHaveLength(2);
+    expect(rendered).not.toContain(")](");
+  });
+});
+

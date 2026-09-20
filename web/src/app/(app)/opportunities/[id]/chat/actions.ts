@@ -5,7 +5,7 @@ import { canAccessOpportunity } from "@/lib/opportunity-access";
 import { getCitableLineItems, getCitableQuotes, sendMessage } from "@/lib/chat-service";
 import { db } from "@/lib/db";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
-import { linkifyMentions } from "@/lib/citation";
+import { renderChatContent } from "@/lib/citation";
 
 // Called directly from the floating ChatWidget client component (not via
 // a <form action>) -- Server Actions can be imported and awaited from
@@ -50,7 +50,7 @@ export async function sendWidgetMessageAction(opportunityId: string, content: st
     return {
       id: assistantMessage.id,
       role: assistantMessage.role,
-      content: linkifyMentions(assistantMessage.content, opportunityId, documents, citableLineItems, citableQuotes),
+      content: renderChatContent(assistantMessage.content, opportunityId, documents, citableLineItems, citableQuotes),
       notice: noticeParts.length > 0 ? noticeParts.join(" ") : null,
     };
   } catch (err) {

@@ -36,7 +36,7 @@ import {
   type DocumentSummary,
   type ExtractableOpportunityField,
 } from "@/lib/ai/document-summary-service";
-import { citationHref, linkifyMentions, parseFreeTextDate } from "@/lib/citation";
+import { citationHref, parseFreeTextDate, renderChatContent } from "@/lib/citation";
 import { XLSX_MIME } from "@/lib/ai/text-extraction";
 import { taxRateLabel, taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import {
@@ -1672,7 +1672,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         initialMessages={chatMessages.map((m) => ({
           id: m.id,
           role: m.role,
-          content: linkifyMentions(m.content, opportunity.id, documents, citableLineItems, citableQuotes),
+          content: renderChatContent(m.content, opportunity.id, documents, citableLineItems, citableQuotes),
         }))}
         autoOpen={!!ask}
         initialInput={ask ?? ""}

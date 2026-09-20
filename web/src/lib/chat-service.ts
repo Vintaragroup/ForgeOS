@@ -40,10 +40,26 @@ const CHAT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
 // realistic ceiling.
 const MAX_TOOL_ROUNDS = 4;
 
+// An opportunity can hold several conversations now (see ChatThread's
+// schema comment). Without an explicit thread this continues the most
+// recently used one, which is what the existing widget expects.
 async function getOrCreateThread(opportunityId: string) {
-  const existing = await db.chatThread.findUnique({ where: { opportunityId } });
+  const existing = await db.chatThread.findFirst({
+    where: { opportunityId, scope: "OPPORTUNITY", archivedAt: null },
+    orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
+  });
   if (existing) return existing;
-  return db.chatThread.create({ data: { opportunityId } });
+  return db.chatThread.create({ data: { opportunityId, scope: "OPPORTUNITY" } });
+}
+
+// A thread list reads better with the opening question than a column of
+// dates; long questions are cut at a word boundary.
+export function threadTitleFrom(content: string, maxLength = 60): string {
+  const flat = content.trim().replace(/\s+/g, " ");
+  if (flat.length <= maxLength) return flat;
+  const cut = flat.slice(0, maxLength);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > 20 ? cut.slice(0, lastSpace) : cut).trim()}…`;
 }
 
 export async function sendMessage(opportunityId: string, userId: string, content: string) {
@@ -55,6 +71,10 @@ export async function sendMessage(opportunityId: string, userId: string, content
   const thread = await getOrCreateThread(opportunityId);
 
   await db.chatMessage.create({ data: { threadId: thread.id, role: "user", content } });
+  await db.chatThread.update({
+    where: { id: thread.id },
+    data: { lastMessageAt: new Date(), ...(thread.title ? {} : { title: threadTitleFrom(content) }) },
+  });
 
   const [{ systemPrompt, documentsDropped, lineItemsOmitted }, history, projectContext] = await Promise.all([
     buildChatContext(opportunityId, content, userId),
@@ -125,8 +145,9 @@ export async function sendMessage(opportunityId: string, userId: string, content
 }
 
 export async function getThreadMessages(opportunityId: string) {
-  const thread = await db.chatThread.findUnique({
-    where: { opportunityId },
+  const thread = await db.chatThread.findFirst({
+    where: { opportunityId, scope: "OPPORTUNITY", archivedAt: null },
+    orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
     include: { messages: { orderBy: { createdAt: "asc" } } },
   });
   return thread?.messages ?? [];

@@ -13,6 +13,13 @@ import { db } from "@/lib/db";
 import type { DocumentType } from "@/generated/prisma/enums";
 import { truncateForCitation } from "@/lib/citation";
 import { getIndexedDocumentIds, retrieveRelevantChunks, type RetrievedChunk } from "@/lib/ai/document-embedding-service";
+import {
+  buildCitationDirectory,
+  CITATION_INSTRUCTIONS,
+  documentCitation,
+  lineItemCitation,
+  type CitationTarget,
+} from "@/lib/ai/citation-tokens";
 
 // Long enough to be a genuinely identifiable excerpt, short enough that a
 // hundred sourced line items don't quietly crowd out the rest of the
@@ -34,6 +41,10 @@ const MAX_HISTORY_MESSAGES = 20;
 
 export interface ChatContext {
   systemPrompt: string;
+  // Everything the model was told it may cite, for rendering its reply
+  // (renderCitationTokens). Same list, so a token can't refer to
+  // something the renderer doesn't know.
+  citations: CitationTarget[];
   documentsIncluded: string[];
   documentsDropped: string[];
   // Line items left out of the prompt entirely because the budget ran out
@@ -329,8 +340,26 @@ export async function buildChatContext(opportunityId: string, question: string, 
     documentsIncluded.push(doc.filename);
   }
 
-  const systemPrompt = `${SYSTEM_PREAMBLE}\n\n${sections.join("\n")}`;
-  return { systemPrompt, documentsIncluded, documentsDropped, lineItemsOmitted };
+  // What the model may cite, and how. Without this it refers to documents
+  // by paraphrased title and no link is ever produced -- see
+  // citation-tokens.ts's header for the real-data evidence.
+  const citations: CitationTarget[] = [
+    ...opportunity.documents.map((doc) => documentCitation(opportunityId, doc)),
+    ...opportunity.estimates.flatMap((estimate) =>
+      estimate.versions.flatMap((version) =>
+        version.sections.flatMap((section) =>
+          section.lineItems.map((item) =>
+            lineItemCitation({ id: item.id, estimateId: estimate.id, description: item.description }),
+          ),
+        ),
+      ),
+    ),
+  ];
+  const directory = buildCitationDirectory(citations);
+  const citationBlock = directory ? `\n\n${CITATION_INSTRUCTIONS}\n\n${directory}` : "";
+
+  const systemPrompt = `${SYSTEM_PREAMBLE}\n\n${sections.join("\n")}${citationBlock}`;
+  return { systemPrompt, documentsIncluded, documentsDropped, lineItemsOmitted, citations };
 }
 
 export async function getRecentMessages(threadId: string) {
