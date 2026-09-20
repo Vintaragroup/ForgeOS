@@ -157,6 +157,10 @@ model User {
   salesmateOwnedCompanies  SalesmateCompany[]
   salesmateOwnedDeals      SalesmateDeal[]
   salesmateOwnedActivities SalesmateActivity[]
+  opportunitiesSubmitted   Opportunity[]          @relation("OpportunityIntakeSubmitter")
+  opportunitiesDesigning   Opportunity[]          @relation("OpportunityDesigner")
+  opportunitiesEstimating  Opportunity[]          @relation("OpportunityEstimator")
+  opportunityNotes         OpportunityNote[]
 
   // Salesmate sync: this person's Salesmate user id, matched once by email
   // (then name) so deal/company ownership survives a rename -- see
@@ -428,6 +432,38 @@ model Opportunity {
   // ClarificationQuestion[] }. Null until run once. Same posture as
   // EstimateVersion.coverageAnalysis: explicitly-triggered, deliberately
   // expensive, full-overwrite on re-run rather than live-recomputed.
+  // --- Show/exhibitor facts a rep gathers at intake (see
+  // opportunity-intake.ts). Kept on the Opportunity, not the Show: two
+  // exhibitors at the same show have different booths, kit accounts and
+  // hall positions, and a standalone job has no Show row at all.
+  showContactName     String?
+  showContactEmail    String?
+  showContactPhone    String?
+  // Exhibitor manual / service kit -- a link, or a Document uploaded to
+  // this opportunity.
+  exhibitorKitUrl     String?
+  // The client's account or booth reference with show management.
+  exhibitorAccountRef String?
+  hall                String?
+  // Aisle, neighbouring booths, ceiling height, floor load -- free text
+  // because every show's manual describes these differently.
+  hallDetail          String?
+
+  // --- Intake review (rep submits -> sales management schedules the
+  // client review meeting -> designer and estimator get assigned).
+  intakeSubmittedAt       DateTime?
+  intakeSubmittedByUserId String?
+  intakeSubmittedBy       User?     @relation("OpportunityIntakeSubmitter", fields: [intakeSubmittedByUserId], references: [id])
+  reviewMeetingAt         DateTime?
+  reviewCompletedAt       DateTime?
+  designerId              String?
+  designer                User?     @relation("OpportunityDesigner", fields: [designerId], references: [id])
+  estimatorId             String?
+  estimator               User?     @relation("OpportunityEstimator", fields: [estimatorId], references: [id])
+
+  notes         OpportunityNote[]
+  showDeadlines OpportunityShowDeadline[]
+
   clarificationQuestions Json?
 
   // Cache of the last timeline generate/edit -- always exactly 11 entries,
@@ -3579,4 +3615,56 @@ model ClientTouch {
   @@index([companyId, occurredAt])
   @@index([byUserId, occurredAt])
   @@map("client_touches")
+}
+
+// What was actually said, and to whom. The Opportunity's projectDetails
+// field is a single blob written by whoever edited last; a rep's intake
+// needs dated, attributed notes -- "client said X on the 14th", "Design
+// flagged Y" -- so the review meeting has something real to work from.
+enum OpportunityNoteKind {
+  CLIENT_MEETING
+  CLIENT_CALL
+  INTERNAL
+  SITE_VISIT
+  OTHER
+}
+
+model OpportunityNote {
+  id             String              @id @default(cuid())
+  opportunityId  String
+  opportunity    Opportunity         @relation(fields: [opportunityId], references: [id])
+  kind           OpportunityNoteKind @default(INTERNAL)
+  // Set when the note belongs to a specific department's discussion
+  // (Design, Estimating) rather than the client conversation.
+  departmentCode String?
+  body           String
+  // When the conversation happened -- not when it was typed up.
+  occurredAt     DateTime
+  authorUserId   String?
+  author         User?               @relation(fields: [authorUserId], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([opportunityId, occurredAt])
+  @@map("opportunity_notes")
+}
+
+// Show-management deadlines from the exhibitor manual (electrical, rigging,
+// drayage, discount cut-offs). Per-opportunity for the same reason the
+// exhibitor fields above are: each exhibitor orders their own services.
+model OpportunityShowDeadline {
+  id            String      @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  label         String
+  dueDate       DateTime
+  note          String?
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([opportunityId, dueDate])
+  @@map("opportunity_show_deadlines")
 }
