@@ -106,7 +106,12 @@ model User {
   // equivalent of isDepartmentHead, kept separate because sales isn't
   // modeled as a Department (a rep's clients come from Salesmate
   // ownership, not a department code).
-  isSalesManager    Boolean    @default(false)
+  isSalesManager Boolean @default(false)
+
+  // Free-text flag an admin leaves on an account ("duplicate -- decide
+  // which is primary", "shared login, needs assigning"). Shown on the
+  // admin users list so it can't be forgotten; never shown to the user.
+  adminNote         String?
   systemRole        SystemRole @default(EMPLOYEE)
   // scrypt "salt:hash" pair, set via `npm run set-password` -- never through
   // a web form, so there is no unauthenticated password-set endpoint. Null

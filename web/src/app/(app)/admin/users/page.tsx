@@ -44,8 +44,10 @@ export default async function AdminUsersPage() {
                     <div className="flex items-center gap-2 font-medium">
                       {user.name}
                       {user.deletedAt && <StatusChip tone="critical">Deactivated</StatusChip>}
+                      {user.adminNote && <StatusChip tone="warning">Needs attention</StatusChip>}
                     </div>
                     <div className="text-sm text-neutral-500">{user.email}</div>
+                    {user.adminNote && <div className="text-sm text-amber-700">{user.adminNote}</div>}
                   </div>
                   <div className="text-sm text-neutral-500">
                     {ROLE_LABELS[user.systemRole] ?? user.systemRole}
