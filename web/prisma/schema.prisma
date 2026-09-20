@@ -143,7 +143,14 @@ model User {
   vendorMatchApplyLogs     VendorMatchApplyLog[]
   calendarEvents           CalendarEvent[]
   calendarFeedTokens       CalendarFeedToken[]
-  salesmateSyncRuns        SalesmateSyncRun[]
+  salesmateOwnedCompanies  SalesmateCompany[]
+  salesmateOwnedDeals      SalesmateDeal[]
+
+  // Salesmate sync: this person's Salesmate user id, matched once by email
+  // (then name) so deal/company ownership survives a rename -- see
+  // salesmate-sync.ts's syncUsers.
+  salesmateUserId   String?            @unique
+  salesmateSyncRuns SalesmateSyncRun[]
 
   @@map("users")
 }
@@ -3365,14 +3372,18 @@ model RateLimitBucket {
 // ignoring legal suffixes; auto-create when nothing plausibly matches) --
 // only a genuinely fuzzy match waits on /admin/integrations/salesmate.
 model SalesmateCompany {
-  salesmateId String  @id
-  name        String
+  salesmateId          String  @id
+  name                 String
   // Customer / Lead / Prospect / Partner / "" -- Salesmate's own field.
-  type        String?
-  phone       String?
-  website     String?
-  address     String?
-  ownerName   String?
+  type                 String?
+  phone                String?
+  website              String?
+  address              String?
+  ownerName            String?
+  // Salesmate's owner, resolved to a ForgeOS user where one matches.
+  ownerSalesmateUserId String?
+  ownerUserId          String?
+  owner                User?   @relation(fields: [ownerUserId], references: [id])
 
   lastCommunicationAt   DateTime?
   lastCommunicationMode String?
@@ -3393,6 +3404,7 @@ model SalesmateCompany {
   syncedAt  DateTime
 
   @@index([companyId])
+  @@index([ownerUserId])
   @@map("salesmate_companies")
 }
 
@@ -3412,13 +3424,16 @@ model SalesmateDeal {
   opportunityId      String?
   opportunity        Opportunity? @relation(fields: [opportunityId], references: [id])
 
-  title     String
+  title                String
   // Won / Lost / Open -- Salesmate's own status.
-  status    String
-  pipeline  String?
-  stage     String?
-  value     Decimal? @db.Decimal(14, 2)
-  ownerName String?
+  status               String
+  pipeline             String?
+  stage                String?
+  value                Decimal? @db.Decimal(14, 2)
+  ownerName            String?
+  ownerSalesmateUserId String?
+  ownerUserId          String?
+  owner                User?    @relation(fields: [ownerUserId], references: [id])
 
   salesmateCreatedAt  DateTime?
   closedAt            DateTime?
@@ -3430,6 +3445,7 @@ model SalesmateDeal {
 
   @@index([companyId])
   @@index([salesmateCompanyId])
+  @@index([ownerUserId])
   @@map("salesmate_deals")
 }
 

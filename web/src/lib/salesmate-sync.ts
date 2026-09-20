@@ -35,9 +35,11 @@ import {
   type SalesmateContactRow,
   type SalesmateDealRow,
   type SalesmateFetcher,
+  type SalesmateUserRow,
 } from "@/lib/salesmate-client";
 
 export interface SalesmateSyncStats {
+  users: { fetched: number; matched: number; unmatched: string[] };
   companies: { fetched: number; created: number; updated: number; removed: number; autoLinked: number; autoCreated: number; linked: number; waitingReview: number };
   contacts: { fetched: number; created: number; updated: number; adopted: number; waitingOnCompany: number; skipped: number };
   deals: { fetched: number; created: number; updated: number; removed: number; onLinkedCompanies: number };
@@ -84,7 +86,47 @@ export function composeSalesmateAddress(row: SalesmateCompanyRow): string | null
   return parts.length ? parts.join("\n") : null;
 }
 
-async function syncCompanies(rows: SalesmateCompanyRow[], now: Date, stats: SalesmateSyncStats) {
+// Ties each Salesmate user to a ForgeOS user so deal/company ownership is
+// a real FK, not a name string: by stored salesmate id, then email, then
+// exact name. Names alone were leaving 67 deals ($1.65M) unattributed on
+// production, because Salesmate spells some reps differently ("David I.
+// Stelly") or has reps who aren't ForgeOS users at all -- those are
+// reported as unmatched rather than silently dropped.
+async function syncUsers(rows: SalesmateUserRow[], stats: SalesmateSyncStats): Promise<Map<string, string>> {
+  const s = stats.users;
+  const active = rows.filter((r) => r.isActive === 1);
+  s.fetched = active.length;
+  const byUserId = new Map<string, string>();
+
+  for (const row of active) {
+    const salesmateUserId = String(row.id);
+    const email = clean(row.email);
+    const name = clean(row.name);
+    let user = await db.user.findUnique({ where: { salesmateUserId }, select: { id: true } });
+    if (!user && email) {
+      user = await db.user.findFirst({
+        where: { deletedAt: null, salesmateUserId: null, email: { equals: email, mode: "insensitive" } },
+        select: { id: true },
+      });
+    }
+    if (!user && name) {
+      user = await db.user.findFirst({
+        where: { deletedAt: null, salesmateUserId: null, name: { equals: name, mode: "insensitive" } },
+        select: { id: true },
+      });
+    }
+    if (!user) {
+      if (name) s.unmatched.push(name);
+      continue;
+    }
+    await db.user.update({ where: { id: user.id }, data: { salesmateUserId } });
+    byUserId.set(salesmateUserId, user.id);
+    s.matched++;
+  }
+  return byUserId;
+}
+
+async function syncCompanies(rows: SalesmateCompanyRow[], now: Date, stats: SalesmateSyncStats, ownerUserIds: Map<string, string>) {
   const s = stats.companies;
   s.fetched = rows.length;
   const existing = new Map(
@@ -104,6 +146,8 @@ async function syncCompanies(rows: SalesmateCompanyRow[], now: Date, stats: Sale
       website: clean(row.website),
       address: composeSalesmateAddress(row),
       ownerName: clean(row.owner?.name),
+      ownerSalesmateUserId: row.owner?.id != null ? String(row.owner.id) : null,
+      ownerUserId: row.owner?.id != null ? (ownerUserIds.get(String(row.owner.id)) ?? null) : null,
       lastCommunicationAt: fromUnixSeconds(row.lastCommunicationAt),
       lastCommunicationMode: clean(row.lastCommunicationMode),
       lastCommunicationBy: clean(row.lastCommunicationBy),
@@ -286,7 +330,7 @@ async function syncContacts(rows: SalesmateContactRow[], now: Date, stats: Sales
   }
 }
 
-async function syncDeals(rows: SalesmateDealRow[], now: Date, stats: SalesmateSyncStats) {
+async function syncDeals(rows: SalesmateDealRow[], now: Date, stats: SalesmateSyncStats, ownerUserIds: Map<string, string>) {
   const s = stats.deals;
   s.fetched = rows.length;
   const [links, contacts, existingIds] = await Promise.all([
@@ -317,6 +361,8 @@ async function syncDeals(rows: SalesmateDealRow[], now: Date, stats: SalesmateSy
       stage: clean(row.stage),
       value: value != null && Number.isFinite(value) ? value : null,
       ownerName: clean(row.owner?.name),
+      ownerSalesmateUserId: row.owner?.id != null ? String(row.owner.id) : null,
+      ownerUserId: row.owner?.id != null ? (ownerUserIds.get(String(row.owner.id)) ?? null) : null,
       salesmateCreatedAt: fromUnixSeconds(row.createdAt),
       closedAt: fromUnixSeconds(row.closedDate),
       estimatedCloseAt: fromIsoDate(row.estimatedCloseDate),
@@ -340,6 +386,7 @@ async function syncDeals(rows: SalesmateDealRow[], now: Date, stats: SalesmateSy
 
 function emptyStats(): SalesmateSyncStats {
   return {
+    users: { fetched: 0, matched: 0, unmatched: [] },
     companies: { fetched: 0, created: 0, updated: 0, removed: 0, autoLinked: 0, autoCreated: 0, linked: 0, waitingReview: 0 },
     contacts: { fetched: 0, created: 0, updated: 0, adopted: 0, waitingOnCompany: 0, skipped: 0 },
     deals: { fetched: 0, created: 0, updated: 0, removed: 0, onLinkedCompanies: 0 },
@@ -365,10 +412,16 @@ export async function runSalesmateSync(options: {
   try {
     // Fetch everything before writing anything, so a Salesmate error
     // part-way through doesn't leave a half-applied sync.
-    const [companies, contacts, deals] = await Promise.all([fetcher.companies(), fetcher.contacts(), fetcher.deals()]);
-    await syncCompanies(companies, now, stats);
+    const [users, companies, contacts, deals] = await Promise.all([
+      fetcher.users(),
+      fetcher.companies(),
+      fetcher.contacts(),
+      fetcher.deals(),
+    ]);
+    const ownerUserIds = await syncUsers(users, stats);
+    await syncCompanies(companies, now, stats, ownerUserIds);
     await syncContacts(contacts, now, stats);
-    await syncDeals(deals, now, stats);
+    await syncDeals(deals, now, stats, ownerUserIds);
     return await db.salesmateSyncRun.update({
       where: { id: run.id },
       data: { status: "SUCCEEDED", stats: stats as unknown as Prisma.InputJsonValue, finishedAt: new Date() },

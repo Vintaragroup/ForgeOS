@@ -39,6 +39,13 @@ export interface SalesmateContactRow {
   lastCommunicationBy: string | null;
 }
 
+export interface SalesmateUserRow {
+  id: number;
+  name: string | null;
+  email: string | null;
+  isActive: number;
+}
+
 export interface SalesmateDealRow {
   id: number;
   title: string | null;
@@ -77,6 +84,7 @@ const DEAL_FIELDS = [
 export class SalesmateConfigError extends Error {}
 
 export interface SalesmateFetcher {
+  users(): Promise<SalesmateUserRow[]>;
   companies(): Promise<SalesmateCompanyRow[]>;
   contacts(): Promise<SalesmateContactRow[]>;
   deals(): Promise<SalesmateDealRow[]>;
@@ -157,7 +165,22 @@ async function searchAll<T extends { id: number }>(module: "company" | "contact"
   );
 }
 
+// Users come from the core API, not the search API -- a plain list, no
+// paging (same call scripts/import-salesmate-users.ts already used).
+async function fetchUsers(): Promise<SalesmateUserRow[]> {
+  const { domain, accessToken } = config();
+  const res = await fetch(`https://${domain}.salesmate.io/apis/core/v4/users`, {
+    headers: { "Content-Type": "application/json", Accept: "application/json", accessToken, "x-linkname": `${domain}.salesmate.io` },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(`Salesmate user list failed: HTTP ${res.status}`);
+  const body = (await res.json()) as { Status?: string; Data?: SalesmateUserRow[] };
+  if (!body.Data) throw new Error("Salesmate user list returned no Data.");
+  return body.Data;
+}
+
 export const salesmateApi: SalesmateFetcher = {
+  users: fetchUsers,
   companies: () => searchAll<SalesmateCompanyRow>("company", COMPANY_FIELDS),
   contacts: () => searchAll<SalesmateContactRow>("contact", CONTACT_FIELDS),
   deals: () => searchAll<SalesmateDealRow>("deal", DEAL_FIELDS),

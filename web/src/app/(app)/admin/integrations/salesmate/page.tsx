@@ -53,6 +53,7 @@ export default async function SalesmateIntegrationPage() {
   const ignoredCount = await db.salesmateCompany.count({ where: { ignoredAt: { not: null }, companyId: null, removedAt: null } });
   const dealsBySalesmateCompany = new Map(dealCounts.map((d) => [d.salesmateCompanyId, d._count]));
   const lastRun = runs[0];
+  const lastRunStats = (runs.find((r) => r.status === "SUCCEEDED")?.stats ?? null) as unknown as SalesmateSyncStats | null;
   const typeRank = (t: string | null) => {
     const i = TYPE_ORDER.indexOf(t ?? "");
     return i === -1 ? TYPE_ORDER.length : i;
@@ -102,6 +103,21 @@ export default async function SalesmateIntegrationPage() {
               can&apos;t reach Salesmate. Add them in Vercel → Project → Settings → Environment Variables, then redeploy.
             </StatusBanner>
           </div>
+        )}
+        {lastRunStats && (
+          <p className="mt-3 text-sm text-neutral-600">
+            Sales reps: {lastRunStats.users?.matched ?? 0} of {lastRunStats.users?.fetched ?? 0} Salesmate users matched to a
+            ForgeOS user.
+            {lastRunStats.users?.unmatched?.length ? (
+              <>
+                {" "}
+                <span className="text-amber-700">
+                  No ForgeOS user for {lastRunStats.users.unmatched.join(", ")} -- their clients and deals stay
+                  unattributed until someone creates (or renames) their user.
+                </span>
+              </>
+            ) : null}
+          </p>
         )}
         {lastRun?.status === "FAILED" && lastRun.error && (
           <div className="mt-4">

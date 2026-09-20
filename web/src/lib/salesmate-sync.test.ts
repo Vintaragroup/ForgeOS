@@ -1,6 +1,12 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import type { SalesmateCompanyRow, SalesmateContactRow, SalesmateDealRow, SalesmateFetcher } from "@/lib/salesmate-client";
+import type {
+  SalesmateCompanyRow,
+  SalesmateContactRow,
+  SalesmateDealRow,
+  SalesmateFetcher,
+  SalesmateUserRow,
+} from "@/lib/salesmate-client";
 import {
   createCompanyFromSalesmate,
   ignoreSalesmateCompany,
@@ -13,6 +19,7 @@ import {
 
 afterEach(async () => {
   await db.salesmateDeal.deleteMany();
+  await db.user.deleteMany();
   await db.salesmateSyncRun.deleteMany();
   await db.salesmateCompany.deleteMany();
   await db.opportunity.deleteMany();
@@ -55,8 +62,14 @@ function deal(id: number, companyId: number, title: string, extra: Partial<Sales
   };
 }
 
-function fakeSalesmate(data: { companies?: SalesmateCompanyRow[]; contacts?: SalesmateContactRow[]; deals?: SalesmateDealRow[] }): SalesmateFetcher {
+function fakeSalesmate(data: {
+  users?: SalesmateUserRow[];
+  companies?: SalesmateCompanyRow[];
+  contacts?: SalesmateContactRow[];
+  deals?: SalesmateDealRow[];
+}): SalesmateFetcher {
   return {
+    users: async () => data.users ?? [],
     companies: async () => data.companies ?? [],
     contacts: async () => data.contacts ?? [],
     deals: async () => data.deals ?? [],
@@ -295,6 +308,47 @@ describe("automatic linking rules", () => {
     // Record 3 followed its twin onto the admin's choice.
     expect(second.stats.companies).toMatchObject({ autoLinked: 1, waitingReview: 0 });
     expect((await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "3" } })).companyId).toBe(nicklaus.id);
+  });
+});
+
+describe("owner mapping", () => {
+  const smUser = (id: number, name: string, email: string | null, isActive = 1): SalesmateUserRow => ({ id, name, email, isActive });
+
+  it("matches reps by email, then name, records the rest as unmatched, and stamps owners onto companies and deals", async () => {
+    const byEmail = await db.user.create({ data: { name: "Terry G.", email: "terry@expocci.com", systemRole: "EMPLOYEE" } });
+    const byName = await db.user.create({ data: { name: "Craig Wells", email: "cw@other.com", systemRole: "EMPLOYEE" } });
+
+    const { stats } = await sync({
+      users: [
+        smUser(1, "Terry Genovese", "TERRY@expocci.com"),
+        smUser(2, "Craig Wells", "craig.wells@expocci.com"),
+        smUser(3, "David I. Stelly", "dstelly@expocci.com"),
+        smUser(4, "Retired Rep", "retired@expocci.com", 0),
+      ],
+      companies: [company(1, "Club Glove", { owner: { id: 2, name: "Craig Wells" } })],
+      deals: [deal(100, 1, "Club Glove - PGA 2026", { owner: { id: 1, name: "Terry Genovese" } })],
+    });
+
+    // Inactive Salesmate users are ignored entirely.
+    expect(stats.users).toMatchObject({ fetched: 3, matched: 2, unmatched: ["David I. Stelly"] });
+    expect((await db.user.findUniqueOrThrow({ where: { id: byEmail.id } })).salesmateUserId).toBe("1");
+    expect((await db.user.findUniqueOrThrow({ where: { id: byName.id } })).salesmateUserId).toBe("2");
+
+    const mirror = await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "1" } });
+    expect(mirror).toMatchObject({ ownerUserId: byName.id, ownerSalesmateUserId: "2", ownerName: "Craig Wells" });
+    const d = await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "100" } });
+    expect(d).toMatchObject({ ownerUserId: byEmail.id, ownerSalesmateUserId: "1" });
+  });
+
+  it("keeps a rep matched after a rename in Salesmate, via the stored id", async () => {
+    const user = await db.user.create({ data: { name: "Tim Morris", email: "tim@expocci.com", systemRole: "EMPLOYEE" } });
+    await sync({ users: [smUser(7, "Tim Morris", "tim@expocci.com")] });
+    const { stats } = await sync({
+      users: [smUser(7, "Timothy Morris-Smith", "newemail@expocci.com")],
+      deals: [deal(101, 1, "Some deal", { owner: { id: 7, name: "Timothy Morris-Smith" } })],
+    });
+    expect(stats.users).toMatchObject({ matched: 1, unmatched: [] });
+    expect((await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "101" } })).ownerUserId).toBe(user.id);
   });
 });
 
