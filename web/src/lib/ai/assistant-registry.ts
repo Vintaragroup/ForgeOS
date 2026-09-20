@@ -12,51 +12,19 @@
 // an unregistered department returns a clear "not set up yet" rather than
 // an assistant that confidently answers from nothing.
 
-import type { CitationTarget } from "@/lib/ai/citation-tokens";
-import { buildSalesAssistantContext } from "@/lib/ai/sales-assistant-context";
+import { buildSalesAssistantContext, SALES_SUGGESTIONS } from "@/lib/ai/sales-assistant-context";
+import type { AssistantUser, DepartmentAssistant } from "@/lib/ai/assistant-contract";
 
-export interface AssistantUser {
-  id: string;
-  name: string;
-  systemRole: string;
-  departmentCode: string | null;
-  isSalesManager: boolean;
-}
-
-export interface AssistantContext {
-  // Facts the model is given, already scoped to this person.
-  systemPrompt: string;
-  // What it may cite, by token (see citation-tokens.ts).
-  citations: CitationTarget[];
-  // Shown in the widget when a thread is empty -- the fastest way to
-  // teach someone what their assistant is actually for.
-  suggestions: string[];
-}
-
-export interface DepartmentAssistant {
-  departmentCode: string;
-  label: string;
-  // One line under the thread list: what this assistant can and can't do.
-  description: string;
-  buildContext(user: AssistantUser): Promise<AssistantContext>;
-}
-
-// Answer-only for v1 (agreed 2026-09-20): the assistant explains and
-// points, and every change still happens on a real page with its own
-// checks. Written here rather than in each builder so no department can
-// quietly ship a writing assistant by forgetting the instruction.
-export const ANSWER_ONLY_INSTRUCTIONS = [
-  "You answer questions and point people to the right page. You cannot change anything, send anything, or take action.",
-  "If asked to do something, say what you'd do and link to where they can do it.",
-  "Answer only from the facts given to you. If something isn't there, say you don't have it -- never invent a client,",
-  "deal, number, or date.",
-].join(" ");
+// Re-exported so callers have one import for "the assistant system".
+export type { AssistantContext, AssistantUser, DepartmentAssistant } from "@/lib/ai/assistant-contract";
+export { ANSWER_ONLY_INSTRUCTIONS } from "@/lib/ai/assistant-contract";
 
 const ASSISTANTS: DepartmentAssistant[] = [
   {
     departmentCode: "SL",
     label: "Sales",
     description: "Knows your clients, deals, scheduled work and contact history. Answers and links -- it can't change anything.",
+    suggestions: SALES_SUGGESTIONS,
     buildContext: buildSalesAssistantContext,
   },
 ];

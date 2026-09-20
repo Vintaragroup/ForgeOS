@@ -19,7 +19,16 @@ import { db } from "@/lib/db";
 import { canViewWholeTeam, COLD_DAYS, loadSalesOverview } from "@/lib/sales-analytics";
 import { ageLabel } from "@/lib/contact-aging";
 import { companyCitation, opportunityCitation, type CitationTarget } from "@/lib/ai/citation-tokens";
-import { ANSWER_ONLY_INSTRUCTIONS, type AssistantContext, type AssistantUser } from "@/lib/ai/assistant-registry";
+import { ANSWER_ONLY_INSTRUCTIONS, type AssistantContext, type AssistantUser } from "@/lib/ai/assistant-contract";
+
+// What a rep sees in an empty thread. Deliberately questions this
+// assistant can actually answer well from the context below.
+export const SALES_SUGGESTIONS = [
+  "Who should I call this week?",
+  "Which clients bought last year but not this year?",
+  "What's stalled in my pipeline and for how long?",
+  "Summarise my three biggest clients and when I last spoke to them.",
+];
 
 const MAX_CLIENTS = 40;
 const MAX_QUEUE_ROWS = 15;
@@ -152,14 +161,5 @@ export async function buildSalesAssistantContext(user: AssistantUser): Promise<A
       `"last contacted" dates come from Salesmate and are reliable, but the history behind them is not.`,
   );
 
-  return {
-    systemPrompt: `${PREAMBLE}\n\n${lines.join("\n")}`,
-    citations,
-    suggestions: [
-      "Who should I call this week?",
-      "Which clients bought last year but not this year?",
-      "What's stalled in my pipeline and for how long?",
-      "Summarise my three biggest clients and when I last spoke to them.",
-    ],
-  };
+  return { systemPrompt: `${PREAMBLE}\n\n${lines.join("\n")}`, citations };
 }

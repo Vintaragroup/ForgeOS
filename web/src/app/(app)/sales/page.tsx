@@ -19,6 +19,9 @@ import {
   type QuickAction,
 } from "@/components/dashboard-shell";
 import { LocalTimestamp } from "@/components/local-timestamp";
+import { AssistantWidget } from "@/components/assistant-widget";
+import { getDepartmentAssistant } from "@/lib/ai/assistant-registry";
+import { listAssistantThreads } from "@/lib/assistant-service";
 
 export const dynamic = "force-dynamic";
 
@@ -80,7 +83,10 @@ export default async function SalesPage(props: PageProps<"/sales">) {
   const tabParam = (Array.isArray(params.tab) ? params.tab[0] : params.tab) ?? "today";
   const tab = ["today", "clients", "numbers", "team"].includes(tabParam) ? tabParam : "today";
 
-  const [overview, reps, viewed, leaderboard, reviews] = await Promise.all([
+  // The rep's own assistant, if their department has one registered.
+  const assistant = getDepartmentAssistant("SL");
+
+  const [overview, reps, viewed, leaderboard, reviews, assistantThreads] = await Promise.all([
     loadSalesOverview({ ownerUserId }),
     // Deliberately not "every Salesmate user" -- that list includes bots
     // and support logins. Only people who actually own clients or deals.
@@ -97,6 +103,7 @@ export default async function SalesPage(props: PageProps<"/sales">) {
     ownerUserId && !viewingSelf ? db.user.findFirst({ where: { id: ownerUserId }, select: { name: true } }) : Promise.resolve(null),
     canSeeTeam ? loadLeaderboard() : Promise.resolve([]),
     canSeeTeam ? pendingClientReviews() : Promise.resolve([]),
+    assistant ? listAssistantThreads(user.id, "SL") : Promise.resolve([]),
   ]);
 
   const { kpis } = overview;
@@ -453,6 +460,19 @@ export default async function SalesPage(props: PageProps<"/sales">) {
             ))}
           </DashCard>
         </DashSection>
+      )}
+      {assistant && (
+        <AssistantWidget
+          departmentCode={assistant.departmentCode}
+          label={assistant.label}
+          description={assistant.description}
+          suggestions={assistant.suggestions}
+          initialThreads={assistantThreads.map((t) => ({
+            id: t.id,
+            title: t.title,
+            lastMessageAt: t.lastMessageAt?.toISOString() ?? null,
+          }))}
+        />
       )}
     </DashboardShell>
   );
