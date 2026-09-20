@@ -198,7 +198,7 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                   </>
                 }
                 right={r.reviewMeetingAt ? <DashChip tone="info">meeting set</DashChip> : <DashChip tone="critical">no meeting yet</DashChip>}
-                actions={<RowAction href={`/opportunities/${r.id}`}>Schedule &amp; assign</RowAction>}
+                actions={<RowAction href={`/opportunities/${r.id}/intake`}>Schedule &amp; assign</RowAction>}
               />
             ))}
           </DashCard>

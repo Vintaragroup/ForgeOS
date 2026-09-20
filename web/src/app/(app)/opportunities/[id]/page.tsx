@@ -45,7 +45,7 @@ import {
   STAGE_AGE_CRITICAL_DAYS,
   STAGE_AGE_WARNING_DAYS,
 } from "@/lib/deal-checklist";
-import { Button, CollapsibleSection, Field, PageHeader, ReadOnlyField, SelectField, StatusBanner, StatusChip } from "@/components/ui";
+import { Button, CollapsibleSection, Field, LinkButton, PageHeader, ReadOnlyField, SelectField, StatusBanner, StatusChip } from "@/components/ui";
 import { readStatus } from "@/lib/action-status";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ChatWidget } from "@/components/chat-widget";
@@ -1056,9 +1056,16 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           // but a border, which is not where a destructive, irreversible
           // action belongs. The confirm dialog (ConfirmForm) is unchanged.
           action={
-            <ConfirmForm action={deleteWithId} confirmMessage="Delete this opportunity? This can't be undone.">
-              <Button variant="danger">Delete opportunity</Button>
-            </ConfirmForm>
+            <div className="flex items-center gap-2">
+              {/* Where a rep gathers everything and submits for the client
+                  review meeting -- see opportunities/[id]/intake. */}
+              <LinkButton href={`/opportunities/${opportunity.id}/intake`} variant="secondary">
+                Intake &amp; review
+              </LinkButton>
+              <ConfirmForm action={deleteWithId} confirmMessage="Delete this opportunity? This can't be undone.">
+                <Button variant="danger">Delete opportunity</Button>
+              </ConfirmForm>
+            </div>
           }
         />
         {hasHeaderSummary && (

@@ -82,7 +82,9 @@ export async function createOpportunity(formData: FormData) {
 
   revalidatePath("/opportunities");
   revalidatePath("/companies"); // no-op unless a new company was just created above
-  redirect(`/opportunities/${opportunity.id}`);
+  // Straight into intake: creating the record is step one of gathering
+  // everything for the client review meeting, not the end of a task.
+  redirect(`/opportunities/${opportunity.id}/intake`);
 }
 
 export async function updateOpportunity(id: string, formData: FormData) {
