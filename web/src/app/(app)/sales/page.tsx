@@ -8,6 +8,7 @@ import { pendingClientReviews } from "@/lib/opportunity-intake";
 import { ageLabel } from "@/lib/contact-aging";
 import { salesmateRecordUrl } from "@/lib/salesmate-links";
 import {
+  type DashTab,
   DashboardShell,
   DashCard,
   DashChip,
@@ -75,6 +76,9 @@ export default async function SalesPage(props: PageProps<"/sales">) {
   const viewingTeam = canSeeTeam && repParam === "all";
   const ownerUserId = viewingTeam ? null : canSeeTeam && repParam ? repParam : user.id;
   const viewingSelf = ownerUserId === user.id;
+  // Tabs, not one long scroll: the landing view is only what needs doing.
+  const tabParam = (Array.isArray(params.tab) ? params.tab[0] : params.tab) ?? "today";
+  const tab = ["today", "clients", "numbers", "team"].includes(tabParam) ? tabParam : "today";
 
   const [overview, reps, viewed, leaderboard, reviews] = await Promise.all([
     loadSalesOverview({ ownerUserId }),
@@ -102,6 +106,19 @@ export default async function SalesPage(props: PageProps<"/sales">) {
   const needsYou =
     overview.goingCold.length + overview.scheduled.pastDueCount + overview.staleOpenDeals.length + overview.lapsed.length + reviews.length;
 
+  // Each queue shows a handful; the rest is a count, not a scroll.
+  const QUEUE_ROWS = 5;
+  const tabHref = (key: string) => `/sales?tab=${key}${repParam ? `&rep=${repParam}` : ""}`;
+
+  const tabs: DashTab[] = [
+    { key: "today", label: "Today", count: needsYou, href: tabHref("today"), active: tab === "today" },
+    { key: "clients", label: "Clients", count: overview.clients.length, href: tabHref("clients"), active: tab === "clients" },
+    { key: "numbers", label: "Numbers", href: tabHref("numbers"), active: tab === "numbers" },
+    ...(canSeeTeam
+      ? [{ key: "team", label: "Team", count: reviews.length, href: tabHref("team"), active: tab === "team" } satisfies DashTab]
+      : []),
+  ];
+
   const quickActions: QuickAction[] = [
     { href: "/opportunities/new", label: "New opportunity", tone: "teal" },
     { href: "/companies", label: "My clients", tone: "navy" },
@@ -118,7 +135,14 @@ export default async function SalesPage(props: PageProps<"/sales">) {
       : `${needsYou} thing${needsYou === 1 ? "" : "s"} need${needsYou === 1 ? "s" : ""} ${whose} today.`;
 
   return (
-    <DashboardShell id="forgeos-sales" today={today} firstName={firstName} subgreeting={subgreeting} quickActions={quickActions}>
+    <DashboardShell
+      id="forgeos-sales"
+      today={today}
+      firstName={firstName}
+      subgreeting={subgreeting}
+      quickActions={quickActions}
+      tabs={tabs}
+    >
       {canSeeTeam && (
         <div className="dash-section">
           <div className="dash-section-head">
@@ -126,6 +150,8 @@ export default async function SalesPage(props: PageProps<"/sales">) {
           </div>
           <DashCard>
             <form action="/sales" className="flex flex-wrap items-center gap-2 px-5 py-3">
+              {/* Keep the tab you're on when switching whose book you're looking at. */}
+              <input type="hidden" name="tab" value={tab} />
               <select
                 name="rep"
                 defaultValue={viewingTeam ? "all" : (ownerUserId ?? user.id)}
@@ -150,7 +176,7 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         </div>
       )}
 
-      {canSeeTeam && reviews.length > 0 && (
+      {canSeeTeam && reviews.length > 0 && (tab === "today" || tab === "team") && (
         <DashSection title={`CLIENT REVIEWS TO SCHEDULE (${reviews.length})`}>
           <DashCard>
             {reviews.map((r) => (
@@ -172,6 +198,7 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         </DashSection>
       )}
 
+      {tab === "today" && (
       <DashSection
         title={`FOLLOW UP — QUIET ${COLD_DAYS}+ DAYS (${overview.goingCold.length})`}
         link={{ href: "/companies?stale=90&sort=contacted", label: "All clients" }}
@@ -183,7 +210,7 @@ export default async function SalesPage(props: PageProps<"/sales">) {
           </DashEmpty>
         ) : (
           <DashCard>
-            {overview.goingCold.slice(0, 6).map((c) => {
+            {overview.goingCold.slice(0, QUEUE_ROWS).map((c) => {
               const salesmate = c.salesmateCompanyId ? salesmateRecordUrl("company", c.salesmateCompanyId) : "";
               return (
                 <DashRow
@@ -208,12 +235,15 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         )}
       </DashSection>
 
+      )}
+
+      {tab === "today" && overview.scheduled.pastDueCount > 0 && (
       <DashSection title={`CONFIRM — PAST DUE (${overview.scheduled.pastDueCount})`}>
         {overview.scheduled.pastDue.length === 0 ? (
           <DashEmpty>Nothing past due.</DashEmpty>
         ) : (
           <DashCard>
-            {overview.scheduled.pastDue.slice(0, 6).map((a) => {
+            {overview.scheduled.pastDue.slice(0, QUEUE_ROWS).map((a) => {
               const salesmate = salesmateRecordUrl("activity", a.salesmateId);
               return (
                 <DashRow
@@ -243,12 +273,18 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         )}
       </DashSection>
 
-      <DashSection title={`PUSH — STALLED DEALS (${overview.staleOpenDeals.length})`}>
+      )}
+
+      {tab === "today" && overview.staleOpenDeals.length > 0 && (
+      <DashSection
+        title={`PUSH — STALLED DEALS (${overview.staleOpenDeals.length})`}
+        link={overview.staleOpenDeals.length > QUEUE_ROWS ? { href: tabHref("clients"), label: "All clients" } : undefined}
+      >
         {overview.staleOpenDeals.length === 0 ? (
           <DashEmpty>Every open deal has had recent activity.</DashEmpty>
         ) : (
           <DashCard>
-            {overview.staleOpenDeals.slice(0, 6).map((d) => {
+            {overview.staleOpenDeals.slice(0, QUEUE_ROWS).map((d) => {
               const salesmate = salesmateRecordUrl("deal", d.salesmateId);
               return (
                 <DashRow
@@ -280,12 +316,15 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         )}
       </DashSection>
 
+      )}
+
+      {tab === "today" && overview.lapsed.length > 0 && (
       <DashSection title={`WIN BACK — NOT THIS YEAR (${overview.lapsed.length})`}>
         {overview.lapsed.length === 0 ? (
           <DashEmpty>Every past client has bought this year or has something open.</DashEmpty>
         ) : (
           <DashCard>
-            {overview.lapsed.slice(0, 6).map((c) => (
+            {overview.lapsed.slice(0, QUEUE_ROWS).map((c) => (
               <DashRow
                 key={c.companyId}
                 title={c.name}
@@ -298,6 +337,18 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         )}
       </DashSection>
 
+      )}
+
+      {tab === "today" && needsYou === 0 && (
+        <DashSection title="NOTHING WAITING">
+          <DashEmpty>
+            Every client has been contacted, nothing is past due, no deal has stalled. Check the Clients tab for who to
+            call next.
+          </DashEmpty>
+        </DashSection>
+      )}
+
+      {tab === "numbers" && (
       <DashSection title="THE BOOK">
         <DashStatStrip
           stats={[
@@ -311,12 +362,15 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         />
       </DashSection>
 
+      )}
+
+      {tab === "clients" && (
       <DashSection title="CLIENTS BY VALUE" link={{ href: "/companies?sort=worked", label: "All clients" }}>
         {overview.clients.length === 0 ? (
           <DashEmpty>No clients on this book yet.</DashEmpty>
         ) : (
           <DashCard>
-            {overview.clients.slice(0, 10).map((c) => (
+            {overview.clients.slice(0, 25).map((c) => (
               <DashRow
                 key={c.companyId}
                 href={`/companies/${c.companyId}`}
@@ -335,12 +389,15 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         )}
       </DashSection>
 
+      )}
+
+      {(tab === "today" || tab === "clients") && (
       <DashSection title={`COMING UP (${overview.scheduled.upcomingCount})`}>
         {overview.scheduled.upcoming.length === 0 ? (
           <DashEmpty>Nothing scheduled.</DashEmpty>
         ) : (
           <DashCard>
-            {overview.scheduled.upcoming.slice(0, 6).map((a) => (
+            {overview.scheduled.upcoming.slice(0, QUEUE_ROWS).map((a) => (
               <DashRow
                 key={a.salesmateId}
                 title={a.title}
@@ -363,7 +420,9 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         )}
       </DashSection>
 
-      {overview.touchHistory.since && (
+      )}
+
+      {tab === "numbers" && overview.touchHistory.since && (
         <DashSection title="CONTACT RECORDED">
           <DashStatStrip
             stats={[
@@ -374,7 +433,7 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         </DashSection>
       )}
 
-      {canSeeTeam && leaderboard.length > 0 && (
+      {canSeeTeam && tab === "team" && leaderboard.length > 0 && (
         <DashSection title="TEAM — LAST 12 MONTHS">
           <DashCard>
             {leaderboard.map((r) => (

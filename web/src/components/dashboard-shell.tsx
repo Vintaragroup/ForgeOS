@@ -26,12 +26,22 @@ export function greetingWord(hour: number): string {
   return "Good evening";
 }
 
+export interface DashTab {
+  key: string;
+  label: string;
+  // Shown next to the label; omit for tabs that aren't a work queue.
+  count?: number;
+  href: string;
+  active: boolean;
+}
+
 export function DashboardShell({
   id,
   today,
   firstName,
   subgreeting,
   quickActions,
+  tabs,
   search,
   children,
 }: {
@@ -42,6 +52,9 @@ export function DashboardShell({
   // is for ("9 things need you today").
   subgreeting: ReactNode;
   quickActions: QuickAction[];
+  // Splits the page so the landing view is only what needs doing -- the
+  // rest is one click away instead of several screens down.
+  tabs?: DashTab[];
   // Optional search/ask box (the main dashboard's command bar).
   search?: ReactNode;
   children: ReactNode;
@@ -73,7 +86,19 @@ export function DashboardShell({
         </div>
       </div>
 
-      <div className="dash-wrap">{children}</div>
+      <div className="dash-wrap">
+        {tabs && tabs.length > 0 && (
+          <nav className="dash-tabs" aria-label="Sections">
+            {tabs.map((tab) => (
+              <Link key={tab.key} href={tab.href} className={`dash-tab${tab.active ? " is-active" : ""}`} aria-current={tab.active ? "page" : undefined}>
+                {tab.label}
+                {tab.count != null && tab.count > 0 && <span className="dash-tab-count">{tab.count}</span>}
+              </Link>
+            ))}
+          </nav>
+        )}
+        {children}
+      </div>
     </div>
   );
 }

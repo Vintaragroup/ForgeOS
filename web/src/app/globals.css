@@ -459,6 +459,41 @@
 
 /* section shell */
 
+/* Department-home tabs: the landing view is "Today" only -- the rest of
+   the page's sections live behind these rather than below them. Styled off
+   the same tokens as .dash-qa so the two rows read as one system. */
+.dash-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+.dash-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--dash-border);
+  border-radius: 0.5rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--dash-text-soft);
+  text-decoration: none;
+  background: var(--dash-card-bg);
+}
+.dash-tab:hover { border-color: var(--dash-navy); color: var(--dash-navy); }
+.dash-tab.is-active { background: var(--dash-navy); border-color: var(--dash-navy); color: #fff; }
+.dash-tab-count {
+  min-width: 1.35rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--dash-bg);
+  color: var(--dash-text-soft);
+  font-size: 0.72rem;
+  text-align: center;
+}
+.dash-tab.is-active .dash-tab-count { background: rgba(255, 255, 255, 0.22); color: #fff; }
+
 .dash-section { margin-bottom: 3rem; }
 .dash-section-head {
   display: flex;
