@@ -75,16 +75,37 @@ const CONTACT_FIELDS = [
   "lastCommunicationAt", "lastCommunicationMode", "lastCommunicationBy",
 ].map((f) => `contact.${f}`);
 
+const ACTIVITY_FIELDS = [
+  "id", "type", "title", "description", "dueDate", "isCompleted", "duration", "createdAt",
+  "owner.id", "owner.name", "company.id", "company.name", "contact.id", "contact.name", "deal.id",
+].map((f) => `activity.${f}`);
+
 const DEAL_FIELDS = [
   "id", "title", "status", "pipeline", "stage", "dealValue",
   "owner.id", "owner.name", "primaryCompany.id", "primaryCompany.name", "primaryContact.id", "primaryContact.name",
   "createdAt", "closedDate", "estimatedCloseDate", "lastCommunicationAt",
 ].map((f) => `deal.${f}`);
 
+export interface SalesmateActivityRow {
+  id: number;
+  type: string | null;
+  title: string | null;
+  description: string | null;
+  dueDate: number | null; // unix seconds
+  isCompleted: number | boolean | null;
+  duration: number | null; // minutes
+  createdAt: number | null;
+  owner: { id?: number; name?: string } | null;
+  company: { id?: number | null; name?: string | null } | null;
+  contact: { id?: number | null; name?: string | null } | null;
+  deal: { id?: number | null } | null;
+}
+
 export class SalesmateConfigError extends Error {}
 
 export interface SalesmateFetcher {
   users(): Promise<SalesmateUserRow[]>;
+  activities(): Promise<SalesmateActivityRow[]>;
   companies(): Promise<SalesmateCompanyRow[]>;
   contacts(): Promise<SalesmateContactRow[]>;
   deals(): Promise<SalesmateDealRow[]>;
@@ -114,14 +135,22 @@ const PAGE_SIZE = 250;
 // never happens, fail loudly -- a sync that silently misses rows would also
 // wrongly mark them "removed".
 const MAX_PASSES = 8;
+
+type SearchModule = "company" | "contact" | "deal" | "activity";
+
+// The activity module returns no totalRows, so there's nothing to check a
+// complete fetch against. Two identical passes is the next best thing --
+// confirmed stable on the real account (892 activities, three passes).
+const NO_TOTAL_MODULES = new Set<SearchModule>(["activity"]);
 const MAX_PAGES_PER_PASS = 100;
 
-async function searchAll<T extends { id: number }>(module: "company" | "contact" | "deal", fields: string[]): Promise<T[]> {
+async function searchAll<T extends { id: number }>(module: SearchModule, fields: string[]): Promise<T[]> {
   const { domain, accessToken } = config();
   const byId = new Map<number, T>();
   let totalRows = 0;
 
   for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const sizeBeforePass = byId.size;
     for (let page = 0; page < MAX_PAGES_PER_PASS; page++) {
       const res = await fetch(
         `https://${domain}.salesmate.io/apis/${module}/v4/search?rows=${PAGE_SIZE}&from=${page * PAGE_SIZE}`,
@@ -157,8 +186,14 @@ async function searchAll<T extends { id: number }>(module: "company" | "contact"
       for (const row of json.Data.data) byId.set(row.id, row);
       if (json.Data.data.length < PAGE_SIZE) break;
     }
-    if (byId.size >= totalRows) return [...byId.values()];
+    if (NO_TOTAL_MODULES.has(module)) {
+      // No totalRows to trust: stop once a pass adds nothing new.
+      if (pass > 0 && byId.size === sizeBeforePass) return [...byId.values()];
+    } else if (byId.size >= totalRows) {
+      return [...byId.values()];
+    }
   }
+  if (NO_TOTAL_MODULES.has(module)) return [...byId.values()];
   throw new Error(
     `Salesmate ${module} search only returned ${byId.size} of ${totalRows} records after ${MAX_PASSES} passes -- ` +
       "stopping rather than syncing an incomplete list.",
@@ -184,6 +219,7 @@ export const salesmateApi: SalesmateFetcher = {
   companies: () => searchAll<SalesmateCompanyRow>("company", COMPANY_FIELDS),
   contacts: () => searchAll<SalesmateContactRow>("contact", CONTACT_FIELDS),
   deals: () => searchAll<SalesmateDealRow>("deal", DEAL_FIELDS),
+  activities: () => searchAll<SalesmateActivityRow>("activity", ACTIVITY_FIELDS),
 };
 
 export function isSalesmateConfigured(): boolean {

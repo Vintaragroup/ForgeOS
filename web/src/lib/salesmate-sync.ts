@@ -36,6 +36,7 @@ import {
   type SalesmateDealRow,
   type SalesmateFetcher,
   type SalesmateUserRow,
+  type SalesmateActivityRow,
 } from "@/lib/salesmate-client";
 
 export interface SalesmateSyncStats {
@@ -43,6 +44,9 @@ export interface SalesmateSyncStats {
   companies: { fetched: number; created: number; updated: number; removed: number; autoLinked: number; autoCreated: number; linked: number; waitingReview: number };
   contacts: { fetched: number; created: number; updated: number; adopted: number; waitingOnCompany: number; skipped: number };
   deals: { fetched: number; created: number; updated: number; removed: number; onLinkedCompanies: number };
+  activities: { fetched: number; created: number; updated: number; removed: number; onClients: number };
+  // Real contact history, accumulated one sync at a time (see ClientTouch).
+  touches: { recorded: number };
   warnings: string[];
 }
 
@@ -384,12 +388,138 @@ async function syncDeals(rows: SalesmateDealRow[], now: Date, stats: SalesmateSy
   }
 }
 
+// Scheduled calls/meetings/tasks. Salesmate links most activities to a
+// contact rather than a company (360 vs 9 of 892 on the real account), so
+// the company is resolved through the contact wherever it's missing.
+async function syncActivities(rows: SalesmateActivityRow[], now: Date, stats: SalesmateSyncStats, ownerUserIds: Map<string, string>) {
+  const s = stats.activities;
+  s.fetched = rows.length;
+  const [contacts, mirrors, existingIds] = await Promise.all([
+    db.contact.findMany({ where: { salesmateId: { not: null } }, select: { id: true, salesmateId: true, companyId: true } }),
+    db.salesmateCompany.findMany({ where: { companyId: { not: null } }, select: { salesmateId: true, companyId: true } }),
+    db.salesmateActivity.findMany({ select: { salesmateId: true } }),
+  ]);
+  const contactBySalesmateId = new Map(contacts.map((c) => [c.salesmateId!, c]));
+  const companyBySalesmateId = new Map(mirrors.map((m) => [m.salesmateId, m.companyId!]));
+  const existing = new Set(existingIds.map((a) => a.salesmateId));
+  const seen = new Set<string>();
+
+  for (const row of rows) {
+    const salesmateId = String(row.id);
+    seen.add(salesmateId);
+    const salesmateContactId = row.contact?.id != null ? String(row.contact.id) : null;
+    const contact = salesmateContactId ? contactBySalesmateId.get(salesmateContactId) : undefined;
+    const salesmateCompanyId = row.company?.id != null ? String(row.company.id) : null;
+    const companyId =
+      (salesmateCompanyId ? companyBySalesmateId.get(salesmateCompanyId) : undefined) ?? contact?.companyId ?? null;
+    if (companyId) s.onClients++;
+
+    const data = {
+      type: clean(row.type) ?? "Activity",
+      title: clean(row.title) ?? "(untitled activity)",
+      description: clean(row.description),
+      dueAt: fromUnixSeconds(row.dueDate),
+      isCompleted: row.isCompleted === 1 || row.isCompleted === true,
+      durationMinutes: typeof row.duration === "number" && Number.isFinite(row.duration) ? row.duration : null,
+      salesmateContactId,
+      contactId: contact?.id ?? null,
+      salesmateCompanyId,
+      companyId,
+      salesmateDealId: row.deal?.id != null ? String(row.deal.id) : null,
+      ownerSalesmateUserId: row.owner?.id != null ? String(row.owner.id) : null,
+      ownerUserId: row.owner?.id != null ? (ownerUserIds.get(String(row.owner.id)) ?? null) : null,
+      salesmateCreatedAt: fromUnixSeconds(row.createdAt),
+      removedAt: null,
+      syncedAt: now,
+    };
+    await db.salesmateActivity.upsert({ where: { salesmateId }, create: { salesmateId, ...data }, update: data });
+    if (existing.has(salesmateId)) s.updated++;
+    else s.created++;
+  }
+
+  if (rows.length > 0) {
+    const removed = await db.salesmateActivity.updateMany({
+      where: { salesmateId: { notIn: [...seen] }, removedAt: null },
+      data: { removedAt: now },
+    });
+    s.removed = removed.count;
+  }
+}
+
+// Turns Salesmate's single "last communication" timestamp into history:
+// every time that timestamp moves forward for a contact (or for a company
+// that has none of its own contacts credited), that's one real touch,
+// recorded once. Runs after contacts/companies are up to date, and is
+// idempotent -- the unique key is (company, contact, moment), so a re-run
+// of the same sync records nothing new.
+async function recordTouches(stats: SalesmateSyncStats) {
+  const s = stats.touches;
+  const [contacts, mirrors, users] = await Promise.all([
+    db.contact.findMany({
+      where: { deletedAt: null, salesmateId: { not: null }, lastContactedAt: { not: null }, companyId: { not: null } },
+      select: { id: true, companyId: true, lastContactedAt: true, lastContactedMode: true, lastContactedBy: true },
+    }),
+    db.salesmateCompany.findMany({
+      where: { removedAt: null, companyId: { not: null }, lastCommunicationAt: { not: null } },
+      select: { companyId: true, lastCommunicationAt: true, lastCommunicationMode: true, lastCommunicationBy: true },
+    }),
+    db.user.findMany({ where: { deletedAt: null }, select: { id: true, name: true } }),
+  ]);
+  const userIdByName = new Map(users.map((u) => [u.name.toLowerCase(), u.id]));
+  const byUser = (name: string | null) => (name ? (userIdByName.get(name.toLowerCase()) ?? null) : null);
+
+  for (const c of contacts) {
+    const created = await db.clientTouch.createMany({
+      data: [{
+        companyId: c.companyId!,
+        contactId: c.id,
+        occurredAt: c.lastContactedAt!,
+        mode: c.lastContactedMode,
+        byName: c.lastContactedBy,
+        byUserId: byUser(c.lastContactedBy),
+      }],
+      skipDuplicates: true,
+    });
+    s.recorded += created.count;
+  }
+
+  // Company-level rows cover communication Salesmate credits to the
+  // company rather than to a specific contact. These can't rely on the
+  // unique key + skipDuplicates: Postgres treats NULLs as distinct, so a
+  // (company, NULL contact, moment) row never collides with itself and
+  // would be re-inserted on every sync. Check first instead.
+  for (const m of mirrors) {
+    // Salesmate's company timestamp is usually the same email as its most
+    // recent contact's -- recording both would show the client being
+    // contacted twice. Any touch at that exact moment, contact-level or
+    // not, means it's already accounted for.
+    const already = await db.clientTouch.findFirst({
+      where: { companyId: m.companyId!, occurredAt: m.lastCommunicationAt! },
+      select: { id: true },
+    });
+    if (already) continue;
+    await db.clientTouch.create({
+      data: {
+        companyId: m.companyId!,
+        contactId: null,
+        occurredAt: m.lastCommunicationAt!,
+        mode: m.lastCommunicationMode,
+        byName: m.lastCommunicationBy,
+        byUserId: byUser(m.lastCommunicationBy),
+      },
+    });
+    s.recorded++;
+  }
+}
+
 function emptyStats(): SalesmateSyncStats {
   return {
     users: { fetched: 0, matched: 0, unmatched: [] },
     companies: { fetched: 0, created: 0, updated: 0, removed: 0, autoLinked: 0, autoCreated: 0, linked: 0, waitingReview: 0 },
     contacts: { fetched: 0, created: 0, updated: 0, adopted: 0, waitingOnCompany: 0, skipped: 0 },
     deals: { fetched: 0, created: 0, updated: 0, removed: 0, onLinkedCompanies: 0 },
+    activities: { fetched: 0, created: 0, updated: 0, removed: 0, onClients: 0 },
+    touches: { recorded: 0 },
     warnings: [],
   };
 }
@@ -412,16 +542,19 @@ export async function runSalesmateSync(options: {
   try {
     // Fetch everything before writing anything, so a Salesmate error
     // part-way through doesn't leave a half-applied sync.
-    const [users, companies, contacts, deals] = await Promise.all([
+    const [users, companies, contacts, deals, activities] = await Promise.all([
       fetcher.users(),
       fetcher.companies(),
       fetcher.contacts(),
       fetcher.deals(),
+      fetcher.activities(),
     ]);
     const ownerUserIds = await syncUsers(users, stats);
     await syncCompanies(companies, now, stats, ownerUserIds);
     await syncContacts(contacts, now, stats);
     await syncDeals(deals, now, stats, ownerUserIds);
+    await syncActivities(activities, now, stats, ownerUserIds);
+    await recordTouches(stats);
     return await db.salesmateSyncRun.update({
       where: { id: run.id },
       data: { status: "SUCCEEDED", stats: stats as unknown as Prisma.InputJsonValue, finishedAt: new Date() },

@@ -6,6 +6,7 @@ import { taxRateOptionLabel, TAX_RATE_PICKER_QUERY } from "@/lib/tax-rate";
 import { Button, Card, Field, PageHeader, SelectField, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { AgingChip } from "@/components/aging-chip";
+import { LocalTimestamp } from "@/components/local-timestamp";
 import { EMPTY_AGING, loadCompanyAging } from "@/lib/company-aging";
 
 const DEAL_STATUS_TONE: Record<string, "good" | "critical" | "info" | "neutral"> = { Won: "good", Lost: "critical", Open: "info" };
@@ -24,6 +25,12 @@ export default async function CompanyDetailPage(props: PageProps<"/companies/[id
         contacts: { where: { deletedAt: null }, orderBy: [{ lastContactedAt: { sort: "desc", nulls: "last" } }, { name: "asc" }] },
         opportunities: { where: { deletedAt: null } },
         salesmateCompanies: { where: { removedAt: null }, orderBy: { lastCommunicationAt: { sort: "desc", nulls: "last" } } },
+        clientTouches: { orderBy: { occurredAt: "desc" }, take: 12, include: { contact: { select: { name: true } } } },
+        salesmateActivities: {
+          where: { removedAt: null, isCompleted: false },
+          orderBy: { dueAt: "asc" },
+          include: { owner: { select: { name: true } } },
+        },
         salesmateDeals: {
           where: { removedAt: null },
           orderBy: [{ salesmateCreatedAt: { sort: "desc", nulls: "last" } }],
@@ -190,6 +197,70 @@ export default async function CompanyDetailPage(props: PageProps<"/companies/[id
             </ul>
           </Card>
         )}
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div>
+          <h2 className="mb-1 text-lg font-semibold">Contact history</h2>
+          <p className="mb-3 text-sm text-neutral-500">
+            Each communication ForgeOS has seen since it started recording. Reps log contact in Salesmate; this fills in
+            from there, so there&apos;s no history before the sync began.
+          </p>
+          {company.clientTouches.length === 0 ? (
+            <p className="text-sm text-neutral-500">No contact recorded yet.</p>
+          ) : (
+            <Card>
+              <ul className="divide-y divide-neutral-200">
+                {company.clientTouches.map((t) => (
+                  <li key={t.id} className="flex items-center justify-between gap-3 px-5 py-2 text-sm">
+                    <span>
+                      {t.mode ?? "Contact"}
+                      {t.contact ? ` with ${t.contact.name}` : ""}
+                      {t.byName ? <span className="text-neutral-500"> · by {t.byName}</span> : null}
+                    </span>
+                    <span className="shrink-0 text-xs text-neutral-500">
+                      <LocalTimestamp iso={t.occurredAt} timeStyle={undefined} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+        </div>
+
+        <div>
+          <h2 className="mb-1 text-lg font-semibold">Scheduled</h2>
+          <p className="mb-3 text-sm text-neutral-500">
+            Open calls and meetings in Salesmate. Past-due ones may simply never have been ticked off.
+          </p>
+          {company.salesmateActivities.length === 0 ? (
+            <p className="text-sm text-neutral-500">Nothing scheduled.</p>
+          ) : (
+            <Card>
+              <ul className="divide-y divide-neutral-200">
+                {company.salesmateActivities.slice(0, 12).map((a) => {
+                  const overdue = a.dueAt ? a.dueAt < new Date() : false;
+                  return (
+                    <li key={a.salesmateId} className="flex items-center justify-between gap-3 px-5 py-2 text-sm">
+                      <span className="min-w-0">
+                        <span className="block truncate">{a.title}</span>
+                        <span className="text-xs text-neutral-500">
+                          {a.type}
+                          {a.owner ? ` · ${a.owner.name}` : ""}
+                        </span>
+                      </span>
+                      {a.dueAt && (
+                        <span className={`shrink-0 text-xs ${overdue ? "text-amber-700" : "text-neutral-500"}`}>
+                          <LocalTimestamp iso={a.dueAt} timeStyle={undefined} />
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </Card>
+          )}
+        </div>
       </div>
 
       <div>

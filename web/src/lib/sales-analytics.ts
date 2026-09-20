@@ -64,6 +64,16 @@ export interface StaleDeal {
   daysQuiet: number;
 }
 
+export interface ScheduledActivity {
+  salesmateId: string;
+  type: string;
+  title: string;
+  dueAt: Date | null;
+  companyId: string | null;
+  companyName: string | null;
+  daysOverdue: number | null;
+}
+
 export interface SalesOverview {
   kpis: SalesKpis;
   clients: ClientRow[];
@@ -77,6 +87,12 @@ export interface SalesOverview {
   staleOpenDeals: StaleDeal[];
   pipelineByStage: { stage: string; count: number; value: number }[];
   forgeos: { openEstimates: number; proposalsSent: number; proposalsSigned: number };
+  // Scheduled work from Salesmate. Past-due ones are shown as "did this
+  // happen?" rather than "missed": on the real account reps almost never
+  // tick an activity complete (1 of 892), so the flag can't be trusted.
+  scheduled: { upcoming: ScheduledActivity[]; pastDue: ScheduledActivity[]; upcomingCount: number; pastDueCount: number };
+  // Contact history accumulated since the sync started recording it.
+  touchHistory: { last30Days: number; last90Days: number; since: Date | null };
 }
 
 export interface LeaderboardRow {
@@ -305,6 +321,40 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
     .map((x) => x.client);
   const quietProspects = quiet.length - goingCold.length;
 
+  const [activityRows, touchAgg, firstTouch] = await Promise.all([
+    db.salesmateActivity.findMany({
+      where: { removedAt: null, isCompleted: false, ...(scope.ownerUserId ? { ownerUserId: scope.ownerUserId } : {}) },
+      select: { salesmateId: true, type: true, title: true, dueAt: true, companyId: true },
+      orderBy: { dueAt: "asc" },
+    }),
+    db.clientTouch.findMany({
+      where: {
+        occurredAt: { gte: new Date(now.getTime() - 90 * DAY_MS) },
+        ...(scope.ownerUserId ? { byUserId: scope.ownerUserId } : {}),
+      },
+      select: { occurredAt: true },
+    }),
+    db.clientTouch.findFirst({ orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
+  ]);
+  const activityNames = new Map(nameById);
+  const toScheduled = (a: (typeof activityRows)[number]): ScheduledActivity => ({
+    salesmateId: a.salesmateId,
+    type: a.type,
+    title: a.title,
+    dueAt: a.dueAt,
+    companyId: a.companyId,
+    companyName: a.companyId ? (activityNames.get(a.companyId) ?? null) : null,
+    daysOverdue: a.dueAt && a.dueAt < now ? daysSince(a.dueAt, now) : null,
+  });
+  const scheduledAll = activityRows.map(toScheduled);
+  // Activities attached to a client come first in both lists: an activity
+  // with no client link ("Weekly Update", "Tim at SIBOS") is someone's own
+  // reminder, not client follow-up, and would otherwise crowd these out.
+  const clientFirst = (a: ScheduledActivity, b: ScheduledActivity) => Number(Boolean(b.companyId)) - Number(Boolean(a.companyId));
+  const pastDue = scheduledAll.filter((a) => a.daysOverdue != null).reverse().sort(clientFirst);
+  const upcoming = scheduledAll.filter((a) => a.daysOverdue == null).sort(clientFirst);
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * DAY_MS);
+
   return {
     kpis,
     clients,
@@ -314,6 +364,17 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
     pipelineByStage: [...stageTotals.entries()]
       .map(([stage, t]) => ({ stage, ...t }))
       .sort((a, b) => b.value - a.value),
+    scheduled: {
+      upcoming: upcoming.slice(0, 8),
+      pastDue: pastDue.slice(0, 8),
+      upcomingCount: upcoming.length,
+      pastDueCount: pastDue.length,
+    },
+    touchHistory: {
+      last30Days: touchAgg.filter((t) => t.occurredAt >= thirtyDaysAgo).length,
+      last90Days: touchAgg.length,
+      since: firstTouch?.createdAt ?? null,
+    },
     forgeos: {
       openEstimates: estimates,
       proposalsSent: proposals.filter((p) => p.sentAt).length,

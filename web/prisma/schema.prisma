@@ -156,6 +156,7 @@ model User {
   calendarFeedTokens       CalendarFeedToken[]
   salesmateOwnedCompanies  SalesmateCompany[]
   salesmateOwnedDeals      SalesmateDeal[]
+  salesmateOwnedActivities SalesmateActivity[]
 
   // Salesmate sync: this person's Salesmate user id, matched once by email
   // (then name) so deal/company ownership survives a rename -- see
@@ -189,8 +190,10 @@ model Company {
   // Salesmate sync -- see SalesmateCompany. Empty until the sync (or an
   // admin) connects this company to its Salesmate record(s). More than one
   // when Salesmate itself has duplicates of the same client.
-  salesmateCompanies SalesmateCompany[]
-  salesmateDeals     SalesmateDeal[]
+  salesmateCompanies  SalesmateCompany[]
+  salesmateDeals      SalesmateDeal[]
+  salesmateActivities SalesmateActivity[]
+  clientTouches       ClientTouch[]
 
   @@map("companies")
 }
@@ -226,13 +229,15 @@ model Contact {
   // fill in when empty (a ForgeOS edit is never overwritten); the
   // lastContacted* fields are Salesmate-owned and refreshed every sync --
   // reps log their communication in Salesmate, not here.
-  salesmateId       String?   @unique
-  title             String?
-  mobile            String?
-  lastContactedAt   DateTime?
-  lastContactedMode String?
-  lastContactedBy   String?
-  salesmateSyncedAt DateTime?
+  salesmateId         String?             @unique
+  title               String?
+  mobile              String?
+  lastContactedAt     DateTime?
+  lastContactedMode   String?
+  lastContactedBy     String?
+  salesmateSyncedAt   DateTime?
+  salesmateActivities SalesmateActivity[]
+  clientTouches       ClientTouch[]
 
   @@map("contacts")
 }
@@ -3488,4 +3493,82 @@ model SalesmateSyncRun {
 
   @@index([startedAt])
   @@map("salesmate_sync_runs")
+}
+
+// Scheduled calls/meetings/tasks mirrored from Salesmate. Deliberately NOT
+// treated as a record of contact that happened: on the real account only 1
+// of 892 activities is marked completed and the dates run months into the
+// future, so this is the team's forward plan, not their history. A past-due
+// activity therefore means "did this happen?", not "this was missed" -- see
+// the /sales Scheduled section.
+//
+// Most activities carry no company link (9 of 892) but many carry a contact
+// (360), so the sync resolves the company through the contact where it can.
+model SalesmateActivity {
+  salesmateId     String    @id
+  // Call / Meeting / Task / Document Added -- Salesmate's own type name.
+  type            String
+  title           String
+  description     String?
+  // Salesmate stores these as unix seconds; dueAt is when it's scheduled.
+  dueAt           DateTime?
+  isCompleted     Boolean   @default(false)
+  // Minutes, as Salesmate reports it.
+  durationMinutes Int?
+
+  salesmateContactId String?
+  contactId          String?
+  contact            Contact? @relation(fields: [contactId], references: [id])
+  salesmateCompanyId String?
+  companyId          String?
+  company            Company? @relation(fields: [companyId], references: [id])
+  salesmateDealId    String?
+
+  ownerSalesmateUserId String?
+  ownerUserId          String?
+  owner                User?   @relation(fields: [ownerUserId], references: [id])
+
+  salesmateCreatedAt DateTime?
+  removedAt          DateTime?
+  syncedAt           DateTime
+
+  @@index([companyId])
+  @@index([contactId])
+  @@index([ownerUserId])
+  @@index([dueAt])
+  @@map("salesmate_activities")
+}
+
+// Real contact history, accumulated rather than imported: Salesmate's API
+// exposes no email/communication log (every email-ish endpoint 404s), only
+// a "last communication" timestamp per contact/company. So each sync
+// compares that timestamp to what it saw last time, and records a row when
+// it moves forward. That makes this authoritative from the day it starts,
+// with no history before it -- which is why cadence figures say how long
+// they've been collecting.
+model ClientTouch {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id])
+
+  occurredAt DateTime
+  // "Email", "Call", ... as Salesmate labels it.
+  mode       String?
+  // The rep Salesmate credits, as a name plus a user where one matches.
+  byName     String?
+  byUserId   String?
+
+  // How this row was learned. Only one source today; an explicitly logged
+  // touch would be another.
+  source    String   @default("SALESMATE_LAST_COMMUNICATION")
+  createdAt DateTime @default(now())
+
+  // One row per (contact-or-company, moment) -- a re-run of the same sync
+  // must not double-count a touch.
+  @@unique([companyId, contactId, occurredAt])
+  @@index([companyId, occurredAt])
+  @@index([byUserId, occurredAt])
+  @@map("client_touches")
 }

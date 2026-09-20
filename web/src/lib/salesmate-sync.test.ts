@@ -4,6 +4,7 @@ import type {
   SalesmateCompanyRow,
   SalesmateContactRow,
   SalesmateDealRow,
+  SalesmateActivityRow,
   SalesmateFetcher,
   SalesmateUserRow,
 } from "@/lib/salesmate-client";
@@ -18,6 +19,8 @@ import {
 } from "@/lib/salesmate-sync";
 
 afterEach(async () => {
+  await db.clientTouch.deleteMany();
+  await db.salesmateActivity.deleteMany();
   await db.salesmateDeal.deleteMany();
   await db.user.deleteMany();
   await db.salesmateSyncRun.deleteMany();
@@ -64,12 +67,14 @@ function deal(id: number, companyId: number, title: string, extra: Partial<Sales
 
 function fakeSalesmate(data: {
   users?: SalesmateUserRow[];
+  activities?: SalesmateActivityRow[];
   companies?: SalesmateCompanyRow[];
   contacts?: SalesmateContactRow[];
   deals?: SalesmateDealRow[];
 }): SalesmateFetcher {
   return {
     users: async () => data.users ?? [],
+    activities: async () => data.activities ?? [],
     companies: async () => data.companies ?? [],
     contacts: async () => data.contacts ?? [],
     deals: async () => data.deals ?? [],
@@ -349,6 +354,64 @@ describe("owner mapping", () => {
     });
     expect(stats.users).toMatchObject({ matched: 1, unmatched: [] });
     expect((await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "101" } })).ownerUserId).toBe(user.id);
+  });
+});
+
+describe("activities and touch history", () => {
+  const activity = (id: number, extra: Partial<SalesmateActivityRow> = {}): SalesmateActivityRow => ({
+    id, type: "Call", title: `Call ${id}`, description: null,
+    dueDate: SEPT_18, isCompleted: 0, duration: 30, createdAt: SEPT_18,
+    owner: { id: 1, name: "Terry Genovese" }, company: null, contact: null, deal: null,
+    ...extra,
+  });
+
+  it("mirrors scheduled activities and finds the client through the contact when the company link is missing", async () => {
+    const co = await db.company.create({ data: { name: "Club Glove" } });
+    const { stats } = await sync({
+      companies: [company(1, "Club Glove")],
+      contacts: [contact(10, 1, "Dana Reyes")],
+      activities: [
+        // Only a contact link -- the common case in the real account.
+        activity(500, { contact: { id: 10, name: "Dana Reyes" } }),
+        // Neither link: kept, but attached to nobody.
+        activity(501, { type: "Meeting", duration: 60 }),
+      ],
+    });
+
+    expect(stats.activities).toMatchObject({ fetched: 2, created: 2, onClients: 1 });
+    const viaContact = await db.salesmateActivity.findUniqueOrThrow({ where: { salesmateId: "500" } });
+    expect(viaContact).toMatchObject({ companyId: co.id, type: "Call", isCompleted: false, durationMinutes: 30 });
+    expect(viaContact.dueAt?.toISOString()).toBe("2026-09-18T12:00:00.000Z");
+    expect((await db.salesmateActivity.findUniqueOrThrow({ where: { salesmateId: "501" } })).companyId).toBeNull();
+  });
+
+  it("records one touch per real communication, and never double-counts on a re-run", async () => {
+    const terry = await db.user.create({ data: { name: "Tim Morris", email: `tim.${Math.random()}@expocci.com`, systemRole: "EMPLOYEE" } });
+    await db.company.create({ data: { name: "Club Glove" } });
+    const data = {
+      companies: [company(1, "Club Glove")],
+      contacts: [contact(10, 1, "Dana Reyes", { email: "dana@clubglove.com" })],
+    };
+
+    const first = await sync(data);
+    // The company's timestamp is the same email as the contact's, so it's
+    // recorded once, not twice.
+    expect(first.stats.touches.recorded).toBe(1);
+    const second = await sync(data);
+    expect(second.stats.touches.recorded).toBe(0);
+
+    // A later communication is a new touch, and the old one is kept.
+    const later = SEPT_18 + 3 * 24 * 60 * 60;
+    const third = await sync({
+      companies: [company(1, "Club Glove", { lastCommunicationAt: later })],
+      contacts: [contact(10, 1, "Dana Reyes", { email: "dana@clubglove.com", lastCommunicationAt: later })],
+    });
+    expect(third.stats.touches.recorded).toBe(1);
+
+    const touches = await db.clientTouch.findMany({ orderBy: { occurredAt: "asc" } });
+    expect(touches).toHaveLength(2);
+    expect(touches[0]).toMatchObject({ mode: "Email", byName: "Tim Morris", byUserId: terry.id });
+    expect(touches.at(-1)!.occurredAt.toISOString()).toBe(new Date(later * 1000).toISOString());
   });
 });
 
