@@ -69,7 +69,7 @@ async function sync(data: Parameters<typeof fakeSalesmate>[0]) {
 }
 
 describe("runSalesmateSync -- companies", () => {
-  it("mirrors every company and auto-links only an unambiguous exact-name match", async () => {
+  it("auto-links exact matches, auto-creates clearly-new companies, and leaves only fuzzy/ambiguous ones for review", async () => {
     const clubGlove = await db.company.create({ data: { name: "Club Glove, Inc." } });
     await db.company.create({ data: { name: "Arena Event Services Inc." } });
     // Two ForgeOS companies normalize to the same name -> ambiguous, must not auto-link.
@@ -86,12 +86,18 @@ describe("runSalesmateSync -- companies", () => {
     });
 
     expect(run.status).toBe("SUCCEEDED");
-    expect(stats.companies).toMatchObject({ fetched: 4, created: 4, autoLinked: 1, linked: 1, waitingReview: 3 });
+    // Club Glove: exact match (legal suffix ignored) -> linked.
+    // Brand New Prospect: nothing plausible in ForgeOS -> created + linked.
+    // Arena: close to "Arena Event Services Inc." but not the same -> review.
+    // Titleist: two ForgeOS companies normalize to it -> review.
+    expect(stats.companies).toMatchObject({ fetched: 4, created: 4, autoLinked: 1, autoCreated: 1, linked: 2, waitingReview: 2 });
     const mirror = await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "1" } });
     expect(mirror).toMatchObject({ companyId: clubGlove.id, phone: "407-555-0100", address: "Orlando, FL", type: "Customer" });
     expect(mirror.lastCommunicationAt?.toISOString()).toBe("2026-09-18T12:00:00.000Z");
-    // Nothing was created in ForgeOS itself -- unmatched companies wait for review.
-    expect(await db.company.count()).toBe(4);
+    expect(await db.company.count()).toBe(5);
+    const created = await db.company.findFirstOrThrow({ where: { name: "Brand New Prospect" } });
+    expect((await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "4" } })).companyId).toBe(created.id);
+    expect((await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "2" } })).companyId).toBeNull();
   });
 
   it("marks a company Salesmate stopped returning as removed -- but never on an empty response", async () => {
@@ -121,7 +127,7 @@ describe("runSalesmateSync -- contacts", () => {
   it("creates contacts under linked companies and counts the rest as waiting", async () => {
     await db.company.create({ data: { name: "Club Glove" } });
     const { stats } = await sync({
-      companies: [company(1, "Club Glove"), company(2, "Unlinked Co")],
+      companies: [company(1, "Club Glove"), company(2, "Unlinked Co", { type: "Partner" })],
       contacts: [
         contact(10, 1, "Dana Reyes", { email: "dana@clubglove.com", designation: "Marketing Director", mobile: "555-1111" }),
         contact(11, 2, "Waiting Person"),
@@ -169,7 +175,7 @@ describe("runSalesmateSync -- deals", () => {
   it("mirrors deals with value and dates, attached to linked companies and synced contacts", async () => {
     const co = await db.company.create({ data: { name: "Club Glove" } });
     const { stats } = await sync({
-      companies: [company(1, "Club Glove"), company(2, "Unlinked Co")],
+      companies: [company(1, "Club Glove"), company(2, "Unlinked Co", { type: "Partner" })],
       contacts: [contact(10, 1, "Dana Reyes")],
       deals: [
         deal(100, 1, "Club Glove - PGA 2026 - 20x20 - Orlando", { primaryContact: { id: 10, name: "Dana Reyes" } }),
@@ -211,7 +217,7 @@ describe("company-link review", () => {
     ];
     expect(suggestCompanyMatches("Arena", companies)[0]).toMatchObject({ id: "a" });
     expect(suggestCompanyMatches("Zzz Unrelated", companies)).toEqual([]);
-    expect(normalizeCompanyName("Club Glove, Inc.")).toBe("clubgloveinc");
+    expect(normalizeCompanyName("Club Glove, Inc.")).toBe("clubglove");
   });
 
   it("linking reattaches deals immediately and brings contacts on the next sync; create-new and ignore work too", async () => {
@@ -223,17 +229,72 @@ describe("company-link review", () => {
     };
     await sync(data);
 
+    // The sync already created "Brand New Prospect" (nothing plausible to match).
+    expect(await db.company.findFirst({ where: { name: "Brand New Prospect", billingAddress: "Miami, FL" } })).not.toBeNull();
+    // Expo's own Partner record is never auto-created; an admin ignores it.
+    expect((await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "4" } })).companyId).toBeNull();
+
     await linkSalesmateCompany("2", arena.id);
     expect((await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "200" } })).companyId).toBe(arena.id);
-    await expect(linkSalesmateCompany("3", arena.id)).rejects.toThrow(/already linked/);
-
-    const created = await createCompanyFromSalesmate("3");
-    expect(created).toMatchObject({ name: "Brand New Prospect", billingAddress: "Miami, FL" });
     await ignoreSalesmateCompany("4");
 
     const { stats } = await sync(data);
     expect(stats.companies).toMatchObject({ linked: 2, waitingReview: 0 });
+    await expect(createCompanyFromSalesmate("2")).rejects.toThrow(/already linked/);
     expect(stats.contacts.created).toBe(1);
     expect((await db.contact.findUniqueOrThrow({ where: { salesmateId: "20" } })).companyId).toBe(arena.id);
   });
 });
+
+describe("automatic linking rules", () => {
+  it("ignores legal suffixes, punctuation, '&', and a leading 'The' when matching names", () => {
+    expect(normalizeCompanyName("Club Glove, Inc.")).toBe("clubglove");
+    expect(normalizeCompanyName("CLUB GLOVE LLC")).toBe("clubglove");
+    expect(normalizeCompanyName("The Nest Group")).toBe("nestgroup");
+    expect(normalizeCompanyName("Flag & Anthem")).toBe(normalizeCompanyName("Flag and Anthem"));
+    // A single word is never stripped away entirely.
+    expect(normalizeCompanyName("Company")).toBe("company");
+    expect(normalizeCompanyName("The")).toBe("the");
+  });
+
+  it("auto-creates when the only overlap is a generic word, but not when a name is plausibly the same client", async () => {
+    await db.company.create({ data: { name: "Aguila Golf" } });
+    await db.company.create({ data: { name: "Full Swing" } });
+    const { stats } = await sync({
+      companies: [company(1, "Golf Max USA", { type: "Lead" }), company(2, "Full Swing Golf", { type: "Lead" })],
+    });
+    expect(stats.companies).toMatchObject({ autoCreated: 1, waitingReview: 1 });
+    expect(await db.company.findFirst({ where: { name: "Golf Max USA" } })).not.toBeNull();
+    expect((await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "2" } })).companyId).toBeNull();
+  });
+
+  it("folds Salesmate duplicates into one company -- created once, or following an admin-linked twin", async () => {
+    await db.company.create({ data: { name: "Nicklaus Children Hospital Systems" } });
+    const first = await sync({
+      companies: [
+        company(1, "ENCOPIM", { type: "Lead" }),
+        company(2, "Encopim", { type: "Prospect" }),
+        company(3, "Nicklaus Children's Health System"),
+        company(4, "Nicklaus Childrens Health System"),
+      ],
+    });
+    // One ENCOPIM company for both records; both Nicklaus records wait (close, not exact).
+    expect(first.stats.companies).toMatchObject({ autoCreated: 1, autoLinked: 1, waitingReview: 2 });
+    expect(await db.company.count({ where: { name: { equals: "encopim", mode: "insensitive" } } })).toBe(1);
+
+    const nicklaus = await db.company.findFirstOrThrow({ where: { name: "Nicklaus Children Hospital Systems" } });
+    await linkSalesmateCompany("4", nicklaus.id);
+    const second = await sync({
+      companies: [
+        company(1, "ENCOPIM", { type: "Lead" }),
+        company(2, "Encopim", { type: "Prospect" }),
+        company(3, "Nicklaus Children's Health System"),
+        company(4, "Nicklaus Childrens Health System"),
+      ],
+    });
+    // Record 3 followed its twin onto the admin's choice.
+    expect(second.stats.companies).toMatchObject({ autoLinked: 1, waitingReview: 0 });
+    expect((await db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId: "3" } })).companyId).toBe(nicklaus.id);
+  });
+});
+

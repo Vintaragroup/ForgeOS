@@ -168,10 +168,11 @@ model Company {
   contacts      Contact[]
   opportunities Opportunity[]
 
-  // Salesmate sync -- see SalesmateCompany. Null until an admin (or the
-  // exact-name auto-link) connects this company to its Salesmate record.
-  salesmateCompany SalesmateCompany?
-  salesmateDeals   SalesmateDeal[]
+  // Salesmate sync -- see SalesmateCompany. Empty until the sync (or an
+  // admin) connects this company to its Salesmate record(s). More than one
+  // when Salesmate itself has duplicates of the same client.
+  salesmateCompanies SalesmateCompany[]
+  salesmateDeals     SalesmateDeal[]
 
   @@map("companies")
 }
@@ -3360,8 +3361,9 @@ model RateLimitBucket {
 // estimates) are spelled differently in Salesmate ("Arena Event Services
 // Inc." vs "Arena"), so a name-only match would create duplicates. Only an
 // exact normalized-name match to exactly one unlinked Company auto-links;
-// everything else waits on /admin/integrations/salesmate for an admin to
-// link it or create it as a new company.
+// see salesmate-sync.ts's linking rules for what's automatic (exact match
+// ignoring legal suffixes; auto-create when nothing plausibly matches) --
+// only a genuinely fuzzy match waits on /admin/integrations/salesmate.
 model SalesmateCompany {
   salesmateId String  @id
   name        String
@@ -3376,7 +3378,10 @@ model SalesmateCompany {
   lastCommunicationMode String?
   lastCommunicationBy   String?
 
-  companyId String?   @unique
+  // Not unique: Salesmate holds duplicate records for some clients
+  // ("ENCOPIM" twice, "Nicklaus Children's" / "Nicklaus Childrens"), and
+  // they should all land on the one ForgeOS company.
+  companyId String?
   company   Company?  @relation(fields: [companyId], references: [id])
   // An admin looked at this row and chose NOT to bring it into ForgeOS
   // (e.g. Expo's own company record) -- keeps it out of the review queue.
@@ -3387,6 +3392,7 @@ model SalesmateCompany {
   removedAt DateTime?
   syncedAt  DateTime
 
+  @@index([companyId])
   @@map("salesmate_companies")
 }
 

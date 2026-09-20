@@ -38,17 +38,27 @@ import {
 } from "@/lib/salesmate-client";
 
 export interface SalesmateSyncStats {
-  companies: { fetched: number; created: number; updated: number; removed: number; autoLinked: number; linked: number; waitingReview: number };
+  companies: { fetched: number; created: number; updated: number; removed: number; autoLinked: number; autoCreated: number; linked: number; waitingReview: number };
   contacts: { fetched: number; created: number; updated: number; adopted: number; waitingOnCompany: number; skipped: number };
   deals: { fetched: number; created: number; updated: number; removed: number; onLinkedCompanies: number };
   warnings: string[];
 }
 
-// Case/punctuation-insensitive: "Club Glove, Inc." === "club glove inc".
-// Deliberately NOT stripping Inc/LLC here -- that's a fuzzy decision, and
-// fuzzy decisions are the admin's (see suggestCompanyMatches).
+// Case/punctuation-insensitive, and blind to legal-form words and a
+// leading "The": "Club Glove, Inc." === "club glove" === "CLUB GLOVE LLC".
+// Only words that never distinguish one client from another are dropped --
+// anything fuzzier is left to suggestCompanyMatches and an admin.
+const LEGAL_SUFFIXES = new Set(["inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation", "co", "company", "plc", "gmbh", "sa", "srl"]);
+
 export function normalizeCompanyName(name: string | null | undefined): string {
-  return (name ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const words = (name ?? "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  while (words.length > 1 && LEGAL_SUFFIXES.has(words[words.length - 1])) words.pop();
+  if (words.length > 1 && words[0] === "the") words.shift();
+  return words.join("");
 }
 
 function fromUnixSeconds(value: number | null | undefined): Date | null {
@@ -113,32 +123,89 @@ async function syncCompanies(rows: SalesmateCompanyRow[], now: Date, stats: Sale
     s.removed = removed.count;
   }
 
-  // Exact-name auto-link, only when unambiguous on both sides.
-  const [unlinkedMirrors, companies] = await Promise.all([
-    db.salesmateCompany.findMany({ where: { companyId: null, ignoredAt: null, removedAt: null } }),
-    db.company.findMany({ where: { deletedAt: null, salesmateCompany: null }, select: { id: true, name: true } }),
+  await autoResolveCompanies(s);
+
+  s.linked = await db.salesmateCompany.count({ where: { companyId: { not: null }, removedAt: null } });
+  s.waitingReview = await db.salesmateCompany.count({ where: { companyId: null, ignoredAt: null, removedAt: null } });
+}
+
+// A suggestCompanyMatches score ABOVE this means "plausibly the same
+// client" -- too close to guess either way, so it waits for an admin. Set
+// from the real production queue (2026-09-19): true matches scored
+// 0.60-1.17 ("Full Swing Golf" / "Full Swing", "Nicklaus Childrens Health
+// System" / "Nicklaus Children Hospital Systems"); unrelated names sharing
+// only generic words scored 0.25-0.50 ("Golf Max USA" / "Aguila Golf",
+// "National Pickleball Center" / "National Center for Simulation", "Mate
+// LLC" / "Brumate Company") -- hence strictly greater than.
+export const PLAUSIBLE_MATCH_SCORE = 0.5;
+
+// Salesmate's own company records for Expo (typed "Partner") must never
+// become a client company.
+const NEVER_AUTO_CREATE_TYPES = new Set(["partner"]);
+
+// The linking rules, applied to every unlinked, un-ignored mirror row on
+// every sync -- so an admin only ever sees the genuinely fuzzy cases:
+//   1. Exact match (normalizeCompanyName) to exactly one ForgeOS company,
+//      or to an already-linked Salesmate twin -> link. Several Salesmate
+//      duplicates may link to the same company.
+//   2. Otherwise, if no ForgeOS company plausibly matches
+//      (PLAUSIBLE_MATCH_SCORE) and it isn't a Partner -> create a ForgeOS
+//      company and link. Salesmate duplicates of one name share it.
+//   3. Otherwise -> leave for review.
+async function autoResolveCompanies(s: SalesmateSyncStats["companies"]) {
+  const [unlinkedMirrors, linkedMirrors, companies] = await Promise.all([
+    db.salesmateCompany.findMany({ where: { companyId: null, ignoredAt: null, removedAt: null }, orderBy: { salesmateId: "asc" } }),
+    db.salesmateCompany.findMany({ where: { companyId: { not: null } }, select: { name: true, companyId: true } }),
+    db.company.findMany({ where: { deletedAt: null }, select: { id: true, name: true } }),
   ]);
+  // A Salesmate duplicate follows its already-linked twin -- whether an
+  // admin or an earlier sync made that first link.
+  const linkedByMirrorName = new Map<string, Set<string>>();
+  for (const m of linkedMirrors) {
+    const key = normalizeCompanyName(m.name);
+    linkedByMirrorName.set(key, (linkedByMirrorName.get(key) ?? new Set()).add(m.companyId!));
+  }
   const companiesByName = new Map<string, string[]>();
   for (const c of companies) {
     const key = normalizeCompanyName(c.name);
     companiesByName.set(key, [...(companiesByName.get(key) ?? []), c.id]);
   }
-  const mirrorsByName = new Map<string, number>();
-  for (const m of unlinkedMirrors) {
-    const key = normalizeCompanyName(m.name);
-    mirrorsByName.set(key, (mirrorsByName.get(key) ?? 0) + 1);
-  }
+  // Companies created in THIS pass, so a second Salesmate duplicate of the
+  // same name links to the first one's new company instead of making another.
+  const createdByName = new Map<string, string>();
+
   for (const mirror of unlinkedMirrors) {
     const key = normalizeCompanyName(mirror.name);
-    const candidates = companiesByName.get(key) ?? [];
-    if (key && candidates.length === 1 && mirrorsByName.get(key) === 1) {
-      await db.salesmateCompany.update({ where: { salesmateId: mirror.salesmateId }, data: { companyId: candidates[0] } });
+    if (!key) continue;
+    const exact = companiesByName.get(key) ?? [];
+    if (exact.length === 1) {
+      await db.salesmateCompany.update({ where: { salesmateId: mirror.salesmateId }, data: { companyId: exact[0] } });
       s.autoLinked++;
+      continue;
     }
-  }
+    if (exact.length > 1) continue; // two ForgeOS companies with one name -- an admin decides
+    const twin = linkedByMirrorName.get(key);
+    if (twin?.size === 1) {
+      await db.salesmateCompany.update({ where: { salesmateId: mirror.salesmateId }, data: { companyId: [...twin][0] } });
+      s.autoLinked++;
+      continue;
+    }
+    const createdId = createdByName.get(key);
+    if (createdId) {
+      await db.salesmateCompany.update({ where: { salesmateId: mirror.salesmateId }, data: { companyId: createdId } });
+      s.autoLinked++;
+      continue;
+    }
+    if (NEVER_AUTO_CREATE_TYPES.has((mirror.type ?? "").toLowerCase())) continue;
+    const plausible = suggestCompanyMatches(mirror.name, companies, 1)[0];
+    if (plausible && plausible.score > PLAUSIBLE_MATCH_SCORE) continue;
 
-  s.linked = await db.salesmateCompany.count({ where: { companyId: { not: null }, removedAt: null } });
-  s.waitingReview = await db.salesmateCompany.count({ where: { companyId: null, ignoredAt: null, removedAt: null } });
+    const company = await db.company.create({ data: { name: mirror.name, billingAddress: mirror.address } });
+    await db.salesmateCompany.update({ where: { salesmateId: mirror.salesmateId }, data: { companyId: company.id } });
+    companies.push({ id: company.id, name: company.name });
+    createdByName.set(key, company.id);
+    s.autoCreated++;
+  }
 }
 
 async function syncContacts(rows: SalesmateContactRow[], now: Date, stats: SalesmateSyncStats) {
@@ -273,7 +340,7 @@ async function syncDeals(rows: SalesmateDealRow[], now: Date, stats: SalesmateSy
 
 function emptyStats(): SalesmateSyncStats {
   return {
-    companies: { fetched: 0, created: 0, updated: 0, removed: 0, autoLinked: 0, linked: 0, waitingReview: 0 },
+    companies: { fetched: 0, created: 0, updated: 0, removed: 0, autoLinked: 0, autoCreated: 0, linked: 0, waitingReview: 0 },
     contacts: { fetched: 0, created: 0, updated: 0, adopted: 0, waitingOnCompany: 0, skipped: 0 },
     deals: { fetched: 0, created: 0, updated: 0, removed: 0, onLinkedCompanies: 0 },
     warnings: [],
@@ -353,12 +420,11 @@ export function suggestCompanyMatches(
 export async function linkSalesmateCompany(salesmateId: string, companyId: string) {
   const [mirror, company] = await Promise.all([
     db.salesmateCompany.findUniqueOrThrow({ where: { salesmateId } }),
-    db.company.findFirst({ where: { id: companyId, deletedAt: null }, include: { salesmateCompany: true } }),
+    db.company.findFirst({ where: { id: companyId, deletedAt: null } }),
   ]);
   if (!company) throw new UserError("That ForgeOS company no longer exists.");
-  if (company.salesmateCompany && company.salesmateCompany.salesmateId !== salesmateId) {
-    throw new UserError(`${company.name} is already linked to Salesmate company "${company.salesmateCompany.name}".`);
-  }
+  // Linking to a company that already has a Salesmate record is allowed on
+  // purpose -- it's how a Salesmate duplicate gets folded in.
   await db.$transaction([
     db.salesmateCompany.update({ where: { salesmateId }, data: { companyId, ignoredAt: null } }),
     db.salesmateDeal.updateMany({ where: { salesmateCompanyId: mirror.salesmateId }, data: { companyId } }),

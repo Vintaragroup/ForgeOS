@@ -25,7 +25,7 @@ const TYPE_ORDER = ["Customer", "Prospect", "Lead", "Marketing Qualified Lead", 
 
 export default async function SalesmateIntegrationPage() {
   const configured = isSalesmateConfigured();
-  const [runs, lastSuccess, mirrorCounts, contactsSynced, dealsTotal, dealsLinked, waiting, linked, unlinkedCompanies, dealCounts] =
+  const [runs, lastSuccess, mirrorCounts, contactsSynced, dealsTotal, dealsLinked, waiting, linked, allCompanies, dealCounts] =
     await Promise.all([
       db.salesmateSyncRun.findMany({ orderBy: { startedAt: "desc" }, take: 10, include: { triggeredBy: { select: { name: true } } } }),
       db.salesmateSyncRun.findFirst({ where: { status: "SUCCEEDED" }, orderBy: { startedAt: "desc" } }),
@@ -43,7 +43,9 @@ export default async function SalesmateIntegrationPage() {
         include: { company: { select: { id: true, name: true } } },
         orderBy: { name: "asc" },
       }),
-      db.company.findMany({ where: { deletedAt: null, salesmateCompany: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+      // All companies, not just unlinked ones: linking a Salesmate duplicate
+      // into an already-linked company is allowed (and how duplicates fold in).
+      db.company.findMany({ where: { deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
       db.salesmateDeal.groupBy({ by: ["salesmateCompanyId"], where: { removedAt: null }, _count: true }),
     ]);
 
@@ -125,9 +127,10 @@ export default async function SalesmateIntegrationPage() {
 
       <CollapsibleSection title={`Companies to review (${queue.length})`} defaultOpen={queue.length > 0}>
         <p className="mb-4 text-sm text-neutral-500">
-          These Salesmate companies didn&apos;t match a ForgeOS company by exact name. Link each one to the ForgeOS
-          company it really is (suggestions first), create it as a new company, or ignore it. Its deal history attaches
-          right away; its contacts arrive on the next sync.
+          The sync links exact name matches and creates companies that clearly don&apos;t exist in ForgeOS yet on its
+          own. These are the ones it couldn&apos;t decide: the name is close to an existing company, but not the same.
+          Link each to the company it really is (the likely match is pre-selected), create it as a new company, or
+          ignore it. Its deal history attaches right away; its contacts arrive on the next sync.
           {ignoredCount > 0 && ` ${ignoredCount} ignored.`}
         </p>
         {queue.length === 0 ? (
@@ -136,7 +139,7 @@ export default async function SalesmateIntegrationPage() {
           <Card className="overflow-hidden">
             <ul className="divide-y divide-neutral-200">
               {queue.map((mirror) => {
-                const suggestions = suggestCompanyMatches(mirror.name, unlinkedCompanies);
+                const suggestions = suggestCompanyMatches(mirror.name, allCompanies);
                 const suggestedIds = new Set(suggestions.map((s) => s.id));
                 const deals = dealsBySalesmateCompany.get(mirror.salesmateId) ?? 0;
                 return (
@@ -167,8 +170,8 @@ export default async function SalesmateIntegrationPage() {
                               ))}
                             </optgroup>
                           )}
-                          <optgroup label="All unlinked companies">
-                            {unlinkedCompanies
+                          <optgroup label="All companies">
+                            {allCompanies
                               .filter((c) => !suggestedIds.has(c.id))
                               .map((c) => (
                                 <option key={c.id} value={c.id}>
@@ -231,7 +234,7 @@ export default async function SalesmateIntegrationPage() {
                           {run.error && <div className="mt-1 max-w-xs text-xs text-red-700">{run.error}</div>}
                         </td>
                         <td className="px-4 py-2 text-neutral-600">
-                          {stats ? `${stats.companies.fetched} fetched · ${stats.companies.created} new · ${stats.companies.autoLinked} auto-linked` : "—"}
+                          {stats ? `${stats.companies.fetched} fetched · ${stats.companies.autoLinked} auto-linked · ${stats.companies.autoCreated ?? 0} auto-created` : "—"}
                         </td>
                         <td className="px-4 py-2 text-neutral-600">
                           {stats

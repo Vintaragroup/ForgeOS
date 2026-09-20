@@ -23,7 +23,7 @@ export default async function CompanyDetailPage(props: PageProps<"/companies/[id
       include: {
         contacts: { where: { deletedAt: null }, orderBy: [{ lastContactedAt: { sort: "desc", nulls: "last" } }, { name: "asc" }] },
         opportunities: { where: { deletedAt: null } },
-        salesmateCompany: true,
+        salesmateCompanies: { where: { removedAt: null }, orderBy: { lastCommunicationAt: { sort: "desc", nulls: "last" } } },
         salesmateDeals: {
           where: { removedAt: null },
           orderBy: [{ salesmateCreatedAt: { sort: "desc", nulls: "last" } }],
@@ -36,7 +36,10 @@ export default async function CompanyDetailPage(props: PageProps<"/companies/[id
   ]);
   if (!company) notFound();
   const aging = agingById.get(company.id) ?? EMPTY_AGING;
-  const salesmate = company.salesmateCompany;
+  // Usually one; more when Salesmate holds duplicates of this client. The
+  // most recently active record supplies the details shown.
+  const salesmate = company.salesmateCompanies[0] ?? null;
+  const otherSalesmateNames = company.salesmateCompanies.slice(1).map((m) => m.name);
 
   const updateCompanyWithId = updateCompany.bind(null, company.id);
   const deleteCompanyWithId = deleteCompany.bind(null, company.id);
@@ -93,6 +96,11 @@ export default async function CompanyDetailPage(props: PageProps<"/companies/[id
                 </a>
               )}
               {salesmate.name !== company.name && <span className="text-neutral-400">(as &ldquo;{salesmate.name}&rdquo;)</span>}
+              {otherSalesmateNames.length > 0 && (
+                <span className="text-neutral-400">
+                  also {otherSalesmateNames.map((n) => `“${n}”`).join(", ")} in Salesmate
+                </span>
+              )}
             </div>
           ) : (
             <span className="text-neutral-500">
