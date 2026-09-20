@@ -539,6 +539,9 @@ model DeadlineAction {
 }
 
 enum AiFeature {
+  // A department's own assistant (ai/assistant-registry.ts) -- separate
+  // from CHAT so its cost can be read on its own.
+  DEPARTMENT_ASSISTANT
   DOCUMENT_SUMMARY
   DRAWING_SUMMARY
   SCOPE_LINE_ITEMS
@@ -3338,11 +3341,13 @@ model AdminAuditLog {
 // a project" in casual usage means this thread, not literal Project
 // model data (WorkOrder/Task/Shipment aren't in its context).
 // What a conversation is about. OPPORTUNITY threads are the original
-// per-job chat (opportunityId set); SALES threads are a rep's own
-// assistant over their book (userId set, no opportunity).
+// per-job chat (opportunityId set). DEPARTMENT threads are a person's own
+// assistant over their department's work (userId + departmentCode set, no
+// opportunity) -- one value for every department rather than an enum
+// member each, so adding Graphics is a registry entry, not a migration.
 enum ChatThreadScope {
   OPPORTUNITY
-  SALES
+  DEPARTMENT
 }
 
 model ChatThread {
@@ -3355,11 +3360,14 @@ model ChatThread {
   opportunityId String?
   opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
 
-  // Set for SALES threads -- whose assistant this is. Access is checked
-  // against this, so a thread is only ever readable by its owner (plus
-  // admins, as everywhere else).
-  userId String?
-  user   User?   @relation(fields: [userId], references: [id])
+  // Set for DEPARTMENT threads -- whose assistant this is. Access is
+  // checked against this, so a thread is only ever readable by its owner
+  // (plus admins, as everywhere else).
+  userId         String?
+  user           User?   @relation(fields: [userId], references: [id])
+  // Which department's assistant answered -- decides the context and the
+  // tools (see ai/assistant-registry.ts).
+  departmentCode String?
 
   // First few words of the opening question, so a thread list reads as
   // something other than a column of dates. Editable later.
