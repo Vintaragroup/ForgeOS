@@ -1,16 +1,27 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { canViewWholeTeam, COLD_DAYS, loadLeaderboard, loadSalesOverview } from "@/lib/sales-analytics";
-import { Card, EmptyState, PageHeader, Stat, StatusChip } from "@/components/ui";
-import { AgingChip } from "@/components/aging-chip";
+import { canViewWholeTeam, COLD_DAYS, loadLeaderboard, loadSalesOverview, type ClientRow } from "@/lib/sales-analytics";
+import { pendingClientReviews } from "@/lib/opportunity-intake";
 import { ageLabel } from "@/lib/contact-aging";
+import { salesmateRecordUrl } from "@/lib/salesmate-links";
+import {
+  DashboardShell,
+  DashCard,
+  DashChip,
+  DashEmpty,
+  DashRow,
+  DashSection,
+  DashStatStrip,
+  type QuickAction,
+} from "@/components/dashboard-shell";
 import { LocalTimestamp } from "@/components/local-timestamp";
 
 export const dynamic = "force-dynamic";
 
-function money(value: number, { compact = false } = {}) {
+function money(value: number, { compact = true } = {}) {
   return value.toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
@@ -23,10 +34,37 @@ function percent(value: number | null) {
   return value == null ? "—" : `${Math.round(value * 100)}%`;
 }
 
+// Small, quiet buttons that sit inside a dash-row without competing with
+// the row's own text.
+function RowAction({ href, children, external = false }: { href: string; children: ReactNode; external?: boolean }) {
+  const className =
+    "rounded-md border border-[color:var(--dash-border)] px-2.5 py-1 text-xs font-medium text-[color:var(--dash-text-soft)] hover:border-[color:var(--dash-navy)] hover:text-[color:var(--dash-navy)]";
+  return external ? (
+    <a href={href} target="_blank" rel="noreferrer" className={className}>
+      {children}
+    </a>
+  ) : (
+    <Link href={href} className={className}>
+      {children}
+    </Link>
+  );
+}
+
+function clientSub(c: ClientRow) {
+  const bits = [`${money(c.lifetimeWonValue)} lifetime`, `${c.wonCount} job${c.wonCount === 1 ? "" : "s"}`];
+  if (c.openValue > 0) bits.push(`${money(c.openValue)} open`);
+  return bits.join(" · ");
+}
+
 // A rep's own book by default; managers and admins can look at anyone, or
 // at the whole team (?rep=all). Everyone else is pinned to themselves --
 // the selector simply isn't rendered, and an unauthorised ?rep= is ignored
 // rather than erroring.
+//
+// Built on the shared dashboard shell (components/dashboard-shell.tsx) so
+// this reads as the same product as the main dashboard: hero greeting,
+// quick actions, then sections of rows. What's department-specific is the
+// quick actions and which queues appear.
 export default async function SalesPage(props: PageProps<"/sales">) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -36,8 +74,9 @@ export default async function SalesPage(props: PageProps<"/sales">) {
   const repParam = (Array.isArray(params.rep) ? params.rep[0] : params.rep) ?? "";
   const viewingTeam = canSeeTeam && repParam === "all";
   const ownerUserId = viewingTeam ? null : canSeeTeam && repParam ? repParam : user.id;
+  const viewingSelf = ownerUserId === user.id;
 
-  const [overview, reps, viewed, leaderboard] = await Promise.all([
+  const [overview, reps, viewed, leaderboard, reviews] = await Promise.all([
     loadSalesOverview({ ownerUserId }),
     // Deliberately not "every Salesmate user" -- that list includes bots
     // and support logins. Only people who actually own clients or deals.
@@ -51,26 +90,46 @@ export default async function SalesPage(props: PageProps<"/sales">) {
           orderBy: { name: "asc" },
         })
       : Promise.resolve([]),
-    ownerUserId && ownerUserId !== user.id
-      ? db.user.findFirst({ where: { id: ownerUserId }, select: { name: true } })
-      : Promise.resolve(null),
+    ownerUserId && !viewingSelf ? db.user.findFirst({ where: { id: ownerUserId }, select: { name: true } }) : Promise.resolve(null),
     canSeeTeam ? loadLeaderboard() : Promise.resolve([]),
+    canSeeTeam ? pendingClientReviews() : Promise.resolve([]),
   ]);
 
   const { kpis } = overview;
-  const title = viewingTeam ? "Sales — whole team" : viewed ? `Sales — ${viewed.name}` : "My sales";
+  const today = new Date();
+  const firstName = user.name.trim().split(/\s+/)[0] ?? user.name;
+  // The one number the hero promises: everything waiting on this person.
+  const needsYou =
+    overview.goingCold.length + overview.scheduled.pastDueCount + overview.staleOpenDeals.length + overview.lapsed.length + reviews.length;
+
+  const quickActions: QuickAction[] = [
+    { href: "/opportunities/new", label: "New opportunity", tone: "teal" },
+    { href: "/companies", label: "My clients", tone: "navy" },
+    { href: "/shows", label: "Shows", tone: "tangerine" },
+    { href: "/estimates", label: "Estimates", tone: "gray" },
+    { href: "/proposals", label: "Proposals", tone: "tan" },
+    { href: "/tasks?view=mine", label: "My tasks", tone: "red" },
+  ];
+
+  const whose = viewingTeam ? "the team" : viewed ? viewed.name : "you";
+  const subgreeting =
+    needsYou === 0
+      ? `Nothing is waiting on ${whose} right now.`
+      : `${needsYou} thing${needsYou === 1 ? "" : "s"} need${needsYou === 1 ? "s" : ""} ${whose} today.`;
 
   return (
-    <div>
-      <PageHeader
-        title={title}
-        action={
-          canSeeTeam ? (
-            <form action="/sales" className="flex items-end gap-2">
+    <DashboardShell id="forgeos-sales" today={today} firstName={firstName} subgreeting={subgreeting} quickActions={quickActions}>
+      {canSeeTeam && (
+        <div className="dash-section">
+          <div className="dash-section-head">
+            <h2 className="dash-section-title">VIEWING</h2>
+          </div>
+          <DashCard>
+            <form action="/sales" className="flex flex-wrap items-center gap-2 px-5 py-3">
               <select
                 name="rep"
                 defaultValue={viewingTeam ? "all" : (ownerUserId ?? user.id)}
-                className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm"
+                className="rounded-md border border-[color:var(--dash-border)] bg-transparent px-3 py-1.5 text-sm"
               >
                 <option value={user.id}>My book</option>
                 <option value="all">Whole team</option>
@@ -82,387 +141,260 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                     </option>
                   ))}
               </select>
-              <button type="submit" className="rounded-md bg-brand-black px-4 py-2 text-sm font-medium text-white hover:bg-brand-navy">
+              <button type="submit" className="dash-qa dash-c-navy">
+                <span className="dash-dot" />
                 View
               </button>
             </form>
-          ) : null
-        }
-      />
-
-      <section className="mb-8">
-        <h2 className="mb-1 text-lg font-semibold">Work the book</h2>
-        <p className="mb-3 text-sm text-neutral-500">
-          Four queues, in the order they&apos;re usually worth doing: chase clients quiet {COLD_DAYS}+ days, confirm what
-          was scheduled, push what&apos;s stalled, then win back who stopped buying.
-        </p>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card className="overflow-hidden">
-            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              1 · Follow up — going quiet ({overview.goingCold.length})
-              {overview.quietProspects > 0 && (
-                <span className="ml-2 font-normal normal-case text-neutral-400">
-                  + {overview.quietProspects} prospect{overview.quietProspects === 1 ? "" : "s"} with no history
-                </span>
-              )}
-            </div>
-            {overview.goingCold.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-neutral-500">No client with won or open work has gone quiet.</p>
-            ) : (
-              <ul className="divide-y divide-neutral-200">
-                {overview.goingCold.slice(0, 6).map((c) => (
-                  <li key={c.companyId}>
-                    <Link href={`/companies/${c.companyId}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-neutral-50">
-                      <span className="min-w-0">
-                        <span className="font-medium">{c.name}</span>
-                        <span className="block text-xs text-neutral-500">
-                          {money(c.lifetimeWonValue, { compact: true })} lifetime · {c.wonCount} job{c.wonCount === 1 ? "" : "s"}
-                          {c.openValue > 0 ? ` · ${money(c.openValue, { compact: true })} open` : ""}
-                        </span>
-                      </span>
-                      <AgingChip date={c.lastContactedAt} emptyLabel="No contact" />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-
-          <Card className="overflow-hidden">
-            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              2 · Confirm — past due ({overview.scheduled.pastDueCount})
-            </div>
-            {overview.scheduled.pastDue.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-neutral-500">Nothing past due.</p>
-            ) : (
-              <ul className="divide-y divide-neutral-200">
-                {overview.scheduled.pastDue.slice(0, 6).map((a) => (
-                  <li key={a.salesmateId} className="flex items-center justify-between gap-3 px-5 py-3">
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{a.title}</span>
-                      <span className="block text-xs text-neutral-500">
-                        {a.type}
-                        {a.companyId ? (
-                          <>
-                            {" · "}
-                            <Link href={`/companies/${a.companyId}`} className="hover:underline">
-                              {a.companyName}
-                            </Link>
-                          </>
-                        ) : (
-                          " · no client linked"
-                        )}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-xs text-amber-700">{a.daysOverdue}d ago</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-
-          <Card className="overflow-hidden">
-            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              3 · Push — stalled open deals ({overview.staleOpenDeals.length})
-            </div>
-            {overview.staleOpenDeals.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-neutral-500">Every open deal has had recent activity.</p>
-            ) : (
-              <ul className="divide-y divide-neutral-200">
-                {overview.staleOpenDeals.slice(0, 6).map((d) => (
-                  <li key={d.salesmateId} className="flex items-center justify-between gap-3 px-5 py-3">
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{d.title}</span>
-                      <span className="block text-xs text-neutral-500">
-                        {d.companyId ? (
-                          <Link href={`/companies/${d.companyId}`} className="hover:underline">
-                            {d.companyName}
-                          </Link>
-                        ) : (
-                          "No linked client"
-                        )}
-                        {d.stage ? ` · ${d.stage}` : ""}
-                        {d.daysInStage != null ? ` · ${d.daysInStage}d in stage` : ""}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-right text-sm">
-                      <span className="block font-medium">{money(d.value, { compact: true })}</span>
-                      <span className="text-xs text-neutral-500">
-                        {d.daysQuiet < 0 ? "no activity logged" : `quiet ${d.daysQuiet}d`}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-
-          <Card className="overflow-hidden">
-            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              4 · Win back — bought before, not this year ({overview.lapsed.length})
-            </div>
-            {overview.lapsed.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-neutral-500">Every past client has bought this year or has something open.</p>
-            ) : (
-              <ul className="divide-y divide-neutral-200">
-                {overview.lapsed.slice(0, 6).map((c) => (
-                  <li key={c.companyId}>
-                    <Link href={`/companies/${c.companyId}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-neutral-50">
-                      <span className="min-w-0">
-                        <span className="font-medium">{c.name}</span>
-                        <span className="block text-xs text-neutral-500">
-                          {money(c.lifetimeWonValue, { compact: true })} lifetime · {c.wonCount} job{c.wonCount === 1 ? "" : "s"}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-xs text-neutral-500">last won {ageLabel(c.lastWonAt)}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
+          </DashCard>
         </div>
-      </section>
+      )}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="p-4">
-          <Stat value={money(kpis.wonValueYtd, { compact: true })} label="Won this year" />
-        </Card>
-        <Card className="p-4">
-          <Stat value={money(kpis.wonValue12mo, { compact: true })} label={`Won last 12 months (${kpis.wonCount12mo} jobs)`} />
-        </Card>
-        <Card className="p-4">
-          <Stat value={money(kpis.openValue, { compact: true })} label={`Open pipeline (${kpis.openCount} deals)`} />
-        </Card>
-        <Card className="p-4">
-          <Stat value={String(kpis.activeClients)} label="Active clients" />
-        </Card>
-      </div>
+      {canSeeTeam && reviews.length > 0 && (
+        <DashSection title={`CLIENT REVIEWS TO SCHEDULE (${reviews.length})`}>
+          <DashCard>
+            {reviews.map((r) => (
+              <DashRow
+                key={r.id}
+                title={`${r.company.name} — ${r.showName}`}
+                sub={
+                  <>
+                    submitted by {r.intakeSubmittedBy?.name ?? "a rep"} {ageLabel(r.intakeSubmittedAt)}
+                    {r.boothSize ? ` · ${r.boothSize}` : ""}
+                    {r.designerId && r.estimatorId ? " · team assigned" : " · needs designer + estimator"}
+                  </>
+                }
+                right={r.reviewMeetingAt ? <DashChip tone="info">meeting set</DashChip> : <DashChip tone="critical">no meeting yet</DashChip>}
+                actions={<RowAction href={`/opportunities/${r.id}`}>Schedule &amp; assign</RowAction>}
+              />
+            ))}
+          </DashCard>
+        </DashSection>
+      )}
 
-      <div className="mb-8 grid gap-4 sm:grid-cols-3">
-        <Card className="p-4">
-          <Stat value={percent(kpis.winRateCount)} label="Win rate, by count (12mo)" />
-        </Card>
-        <Card className="p-4">
-          <Stat value={percent(kpis.winRateValue)} label="Win rate, by value (12mo)" />
-        </Card>
-        <Card className="p-4">
-          <Stat value={money(kpis.avgWonDealValue, { compact: true })} label="Average won deal" />
-        </Card>
-      </div>
-
-      <section className="mb-8">
-        <h2 className="mb-1 text-lg font-semibold">Scheduled work</h2>
-        <p className="mb-3 text-sm text-neutral-500">
-          Calls and meetings from Salesmate. Past-due ones are worth confirming rather than assuming missed -- activities
-          are rarely ticked complete there.
-          {overview.touchHistory.since && (
-            <>
-              {" "}
-              Contact recorded: {overview.touchHistory.last30Days} in the last 30 days, {overview.touchHistory.last90Days} in 90
-              -- history since <LocalTimestamp iso={overview.touchHistory.since} timeStyle={undefined} />.
-            </>
-          )}
-        </p>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card className="overflow-hidden">
-            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              Past due ({overview.scheduled.pastDueCount})
-            </div>
-            {overview.scheduled.pastDue.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-neutral-500">Nothing past due.</p>
-            ) : (
-              <ul className="divide-y divide-neutral-200">
-                {overview.scheduled.pastDue.map((a) => (
-                  <li key={a.salesmateId} className="flex items-center justify-between gap-3 px-5 py-3">
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{a.title}</span>
-                      <span className="block text-xs text-neutral-500">
-                        {a.type}
-                        {a.companyId ? (
-                          <>
-                            {" · "}
-                            <Link href={`/companies/${a.companyId}`} className="hover:underline">
-                              {a.companyName}
-                            </Link>
-                          </>
-                        ) : (
-                          " · no client linked"
-                        )}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-xs text-amber-700">{a.daysOverdue}d ago</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-          <Card className="overflow-hidden">
-            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              Coming up ({overview.scheduled.upcomingCount})
-            </div>
-            {overview.scheduled.upcoming.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-neutral-500">Nothing scheduled.</p>
-            ) : (
-              <ul className="divide-y divide-neutral-200">
-                {overview.scheduled.upcoming.map((a) => (
-                  <li key={a.salesmateId} className="flex items-center justify-between gap-3 px-5 py-3">
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{a.title}</span>
-                      <span className="block text-xs text-neutral-500">
-                        {a.type}
-                        {a.companyId ? (
-                          <>
-                            {" · "}
-                            <Link href={`/companies/${a.companyId}`} className="hover:underline">
-                              {a.companyName}
-                            </Link>
-                          </>
-                        ) : (
-                          " · no client linked"
-                        )}
-                      </span>
-                    </span>
-                    {a.dueAt && (
-                      <span className="shrink-0 text-xs text-neutral-500">
-                        <LocalTimestamp iso={a.dueAt} timeStyle={undefined} />
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </div>
-      </section>
-
-      <section className="mb-8">
-        <h2 className="mb-1 text-lg font-semibold">Clients by value</h2>
-        <p className="mb-3 text-sm text-neutral-500">
-          Won and open value come from Salesmate; proposals come from ForgeOS as they&apos;re sent.
-        </p>
-        {overview.clients.length === 0 ? (
-          <EmptyState message="No clients yet on this book." />
+      <DashSection
+        title={`FOLLOW UP — QUIET ${COLD_DAYS}+ DAYS (${overview.goingCold.length})`}
+        link={{ href: "/companies?stale=90&sort=contacted", label: "All clients" }}
+      >
+        {overview.goingCold.length === 0 ? (
+          <DashEmpty>
+            No client with won or open work has gone quiet.
+            {overview.quietProspects > 0 && ` ${overview.quietProspects} prospect(s) with no history are also quiet.`}
+          </DashEmpty>
         ) : (
-          <Card className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500">
-                <tr>
-                  <th className="px-4 py-2">Client</th>
-                  <th className="px-4 py-2 text-right">Lifetime won</th>
-                  <th className="px-4 py-2 text-right">Won 12mo</th>
-                  <th className="px-4 py-2 text-right">Open</th>
-                  <th className="px-4 py-2 text-right">Proposals</th>
-                  <th className="px-4 py-2">Last contacted</th>
-                  <th className="px-4 py-2">Last worked with</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-200">
-                {overview.clients.slice(0, 50).map((c) => (
-                  <tr key={c.companyId} className="hover:bg-neutral-50">
-                    <td className="px-4 py-2">
-                      <Link href={`/companies/${c.companyId}`} className="font-medium hover:underline">
-                        {c.name}
-                      </Link>
-                      {c.salesmateType && c.salesmateType !== "Customer" && (
-                        <StatusChip tone="neutral">{c.salesmateType}</StatusChip>
+          <DashCard>
+            {overview.goingCold.slice(0, 6).map((c) => {
+              const salesmate = c.salesmateCompanyId ? salesmateRecordUrl("company", c.salesmateCompanyId) : "";
+              return (
+                <DashRow
+                  key={c.companyId}
+                  title={c.name}
+                  sub={clientSub(c)}
+                  right={<DashChip tone="critical">{ageLabel(c.lastContactedAt)}</DashChip>}
+                  actions={
+                    <>
+                      <RowAction href={`/companies/${c.companyId}`}>Open</RowAction>
+                      {salesmate && (
+                        <RowAction href={salesmate} external>
+                          Salesmate
+                        </RowAction>
                       )}
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums">{money(c.lifetimeWonValue)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{c.wonValue12mo ? money(c.wonValue12mo) : "—"}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{c.openValue ? money(c.openValue) : "—"}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">
-                      {c.proposalsSent ? `${c.proposalsSigned}/${c.proposalsSent}` : "—"}
-                    </td>
-                    <td className="px-4 py-2">
-                      <AgingChip date={c.lastContactedAt} emptyLabel="Never" />
-                    </td>
-                    <td className="px-4 py-2 text-neutral-600">{ageLabel(c.lastWorkedWithAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {overview.clients.length > 50 && (
-              <p className="px-4 py-3 text-xs text-neutral-500">Showing the top 50 of {overview.clients.length} clients by lifetime value.</p>
-            )}
-          </Card>
+                    </>
+                  }
+                />
+              );
+            })}
+          </DashCard>
         )}
-      </section>
+      </DashSection>
 
-      <section className="mb-8">
-        <h2 className="mb-1 text-lg font-semibold">Open pipeline by stage</h2>
-        <p className="mb-3 text-sm text-neutral-500">
-          Salesmate stages. In ForgeOS right now: {overview.forgeos.openEstimates} estimate
-          {overview.forgeos.openEstimates === 1 ? "" : "s"} in progress, {overview.forgeos.proposalsSent} proposal
-          {overview.forgeos.proposalsSent === 1 ? "" : "s"} sent, {overview.forgeos.proposalsSigned} signed.
-        </p>
-        {overview.pipelineByStage.length === 0 ? (
-          <EmptyState message="No open deals." />
+      <DashSection title={`CONFIRM — PAST DUE (${overview.scheduled.pastDueCount})`}>
+        {overview.scheduled.pastDue.length === 0 ? (
+          <DashEmpty>Nothing past due.</DashEmpty>
         ) : (
-          <Card>
-            <ul className="divide-y divide-neutral-200">
-              {overview.pipelineByStage.map((s) => (
-                <li key={s.stage} className="flex items-center justify-between px-5 py-3 text-sm">
-                  <span className="font-medium">{s.stage}</span>
-                  <span className="text-neutral-600">
-                    {s.count} deal{s.count === 1 ? "" : "s"} · <span className="tabular-nums">{money(s.value)}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Card>
+          <DashCard>
+            {overview.scheduled.pastDue.slice(0, 6).map((a) => {
+              const salesmate = salesmateRecordUrl("activity", a.salesmateId);
+              return (
+                <DashRow
+                  key={a.salesmateId}
+                  title={a.title}
+                  sub={
+                    <>
+                      {a.type}
+                      {a.companyName ? ` · ${a.companyName}` : " · no client linked"}
+                    </>
+                  }
+                  right={<DashChip tone="critical">{a.daysOverdue}d ago</DashChip>}
+                  actions={
+                    <>
+                      {a.companyId && <RowAction href={`/companies/${a.companyId}`}>Open</RowAction>}
+                      {salesmate && (
+                        <RowAction href={salesmate} external>
+                          Salesmate
+                        </RowAction>
+                      )}
+                    </>
+                  }
+                />
+              );
+            })}
+          </DashCard>
         )}
-      </section>
+      </DashSection>
+
+      <DashSection title={`PUSH — STALLED DEALS (${overview.staleOpenDeals.length})`}>
+        {overview.staleOpenDeals.length === 0 ? (
+          <DashEmpty>Every open deal has had recent activity.</DashEmpty>
+        ) : (
+          <DashCard>
+            {overview.staleOpenDeals.slice(0, 6).map((d) => {
+              const salesmate = salesmateRecordUrl("deal", d.salesmateId);
+              return (
+                <DashRow
+                  key={d.salesmateId}
+                  title={d.title}
+                  sub={
+                    <>
+                      {d.companyName ?? "No linked client"}
+                      {d.stage ? ` · ${d.stage}` : ""}
+                      {d.daysInStage != null ? ` · ${d.daysInStage}d in stage` : ""}
+                      {d.daysQuiet < 0 ? " · no activity logged" : ` · quiet ${d.daysQuiet}d`}
+                    </>
+                  }
+                  right={<DashChip tone="neutral">{money(d.value)}</DashChip>}
+                  actions={
+                    <>
+                      {salesmate && (
+                        <RowAction href={salesmate} external>
+                          Salesmate
+                        </RowAction>
+                      )}
+                      <RowAction href={`/opportunities/new${d.companyId ? `?companyId=${d.companyId}` : ""}`}>Start intake</RowAction>
+                    </>
+                  }
+                />
+              );
+            })}
+          </DashCard>
+        )}
+      </DashSection>
+
+      <DashSection title={`WIN BACK — NOT THIS YEAR (${overview.lapsed.length})`}>
+        {overview.lapsed.length === 0 ? (
+          <DashEmpty>Every past client has bought this year or has something open.</DashEmpty>
+        ) : (
+          <DashCard>
+            {overview.lapsed.slice(0, 6).map((c) => (
+              <DashRow
+                key={c.companyId}
+                title={c.name}
+                sub={clientSub(c)}
+                right={<DashChip tone="neutral">last won {ageLabel(c.lastWonAt)}</DashChip>}
+                actions={<RowAction href={`/companies/${c.companyId}`}>Open</RowAction>}
+              />
+            ))}
+          </DashCard>
+        )}
+      </DashSection>
+
+      <DashSection title="THE BOOK">
+        <DashStatStrip
+          stats={[
+            { value: money(kpis.wonValueYtd), label: "Won this year" },
+            { value: money(kpis.wonValue12mo), label: `Won 12mo (${kpis.wonCount12mo})` },
+            { value: money(kpis.openValue), label: `Open (${kpis.openCount})` },
+            { value: String(kpis.activeClients), label: "Active clients" },
+            { value: percent(kpis.winRateCount), label: "Win rate" },
+            { value: money(kpis.avgWonDealValue), label: "Avg won deal" },
+          ]}
+        />
+      </DashSection>
+
+      <DashSection title="CLIENTS BY VALUE" link={{ href: "/companies?sort=worked", label: "All clients" }}>
+        {overview.clients.length === 0 ? (
+          <DashEmpty>No clients on this book yet.</DashEmpty>
+        ) : (
+          <DashCard>
+            {overview.clients.slice(0, 10).map((c) => (
+              <DashRow
+                key={c.companyId}
+                href={`/companies/${c.companyId}`}
+                title={c.name}
+                sub={
+                  <>
+                    {clientSub(c)} · contacted {ageLabel(c.lastContactedAt).toLowerCase()} · worked with{" "}
+                    {ageLabel(c.lastWorkedWithAt).toLowerCase()}
+                    {c.proposalsSent > 0 ? ` · ${c.proposalsSigned}/${c.proposalsSent} proposals signed` : ""}
+                  </>
+                }
+                right={<DashChip tone="good">{money(c.lifetimeWonValue)}</DashChip>}
+              />
+            ))}
+          </DashCard>
+        )}
+      </DashSection>
+
+      <DashSection title={`COMING UP (${overview.scheduled.upcomingCount})`}>
+        {overview.scheduled.upcoming.length === 0 ? (
+          <DashEmpty>Nothing scheduled.</DashEmpty>
+        ) : (
+          <DashCard>
+            {overview.scheduled.upcoming.slice(0, 6).map((a) => (
+              <DashRow
+                key={a.salesmateId}
+                title={a.title}
+                sub={
+                  <>
+                    {a.type}
+                    {a.companyName ? ` · ${a.companyName}` : " · no client linked"}
+                  </>
+                }
+                right={
+                  a.dueAt ? (
+                    <DashChip tone="info">
+                      <LocalTimestamp iso={a.dueAt} timeStyle={undefined} />
+                    </DashChip>
+                  ) : null
+                }
+              />
+            ))}
+          </DashCard>
+        )}
+      </DashSection>
+
+      {overview.touchHistory.since && (
+        <DashSection title="CONTACT RECORDED">
+          <DashStatStrip
+            stats={[
+              { value: String(overview.touchHistory.last30Days), label: "Last 30 days" },
+              { value: String(overview.touchHistory.last90Days), label: "Last 90 days" },
+            ]}
+          />
+        </DashSection>
+      )}
 
       {canSeeTeam && leaderboard.length > 0 && (
-        <section>
-          <h2 className="mb-1 text-lg font-semibold">Team</h2>
-          <p className="mb-3 text-sm text-neutral-500">
-            Last 12 months. &ldquo;Former reps&rdquo; holds deals whose Salesmate owner is no longer active -- those clients
-            need an owner.
-          </p>
-          <Card className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500">
-                <tr>
-                  <th className="px-4 py-2">Rep</th>
-                  <th className="px-4 py-2 text-right">Won 12mo</th>
-                  <th className="px-4 py-2 text-right">Jobs</th>
-                  <th className="px-4 py-2 text-right">Open</th>
-                  <th className="px-4 py-2 text-right">Win rate</th>
-                  <th className="px-4 py-2 text-right">Clients</th>
-                  <th className="px-4 py-2 text-right">Going cold</th>
-                  <th className="px-4 py-2 text-right">Median since contact</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-200">
-                {leaderboard.map((r) => (
-                  <tr key={r.userId ?? "former"} className="hover:bg-neutral-50">
-                    <td className="px-4 py-2 font-medium">
-                      {r.userId ? (
-                        <Link href={`/sales?rep=${r.userId}`} className="hover:underline">
-                          {r.name}
-                        </Link>
-                      ) : (
-                        <span className="text-neutral-500">{r.name}</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums">{money(r.wonValue12mo)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{r.wonCount12mo}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{r.openValue ? money(r.openValue) : "—"}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{percent(r.winRateCount)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{r.clients}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{r.coldClients}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">
-                      {r.medianDaysSinceContact == null ? "—" : `${r.medianDaysSinceContact}d`}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
-        </section>
+        <DashSection title="TEAM — LAST 12 MONTHS">
+          <DashCard>
+            {leaderboard.map((r) => (
+              <DashRow
+                key={r.userId ?? "former"}
+                href={r.userId ? `/sales?rep=${r.userId}` : undefined}
+                title={r.name}
+                sub={
+                  <>
+                    {r.wonCount12mo} job{r.wonCount12mo === 1 ? "" : "s"} · {money(r.openValue)} open · win rate{" "}
+                    {percent(r.winRateCount)} · {r.clients} client{r.clients === 1 ? "" : "s"} · {r.coldClients} going cold
+                    {r.medianDaysSinceContact != null ? ` · typically ${r.medianDaysSinceContact}d since contact` : ""}
+                  </>
+                }
+                right={<DashChip tone={r.isFormer ? "neutral" : "good"}>{money(r.wonValue12mo)}</DashChip>}
+              />
+            ))}
+          </DashCard>
+        </DashSection>
       )}
-    </div>
+    </DashboardShell>
   );
 }

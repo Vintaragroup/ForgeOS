@@ -40,6 +40,8 @@ export interface SalesKpis {
 
 export interface ClientRow {
   companyId: string;
+  // For deep-linking into Salesmate; null when the client has no mirror row.
+  salesmateCompanyId: string | null;
   name: string;
   salesmateType: string | null;
   lifetimeWonValue: number;
@@ -174,7 +176,7 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
   // they have a deal on (an owner change shouldn't erase their history).
   const ownedMirrors = await db.salesmateCompany.findMany({
     where: { removedAt: null, companyId: { not: null }, ...(scope.ownerUserId ? { ownerUserId: scope.ownerUserId } : {}) },
-    select: { companyId: true, type: true, lastCommunicationAt: true },
+    select: { salesmateId: true, companyId: true, type: true, lastCommunicationAt: true },
   });
   const allCompanyIds = [...new Set([...companyIds, ...ownedMirrors.map((m) => m.companyId!)])];
 
@@ -198,6 +200,7 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
   ]);
 
   const typeByCompany = new Map(ownedMirrors.map((m) => [m.companyId!, m.type]));
+  const salesmateIdByCompany = new Map(ownedMirrors.map((m) => [m.companyId!, m.salesmateId]));
   const contactedByCompany = new Map<string, Date>();
   for (const m of ownedMirrors) {
     if (m.lastCommunicationAt) contactedByCompany.set(m.companyId!, m.lastCommunicationAt);
@@ -223,6 +226,7 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
     if (!r) {
       r = {
         companyId, name,
+        salesmateCompanyId: salesmateIdByCompany.get(companyId) ?? null,
         salesmateType: typeByCompany.get(companyId) ?? null,
         lifetimeWonValue: 0, wonValue12mo: 0, wonCount: 0, openValue: 0, openCount: 0,
         lastContactedAt: contactedByCompany.get(companyId) ?? null,
