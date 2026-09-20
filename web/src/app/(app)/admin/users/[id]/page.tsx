@@ -74,6 +74,18 @@ export default async function AdminUserDetailPage(props: PageProps<"/admin/users
             Gates whole-department oversight views (a dashboard&apos;s &ldquo;Department&rdquo; mode, its Analytics view) --
             everyday access to that department&apos;s own work is unaffected either way.
           </p>
+          <label className="flex items-center gap-2 text-sm text-neutral-700">
+            <input
+              type="checkbox"
+              name="isSalesManager"
+              defaultChecked={user.isSalesManager}
+              className="h-4 w-4 rounded border-neutral-300"
+            />
+            Sales manager
+          </label>
+          <p className="-mt-2 text-xs text-neutral-500">
+            Sees every rep&apos;s book and the team leaderboard on Sales, not just their own clients. Admins always can.
+          </p>
           <div>
             <Button>Save changes</Button>
           </div>

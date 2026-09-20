@@ -54,6 +54,7 @@ export const getCurrentUser = cache(async () => {
       systemRole: true,
       departmentCode: true,
       isDepartmentHead: true,
+      isSalesManager: true,
       passwordChangedAt: true,
     },
   });

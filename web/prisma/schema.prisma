@@ -76,10 +76,10 @@ enum SystemRole {
 }
 
 model User {
-  id                String      @id @default(cuid())
-  name              String
-  email             String      @unique
-  role              String? // job title, e.g. "Estimator" -- not access control
+  id               String      @id @default(cuid())
+  name             String
+  email            String      @unique
+  role             String? // job title, e.g. "Estimator" -- not access control
   // Deprecated free-text field, kept (not dropped) until
   // scripts/backfill-user-department-codes.ts's mapping is reviewed --
   // never read for logic, only ever displayed. departmentCode below is the
@@ -87,9 +87,9 @@ model User {
   // to grant department-scoped access independent of opportunity
   // ownership (see that file's own comment for why this is a second,
   // narrower access axis, not a replacement for owner/collaborator).
-  department        String?
-  departmentCode    String?
-  departmentRef     Department? @relation(fields: [departmentCode], references: [code])
+  department       String?
+  departmentCode   String?
+  departmentRef    Department? @relation(fields: [departmentCode], references: [code])
   // Oversight of the WHOLE department (department-wide dashboards, the
   // Analytics view) is restricted to designated head(s), not open to every
   // member of the department -- see department-access.ts's
@@ -100,8 +100,14 @@ model User {
   // which is everyday operational access and stays unchanged by this field
   // -- a regular department member can still work any piece, they just
   // don't get the aggregate oversight view.
-  isDepartmentHead  Boolean     @default(false)
-  systemRole        SystemRole  @default(EMPLOYEE)
+  isDepartmentHead Boolean     @default(false)
+
+  // Sees every rep's numbers on /sales, not just their own -- the sales
+  // equivalent of isDepartmentHead, kept separate because sales isn't
+  // modeled as a Department (a rep's clients come from Salesmate
+  // ownership, not a department code).
+  isSalesManager    Boolean    @default(false)
+  systemRole        SystemRole @default(EMPLOYEE)
   // scrypt "salt:hash" pair, set via `npm run set-password` -- never through
   // a web form, so there is no unauthenticated password-set endpoint. Null
   // until set, meaning the account can't log in yet. See src/lib/auth.ts.

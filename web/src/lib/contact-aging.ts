@@ -48,8 +48,9 @@ export function ageLabel(date: Date | null | undefined, now: Date = new Date()):
   if (days === 0) return "Today";
   if (days < 60) return `${days} day${days === 1 ? "" : "s"} ago`;
   const months = Math.floor(days / 30.44);
-  if (months < 24) return `${months} months ago`;
-  return `${Math.floor(days / 365.25)} years ago`;
+  if (months < 24) return `${months} month${months === 1 ? "" : "s"} ago`;
+  const years = Math.floor(days / 365.25);
+  return `${years} year${years === 1 ? "" : "s"} ago`;
 }
 
 // The URL filter values used by the company/contact lists' "not contacted
