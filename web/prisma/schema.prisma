@@ -3451,6 +3451,14 @@ model SalesmateDeal {
   ownerUserId          String?
   owner                User?    @relation(fields: [ownerUserId], references: [id])
 
+  // Stage/status movement, learned by comparing each sync to the last --
+  // Salesmate's API exposes no deal history, so "days in this stage" only
+  // counts from the first sync that saw the deal here. stageSince is set
+  // on every observed change; previousStage keeps the one before it.
+  stageSince      DateTime?
+  previousStage   String?
+  statusChangedAt DateTime?
+
   salesmateCreatedAt  DateTime?
   closedAt            DateTime?
   estimatedCloseAt    DateTime?

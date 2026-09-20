@@ -340,8 +340,11 @@ async function syncDeals(rows: SalesmateDealRow[], now: Date, stats: SalesmateSy
   const [links, contacts, existingIds] = await Promise.all([
     db.salesmateCompany.findMany({ where: { companyId: { not: null } }, select: { salesmateId: true, companyId: true } }),
     db.contact.findMany({ where: { salesmateId: { not: null } }, select: { id: true, salesmateId: true } }),
-    db.salesmateDeal.findMany({ select: { salesmateId: true } }),
+    db.salesmateDeal.findMany({
+      select: { salesmateId: true, stage: true, status: true, stageSince: true, previousStage: true, statusChangedAt: true },
+    }),
   ]);
+  const previousById = new Map(existingIds.map((d) => [d.salesmateId, d]));
   const companyIdBySalesmateId = new Map(links.map((l) => [l.salesmateId, l.companyId!]));
   const contactIdBySalesmateId = new Map(contacts.map((c) => [c.salesmateId!, c.id]));
   const existing = new Set(existingIds.map((d) => d.salesmateId));
@@ -374,7 +377,19 @@ async function syncDeals(rows: SalesmateDealRow[], now: Date, stats: SalesmateSy
       removedAt: null,
       syncedAt: now,
     };
-    await db.salesmateDeal.upsert({ where: { salesmateId }, create: { salesmateId, ...data }, update: data });
+    // Stage/status movement: only a change resets the clock, so "days in
+    // stage" survives syncs that change nothing else.
+    const before = previousById.get(salesmateId);
+    const movement = {
+      stageSince: before && before.stage === data.stage ? before.stageSince : now,
+      previousStage: before && before.stage !== data.stage ? before.stage : (before?.previousStage ?? null),
+      statusChangedAt: before && before.status === data.status ? before.statusChangedAt : now,
+    };
+    await db.salesmateDeal.upsert({
+      where: { salesmateId },
+      create: { salesmateId, ...data, ...movement },
+      update: { ...data, ...movement },
+    });
     if (existing.has(salesmateId)) s.updated++;
     else s.created++;
   }

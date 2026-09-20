@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { canViewWholeTeam, loadLeaderboard, loadSalesOverview, COLD_DAYS } from "@/lib/sales-analytics";
+import { canViewWholeTeam, COLD_DAYS, loadLeaderboard, loadSalesOverview } from "@/lib/sales-analytics";
 import { Card, EmptyState, PageHeader, Stat, StatusChip } from "@/components/ui";
 import { AgingChip } from "@/components/aging-chip";
 import { ageLabel } from "@/lib/contact-aging";
@@ -90,6 +90,140 @@ export default async function SalesPage(props: PageProps<"/sales">) {
         }
       />
 
+      <section className="mb-8">
+        <h2 className="mb-1 text-lg font-semibold">Work the book</h2>
+        <p className="mb-3 text-sm text-neutral-500">
+          Four queues, in the order they&apos;re usually worth doing: chase clients quiet {COLD_DAYS}+ days, confirm what
+          was scheduled, push what&apos;s stalled, then win back who stopped buying.
+        </p>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card className="overflow-hidden">
+            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              1 · Follow up — going quiet ({overview.goingCold.length})
+              {overview.quietProspects > 0 && (
+                <span className="ml-2 font-normal normal-case text-neutral-400">
+                  + {overview.quietProspects} prospect{overview.quietProspects === 1 ? "" : "s"} with no history
+                </span>
+              )}
+            </div>
+            {overview.goingCold.length === 0 ? (
+              <p className="px-5 py-4 text-sm text-neutral-500">No client with won or open work has gone quiet.</p>
+            ) : (
+              <ul className="divide-y divide-neutral-200">
+                {overview.goingCold.slice(0, 6).map((c) => (
+                  <li key={c.companyId}>
+                    <Link href={`/companies/${c.companyId}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-neutral-50">
+                      <span className="min-w-0">
+                        <span className="font-medium">{c.name}</span>
+                        <span className="block text-xs text-neutral-500">
+                          {money(c.lifetimeWonValue, { compact: true })} lifetime · {c.wonCount} job{c.wonCount === 1 ? "" : "s"}
+                          {c.openValue > 0 ? ` · ${money(c.openValue, { compact: true })} open` : ""}
+                        </span>
+                      </span>
+                      <AgingChip date={c.lastContactedAt} emptyLabel="No contact" />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card className="overflow-hidden">
+            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              2 · Confirm — past due ({overview.scheduled.pastDueCount})
+            </div>
+            {overview.scheduled.pastDue.length === 0 ? (
+              <p className="px-5 py-4 text-sm text-neutral-500">Nothing past due.</p>
+            ) : (
+              <ul className="divide-y divide-neutral-200">
+                {overview.scheduled.pastDue.slice(0, 6).map((a) => (
+                  <li key={a.salesmateId} className="flex items-center justify-between gap-3 px-5 py-3">
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{a.title}</span>
+                      <span className="block text-xs text-neutral-500">
+                        {a.type}
+                        {a.companyId ? (
+                          <>
+                            {" · "}
+                            <Link href={`/companies/${a.companyId}`} className="hover:underline">
+                              {a.companyName}
+                            </Link>
+                          </>
+                        ) : (
+                          " · no client linked"
+                        )}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-xs text-amber-700">{a.daysOverdue}d ago</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card className="overflow-hidden">
+            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              3 · Push — stalled open deals ({overview.staleOpenDeals.length})
+            </div>
+            {overview.staleOpenDeals.length === 0 ? (
+              <p className="px-5 py-4 text-sm text-neutral-500">Every open deal has had recent activity.</p>
+            ) : (
+              <ul className="divide-y divide-neutral-200">
+                {overview.staleOpenDeals.slice(0, 6).map((d) => (
+                  <li key={d.salesmateId} className="flex items-center justify-between gap-3 px-5 py-3">
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{d.title}</span>
+                      <span className="block text-xs text-neutral-500">
+                        {d.companyId ? (
+                          <Link href={`/companies/${d.companyId}`} className="hover:underline">
+                            {d.companyName}
+                          </Link>
+                        ) : (
+                          "No linked client"
+                        )}
+                        {d.stage ? ` · ${d.stage}` : ""}
+                        {d.daysInStage != null ? ` · ${d.daysInStage}d in stage` : ""}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right text-sm">
+                      <span className="block font-medium">{money(d.value, { compact: true })}</span>
+                      <span className="text-xs text-neutral-500">
+                        {d.daysQuiet < 0 ? "no activity logged" : `quiet ${d.daysQuiet}d`}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card className="overflow-hidden">
+            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              4 · Win back — bought before, not this year ({overview.lapsed.length})
+            </div>
+            {overview.lapsed.length === 0 ? (
+              <p className="px-5 py-4 text-sm text-neutral-500">Every past client has bought this year or has something open.</p>
+            ) : (
+              <ul className="divide-y divide-neutral-200">
+                {overview.lapsed.slice(0, 6).map((c) => (
+                  <li key={c.companyId}>
+                    <Link href={`/companies/${c.companyId}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-neutral-50">
+                      <span className="min-w-0">
+                        <span className="font-medium">{c.name}</span>
+                        <span className="block text-xs text-neutral-500">
+                          {money(c.lifetimeWonValue, { compact: true })} lifetime · {c.wonCount} job{c.wonCount === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-xs text-neutral-500">last won {ageLabel(c.lastWonAt)}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      </section>
+
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="p-4">
           <Stat value={money(kpis.wonValueYtd, { compact: true })} label="Won this year" />
@@ -116,83 +250,6 @@ export default async function SalesPage(props: PageProps<"/sales">) {
           <Stat value={money(kpis.avgWonDealValue, { compact: true })} label="Average won deal" />
         </Card>
       </div>
-
-      <section className="mb-8">
-        <h2 className="mb-1 text-lg font-semibold">Needs attention</h2>
-        <p className="mb-3 text-sm text-neutral-500">
-          Clients ranked by what they&apos;re worth and how long they&apos;ve been quiet ({COLD_DAYS}+ days), then open deals
-          nobody has touched in a month.
-        </p>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card className="overflow-hidden">
-            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              Going cold ({overview.goingCold.length})
-              {overview.quietProspects > 0 && (
-                <span className="ml-2 font-normal normal-case text-neutral-400">
-                  + {overview.quietProspects} quiet prospect{overview.quietProspects === 1 ? "" : "s"} with no history
-                </span>
-              )}
-            </div>
-            {overview.goingCold.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-neutral-500">
-                No client with won or open work has gone quiet.
-                {overview.quietProspects > 0 && ` ${overview.quietProspects} prospect(s) with no history are also quiet.`}
-              </p>
-            ) : (
-              <ul className="divide-y divide-neutral-200">
-                {overview.goingCold.slice(0, 8).map((c) => (
-                  <li key={c.companyId}>
-                    <Link href={`/companies/${c.companyId}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-neutral-50">
-                      <span className="min-w-0">
-                        <span className="font-medium">{c.name}</span>
-                        <span className="block text-xs text-neutral-500">
-                          {money(c.lifetimeWonValue, { compact: true })} lifetime · {c.wonCount} job{c.wonCount === 1 ? "" : "s"}
-                        </span>
-                      </span>
-                      <AgingChip date={c.lastContactedAt} emptyLabel="No contact" />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-
-          <Card className="overflow-hidden">
-            <div className="border-b border-neutral-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              Quiet open deals ({overview.staleOpenDeals.length})
-            </div>
-            {overview.staleOpenDeals.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-neutral-500">Every open deal has had recent activity.</p>
-            ) : (
-              <ul className="divide-y divide-neutral-200">
-                {overview.staleOpenDeals.map((d) => (
-                  <li key={d.salesmateId} className="flex items-center justify-between gap-3 px-5 py-3">
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{d.title}</span>
-                      <span className="block text-xs text-neutral-500">
-                        {d.companyId ? (
-                          <Link href={`/companies/${d.companyId}`} className="hover:underline">
-                            {d.companyName}
-                          </Link>
-                        ) : (
-                          "No linked client"
-                        )}
-                        {d.stage ? ` · ${d.stage}` : ""}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-right text-sm">
-                      <span className="block font-medium">{money(d.value, { compact: true })}</span>
-                      <span className="text-xs text-neutral-500">
-                        {d.daysQuiet < 0 ? "no activity logged" : `quiet ${d.daysQuiet} days`}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </div>
-      </section>
 
       <section className="mb-8">
         <h2 className="mb-1 text-lg font-semibold">Scheduled work</h2>

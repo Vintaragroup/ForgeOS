@@ -40,7 +40,7 @@ async function client(name: string, ownerUserId: string | null, salesmateId: str
 async function dealFor(
   companyId: string | null,
   ownerUserId: string | null,
-  data: { id: string; status: string; value: number; pipeline?: string | null; stage?: string | null; closedAt?: Date | null; lastComm?: Date | null; ownerName?: string },
+  data: { id: string; status: string; value: number; pipeline?: string | null; stage?: string | null; closedAt?: Date | null; lastComm?: Date | null; ownerName?: string; stageSince?: Date },
 ) {
   return db.salesmateDeal.create({
     data: {
@@ -55,6 +55,7 @@ async function dealFor(
       ownerName: data.ownerName ?? null,
       closedAt: data.closedAt ?? null,
       lastCommunicationAt: data.lastComm ?? null,
+      stageSince: data.stageSince ?? null,
       syncedAt: NOW,
     },
   });
@@ -192,3 +193,35 @@ describe("canViewWholeTeam", () => {
     expect(canViewWholeTeam({ systemRole: "SUPER_ADMIN", isSalesManager: false })).toBe(true);
   });
 });
+
+describe("win-back and deal movement", () => {
+  it("lists clients who bought before but not in the last year, with nothing open", async () => {
+    const terry = await rep("Terry");
+    const lapsed = await client("Lapsed Co", terry.id, "1", daysAgo(200));
+    const current = await client("Current Co", terry.id, "2", daysAgo(10));
+    const quoted = await client("Lapsed But Quoting", terry.id, "3", daysAgo(10));
+
+    await dealFor(lapsed.id, terry.id, { id: "100", status: "Won", value: 80_000, closedAt: daysAgo(500) });
+    await dealFor(current.id, terry.id, { id: "101", status: "Won", value: 20_000, closedAt: daysAgo(30) });
+    // Bought long ago, but there's an open deal -- already being worked, not a win-back.
+    await dealFor(quoted.id, terry.id, { id: "102", status: "Won", value: 50_000, closedAt: daysAgo(500) });
+    await dealFor(quoted.id, terry.id, { id: "103", status: "Open", value: 10_000 });
+
+    const { lapsed: winBack } = await loadSalesOverview({ ownerUserId: terry.id }, NOW);
+    expect(winBack.map((c) => c.name)).toEqual(["Lapsed Co"]);
+    expect(winBack[0].lastWonAt?.toISOString()).toBe(daysAgo(500).toISOString());
+  });
+
+  it("reports how long a quiet open deal has sat in its stage", async () => {
+    const terry = await rep("Terry");
+    const acme = await client("Acme", terry.id, "1", daysAgo(5));
+    await dealFor(acme.id, terry.id, { id: "100", status: "Open", value: 10_000, stage: "PROPOSAL", lastComm: daysAgo(40), stageSince: daysAgo(75) });
+    await dealFor(acme.id, terry.id, { id: "101", status: "Open", value: 9_000, lastComm: daysAgo(40) });
+
+    const { staleOpenDeals } = await loadSalesOverview({ ownerUserId: terry.id }, NOW);
+    expect(staleOpenDeals[0]).toMatchObject({ salesmateId: "100", daysInStage: 75 });
+    // Not yet observed changing stage -- reported as unknown, not zero.
+    expect(staleOpenDeals[1].daysInStage).toBeNull();
+  });
+});
+

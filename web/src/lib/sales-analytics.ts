@@ -58,6 +58,9 @@ export interface StaleDeal {
   title: string;
   value: number;
   stage: string | null;
+  // Days in the current stage, counted from the first sync that saw it
+  // there (Salesmate exposes no deal history) -- null until that's known.
+  daysInStage: number | null;
   companyId: string | null;
   companyName: string | null;
   lastTouchAt: Date | null;
@@ -84,6 +87,9 @@ export interface SalesOverview {
   goingCold: ClientRow[];
   // Quiet prospects with no won/open value, counted rather than listed.
   quietProspects: number;
+  // Clients who bought before but not in the last year, with nothing open
+  // -- the "win them back" list. Ordered by what they used to be worth.
+  lapsed: (ClientRow & { lastWonAt: Date | null })[];
   staleOpenDeals: StaleDeal[];
   pipelineByStage: { stage: string; count: number; value: number }[];
   forgeos: { openEstimates: number; proposalsSent: number; proposalsSigned: number };
@@ -144,6 +150,7 @@ interface DealRow {
   closedAt: Date | null;
   lastCommunicationAt: Date | null;
   salesmateCreatedAt: Date | null;
+  stageSince: Date | null;
 }
 
 async function loadDeals(ownerUserId: string | null): Promise<DealRow[]> {
@@ -151,7 +158,7 @@ async function loadDeals(ownerUserId: string | null): Promise<DealRow[]> {
     where: { removedAt: null, ...(ownerUserId ? { ownerUserId } : {}) },
     select: {
       salesmateId: true, title: true, status: true, stage: true, pipeline: true, value: true,
-      companyId: true, ownerUserId: true, ownerName: true, closedAt: true, lastCommunicationAt: true, salesmateCreatedAt: true,
+      companyId: true, ownerUserId: true, ownerName: true, closedAt: true, lastCommunicationAt: true, salesmateCreatedAt: true, stageSince: true,
     },
   });
 }
@@ -240,6 +247,7 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
   let wonValueAll = 0;
   let won12 = 0, lost12 = 0, wonValue12 = 0, lostValue12 = 0;
   const staleOpenDeals: StaleDeal[] = [];
+  const lastWonByCompany = new Map<string, Date>();
   const stageTotals = new Map<string, { count: number; value: number }>();
 
   for (const deal of deals) {
@@ -253,6 +261,9 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
         client.lifetimeWonValue += value;
         client.wonCount++;
         noteWorked(deal.companyId, wonAt);
+        if (wonAt && (!lastWonByCompany.has(client.companyId) || wonAt > lastWonByCompany.get(client.companyId)!)) {
+          lastWonByCompany.set(client.companyId, wonAt);
+        }
       }
       if (wonAt && wonAt >= yearStart) kpis.wonValueYtd += value;
       if (wonAt && wonAt >= twelveMonthsAgo) {
@@ -284,6 +295,7 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
       if (quiet >= STALE_OPEN_DEAL_DAYS) {
         staleOpenDeals.push({
           salesmateId: deal.salesmateId, title: deal.title, value, stage: deal.stage,
+          daysInStage: deal.stageSince ? daysSince(deal.stageSince, now) : null,
           companyId: deal.companyId, companyName: deal.companyId ? (nameById.get(deal.companyId) ?? null) : null,
           lastTouchAt: lastTouch ?? null,
           daysQuiet: lastTouch ? quiet : -1,
@@ -313,6 +325,13 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
 
   // Worth chasing = how much they're worth × how long they've been quiet.
   // A $200k client silent for 100 days outranks a $2k one silent for a year.
+  // Bought before, nothing won in the last 12 months, nothing open now.
+  const lapsed = clients
+    .filter((c) => c.wonCount > 0 && c.openCount === 0)
+    .map((c) => ({ ...c, lastWonAt: lastWonByCompany.get(c.companyId) ?? null }))
+    .filter((c) => !c.lastWonAt || c.lastWonAt < twelveMonthsAgo)
+    .sort((a, b) => b.lifetimeWonValue - a.lifetimeWonValue);
+
   const quiet = clients.filter((c) => !c.lastContactedAt || daysSince(c.lastContactedAt, now) >= COLD_DAYS);
   const goingCold = quiet
     .filter((c) => c.lifetimeWonValue > 0 || c.openValue > 0)
@@ -360,6 +379,7 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
     clients,
     goingCold,
     quietProspects,
+    lapsed: lapsed.slice(0, 8),
     staleOpenDeals: staleOpenDeals.sort((a, b) => b.value - a.value).slice(0, 10),
     pipelineByStage: [...stageTotals.entries()]
       .map(([stage, t]) => ({ stage, ...t }))

@@ -6,6 +6,7 @@ import type { NavGroup } from "@/components/app-nav";
 // no matching nav entries, or vice versa).
 export const DEPARTMENT_HOME: Record<string, string> = {
   GR: "/departments/graphics",
+  SL: "/sales",
 };
 
 // Display label for each department's dashboard -- keyed off the same
@@ -14,6 +15,7 @@ export const DEPARTMENT_HOME: Record<string, string> = {
 // keep in sync.
 export const DEPARTMENT_LABELS: Record<string, string> = {
   GR: "Graphics",
+  SL: "Sales",
 };
 
 // Deliberately hand-built per department rather than derived from the main
@@ -22,6 +24,36 @@ export const DEPARTMENT_LABELS: Record<string, string> = {
 // item added to the main nav later doesn't silently leak into a
 // department's filtered view without a deliberate decision here.
 export const DEPARTMENT_NAV: Record<string, NavGroup[]> = {
+  // Sales keeps a wide nav on purpose, unlike Graphics: a rep's job spans
+  // the whole pipeline (their own book, the shows they sell into, the
+  // estimate and proposal on each deal) plus the directory they live in.
+  // What's left out is the shop floor -- projects, tasks, the catalog.
+  SL: [
+    {
+      label: "Pipeline",
+      items: [
+        { href: "/sales", label: "My sales" },
+        { href: "/shows", label: "Shows" },
+        { href: "/opportunities", label: "Opportunities" },
+        { href: "/estimates", label: "Estimates" },
+        { href: "/proposals", label: "Proposals" },
+      ],
+    },
+    {
+      label: "Directory",
+      items: [
+        { href: "/companies", label: "Companies" },
+        { href: "/contacts", label: "Contacts" },
+      ],
+    },
+    {
+      label: "Schedule",
+      items: [
+        { href: "/calendar", label: "Calendar" },
+        { href: "/tasks", label: "Tasks" },
+      ],
+    },
+  ],
   GR: [
     {
       label: "Production",
