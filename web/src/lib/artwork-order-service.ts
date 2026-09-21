@@ -9,6 +9,7 @@
 // who acted.
 import { randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
+import { setArtworkRouting } from "@/lib/artwork-routing";
 import { UserError } from "@/lib/user-error";
 import {
   ArtworkOrderStatus,
@@ -581,7 +582,12 @@ export async function acceptArtworkOrder(artworkOrderId: string, actor: ArtworkA
 // separate decision the vendor makes) -- the vendor's own first real
 // action is uploading a proof, not accepting the job.
 export async function assignVendor(artworkOrderId: string, vendorId: string, actor: ArtworkActor) {
-  await db.artworkOrder.update({ where: { id: artworkOrderId }, data: { vendorId } });
+  // Writes the routing set too, so ArtworkOrder.vendorId and
+  // ArtworkOrder.routings can't drift while both exist. Assigning a single
+  // vendor through this path means exactly that -- one VENDOR routing,
+  // replacing whatever was there. A piece split between the sign shop and
+  // an outside vendor is set through setArtworkRouting instead.
+  await setArtworkRouting(artworkOrderId, [{ kind: "VENDOR", vendorId }]);
   await transitionArtworkOrder(artworkOrderId, "VENDOR_ASSIGNED", "ASSIGN_VENDOR", actor);
   return transitionArtworkOrder(artworkOrderId, "PROOF_IN_PROGRESS", "VENDOR_NOTIFIED", { type: "SYSTEM" });
 }

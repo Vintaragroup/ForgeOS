@@ -1289,8 +1289,56 @@ model Office {
   deletedAt DateTime?
 
   catalogItemAliases CatalogItemAlias[]
+  artworkRoutings    ArtworkOrderRouting[]
 
   @@map("offices")
+}
+
+// One way a piece is being produced. An ArtworkOrder has a set of these --
+// see ArtworkOrder.routings for why a single vendorId is not enough.
+//
+// Exactly one of vendorId / officeCode is meaningful, decided by `kind`,
+// and both are null for AM_PM_COORDINATED. Enforced in artwork-routing.ts
+// rather than by a DB constraint, matching this codebase's usual
+// cross-field validation style -- and there is deliberately no unique
+// index across (artworkOrderId, kind, vendorId): vendorId is nullable,
+// Postgres treats NULLs as distinct, so such an index would not stop two
+// EXPO_IN_HOUSE rows anyway. setArtworkRouting de-duplicates instead.
+model ArtworkOrderRouting {
+  id             String       @id @default(cuid())
+  artworkOrderId String
+  artworkOrder   ArtworkOrder @relation(fields: [artworkOrderId], references: [id], onDelete: Cascade)
+
+  kind ArtworkRoutingKind
+
+  // Set only when kind is VENDOR.
+  vendorId String?
+  vendor   Vendor? @relation(fields: [vendorId], references: [id])
+
+  // Set only when kind is EXPO_IN_HOUSE: which sign shop is producing it.
+  // Validated against Office.hasSignShop, which is the whole reason that
+  // flag exists -- claiming Orlando printed something in-house should
+  // fail, because Orlando has no sign shop.
+  officeCode String?
+  office     Office? @relation(fields: [officeCode], references: [code])
+
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([artworkOrderId])
+  @@index([vendorId])
+  @@map("artwork_order_routings")
+}
+
+enum ArtworkRoutingKind {
+  // Printed by an Expo sign shop. Her Shop column spells this "Expo".
+  EXPO_IN_HOUSE
+  // Sent to an outside print shop.
+  VENDOR
+  // The Account/Project Manager coordinates the printing themselves,
+  // against their own local vendors. Her column spells this "AE / PM",
+  // an old title -- she has confirmed the current wording is AM/PM.
+  AM_PM_COORDINATED
 }
 
 // What a catalog item fundamentally is -- also the first letter of its
@@ -2786,8 +2834,9 @@ model Vendor {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  tasks         Task[]
-  artworkOrders ArtworkOrder[]
+  tasks           Task[]
+  artworkOrders   ArtworkOrder[]
+  artworkRoutings ArtworkOrderRouting[]
 
   @@map("vendors")
 }
@@ -3066,8 +3115,29 @@ model ArtworkOrder {
   wantsExpoProducedArt Boolean  @default(false)
   expoProducedFee      Decimal? @db.Decimal(10, 2)
 
+  // The single shop this piece went to. Superseded by `routings` below --
+  // kept because assignVendor, the detail page's picker and rollover all
+  // still read it, and because it is the vendor the portal invite is
+  // addressed to. assignVendor writes both, so the two cannot drift.
+  // Contract step (drop this column) once the multi-routing editor lands.
   vendorId String?
   vendor   Vendor? @relation(fields: [vendorId], references: [id])
+
+  // Where this piece is actually produced -- a set, not a choice.
+  //
+  // Gabriella's Shop column is multi-select, and 50 of the 282 rows in the
+  // Seatrade April 2026 export carry two values: one piece split between
+  // Expo's own sign shop and an outside vendor, each half finishing
+  // separately (which is why Print Status is multi-valued too). A single
+  // vendorId cannot say that.
+  //
+  // It also cannot say the other two things her column means. "Expo" is
+  // in-house production, possible only at an office with a sign shop
+  // (Miami, today). "AM/PM" means the account team coordinates the
+  // printing themselves against their own local shops, which is how the
+  // West Coast and Orlando work. Neither is a company, so neither can be
+  // a Vendor row.
+  routings ArtworkOrderRouting[]
 
   // The ONLY identifier ever shown to the vendor -- see
   // getVendorPortalView's selector in the vendor-portal piece. Assigned at
