@@ -210,6 +210,37 @@ describe("runSalesmateSync -- deals", () => {
     expect((await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "101" } })).companyId).toBeNull();
   });
 
+  it("starts the stage clock on the first sync that sees a deal, including one mirrored before the column existed", async () => {
+    const data = { companies: [company(1, "Club Glove")], deals: [deal(100, 1, "Club Glove - PGA 2026", { status: "Open", stage: "January" })] };
+    await sync(data);
+    // Exactly the state every pre-existing production deal was in: mirrored,
+    // but with no movement columns, because they were added afterwards.
+    await db.salesmateDeal.update({ where: { salesmateId: "100" }, data: { stageSince: null, statusChangedAt: null } });
+
+    // A re-sync that changes nothing must still start the clock, not copy
+    // the null forward.
+    await sync(data);
+    const deal1 = await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "100" } });
+    expect(deal1.stageSince).not.toBeNull();
+    expect(deal1.statusChangedAt).not.toBeNull();
+
+    // And once it's running, an unchanged stage leaves it alone.
+    await sync(data);
+    const deal2 = await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "100" } });
+    expect(deal2.stageSince?.toISOString()).toBe(deal1.stageSince?.toISOString());
+  });
+
+  it("resets the stage clock and remembers the previous stage when a deal moves", async () => {
+    const companies = [company(1, "Club Glove")];
+    await sync({ companies, deals: [deal(100, 1, "Club Glove - PGA 2026", { status: "Open", stage: "January" })] });
+    const before = await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "100" } });
+
+    await sync({ companies, deals: [deal(100, 1, "Club Glove - PGA 2026", { status: "Open", stage: "February" })] });
+    const after = await db.salesmateDeal.findUniqueOrThrow({ where: { salesmateId: "100" } });
+    expect(after.previousStage).toBe("January");
+    expect(after.stageSince!.getTime()).toBeGreaterThanOrEqual(before.stageSince!.getTime());
+  });
+
   it("keeps a hand-made opportunity link across re-syncs", async () => {
     const co = await db.company.create({ data: { name: "Club Glove" } });
     const opp = await db.opportunity.create({ data: { companyId: co.id, showName: "PGA Show" } });

@@ -379,11 +379,20 @@ async function syncDeals(rows: SalesmateDealRow[], now: Date, stats: SalesmateSy
     };
     // Stage/status movement: only a change resets the clock, so "days in
     // stage" survives syncs that change nothing else.
+    //
+    // The `?? now` matters. A deal that was already mirrored before these
+    // columns existed has a null stageSince, and its stage doesn't change
+    // on the next sync -- so without the fallback it copies null forward
+    // forever and the clock never starts. That's not hypothetical: 359 of
+    // 363 production deals were stuck that way, and only the 4 that
+    // happened to move stage had a value. Starting the clock at the first
+    // sync that sees the deal in this stage is exactly what the schema
+    // promises.
     const before = previousById.get(salesmateId);
     const movement = {
-      stageSince: before && before.stage === data.stage ? before.stageSince : now,
+      stageSince: before && before.stage === data.stage ? (before.stageSince ?? now) : now,
       previousStage: before && before.stage !== data.stage ? before.stage : (before?.previousStage ?? null),
-      statusChangedAt: before && before.status === data.status ? before.statusChangedAt : now,
+      statusChangedAt: before && before.status === data.status ? (before.statusChangedAt ?? now) : now,
     };
     await db.salesmateDeal.upsert({
       where: { salesmateId },
