@@ -13,6 +13,7 @@
 
 import type { Prisma, SystemRole } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
+import { ACTIVE_ARTWORK_ORDER } from "@/lib/artwork-scope";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment, type DepartmentUser } from "@/lib/department-access";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
@@ -247,7 +248,7 @@ export async function getCalendarItems(
     }),
     db.artworkOrder.findMany({
       where: {
-        deletedAt: null,
+        ...ACTIVE_ARTWORK_ORDER,
         status: "EXPO_PROOF_CHECK",
         slaDueAt: { gte: rangeStart, lte: rangeEnd },
         ...artworkOppAccess,

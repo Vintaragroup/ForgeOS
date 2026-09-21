@@ -4,6 +4,7 @@
 // separate scoping rule, not a widening of either.
 
 import { db } from "@/lib/db";
+import { ACTIVE_ARTWORK_ORDER } from "@/lib/artwork-scope";
 import type { ArtworkOrderStatus, SystemRole } from "@/generated/prisma/enums";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
@@ -76,7 +77,7 @@ export async function getMyClientGraphicsSummary(user: { id: string }): Promise<
 export async function getGraphicsOrders(user: { id: string; systemRole: SystemRole; departmentCode: string | null }) {
   return db.artworkOrder.findMany({
     where: {
-      deletedAt: null,
+      ...ACTIVE_ARTWORK_ORDER,
       ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }),
     },
     orderBy: { updatedAt: "desc" },
@@ -123,7 +124,7 @@ export async function getWeeklyDeliveredCounts(
       toStatus: "DELIVERED_AT_SHOW",
       createdAt: { gte: rangeStart },
       artworkOrder: {
-        deletedAt: null,
+        ...ACTIVE_ARTWORK_ORDER,
         ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }),
       },
     },

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { ACTIVE_ARTWORK_ORDER } from "@/lib/artwork-scope";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
@@ -38,7 +39,7 @@ export default async function ArtworkReviewQueuePage() {
   // canAccessOpportunity itself) -- listing an opportunity a department
   // user can't actually click through to would just be a dead link.
   const orders = await db.artworkOrder.findMany({
-    where: { deletedAt: null, ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }) },
+    where: { ...ACTIVE_ARTWORK_ORDER, ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }) },
     orderBy: { updatedAt: "desc" },
     include: {
       opportunity: { include: { company: true, show: { select: { id: true, name: true } } } },

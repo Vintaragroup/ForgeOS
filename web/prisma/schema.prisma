@@ -3080,6 +3080,24 @@ model ArtworkOrder {
   // anything not currently in EXPO_PROOF_CHECK).
   slaWarningNotifiedAt DateTime?
 
+  // Set on a piece that belongs to a show that has already happened --
+  // almost always because it was bulk-imported from a past show's control
+  // log rather than worked through the pipeline here.
+  //
+  // Deliberately NOT a status. Forcing imported rows into a finished state
+  // would throw away what actually happened: of 282 rows in the Seatrade
+  // April 2026 export, 43 were never sent to showsite, 14 went to storage
+  // and 5 were cancelled. That history is the reason to import at all, so
+  // `status` keeps telling the truth and this field decides visibility.
+  //
+  // Archived pieces are excluded from live work surfaces (the Graphics
+  // Hub, the artwork list, the SLA sweep, the calendar -- see
+  // ACTIVE_ARTWORK_ORDER in artwork-scope.ts) and deliberately kept in
+  // history ones: the post-show page, analytics, any detail page, and
+  // rollover -- rolling last year's piece into this year's occurrence is
+  // exactly how archived data is meant to direct new work.
+  archivedAt DateTime?
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -3093,6 +3111,7 @@ model ArtworkOrder {
   @@index([showId])
   @@index([designerId])
   @@index([rolledOverFromId])
+  @@index([archivedAt])
   @@map("artwork_orders")
 }
 

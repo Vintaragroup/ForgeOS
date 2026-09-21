@@ -5,6 +5,7 @@
 // (reads state, sends a notification, writes state back) rather than
 // belonging to either one.
 import { db } from "@/lib/db";
+import { ACTIVE_ARTWORK_ORDER } from "@/lib/artwork-scope";
 import { notifySlaWarning } from "@/lib/artwork-notifications";
 
 export interface SlaWarningSweepResult {
@@ -21,7 +22,7 @@ export interface SlaWarningSweepResult {
 // this is deliberately "most recently entered," not "first ever."
 export async function runSlaWarningSweep(now: Date = new Date()): Promise<SlaWarningSweepResult> {
   const candidates = await db.artworkOrder.findMany({
-    where: { status: "EXPO_PROOF_CHECK", slaDueAt: { not: null }, slaWarningNotifiedAt: null, deletedAt: null },
+    where: { ...ACTIVE_ARTWORK_ORDER, status: "EXPO_PROOF_CHECK", slaDueAt: { not: null }, slaWarningNotifiedAt: null },
     select: { id: true, opportunityId: true, jobCode: true, slaDueAt: true },
   });
   if (candidates.length === 0) return { notified: 0 };
