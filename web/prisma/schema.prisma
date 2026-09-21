@@ -1322,6 +1322,17 @@ model ArtworkOrderRouting {
   officeCode String?
   office     Office? @relation(fields: [officeCode], references: [code])
 
+  // How far THIS half has got. Not a property of the order: her Print
+  // Status column is multi-select for exactly this reason, and the data
+  // proves it -- of 60 two-shop rows on the Seatrade show, 58 carry
+  // exactly two statuses, and the pair is always "Completed" (the piece
+  // Expo printed) alongside "O.S Received" (the piece the vendor sent
+  // back). The two halves finish independently.
+  //
+  // Which values are legal depends on `kind` -- an in-house half is never
+  // "O.S Sent" -- and that is enforced in artwork-routing.ts.
+  productionStatus ArtworkProductionStatus @default(NOT_STARTED)
+
   note      String?
   createdAt DateTime @default(now())
 
@@ -1336,6 +1347,42 @@ model ArtworkOrderRouting {
 // reprint reason is required on every site print -- so the distinction
 // earns a field rather than being inferred from whether a client is
 // attached.
+// How far one half of a piece has got in production.
+//
+// Two vocabularies in one enum, because a piece can be split across both
+// and they share a finish line. Which are legal is decided by the
+// routing's `kind`:
+//
+//   in-house (EXPO_IN_HOUSE)  NOT_STARTED -> PRINTING -> COMPLETED
+//   outsourced (VENDOR)       OS_NOT_SENT -> OS_SENT -> OS_QUOTE_APPROVED
+//                             -> OS_PROOF_APPROVED -> OS_RECEIVED
+//                             (or OS_RECEIVED_PARTIALLY)
+//                             -> OS_DELIVERED_TO_SHOWSITE
+//
+// OS_QUOTE_APPROVED and OS_RECEIVED_PARTIALLY have no equivalent anywhere
+// in ForgeOS today, and partial receipt is the one that burns a show.
+//
+// Deliberately NOT here: STORAGE. It appears in her Print Status column on
+// 20 Seatrade rows, always alongside a real status ("STORAGE" +
+// "Completed"), because it is not a stage of production at all -- it says
+// where the piece came from or went. ForgeOS already models that axis as
+// PostShowStatus.EXPO_STORAGE and the rollover link.
+enum ArtworkProductionStatus {
+  NOT_STARTED
+  PRINTING
+  COMPLETED
+
+  OS_NOT_SENT
+  OS_SENT
+  OS_QUOTE_APPROVED
+  OS_PROOF_APPROVED
+  OS_RECEIVED
+  OS_RECEIVED_PARTIALLY
+  OS_DELIVERED_TO_SHOWSITE
+
+  CANCELLED
+}
+
 enum ArtworkOrderType {
   // An exhibitor's own booth graphics. Always has a client opportunity.
   EXHIBITOR

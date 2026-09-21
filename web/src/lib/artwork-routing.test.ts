@@ -1,6 +1,14 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { assignSingleVendor, describeRouting, loadArtworkRouting, setArtworkRouting, signShopOffices } from "@/lib/artwork-routing";
+import {
+  assignSingleVendor,
+  describeRouting,
+  isFullyProduced,
+  loadArtworkRouting,
+  setArtworkRouting,
+  setHalfProductionStatus,
+  signShopOffices,
+} from "@/lib/artwork-routing";
 import { UserError } from "@/lib/user-error";
 
 afterEach(async () => {
@@ -152,5 +160,91 @@ describe("assignSingleVendor", () => {
     const routings = await assignSingleVendor(order.id, binick.id);
     expect(routings).toHaveLength(1);
     expect(routings[0].vendorId).toBe(binick.id);
+  });
+});
+
+describe("per-half production status", () => {
+  it("starts each half in the right place for its kind", async () => {
+    const { order, binick } = await fixture();
+    const routings = await setArtworkRouting(order.id, [
+      { kind: "EXPO_IN_HOUSE", officeCode: "MIA" },
+      { kind: "VENDOR", vendorId: binick.id },
+    ]);
+    const byKind = Object.fromEntries(routings.map((r) => [r.kind, r.productionStatus]));
+    // An outsourced half begins as "not yet sent to the shop"; an in-house
+    // one as "not yet printed".
+    expect(byKind.EXPO_IN_HOUSE).toBe("NOT_STARTED");
+    expect(byKind.VENDOR).toBe("OS_NOT_SENT");
+  });
+
+  it("moves one half without touching the other", async () => {
+    const { order, binick } = await fixture();
+    const routings = await setArtworkRouting(order.id, [
+      { kind: "EXPO_IN_HOUSE", officeCode: "MIA" },
+      { kind: "VENDOR", vendorId: binick.id },
+    ]);
+    const inHouse = routings.find((r) => r.kind === "EXPO_IN_HOUSE")!;
+    await setHalfProductionStatus(inHouse.id, "COMPLETED");
+
+    const after = await loadArtworkRouting(order.id);
+    // Exactly the Seatrade shape: Completed alongside O.S not sent.
+    expect(after.find((r) => r.kind === "EXPO_IN_HOUSE")?.productionStatus).toBe("COMPLETED");
+    expect(after.find((r) => r.kind === "VENDOR")?.productionStatus).toBe("OS_NOT_SENT");
+  });
+
+  it("refuses a status the kind can't be in", async () => {
+    const { order } = await fixture();
+    const [inHouse] = await setArtworkRouting(order.id, [{ kind: "EXPO_IN_HOUSE", officeCode: "MIA" }]);
+    await expect(setHalfProductionStatus(inHouse.id, "OS_SENT")).rejects.toThrow(/isn't a status this half can be in/);
+    await expect(
+      setArtworkRouting(order.id, [{ kind: "EXPO_IN_HOUSE", officeCode: "MIA", productionStatus: "OS_RECEIVED" }]),
+    ).rejects.toThrow(UserError);
+  });
+
+  it("keeps a half's progress when the routing set is re-saved", async () => {
+    const { order, binick, binca } = await fixture();
+    const routings = await setArtworkRouting(order.id, [
+      { kind: "EXPO_IN_HOUSE", officeCode: "MIA" },
+      { kind: "VENDOR", vendorId: binick.id },
+    ]);
+    await setHalfProductionStatus(routings.find((r) => r.kind === "EXPO_IN_HOUSE")!.id, "COMPLETED");
+
+    // Adding a second shop must not reset what the sign shop already did.
+    await setArtworkRouting(order.id, [
+      { kind: "EXPO_IN_HOUSE", officeCode: "MIA" },
+      { kind: "VENDOR", vendorId: binick.id },
+      { kind: "VENDOR", vendorId: binca.id },
+    ]);
+    const after = await loadArtworkRouting(order.id);
+    expect(after.find((r) => r.kind === "EXPO_IN_HOUSE")?.productionStatus).toBe("COMPLETED");
+    expect(after.find((r) => r.vendorId === binca.id)?.productionStatus).toBe("OS_NOT_SENT");
+  });
+
+  it("treats partial receipt as unfinished, because it is", async () => {
+    const { order, binick } = await fixture();
+    const [vendorHalf] = await setArtworkRouting(order.id, [{ kind: "VENDOR", vendorId: binick.id }]);
+
+    await setHalfProductionStatus(vendorHalf.id, "OS_RECEIVED_PARTIALLY");
+    expect(isFullyProduced(await loadArtworkRouting(order.id))).toBe(false);
+
+    await setHalfProductionStatus(vendorHalf.id, "OS_RECEIVED");
+    expect(isFullyProduced(await loadArtworkRouting(order.id))).toBe(true);
+  });
+
+  it("is not fully produced while either half is outstanding", async () => {
+    const { order, binick } = await fixture();
+    const routings = await setArtworkRouting(order.id, [
+      { kind: "EXPO_IN_HOUSE", officeCode: "MIA" },
+      { kind: "VENDOR", vendorId: binick.id },
+    ]);
+    await setHalfProductionStatus(routings.find((r) => r.kind === "EXPO_IN_HOUSE")!.id, "COMPLETED");
+    expect(isFullyProduced(await loadArtworkRouting(order.id))).toBe(false);
+
+    await setHalfProductionStatus(routings.find((r) => r.kind === "VENDOR")!.id, "OS_RECEIVED");
+    expect(isFullyProduced(await loadArtworkRouting(order.id))).toBe(true);
+  });
+
+  it("an unrouted piece is not 'fully produced'", async () => {
+    expect(isFullyProduced([])).toBe(false);
   });
 });

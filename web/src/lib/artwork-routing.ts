@@ -9,7 +9,64 @@
 
 import { db } from "@/lib/db";
 import { UserError } from "@/lib/user-error";
-import type { ArtworkRoutingKind } from "@/generated/prisma/enums";
+import type { ArtworkProductionStatus, ArtworkRoutingKind } from "@/generated/prisma/enums";
+
+// Which production statuses each kind of half can legally be in. An
+// in-house half is never "O.S Sent"; an outsourced half never just
+// "Printing". Kept as data so the picker and the validator read the same
+// list and cannot drift.
+export const PRODUCTION_STATUSES_BY_KIND: Record<ArtworkRoutingKind, ArtworkProductionStatus[]> = {
+  EXPO_IN_HOUSE: ["NOT_STARTED", "PRINTING", "COMPLETED", "CANCELLED"],
+  VENDOR: [
+    "OS_NOT_SENT",
+    "OS_SENT",
+    "OS_QUOTE_APPROVED",
+    "OS_PROOF_APPROVED",
+    "OS_RECEIVED",
+    "OS_RECEIVED_PARTIALLY",
+    "OS_DELIVERED_TO_SHOWSITE",
+    "CANCELLED",
+  ],
+  // The account team is handling it against their own shops, so Expo only
+  // knows whether it has landed.
+  AM_PM_COORDINATED: ["NOT_STARTED", "COMPLETED", "CANCELLED"],
+};
+
+export const PRODUCTION_STATUS_LABELS: Record<ArtworkProductionStatus, string> = {
+  NOT_STARTED: "Not printed",
+  PRINTING: "Printing",
+  COMPLETED: "Completed",
+  OS_NOT_SENT: "O.S not sent",
+  OS_SENT: "O.S sent",
+  OS_QUOTE_APPROVED: "O.S quote approved",
+  OS_PROOF_APPROVED: "O.S proof approved",
+  OS_RECEIVED: "O.S received",
+  OS_RECEIVED_PARTIALLY: "O.S received partially",
+  OS_DELIVERED_TO_SHOWSITE: "O.S delivered to showsite",
+  CANCELLED: "Cancelled",
+};
+
+// The status a half starts in, which differs by kind: an outsourced half
+// begins life as "not yet sent to the shop", an in-house one as "not yet
+// printed".
+export function defaultProductionStatus(kind: ArtworkRoutingKind): ArtworkProductionStatus {
+  return kind === "VENDOR" ? "OS_NOT_SENT" : "NOT_STARTED";
+}
+
+// A half is done when it can no longer move on its own. Used to tell
+// whether a split piece is fully finished -- both halves, not one.
+const SETTLED: ArtworkProductionStatus[] = ["COMPLETED", "OS_RECEIVED", "OS_DELIVERED_TO_SHOWSITE", "CANCELLED"];
+
+export function isHalfSettled(status: ArtworkProductionStatus): boolean {
+  return SETTLED.includes(status);
+}
+
+// Partial receipt counts as unsettled on purpose: "O.S Received
+// Partially" is precisely the state that looks finished on a dashboard
+// and is not, and it is the one that burns a show.
+export function isFullyProduced(routings: { productionStatus: ArtworkProductionStatus }[]): boolean {
+  return routings.length > 0 && routings.every((r) => isHalfSettled(r.productionStatus));
+}
 
 export interface RoutingInput {
   kind: ArtworkRoutingKind;
@@ -18,6 +75,7 @@ export interface RoutingInput {
   // Required for EXPO_IN_HOUSE, ignored otherwise.
   officeCode?: string | null;
   note?: string | null;
+  productionStatus?: ArtworkProductionStatus | null;
 }
 
 // A stable key for de-duplicating a set. Two VENDOR entries for the same
@@ -73,6 +131,13 @@ async function validate(entries: RoutingInput[]): Promise<RoutingInput[]> {
       case "AM_PM_COORDINATED":
         break;
     }
+    if (entry.productionStatus && !PRODUCTION_STATUSES_BY_KIND[entry.kind].includes(entry.productionStatus)) {
+      throw new UserError(
+        `"${PRODUCTION_STATUS_LABELS[entry.productionStatus]}" isn't a status ${
+          entry.kind === "EXPO_IN_HOUSE" ? "in-house work" : entry.kind === "VENDOR" ? "an outside shop" : "AM/PM-coordinated work"
+        } can be in.`,
+      );
+    }
     const key = routingKey(entry);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -90,15 +155,30 @@ export async function setArtworkRouting(artworkOrderId: string, entries: Routing
 
   const cleaned = await validate(entries);
 
+  // This replaces the set by deleting and recreating, so a half that is
+  // already "O.S Received" would come back "O.S not sent" every time
+  // someone re-saved the editor. Carry each surviving half's status over
+  // by its key; only a genuinely new half starts at its default.
+  const existing = await db.artworkOrderRouting.findMany({
+    where: { artworkOrderId },
+    select: { kind: true, vendorId: true, officeCode: true, productionStatus: true },
+  });
+  const statusByKey = new Map(existing.map((r) => [routingKey(r), r.productionStatus]));
+
   await db.$transaction(async (tx) => {
     await tx.artworkOrderRouting.deleteMany({ where: { artworkOrderId } });
     for (const entry of cleaned) {
+      const carried = statusByKey.get(routingKey(entry));
+      const status = entry.productionStatus ?? carried ?? defaultProductionStatus(entry.kind);
       await tx.artworkOrderRouting.create({
         data: {
           artworkOrderId,
           kind: entry.kind,
           vendorId: entry.kind === "VENDOR" ? entry.vendorId! : null,
           officeCode: entry.kind === "EXPO_IN_HOUSE" ? entry.officeCode! : null,
+          productionStatus: PRODUCTION_STATUSES_BY_KIND[entry.kind].includes(status)
+            ? status
+            : defaultProductionStatus(entry.kind),
           note: entry.note?.trim() || null,
         },
       });
@@ -123,6 +203,17 @@ export async function assignSingleVendor(artworkOrderId: string, vendorId: strin
     .filter((r) => r.kind !== "VENDOR")
     .map((r) => ({ kind: r.kind, officeCode: r.officeCode, note: r.note }));
   return setArtworkRouting(artworkOrderId, [...kept, { kind: "VENDOR", vendorId }]);
+}
+
+// Moves ONE half. The whole point of per-half status is that the vendor
+// coming back doesn't touch what the sign shop is doing.
+export async function setHalfProductionStatus(routingId: string, status: ArtworkProductionStatus) {
+  const routing = await db.artworkOrderRouting.findUnique({ where: { id: routingId }, select: { id: true, kind: true } });
+  if (!routing) throw new UserError("That production half no longer exists.");
+  if (!PRODUCTION_STATUSES_BY_KIND[routing.kind].includes(status)) {
+    throw new UserError(`"${PRODUCTION_STATUS_LABELS[status]}" isn't a status this half can be in.`);
+  }
+  await db.artworkOrderRouting.update({ where: { id: routingId }, data: { productionStatus: status } });
 }
 
 export async function loadArtworkRouting(artworkOrderId: string) {
