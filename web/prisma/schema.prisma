@@ -162,6 +162,7 @@ model User {
   opportunitiesEstimating  Opportunity[]          @relation("OpportunityEstimator")
   opportunityNotes         OpportunityNote[]
   chatThreads              ChatThread[]
+  salesQueueSnoozes        SalesQueueSnooze[]
 
   // Salesmate sync: this person's Salesmate user id, matched once by email
   // (then name) so deal/company ownership survives a rename -- see
@@ -3613,6 +3614,14 @@ model SalesmateActivity {
   removedAt          DateTime?
   syncedAt           DateTime
 
+  // "Did this happen?" answered in ForgeOS. Reps almost never tick an
+  // activity complete in Salesmate (1 of 892 on the real account), so
+  // isCompleted above can't be trusted and the dashboard asks instead.
+  // Local-only and absent from syncActivities' explicit field list, so a
+  // re-sync leaves it alone -- same trick as SalesmateDeal.opportunityId.
+  confirmedAt       DateTime?
+  confirmedByUserId String?
+
   @@index([companyId])
   @@index([contactId])
   @@index([ownerUserId])
@@ -3641,8 +3650,13 @@ model ClientTouch {
   byName     String?
   byUserId   String?
 
-  // How this row was learned. Only one source today; an explicitly logged
-  // touch would be another.
+  // What the rep wrote when they logged it themselves. Always null on a
+  // synced row -- Salesmate's lastCommunicationAt carries no content.
+  note      String?
+
+  // How this row was learned: SALESMATE_LAST_COMMUNICATION for a row the
+  // sync inferred from lastCommunicationAt moving, LOGGED for one a rep
+  // entered on their dashboard (see sales-actions.ts).
   source    String   @default("SALESMATE_LAST_COMMUNICATION")
   createdAt DateTime @default(now())
 
@@ -3652,6 +3666,46 @@ model ClientTouch {
   @@index([companyId, occurredAt])
   @@index([byUserId, occurredAt])
   @@map("client_touches")
+}
+
+// "Not now." A rep who consciously skips a client still sees the row at
+// the top of their queue tomorrow, so a queue that can't be cleared gets
+// ignored within a week -- snoozing is what makes the four queues on
+// /sales worth working.
+//
+// One table rather than a snoozedUntil column per queue, because the
+// queues are keyed by three different kinds of id: FOLLOW_UP and WIN_BACK
+// by Company.id, PAST_DUE by SalesmateActivity.salesmateId, STALLED_DEAL
+// by SalesmateDeal.salesmateId. targetKey is therefore a plain string
+// with no FK -- a Salesmate row can vanish on the next sync, and a snooze
+// pointing at something gone is harmless (nothing to hide).
+//
+// Per user, not per company: two reps sharing a client each decide their
+// own "not now".
+model SalesQueueSnooze {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  queue     SalesQueue
+  targetKey String
+
+  snoozedUntil DateTime
+  note         String?
+  createdAt    DateTime @default(now())
+
+  // Re-snoozing the same row updates the existing one rather than piling
+  // up rows that all have to be checked.
+  @@unique([userId, queue, targetKey])
+  @@index([userId, snoozedUntil])
+  @@map("sales_queue_snoozes")
+}
+
+enum SalesQueue {
+  FOLLOW_UP
+  PAST_DUE
+  STALLED_DEAL
+  WIN_BACK
 }
 
 // What was actually said, and to whom. The Opportunity's projectDetails

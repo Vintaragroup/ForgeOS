@@ -7,6 +7,8 @@ const daysAgo = (n: number) => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000)
 
 afterEach(async () => {
   // FK order: proposals -> versions -> estimates -> opportunities.
+  // Touches reference companies and contacts, so they go before both.
+  await db.clientTouch.deleteMany();
   await db.salesmateDeal.deleteMany();
   await db.salesmateCompany.deleteMany();
   await db.contact.deleteMany();
@@ -222,6 +224,67 @@ describe("win-back and deal movement", () => {
     expect(staleOpenDeals[0]).toMatchObject({ salesmateId: "100", daysInStage: 75 });
     // Not yet observed changing stage -- reported as unknown, not zero.
     expect(staleOpenDeals[1].daysInStage).toBeNull();
+  });
+});
+
+describe("counts beyond the display cap", () => {
+  // The landing page adds these up into "N things need you today", so a
+  // count that stops at the display cap under-reports for exactly the reps
+  // with the most to do.
+  it("reports the true number of stalled deals and lapsed clients, not the trimmed list length", async () => {
+    const terry = await rep("Terry");
+    const acme = await client("Acme", terry.id, "1", daysAgo(5));
+
+    // 12 stalled open deals -- more than the 10 the list is trimmed to.
+    for (let i = 0; i < 12; i++) {
+      await dealFor(acme.id, terry.id, { id: `2${i}`, status: "Open", value: 1_000 + i, lastComm: daysAgo(40) });
+    }
+    // 9 lapsed clients -- more than the 8 the list is trimmed to.
+    for (let i = 0; i < 9; i++) {
+      const co = await client(`Lapsed ${i}`, terry.id, `9${i}`, daysAgo(200));
+      await dealFor(co.id, terry.id, { id: `3${i}`, status: "Won", value: 5_000 + i, closedAt: daysAgo(500) });
+    }
+
+    const overview = await loadSalesOverview({ ownerUserId: terry.id }, NOW);
+    expect(overview.staleOpenDeals).toHaveLength(10);
+    expect(overview.staleOpenDealCount).toBe(12);
+    expect(overview.lapsed).toHaveLength(8);
+    expect(overview.lapsedCount).toBe(9);
+  });
+});
+
+describe("touch history", () => {
+  it("counts contact with the rep's clients even when Salesmate credits no user", async () => {
+    const terry = await rep("Terry");
+    const acme = await client("Acme", terry.id, "1", daysAgo(5));
+
+    // How the sync records a company-level touch: learned from
+    // lastCommunicationAt moving, with no user to attribute it to.
+    await db.clientTouch.create({
+      data: { companyId: acme.id, occurredAt: daysAgo(3), mode: "Email", byUserId: null, byName: "Terry Genovese" },
+    });
+    // And one the rep is credited with directly.
+    await db.clientTouch.create({
+      data: { companyId: acme.id, occurredAt: daysAgo(10), mode: "Call", byUserId: terry.id },
+    });
+    // Older than the 90-day window.
+    await db.clientTouch.create({
+      data: { companyId: acme.id, occurredAt: daysAgo(120), mode: "Call", byUserId: terry.id },
+    });
+
+    const { touchHistory } = await loadSalesOverview({ ownerUserId: terry.id }, NOW);
+    expect(touchHistory.last30Days).toBe(2);
+    expect(touchHistory.last90Days).toBe(2);
+  });
+
+  it("does not count touches on another rep's clients", async () => {
+    const terry = await rep("Terry");
+    const jan = await rep("Jan");
+    const hers = await client("Jan's Client", jan.id, "2", daysAgo(5));
+    await db.clientTouch.create({ data: { companyId: hers.id, occurredAt: daysAgo(3), byUserId: null } });
+
+    const { touchHistory } = await loadSalesOverview({ ownerUserId: terry.id }, NOW);
+    expect(touchHistory.last90Days).toBe(0);
   });
 });
 

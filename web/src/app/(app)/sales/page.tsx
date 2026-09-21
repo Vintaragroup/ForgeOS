@@ -20,6 +20,7 @@ import {
 } from "@/components/dashboard-shell";
 import { LocalTimestamp } from "@/components/local-timestamp";
 import { AssistantWidget } from "@/components/assistant-widget";
+import { ConfirmActivityButton, LogTouchButton, SnoozeButton } from "@/components/sales-row-actions";
 import { getDepartmentAssistant } from "@/lib/ai/assistant-registry";
 import { listAssistantThreads } from "@/lib/assistant-service";
 
@@ -110,11 +111,24 @@ export default async function SalesPage(props: PageProps<"/sales">) {
   const today = new Date();
   const firstName = user.name.trim().split(/\s+/)[0] ?? user.name;
   // The one number the hero promises: everything waiting on this person.
+  // Counts, not list lengths -- staleOpenDeals and lapsed are trimmed for
+  // display, so adding their .length quietly under-reports for exactly the
+  // busiest reps.
   const needsYou =
-    overview.goingCold.length + overview.scheduled.pastDueCount + overview.staleOpenDeals.length + overview.lapsed.length + reviews.length;
+    overview.goingCold.length +
+    overview.scheduled.pastDueCount +
+    overview.staleOpenDealCount +
+    overview.lapsedCount +
+    reviews.length;
 
   // Each queue shows a handful; the rest is a count, not a scroll.
   const QUEUE_ROWS = 5;
+  // Logging a touch or snoozing writes as the signed-in user, so the write
+  // buttons only appear on your own book. A manager reading someone else's
+  // can still open the client or jump to Salesmate -- they just can't put
+  // words in that rep's mouth, or hide a row from a queue that isn't
+  // theirs.
+  const canAct = viewingSelf;
   const tabHref = (key: string) => `/sales?tab=${key}${repParam ? `&rep=${repParam}` : ""}`;
 
   const tabs: DashTab[] = [
@@ -227,6 +241,12 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                   right={<DashChip tone="critical">{ageLabel(c.lastContactedAt)}</DashChip>}
                   actions={
                     <>
+                      {canAct && (
+                        <>
+                          <LogTouchButton companyId={c.companyId} companyName={c.name} />
+                          <SnoozeButton queue="FOLLOW_UP" targetKey={c.companyId} />
+                        </>
+                      )}
                       <RowAction href={`/companies/${c.companyId}`}>Open</RowAction>
                       {salesmate && (
                         <RowAction href={salesmate} external>
@@ -265,6 +285,12 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                   right={<DashChip tone="critical">{a.daysOverdue}d ago</DashChip>}
                   actions={
                     <>
+                      {canAct && (
+                        <>
+                          <ConfirmActivityButton salesmateId={a.salesmateId} />
+                          <SnoozeButton queue="PAST_DUE" targetKey={a.salesmateId} />
+                        </>
+                      )}
                       {a.companyId && <RowAction href={`/companies/${a.companyId}`}>Open</RowAction>}
                       {salesmate && (
                         <RowAction href={salesmate} external>
@@ -282,10 +308,10 @@ export default async function SalesPage(props: PageProps<"/sales">) {
 
       )}
 
-      {tab === "today" && overview.staleOpenDeals.length > 0 && (
+      {tab === "today" && overview.staleOpenDealCount > 0 && (
       <DashSection
-        title={`PUSH — STALLED DEALS (${overview.staleOpenDeals.length})`}
-        link={overview.staleOpenDeals.length > QUEUE_ROWS ? { href: tabHref("clients"), label: "All clients" } : undefined}
+        title={`PUSH — STALLED DEALS (${overview.staleOpenDealCount})`}
+        link={overview.staleOpenDealCount > QUEUE_ROWS ? { href: tabHref("clients"), label: "All clients" } : undefined}
       >
         {overview.staleOpenDeals.length === 0 ? (
           <DashEmpty>Every open deal has had recent activity.</DashEmpty>
@@ -308,6 +334,12 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                   right={<DashChip tone="neutral">{money(d.value)}</DashChip>}
                   actions={
                     <>
+                      {canAct && (
+                        <>
+                          {d.companyId && <LogTouchButton companyId={d.companyId} companyName={d.companyName ?? "this client"} />}
+                          <SnoozeButton queue="STALLED_DEAL" targetKey={d.salesmateId} />
+                        </>
+                      )}
                       {salesmate && (
                         <RowAction href={salesmate} external>
                           Salesmate
@@ -325,8 +357,8 @@ export default async function SalesPage(props: PageProps<"/sales">) {
 
       )}
 
-      {tab === "today" && overview.lapsed.length > 0 && (
-      <DashSection title={`WIN BACK — NOT THIS YEAR (${overview.lapsed.length})`}>
+      {tab === "today" && overview.lapsedCount > 0 && (
+      <DashSection title={`WIN BACK — NOT THIS YEAR (${overview.lapsedCount})`}>
         {overview.lapsed.length === 0 ? (
           <DashEmpty>Every past client has bought this year or has something open.</DashEmpty>
         ) : (
@@ -337,7 +369,17 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                 title={c.name}
                 sub={clientSub(c)}
                 right={<DashChip tone="neutral">last won {ageLabel(c.lastWonAt)}</DashChip>}
-                actions={<RowAction href={`/companies/${c.companyId}`}>Open</RowAction>}
+                actions={
+                  <>
+                    {canAct && (
+                      <>
+                        <LogTouchButton companyId={c.companyId} companyName={c.name} />
+                        <SnoozeButton queue="WIN_BACK" targetKey={c.companyId} />
+                      </>
+                    )}
+                    <RowAction href={`/companies/${c.companyId}`}>Open</RowAction>
+                  </>
+                }
               />
             ))}
           </DashCard>

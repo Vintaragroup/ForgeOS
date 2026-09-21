@@ -47,7 +47,12 @@ export function ActionForm({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    // The submitter is passed on purpose: a native submit includes the
+    // name/value of the button that did it, and forms that offer several
+    // outcomes (Snooze 1 week / 2 weeks / ...) carry the choice that way.
+    // Building FormData without it silently drops that field.
+    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    const formData = new FormData(event.currentTarget, submitter instanceof HTMLElement ? submitter : null);
     submittedRef.current = true;
     startTransition(() => dispatch(formData));
   }

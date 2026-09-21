@@ -15,6 +15,8 @@ import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { showMonthEnd } from "@/lib/company-aging";
 import { daysSince } from "@/lib/contact-aging";
+import { loadSnoozedKeys } from "@/lib/sales-actions";
+import type { SalesQueueKey } from "@/lib/sales-queue";
 
 export const FORMER_REP_OWNER = "__former__";
 
@@ -93,6 +95,11 @@ export interface SalesOverview {
   // -- the "win them back" list. Ordered by what they used to be worth.
   lapsed: (ClientRow & { lastWonAt: Date | null })[];
   staleOpenDeals: StaleDeal[];
+  // How many there really are. The two lists above are trimmed for
+  // display, so .length under-reports -- and the landing page adds these
+  // up into "N things need you today". Same convention as `scheduled`.
+  lapsedCount: number;
+  staleOpenDealCount: number;
   pipelineByStage: { stage: string; count: number; value: number }[];
   forgeos: { openEstimates: number; proposalsSent: number; proposalsSigned: number };
   // Scheduled work from Salesmate. Past-due ones are shown as "did this
@@ -168,6 +175,12 @@ async function loadDeals(ownerUserId: string | null): Promise<DealRow[]> {
 export async function loadSalesOverview(scope: SalesScope, now: Date = new Date()): Promise<SalesOverview> {
   const yearStart = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
   const twelveMonthsAgo = new Date(now.getTime() - 365 * DAY_MS);
+
+  // Rows this rep has said "not now" to. Filtered out of the queues below
+  // AND out of the counts, so the hero's "N things need you today" agrees
+  // with what they can see.
+  const snoozed = await loadSnoozedKeys(scope.ownerUserId, now);
+  const isSnoozed = (queue: SalesQueueKey, key: string) => snoozed.get(queue)?.has(key) ?? false;
 
   const deals = await loadDeals(scope.ownerUserId);
   const companyIds = [...new Set(deals.map((d) => d.companyId).filter((id): id is string => Boolean(id)))];
@@ -296,7 +309,7 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
 
       const lastTouch = deal.lastCommunicationAt ?? deal.salesmateCreatedAt;
       const quiet = lastTouch ? daysSince(lastTouch, now) : Infinity;
-      if (quiet >= STALE_OPEN_DEAL_DAYS) {
+      if (quiet >= STALE_OPEN_DEAL_DAYS && !isSnoozed("STALLED_DEAL", deal.salesmateId)) {
         staleOpenDeals.push({
           salesmateId: deal.salesmateId, title: deal.title, value, stage: deal.stage,
           daysInStage: deal.stageSince ? daysSince(deal.stageSince, now) : null,
@@ -331,29 +344,50 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
   // A $200k client silent for 100 days outranks a $2k one silent for a year.
   // Bought before, nothing won in the last 12 months, nothing open now.
   const lapsed = clients
-    .filter((c) => c.wonCount > 0 && c.openCount === 0)
+    .filter((c) => c.wonCount > 0 && c.openCount === 0 && !isSnoozed("WIN_BACK", c.companyId))
     .map((c) => ({ ...c, lastWonAt: lastWonByCompany.get(c.companyId) ?? null }))
     .filter((c) => !c.lastWonAt || c.lastWonAt < twelveMonthsAgo)
     .sort((a, b) => b.lifetimeWonValue - a.lifetimeWonValue);
 
   const quiet = clients.filter((c) => !c.lastContactedAt || daysSince(c.lastContactedAt, now) >= COLD_DAYS);
-  const goingCold = quiet
-    .filter((c) => c.lifetimeWonValue > 0 || c.openValue > 0)
+  // Split the value test from the snooze test: quietProspects counts the
+  // quiet clients with no history, so it has to be derived before snoozing
+  // removes any -- otherwise hiding a going-cold client would silently
+  // reclassify it as a prospect.
+  const quietWithHistory = quiet.filter((c) => c.lifetimeWonValue > 0 || c.openValue > 0);
+  const goingCold = quietWithHistory
+    .filter((c) => !isSnoozed("FOLLOW_UP", c.companyId))
     .map((c) => ({ client: c, days: c.lastContactedAt ? daysSince(c.lastContactedAt, now) : 999 }))
     .sort((a, b) => b.client.lifetimeWonValue * b.days - a.client.lifetimeWonValue * a.days)
     .map((x) => x.client);
-  const quietProspects = quiet.length - goingCold.length;
+  const quietProspects = quiet.length - quietWithHistory.length;
 
   const [activityRows, touchAgg, firstTouch] = await Promise.all([
     db.salesmateActivity.findMany({
-      where: { removedAt: null, isCompleted: false, ...(scope.ownerUserId ? { ownerUserId: scope.ownerUserId } : {}) },
+      // confirmedAt is ForgeOS's own answer to "did this happen?" -- once
+      // given, the row is done regardless of what Salesmate's untrustworthy
+      // isCompleted says.
+      where: {
+        removedAt: null,
+        isCompleted: false,
+        confirmedAt: null,
+        ...(scope.ownerUserId ? { ownerUserId: scope.ownerUserId } : {}),
+      },
       select: { salesmateId: true, type: true, title: true, dueAt: true, companyId: true },
       orderBy: { dueAt: "asc" },
     }),
     db.clientTouch.findMany({
       where: {
         occurredAt: { gte: new Date(now.getTime() - 90 * DAY_MS) },
-        ...(scope.ownerUserId ? { byUserId: scope.ownerUserId } : {}),
+        // A rep's contact history is contact with *their clients*, however
+        // it was learned -- not only the touches Salesmate credits to them
+        // by name. Company-level touches (source
+        // SALESMATE_LAST_COMMUNICATION) carry no byUserId at all, and they
+        // were 72 of 139 rows in production, so filtering on byUserId
+        // alone showed every rep about half their real activity.
+        ...(scope.ownerUserId
+          ? { OR: [{ byUserId: scope.ownerUserId }, { companyId: { in: allCompanyIds } }] }
+          : {}),
       },
       select: { occurredAt: true },
     }),
@@ -369,7 +403,7 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
     companyName: a.companyId ? (activityNames.get(a.companyId) ?? null) : null,
     daysOverdue: a.dueAt && a.dueAt < now ? daysSince(a.dueAt, now) : null,
   });
-  const scheduledAll = activityRows.map(toScheduled);
+  const scheduledAll = activityRows.map(toScheduled).filter((a) => !isSnoozed("PAST_DUE", a.salesmateId));
   // Activities attached to a client come first in both lists: an activity
   // with no client link ("Weekly Update", "Tim at SIBOS") is someone's own
   // reminder, not client follow-up, and would otherwise crowd these out.
@@ -385,6 +419,8 @@ export async function loadSalesOverview(scope: SalesScope, now: Date = new Date(
     quietProspects,
     lapsed: lapsed.slice(0, 8),
     staleOpenDeals: staleOpenDeals.sort((a, b) => b.value - a.value).slice(0, 10),
+    lapsedCount: lapsed.length,
+    staleOpenDealCount: staleOpenDeals.length,
     pipelineByStage: [...stageTotals.entries()]
       .map(([stage, t]) => ({ stage, ...t }))
       .sort((a, b) => b.value - a.value),
