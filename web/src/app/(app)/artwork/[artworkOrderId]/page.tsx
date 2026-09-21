@@ -10,6 +10,7 @@ import { CopyLinkBanner } from "@/components/copy-link-banner";
 import { PostShowPhotoUploadForm } from "@/components/post-show-photo-upload-form";
 import { ActionForm } from "@/components/action-form";
 import { ArtworkRoutingEditor } from "@/components/artwork-routing-editor";
+import { REPRINT_REASONS, REPRINT_REASON_LABELS, isActualReprint, reprintReasonRequired } from "@/lib/artwork-reprint";
 import {
   PRODUCTION_STATUSES_BY_KIND,
   PRODUCTION_STATUS_LABELS,
@@ -35,6 +36,7 @@ import {
   setProductionSpecAction,
   setRoutingAction,
   setHalfStatusAction,
+  requestReprintAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -95,6 +97,9 @@ export default async function ArtworkOrderPage({
   const assignVendorWithId = assignVendorAction.bind(null, order.id);
   const setRoutingWithId = setRoutingAction.bind(null, order.id);
   const setHalfStatusWithId = setHalfStatusAction.bind(null, order.id);
+  const requestReprintWithId = requestReprintAction.bind(null, order.id);
+  // REPRINT_REQUESTED is reachable from these three, per ARTWORK_TRANSITIONS.
+  const canReprint = ["IN_PRODUCTION", "RECEIVED_FROM_VENDOR", "INSPECTED"].includes(order.status);
   const confirmMatchWithId = confirmProofMatchAction.bind(null, order.id);
   const requestRevisionWithId = requestProofRevisionAction.bind(null, order.id);
   const resolveEscalationWithId = resolveEscalationAction.bind(null, order.id);
@@ -365,6 +370,43 @@ export default async function ArtworkOrderPage({
                 <Button variant="danger">Reject</Button>
               </form>
             </div>
+          </Card>
+        )}
+
+        {(canReprint || order.reprintReason) && (
+          <Card className="p-6">
+            <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Reprint</h2>
+            {order.reprintReason && (
+              <p className="mb-4 text-sm text-neutral-600">
+                {REPRINT_REASON_LABELS[order.reprintReason]}
+                {order.reprintNote ? ` — ${order.reprintNote}` : ""}
+                {!isActualReprint(order.reprintReason) && " (recorded as added work, not a re-run)"}
+              </p>
+            )}
+            {canReprint && (
+              <ActionForm action={requestReprintWithId} className="flex flex-col gap-3">
+                <SelectField
+                  label="Why is this being reprinted?"
+                  name="reprintReason"
+                  required
+                  defaultValue={order.reprintReason ?? ""}
+                  options={[
+                    { value: "", label: "Select a reason…" },
+                    ...REPRINT_REASONS.filter((r) => r !== "NEW_ORDER_UPSELL").map((r) => ({
+                      value: r,
+                      label: REPRINT_REASON_LABELS[r],
+                    })),
+                  ]}
+                />
+                <Field label="What happened?" name="reprintNote" defaultValue={order.reprintNote ?? ""} />
+                {reprintReasonRequired(order.orderType) && (
+                  <p className="text-xs text-neutral-500">Site prints must always record a reason.</p>
+                )}
+                <div>
+                  <Button variant="secondary">Send back for reprint</Button>
+                </div>
+              </ActionForm>
+            )}
           </Card>
         )}
 

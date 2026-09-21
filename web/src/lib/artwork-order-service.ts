@@ -10,11 +10,13 @@
 import { randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
 import { assignSingleVendor } from "@/lib/artwork-routing";
+import { reprintNoteRequired } from "@/lib/artwork-reprint";
 import { UserError } from "@/lib/user-error";
 import {
   ArtworkOrderStatus,
   type ArtworkActorType,
   type ArtworkOrderType,
+  type ArtworkReprintReason,
   type ExistingGraphicsStatus,
   type PostShowStatus,
   type PostShowCondition,
@@ -596,6 +598,47 @@ export async function assignVendor(artworkOrderId: string, vendorId: string, act
   await assignSingleVendor(artworkOrderId, vendorId);
   await transitionArtworkOrder(artworkOrderId, "VENDOR_ASSIGNED", "ASSIGN_VENDOR", actor);
   return transitionArtworkOrder(artworkOrderId, "PROOF_IN_PROGRESS", "VENDOR_NOTIFIED", { type: "SYSTEM" });
+}
+
+// Sends a piece back to be run again. REPRINT_REQUESTED was a legal
+// transition that nothing could actually reach -- no service function, no
+// button -- so this is the path to it.
+//
+// The reason is recorded on the order, not just the event, because it has
+// to survive the loop back to IN_PRODUCTION: the status says a reprint is
+// happening now, the reason says why it ever did. The yearly executive
+// reprint report is built from the latter.
+export async function requestReprint(
+  artworkOrderId: string,
+  input: { reason: ArtworkReprintReason; note?: string | null },
+  actor: ArtworkActor,
+) {
+  const order = await db.artworkOrder.findFirst({
+    where: { id: artworkOrderId, deletedAt: null },
+    select: { id: true, orderType: true },
+  });
+  if (!order) throw new UserError("That piece no longer exists.");
+
+  // Her column holds this value, but it does not describe a reprint -- it
+  // means the row is additional billable work. Recording it here would put
+  // a piece that was never reprinted into the reprint loop.
+  if (input.reason === "NEW_ORDER_UPSELL") {
+    throw new UserError("An upsell isn't a reprint -- raise it as a new piece instead.");
+  }
+
+  const note = input.note?.trim() || null;
+  if (reprintNoteRequired(input.reason) && !note) {
+    throw new UserError("Say what happened -- \"Other\" on its own doesn't explain anything later.");
+  }
+
+  await db.artworkOrder.update({
+    where: { id: artworkOrderId },
+    data: { reprintReason: input.reason, reprintNote: note },
+  });
+  return transitionArtworkOrder(artworkOrderId, "REPRINT_REQUESTED", "REQUEST_REPRINT", actor, {
+    note,
+    detail: { reprintReason: input.reason },
+  });
 }
 
 // Chains straight through ExpoProofCheck's auto-queueing, mirroring

@@ -1367,6 +1367,24 @@ model ArtworkOrderRouting {
 // "Completed"), because it is not a stage of production at all -- it says
 // where the piece came from or went. ForgeOS already models that axis as
 // PostShowStatus.EXPO_STORAGE and the rollover link.
+// Her six Reprint Reason values, as her list stores them.
+//
+// NEW_ORDER_UPSELL is in this list because her column holds it, not
+// because it is a reprint -- it means the row exists as additional billable
+// work rather than a re-run of something already printed. Kept so an
+// import maps cleanly, and excluded from reprint counts by
+// isActualReprint() in artwork-reprint.ts. Counting upsells as reprints
+// would make the department's quality numbers look worse than they are,
+// and its revenue invisible.
+enum ArtworkReprintReason {
+  PRODUCTION_QUALITY
+  TRANSPORT_HANDLING_DAMAGE
+  INSTALL_SITE_DAMAGE
+  CLIENT_CHANGES
+  NEW_ORDER_UPSELL
+  OTHER
+}
+
 enum ArtworkProductionStatus {
   NOT_STARTED
   PRINTING
@@ -3159,6 +3177,17 @@ model ArtworkOrder {
 
   designerId String?
   designer   User?   @relation("ArtworkOrderDesigner", fields: [designerId], references: [id])
+
+  // Why this piece was re-run, from her tracker's Reprint Reason column.
+  // Required on site prints -- SOP Part 3: "Production tracker should also
+  // indicate reprint reason for all site prints" -- which is why her
+  // site-only export carries one on all 16 rows.
+  //
+  // Nullable and separate from the REPRINT_REQUESTED status: the status
+  // says a reprint is happening now, this says why it ever did, and it
+  // outlives the loop back to IN_PRODUCTION.
+  reprintReason ArtworkReprintReason?
+  reprintNote   String?
 
   // -- Post-show disposition -- set once, after DELIVERED_AT_SHOW. See
   // PostShowStatus/PostShowCondition's own comments for why these are

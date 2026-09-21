@@ -2,7 +2,7 @@
 
 import { setArtworkRouting, setHalfProductionStatus, type RoutingInput } from "@/lib/artwork-routing";
 import { revalidatePath } from "next/cache";
-import type { ArtworkOrderType, ArtworkProductionStatus } from "@/generated/prisma/enums";
+import type { ArtworkOrderType, ArtworkProductionStatus, ArtworkReprintReason } from "@/generated/prisma/enums";
 import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
 import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
 import {
@@ -14,6 +14,7 @@ import {
   setProductionDetail,
   setProductionSpec,
   transitionArtworkOrder,
+  requestReprint,
 } from "@/lib/artwork-order-service";
 import type {
   ExistingGraphicsStatus,
@@ -189,6 +190,20 @@ export async function setHalfStatusAction(
     const status = String(formData.get("status") ?? "").trim();
     if (!routingId || !status) throw new UserError("Pick a status.");
     await setHalfProductionStatus(routingId, status as ArtworkProductionStatus);
+    revalidatePath(`/artwork/${artworkOrderId}`);
+  });
+}
+
+export async function requestReprintAction(
+  artworkOrderId: string,
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const actor = await expoActor(artworkOrderId);
+  return catchUserError(async () => {
+    const reason = String(formData.get("reprintReason") ?? "").trim();
+    if (!reason) throw new UserError("Pick why this is being reprinted.");
+    await requestReprint(artworkOrderId, { reason: reason as ArtworkReprintReason, note: String(formData.get("reprintNote") ?? "") }, actor);
     revalidatePath(`/artwork/${artworkOrderId}`);
   });
 }
