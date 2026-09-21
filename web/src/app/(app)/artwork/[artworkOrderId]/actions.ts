@@ -1,8 +1,8 @@
 "use server";
 
-import { setArtworkRouting, type RoutingInput } from "@/lib/artwork-routing";
+import { setArtworkRouting, setHalfProductionStatus, type RoutingInput } from "@/lib/artwork-routing";
 import { revalidatePath } from "next/cache";
-import type { ArtworkOrderType } from "@/generated/prisma/enums";
+import type { ArtworkOrderType, ArtworkProductionStatus } from "@/generated/prisma/enums";
 import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
 import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
 import {
@@ -174,6 +174,21 @@ export async function setRoutingAction(
       entries.push({ kind: "AM_PM_COORDINATED", note: String(formData.get("amPmNote") ?? "") });
     }
     await setArtworkRouting(artworkOrderId, entries);
+    revalidatePath(`/artwork/${artworkOrderId}`);
+  });
+}
+
+export async function setHalfStatusAction(
+  artworkOrderId: string,
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  await expoActor(artworkOrderId);
+  return catchUserError(async () => {
+    const routingId = String(formData.get("routingId") ?? "").trim();
+    const status = String(formData.get("status") ?? "").trim();
+    if (!routingId || !status) throw new UserError("Pick a status.");
+    await setHalfProductionStatus(routingId, status as ArtworkProductionStatus);
     revalidatePath(`/artwork/${artworkOrderId}`);
   });
 }

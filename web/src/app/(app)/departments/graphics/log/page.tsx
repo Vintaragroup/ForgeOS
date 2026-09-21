@@ -1,3 +1,4 @@
+import { describeRouting } from "@/lib/artwork-routing";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
@@ -157,9 +158,10 @@ export default async function GraphicsProductionLogPage({
                     <th className="py-2 pr-3">Client</th>
                     <th className="py-2 pr-3">Piece</th>
                     <th className="py-2 pr-3">Material</th>
-                    <th className="py-2 pr-3">Vendor</th>
+                    <th className="py-2 pr-3">Produced by</th>
                     <th className="py-2 pr-3">Status</th>
                     <th className="py-2 pr-3">Art due</th>
+                    <th className="py-2 pr-3">In hand</th>
                     <th className="py-2 pr-3">Designer</th>
                   </tr>
                 </thead>
@@ -173,7 +175,7 @@ export default async function GraphicsProductionLogPage({
                       </td>
                       <td className="py-2 pr-3">{order.graphicCode ?? "—"}</td>
                       <td className="py-2 pr-3">{order.material ?? "—"}</td>
-                      <td className="py-2 pr-3">{order.vendor?.name ?? "—"}</td>
+                      <td className="py-2 pr-3">{describeRouting(order.routings)}</td>
                       <td className="py-2 pr-3">
                         <StatusChip tone={PRODUCTION_LOG_STATUS_TONE[order.status] ?? "neutral"}>
                           {order.status.replaceAll("_", " ")}
@@ -181,6 +183,9 @@ export default async function GraphicsProductionLogPage({
                       </td>
                       <td className="py-2 pr-3">
                         {order.artDueDate ? order.artDueDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
+                      </td>
+                      <td className="py-2 pr-3">
+                        {order.inHandDate ? order.inHandDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
                       </td>
                       <td className="py-2 pr-3">{order.designer?.name ?? "—"}</td>
                     </tr>

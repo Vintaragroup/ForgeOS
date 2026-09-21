@@ -10,7 +10,14 @@ import { CopyLinkBanner } from "@/components/copy-link-banner";
 import { PostShowPhotoUploadForm } from "@/components/post-show-photo-upload-form";
 import { ActionForm } from "@/components/action-form";
 import { ArtworkRoutingEditor } from "@/components/artwork-routing-editor";
-import { describeRouting, loadArtworkRouting, signShopOffices } from "@/lib/artwork-routing";
+import {
+  PRODUCTION_STATUSES_BY_KIND,
+  PRODUCTION_STATUS_LABELS,
+  describeRouting,
+  isFullyProduced,
+  loadArtworkRouting,
+  signShopOffices,
+} from "@/lib/artwork-routing";
 import {
   assignVendorAction,
   confirmProofMatchAction,
@@ -27,6 +34,7 @@ import {
   setProductionDetailAction,
   setProductionSpecAction,
   setRoutingAction,
+  setHalfStatusAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -86,6 +94,7 @@ export default async function ArtworkOrderPage({
   const issueQuoteWithId = issueCustomQuoteAction.bind(null, order.id);
   const assignVendorWithId = assignVendorAction.bind(null, order.id);
   const setRoutingWithId = setRoutingAction.bind(null, order.id);
+  const setHalfStatusWithId = setHalfStatusAction.bind(null, order.id);
   const confirmMatchWithId = confirmProofMatchAction.bind(null, order.id);
   const requestRevisionWithId = requestProofRevisionAction.bind(null, order.id);
   const resolveEscalationWithId = resolveEscalationAction.bind(null, order.id);
@@ -361,7 +370,47 @@ export default async function ArtworkOrderPage({
 
         <Card className="p-6">
           <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Production routing</h2>
-          <p className="mb-4 text-sm text-neutral-600">{describeRouting(routings)}</p>
+          <p className="mb-1 text-sm text-neutral-600">{describeRouting(routings)}</p>
+          {routings.length > 0 && (
+            <p className="mb-4 text-xs text-neutral-500">
+              {isFullyProduced(routings)
+                ? "Every half is in."
+                : "Still outstanding — a piece isn't done until both halves are."}
+            </p>
+          )}
+
+          {routings.length > 0 && (
+            <ul className="mb-6 divide-y divide-neutral-200 rounded-md border border-neutral-200">
+              {routings.map((r) => (
+                <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                  <span className="text-sm">
+                    {r.kind === "EXPO_IN_HOUSE"
+                      ? `Expo${r.office ? ` (${r.office.name})` : ""}`
+                      : r.kind === "VENDOR"
+                        ? (r.vendor?.name ?? "Unknown shop")
+                        : "AM/PM coordinating"}
+                  </span>
+                  <ActionForm action={setHalfStatusWithId} className="flex items-center gap-2">
+                    <input type="hidden" name="routingId" value={r.id} />
+                    <select
+                      name="status"
+                      defaultValue={r.productionStatus}
+                      className="rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                    >
+                      {PRODUCTION_STATUSES_BY_KIND[r.kind].map((st) => (
+                        <option key={st} value={st}>
+                          {PRODUCTION_STATUS_LABELS[st]}
+                        </option>
+                      ))}
+                    </select>
+                    <button type="submit" className="rounded-md border border-neutral-300 px-2 py-1 text-xs font-medium hover:border-neutral-500">
+                      Update
+                    </button>
+                  </ActionForm>
+                </li>
+              ))}
+            </ul>
+          )}
           <ArtworkRoutingEditor
             action={setRoutingWithId}
             offices={signShops}

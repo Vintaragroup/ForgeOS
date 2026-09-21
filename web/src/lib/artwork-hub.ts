@@ -88,6 +88,13 @@ export async function getGraphicsOrders(user: { id: string; systemRole: SystemRo
       show: { select: { id: true, name: true, eventStartDate: true } },
       vendor: { select: { name: true } },
       designer: { select: { name: true } },
+      // Where the piece is actually produced. vendor above names only the
+      // first outside shop, so it cannot show a split or in-house work --
+      // see ArtworkOrder.routings.
+      routings: {
+        include: { vendor: { select: { id: true, name: true, initials: true } }, office: { select: { code: true, name: true } } },
+        orderBy: { createdAt: "asc" },
+      },
     },
   });
 }
