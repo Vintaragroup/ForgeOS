@@ -1271,6 +1271,19 @@ model Office {
   name       String
   isStandard Boolean @default(false)
 
+  // Whether this office can produce graphics itself. Confirmed by
+  // Gabriella Maya (Graphics Manager) on 2026-09-21: Miami is the only
+  // Expo facility with dedicated Sign Shop Associates and Production
+  // Artists. Everywhere else routes printing to outside vendors, or has
+  // the AM/PM coordinate it against their own local shops.
+  //
+  // This is why the Miami SOP's "rigid printing defaults to Expo" rule
+  // cannot be applied company-wide: of 371 rigid orders in the Orlando
+  // history, 9 were produced in-house. Whether work stays in-house is a
+  // property of the office, not of the material.
+  hasSignShop          Boolean @default(false)
+  hasProductionArtists Boolean @default(false)
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
