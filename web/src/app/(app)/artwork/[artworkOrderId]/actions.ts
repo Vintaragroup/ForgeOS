@@ -2,6 +2,7 @@
 
 import { setArtworkRouting, type RoutingInput } from "@/lib/artwork-routing";
 import { revalidatePath } from "next/cache";
+import type { ArtworkOrderType } from "@/generated/prisma/enums";
 import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
 import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
 import {
@@ -128,6 +129,7 @@ export async function setProductionDetailAction(artworkOrderId: string, formData
   const rawExistingStatus = String(formData.get("existingGraphicsStatus") ?? "").trim();
   const rawArtDue = String(formData.get("artDueDate") ?? "").trim();
   const rawInHand = String(formData.get("inHandDate") ?? "").trim();
+  const rawOrderType = String(formData.get("orderType") ?? "").trim();
   const rawQty = String(formData.get("qty") ?? "").trim();
   const qty = rawQty ? Number(rawQty) : 1;
   if (!Number.isFinite(qty) || qty < 1) throw new Error("Enter a valid quantity.");
@@ -141,6 +143,7 @@ export async function setProductionDetailAction(artworkOrderId: string, formData
       finishingDetails: String(formData.get("finishingDetails") ?? "").trim() || null,
       artDueDate: rawArtDue ? new Date(rawArtDue) : null,
       inHandDate: rawInHand ? new Date(rawInHand) : null,
+      orderType: (rawOrderType || null) as ArtworkOrderType | null,
       existingGraphicsStatus: EXISTING_GRAPHICS_STATUS_VALUES.includes(rawExistingStatus as ExistingGraphicsStatus)
         ? (rawExistingStatus as ExistingGraphicsStatus)
         : null,

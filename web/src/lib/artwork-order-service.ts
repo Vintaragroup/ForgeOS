@@ -14,6 +14,7 @@ import { UserError } from "@/lib/user-error";
 import {
   ArtworkOrderStatus,
   type ArtworkActorType,
+  type ArtworkOrderType,
   type ExistingGraphicsStatus,
   type PostShowStatus,
   type PostShowCondition,
@@ -400,6 +401,7 @@ export async function setProductionDetail(
     finishingDetails?: string | null;
     artDueDate?: Date | null;
     inHandDate?: Date | null;
+    orderType?: ArtworkOrderType | null;
     existingGraphicsStatus?: ExistingGraphicsStatus | null;
     verifiedSizes?: boolean;
     designerId?: string | null;
@@ -415,6 +417,7 @@ export async function setProductionDetail(
     "finishingDetails",
     "artDueDate",
     "inHandDate",
+    "orderType",
     "existingGraphicsStatus",
     "verifiedSizes",
     "designerId",

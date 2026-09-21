@@ -1330,6 +1330,22 @@ model ArtworkOrderRouting {
   @@map("artwork_order_routings")
 }
 
+// Who an artwork order is for, from the Graphics tracker's "SM or EXH"
+// column. Site work behaves differently from the other two in her SOP --
+// "Site Orders are automatically approved unless stated otherwise", and
+// reprint reason is required on every site print -- so the distinction
+// earns a field rather than being inferred from whether a client is
+// attached.
+enum ArtworkOrderType {
+  // An exhibitor's own booth graphics. Always has a client opportunity.
+  EXHIBITOR
+  // The show organiser's own graphics, where Expo is GC for the show.
+  SHOW_MANAGEMENT
+  // Signage for the show site itself -- service desks, wayfinding,
+  // hanging signs over common areas.
+  SITE
+}
+
 enum ArtworkRoutingKind {
   // Printed by an Expo sign shop. Her Shop column spells this "Expo".
   EXPO_IN_HOUSE
@@ -3033,6 +3049,17 @@ model ArtworkOrder {
   show   Show?   @relation(fields: [showId], references: [id])
 
   status ArtworkOrderStatus @default(INVITED)
+
+  // Who the piece is for. Her tracker's "SM or EXH" column, which carries
+  // three values, not two: SM 107, EXH 96, Site 79 on the Seatrade April
+  // 2026 show.
+  //
+  // ForgeOS approximated two of them structurally -- opportunityId means a
+  // client's own booth, showId means a shared piece owned by no client --
+  // but could not say which of Show Management or Site a shared piece was.
+  // Nullable because that distinction cannot be recovered for the history
+  // we already hold: see the migration's own note.
+  orderType ArtworkOrderType?
 
   sizeTierId String?
   sizeTier   ArtworkSizeTier? @relation(fields: [sizeTierId], references: [id])

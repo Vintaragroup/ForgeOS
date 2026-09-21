@@ -240,6 +240,17 @@ export default async function ArtworkOrderPage({
                 defaultValue={order.inHandDate ? order.inHandDate.toISOString().slice(0, 10) : ""}
               />
               <SelectField
+                label="Order type"
+                name="orderType"
+                defaultValue={order.orderType ?? ""}
+                options={[
+                  { value: "", label: "Not set" },
+                  { value: "EXHIBITOR", label: "Exhibitor booth" },
+                  { value: "SHOW_MANAGEMENT", label: "Show management" },
+                  { value: "SITE", label: "Show site" },
+                ]}
+              />
+              <SelectField
                 label="Existing graphics status"
                 name="existingGraphicsStatus"
                 defaultValue={order.existingGraphicsStatus ?? ""}
