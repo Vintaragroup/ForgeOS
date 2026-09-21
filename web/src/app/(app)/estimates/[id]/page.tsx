@@ -380,7 +380,12 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         include: {
           sections: {
             where: { optionId: null },
-            orderBy: { sortOrder: "asc" },
+            // Tiebreaks matter: sortOrder defaults to 0 on every section,
+            // so an untouched estimate ties on all of them and Postgres
+            // may return them in any order. Same shape lineItems below
+            // already uses, plus id -- createdAt can tie to the
+            // millisecond when sections are added in a loop.
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
             include: {
               lineItems: {
                 orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -394,7 +399,9 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
           },
           options: {
             orderBy: { sortOrder: "asc" },
-            include: { sections: { orderBy: { sortOrder: "asc" }, include: { lineItems: true } } },
+            include: {
+              sections: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }], include: { lineItems: true } },
+            },
           },
           bidPackages: {
             where: { deletedAt: null },

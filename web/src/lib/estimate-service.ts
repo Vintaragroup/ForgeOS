@@ -645,6 +645,13 @@ export async function moveElementGroupOrder(
 
   const sections = await db.estimateSection.findMany({
     where: { estimateVersionId, groupLabel },
+    // Explicit, and with tiebreaks: sortOrder defaults to 0 on every
+    // section, so until someone reorders a booth every row ties. With no
+    // orderBy, Postgres may return a tied set in any order, which made the
+    // element-group order vary between reads -- the same booth could list
+    // its groups differently on two loads, and a move or delete aimed at
+    // the first/last group could act on a different one than was shown.
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
       name: true,
@@ -706,6 +713,13 @@ export async function deleteElementGroup(
 
   const sections = await db.estimateSection.findMany({
     where: { estimateVersionId, groupLabel },
+    // Explicit, and with tiebreaks: sortOrder defaults to 0 on every
+    // section, so until someone reorders a booth every row ties. With no
+    // orderBy, Postgres may return a tied set in any order, which made the
+    // element-group order vary between reads -- the same booth could list
+    // its groups differently on two loads, and a move or delete aimed at
+    // the first/last group could act on a different one than was shown.
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
       name: true,
