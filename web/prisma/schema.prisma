@@ -163,6 +163,7 @@ model User {
   opportunityNotes         OpportunityNote[]
   chatThreads              ChatThread[]
   salesQueueSnoozes        SalesQueueSnooze[]
+  showSectionsLed          ShowSection[]             @relation("ShowSectionLead")
 
   // Salesmate sync: this person's Salesmate user id, matched once by email
   // (then name) so deal/company ownership survives a rename -- see
@@ -338,6 +339,7 @@ model Show {
   // Opportunity -- see ArtworkOrder.showId's own comment.
   artworkOrders ArtworkOrder[]
   skids         Skid[]
+  sections      ShowSection[]
 
   @@map("shows")
 }
@@ -1293,6 +1295,46 @@ model Office {
   artworkRoutings    ArtworkOrderRouting[]
 
   @@map("offices")
+}
+
+// A stretch of show floor, defined by the booth numbers in it.
+//
+// Her tracker's Section column: "Section 1 (100-699)", "Section 2
+// (700-1299)" and so on. SOP Step 8: "If a show has sections for Expo
+// Leads, graphics are organized by booth in that section."
+//
+// A piece is NOT assigned to a section. Which section a booth is in is a
+// fact about the booth number, and the data says so: of the 98 Seatrade
+// rows with both a section and a numeric booth, all 98 fall inside their
+// stated range and none is an exception. Storing it per piece would only
+// create something to drift -- re-drawing a boundary here re-files every
+// affected graphic at once. See sectionForBooth in show-section.ts.
+model ShowSection {
+  id     String @id @default(cuid())
+  showId String
+  show   Show   @relation(fields: [showId], references: [id])
+
+  // As she writes it: "Section 1". The range is carried separately rather
+  // than parsed back out of the label.
+  name String
+
+  // Inclusive, and validated so they can't overlap another section on the
+  // same show -- a booth in two sections has no answer.
+  boothStart Int
+  boothEnd   Int
+
+  // The Graphics Section Lead: "a selected Account Manager or Project
+  // Manager", per SOP Part 2.
+  leadUserId String?
+  lead       User?   @relation("ShowSectionLead", fields: [leadUserId], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([showId, name])
+  @@index([showId])
+  @@map("show_sections")
 }
 
 // A crate of finished graphics, from SOP Step 8.

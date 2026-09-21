@@ -1,5 +1,5 @@
 "use server";
-import { createSkid, markSkidSent } from "@/lib/skid-service";
+import { createShowSection, createSkid, deleteShowSection, markSkidSent } from "@/lib/skid-service";
 import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
 
 import { db } from "@/lib/db";
@@ -145,4 +145,24 @@ export async function markSkidSentAction(showId: string, _prev: ActionResult, fo
   });
   if (!result) revalidatePath(`/shows/${showId}`);
   return result;
+}
+
+export async function createShowSectionAction(showId: string, _prev: ActionResult, formData: FormData): Promise<ActionResult> {
+  if (!(await getCurrentUser())) throw new Error("Not authenticated");
+  const result = await catchUserError(async () => {
+    await createShowSection(showId, {
+      name: String(formData.get("name") ?? ""),
+      boothStart: Number(formData.get("boothStart")),
+      boothEnd: Number(formData.get("boothEnd")),
+      leadUserId: String(formData.get("leadUserId") ?? "") || null,
+    });
+  });
+  if (!result) revalidatePath(`/shows/${showId}`);
+  return result;
+}
+
+export async function deleteShowSectionAction(showId: string, sectionId: string) {
+  if (!(await getCurrentUser())) throw new Error("Not authenticated");
+  await deleteShowSection(sectionId);
+  revalidatePath(`/shows/${showId}`);
 }

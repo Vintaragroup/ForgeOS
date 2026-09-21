@@ -3,9 +3,10 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
-import { assignOpportunityToShowAction, createSkidAction, deleteShow, markSkidSentAction, rolloverShowAction, updateShow } from "../actions";
+import { assignOpportunityToShowAction, createShowSectionAction, createSkidAction, deleteShow, deleteShowSectionAction, markSkidSentAction, rolloverShowAction, updateShow } from "../actions";
 import { ActionForm } from "@/components/action-form";
-import { listSkids } from "@/lib/skid-service";
+import { listShowSections, listSkids } from "@/lib/skid-service";
+import { describeSection } from "@/lib/show-section";
 import { inviteToArtworkPortalAction } from "@/app/(app)/opportunities/[id]/artwork-actions";
 import { Button, Card, EmptyState, Field, PageHeader, SelectField, StatusBanner, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
@@ -33,9 +34,10 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
   });
   if (!show) notFound();
 
-  const skids = await listSkids(show.id);
+  const [skids, sections] = await Promise.all([listSkids(show.id), listShowSections(show.id)]);
   const createSkidWithId = createSkidAction.bind(null, show.id);
   const markSkidSentWithId = markSkidSentAction.bind(null, show.id);
+  const createSectionWithId = createShowSectionAction.bind(null, show.id);
 
   const unassignedOpportunities = await db.opportunity.findMany({
     where: { deletedAt: null, showId: null, ...opportunityAccessWhere(user) },
@@ -207,6 +209,41 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
           </Link>{" "}
           directly under this show.
         </p>
+      </Card>
+
+      <Card className="p-6">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Floor sections</h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Stretches of show floor by booth number, used to group graphics for an Expo Lead. A piece isn&apos;t assigned
+          to one &mdash; its section follows from its booth number, so re-drawing a boundary re-files everything in it
+          at once. Ranges can&apos;t overlap.
+        </p>
+        {sections.length === 0 ? (
+          <EmptyState message="No sections drawn for this show." />
+        ) : (
+          <ul className="mb-4 divide-y divide-neutral-200 rounded-md border border-neutral-200">
+            {sections.map((section) => (
+              <li key={section.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-sm">
+                <span>
+                  <span className="font-medium">{describeSection(section)}</span>
+                  {section.lead && <span className="text-neutral-500"> · lead {section.lead.name}</span>}
+                </span>
+                <ConfirmForm
+                  action={deleteShowSectionAction.bind(null, show.id, section.id)}
+                  confirmMessage={`Remove ${section.name}? Nothing is deleted with it -- sections are derived, so the graphics just stop being grouped.`}
+                >
+                  <Button variant="secondary">Remove</Button>
+                </ConfirmForm>
+              </li>
+            ))}
+          </ul>
+        )}
+        <ActionForm action={createSectionWithId} className="flex flex-wrap items-end gap-3" resetOnSuccess>
+          <Field label="Name" name="name" placeholder="Section 1" required />
+          <Field label="First booth" name="boothStart" type="number" placeholder="100" required />
+          <Field label="Last booth" name="boothEnd" type="number" placeholder="699" required />
+          <Button variant="secondary">Add section</Button>
+        </ActionForm>
       </Card>
 
       <Card className="p-6">

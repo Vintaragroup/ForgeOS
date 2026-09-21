@@ -1,11 +1,23 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { createSkid, listSkids, markSkidSent, packOntoSkid, packingRank, skidContents, sortForPacking } from "@/lib/skid-service";
+import {
+  createShowSection,
+  createSkid,
+  deleteShowSection,
+  listShowSections,
+  listSkids,
+  markSkidSent,
+  packOntoSkid,
+  packingRank,
+  skidContents,
+  sortForPacking,
+} from "@/lib/skid-service";
 import { UserError } from "@/lib/user-error";
 
 afterEach(async () => {
   await db.artworkOrder.deleteMany();
   await db.skid.deleteMany();
+  await db.showSection.deleteMany();
   await db.opportunity.deleteMany();
   await db.company.deleteMany();
   await db.show.deleteMany();
@@ -173,5 +185,51 @@ describe("skidContents", () => {
     await packOntoSkid((await piece(s.id, "Vinyl (White)", "A1")).id, skid.id);
     const [listed] = await listSkids(s.id);
     expect(listed._count.artworkOrders).toBe(1);
+  });
+});
+
+describe("show sections", () => {
+  it("creates the four Seatrade sections", async () => {
+    const s = await show();
+    for (const [name, start, end] of [
+      ["Section 1", 100, 699],
+      ["Section 2", 700, 1299],
+      ["Section 3", 1300, 1799],
+      ["Section 4", 1800, 2299],
+    ] as const) {
+      await createShowSection(s.id, { name, boothStart: start, boothEnd: end });
+    }
+    const listed = await listShowSections(s.id);
+    expect(listed.map((x) => x.name)).toEqual(["Section 1", "Section 2", "Section 3", "Section 4"]);
+  });
+
+  it("refuses a range that overlaps another, since a booth can't be in two", async () => {
+    const s = await show();
+    await createShowSection(s.id, { name: "Section 1", boothStart: 100, boothEnd: 699 });
+    await expect(createShowSection(s.id, { name: "Section 2", boothStart: 600, boothEnd: 900 })).rejects.toThrow(
+      /overlap Section 1 \(100-699\)/,
+    );
+  });
+
+  it("allows a range that abuts the previous one", async () => {
+    const s = await show();
+    await createShowSection(s.id, { name: "Section 1", boothStart: 100, boothEnd: 699 });
+    await expect(createShowSection(s.id, { name: "Section 2", boothStart: 700, boothEnd: 1299 })).resolves.toBeDefined();
+  });
+
+  it("refuses a backwards range and a duplicate name", async () => {
+    const s = await show();
+    await createShowSection(s.id, { name: "Section 1", boothStart: 100, boothEnd: 699 });
+    await expect(createShowSection(s.id, { name: "Section 9", boothStart: 900, boothEnd: 800 })).rejects.toThrow(UserError);
+    await expect(createShowSection(s.id, { name: "Section 1", boothStart: 3000, boothEnd: 3999 })).rejects.toThrow(
+      /already has a Section 1/,
+    );
+  });
+
+  it("lets a deleted section's range be reused", async () => {
+    const s = await show();
+    const sec = await createShowSection(s.id, { name: "Section 1", boothStart: 100, boothEnd: 699 });
+    await deleteShowSection(sec.id);
+    await expect(createShowSection(s.id, { name: "Section A", boothStart: 100, boothEnd: 699 })).resolves.toBeDefined();
   });
 });

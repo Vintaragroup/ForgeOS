@@ -8,6 +8,7 @@
 
 import { db } from "@/lib/db";
 import { UserError } from "@/lib/user-error";
+import { describeSection, overlappingSection } from "@/lib/show-section";
 
 // "PVC panels are packed first due to weight followed by lighter material
 // such as foamboard and vinyl." Lower sorts earlier, so a packing list
@@ -122,4 +123,52 @@ export async function skidContents(skidId: string) {
     },
   });
   return sortForPacking(pieces);
+}
+
+// --- show sections -----------------------------------------------------
+// Sections live here rather than in their own service because they are the
+// other half of the same job: skids are how finished work is grouped to
+// ship, sections are how it is grouped on the floor.
+
+export async function listShowSections(showId: string) {
+  return db.showSection.findMany({
+    where: { showId, deletedAt: null },
+    orderBy: { boothStart: "asc" },
+    include: { lead: { select: { id: true, name: true } } },
+  });
+}
+
+export async function createShowSection(
+  showId: string,
+  input: { name: string; boothStart: number; boothEnd: number; leadUserId?: string | null },
+) {
+  const name = input.name.trim();
+  if (!name) throw new UserError("Name the section.");
+  if (!Number.isSafeInteger(input.boothStart) || !Number.isSafeInteger(input.boothEnd)) {
+    throw new UserError("Booth numbers must be whole numbers.");
+  }
+  if (input.boothEnd < input.boothStart) throw new UserError("The last booth can't come before the first one.");
+
+  const show = await db.show.findFirst({ where: { id: showId, deletedAt: null }, select: { id: true } });
+  if (!show) throw new UserError("That show no longer exists.");
+
+  const existing = await listShowSections(showId);
+  if (existing.some((s) => s.name === name)) throw new UserError(`This show already has a ${name}.`);
+
+  // A booth in two sections has no answer, so overlaps are refused rather
+  // than resolved by whichever row happens to be found first.
+  const clash = overlappingSection(existing, { boothStart: input.boothStart, boothEnd: input.boothEnd });
+  if (clash) {
+    throw new UserError(`Booths ${input.boothStart}-${input.boothEnd} overlap ${describeSection(clash)}.`);
+  }
+
+  return db.showSection.create({
+    data: { showId, name, boothStart: input.boothStart, boothEnd: input.boothEnd, leadUserId: input.leadUserId || null },
+  });
+}
+
+export async function deleteShowSection(sectionId: string) {
+  // Soft delete, and nothing to cascade: no piece points at a section,
+  // because a section is derived from the booth number.
+  await db.showSection.updateMany({ where: { id: sectionId, deletedAt: null }, data: { deletedAt: new Date() } });
 }

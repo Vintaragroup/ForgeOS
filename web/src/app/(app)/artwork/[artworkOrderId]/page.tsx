@@ -11,7 +11,8 @@ import { PostShowPhotoUploadForm } from "@/components/post-show-photo-upload-for
 import { ActionForm } from "@/components/action-form";
 import { ArtworkRoutingEditor } from "@/components/artwork-routing-editor";
 import { REPRINT_REASONS, REPRINT_REASON_LABELS, isActualReprint, reprintReasonRequired } from "@/lib/artwork-reprint";
-import { listSkids } from "@/lib/skid-service";
+import { listShowSections, listSkids } from "@/lib/skid-service";
+import { describeSection, sectionForBooth } from "@/lib/show-section";
 import {
   PRODUCTION_STATUSES_BY_KIND,
   PRODUCTION_STATUS_LABELS,
@@ -90,7 +91,11 @@ export default async function ArtworkOrderPage({
   // Skids belong to a show, and a piece reaches one either directly or
   // through its opportunity -- same two paths the Hub reads.
   const pieceShowId = order.showId ?? order.opportunity?.showId ?? null;
-  const skids = pieceShowId ? await listSkids(pieceShowId) : [];
+  const [skids, showSections] = pieceShowId
+    ? await Promise.all([listSkids(pieceShowId), listShowSections(pieceShowId)])
+    : [[], []];
+  // Derived, never stored -- see show-section.ts.
+  const floorSection = sectionForBooth(showSections, order.opportunity?.boothNumber ?? null);
   // Designers are internal staff in the DE ("Design") department -- see
   // department-home.ts's DEPARTMENT_LABELS for the code list. Falls back
   // to an empty list gracefully (just "Unassigned" in the dropdown) if no
@@ -217,6 +222,7 @@ export default async function ArtworkOrderPage({
             <ReadOnlyField label="Graphic code" value={order.graphicCode} />
             <ReadOnlyField label="Finishing details" value={order.finishingDetails} />
             <ReadOnlyField label="Art due" value={order.artDueDate ? order.artDueDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null} />
+            <ReadOnlyField label="Floor section" value={floorSection ? describeSection(floorSection) : null} />
             <ReadOnlyField label="In hand by" value={order.inHandDate ? order.inHandDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null} />
             <ReadOnlyField
               label="Existing graphics status"
