@@ -337,6 +337,7 @@ model Show {
   // Hub/hanging-sign artwork pieces not owned by any one client's
   // Opportunity -- see ArtworkOrder.showId's own comment.
   artworkOrders ArtworkOrder[]
+  skids         Skid[]
 
   @@map("shows")
 }
@@ -1292,6 +1293,46 @@ model Office {
   artworkRoutings    ArtworkOrderRouting[]
 
   @@map("offices")
+}
+
+// A crate of finished graphics, from SOP Step 8.
+//
+// "On the Production Tracker, the graphics are marked as packed and which
+// skid. This also has the time and date in which the skid is sent out.
+// The sign shop changes the color of the labels to indicate different
+// skids."
+//
+// Scoped to a show, because that is the only scope a skid means anything
+// in: her codes restart at "Item A" for each show, so two shows can both
+// have one.
+model Skid {
+  id     String @id @default(cuid())
+  showId String
+  show   Show   @relation(fields: [showId], references: [id])
+
+  // As the sign shop writes it: "Item A", "Item B". Free text rather than
+  // a generated sequence -- the labels are physical and already exist.
+  code String
+
+  // The sign shop colour-codes labels so a skid is identifiable across a
+  // dock without reading anything. Free text: it is a real colour someone
+  // chose, not a palette this app owns.
+  labelColor String?
+
+  // When the skid physically left. The SOP asks for the time as well as
+  // the date, so this is a timestamp, not a date.
+  sentAt DateTime?
+
+  note      String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  artworkOrders ArtworkOrder[]
+
+  @@unique([showId, code])
+  @@index([showId])
+  @@map("skids")
 }
 
 // One way a piece is being produced. An ArtworkOrder has a set of these --
@@ -3188,6 +3229,14 @@ model ArtworkOrder {
   // outlives the loop back to IN_PRODUCTION.
   reprintReason ArtworkReprintReason?
   reprintNote   String?
+
+  // Which skid this piece was packed onto, and when. Her tracker crams
+  // both into the Packed column, whose choices are Completed, Cancelled
+  // and "Item A" through "Item H" -- a crate identifier sharing a field
+  // with a status.
+  skidId   String?
+  skid     Skid?     @relation(fields: [skidId], references: [id])
+  packedAt DateTime?
 
   // -- Post-show disposition -- set once, after DELIVERED_AT_SHOW. See
   // PostShowStatus/PostShowCondition's own comments for why these are

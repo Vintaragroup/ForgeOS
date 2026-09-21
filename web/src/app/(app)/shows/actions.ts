@@ -1,4 +1,6 @@
 "use server";
+import { createSkid, markSkidSent } from "@/lib/skid-service";
+import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
 
 import { db } from "@/lib/db";
 import { requireAdmin, getCurrentUser } from "@/lib/auth";
@@ -120,4 +122,27 @@ function emptyToNull(value: FormDataEntryValue | null): string | null {
 function emptyToDate(value: FormDataEntryValue | null): Date | null {
   const str = String(value ?? "").trim();
   return str === "" ? null : new Date(str);
+}
+
+export async function createSkidAction(showId: string, _prev: ActionResult, formData: FormData): Promise<ActionResult> {
+  if (!(await getCurrentUser())) throw new Error("Not authenticated");
+  const result = await catchUserError(async () => {
+    await createSkid(showId, {
+      code: String(formData.get("code") ?? ""),
+      labelColor: String(formData.get("labelColor") ?? ""),
+    });
+  });
+  if (!result) revalidatePath(`/shows/${showId}`);
+  return result;
+}
+
+export async function markSkidSentAction(showId: string, _prev: ActionResult, formData: FormData): Promise<ActionResult> {
+  if (!(await getCurrentUser())) throw new Error("Not authenticated");
+  const result = await catchUserError(async () => {
+    const skidId = String(formData.get("skidId") ?? "").trim();
+    if (!skidId) throw new UserError("Which skid?");
+    await markSkidSent(skidId);
+  });
+  if (!result) revalidatePath(`/shows/${showId}`);
+  return result;
 }

@@ -11,6 +11,7 @@ import { PostShowPhotoUploadForm } from "@/components/post-show-photo-upload-for
 import { ActionForm } from "@/components/action-form";
 import { ArtworkRoutingEditor } from "@/components/artwork-routing-editor";
 import { REPRINT_REASONS, REPRINT_REASON_LABELS, isActualReprint, reprintReasonRequired } from "@/lib/artwork-reprint";
+import { listSkids } from "@/lib/skid-service";
 import {
   PRODUCTION_STATUSES_BY_KIND,
   PRODUCTION_STATUS_LABELS,
@@ -37,6 +38,7 @@ import {
   setRoutingAction,
   setHalfStatusAction,
   requestReprintAction,
+  packOntoSkidAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +74,7 @@ export default async function ArtworkOrderPage({
       vendor: true,
       sizeTier: true,
       designer: { select: { name: true } },
+      skid: { select: { id: true, code: true, labelColor: true, sentAt: true } },
       // Only set on a piece created by a Show rollover -- see
       // rolloverArtworkOrder's own comment in artwork-order-service.ts.
       rolledOverFrom: { select: { id: true, jobCode: true, graphicCode: true } },
@@ -84,6 +87,10 @@ export default async function ArtworkOrderPage({
 
   const vendors = await db.vendor.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } });
   const [routings, signShops] = await Promise.all([loadArtworkRouting(order.id), signShopOffices()]);
+  // Skids belong to a show, and a piece reaches one either directly or
+  // through its opportunity -- same two paths the Hub reads.
+  const pieceShowId = order.showId ?? order.opportunity?.showId ?? null;
+  const skids = pieceShowId ? await listSkids(pieceShowId) : [];
   // Designers are internal staff in the DE ("Design") department -- see
   // department-home.ts's DEPARTMENT_LABELS for the code list. Falls back
   // to an empty list gracefully (just "Unassigned" in the dropdown) if no
@@ -98,6 +105,7 @@ export default async function ArtworkOrderPage({
   const setRoutingWithId = setRoutingAction.bind(null, order.id);
   const setHalfStatusWithId = setHalfStatusAction.bind(null, order.id);
   const requestReprintWithId = requestReprintAction.bind(null, order.id);
+  const packOntoSkidWithId = packOntoSkidAction.bind(null, order.id);
   // REPRINT_REQUESTED is reachable from these three, per ARTWORK_TRANSITIONS.
   const canReprint = ["IN_PRODUCTION", "RECEIVED_FROM_VENDOR", "INSPECTED"].includes(order.status);
   const confirmMatchWithId = confirmProofMatchAction.bind(null, order.id);
@@ -370,6 +378,40 @@ export default async function ArtworkOrderPage({
                 <Button variant="danger">Reject</Button>
               </form>
             </div>
+          </Card>
+        )}
+
+        {pieceShowId && (
+          <Card className="p-6">
+            <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Packing</h2>
+            <p className="mb-4 text-sm text-neutral-600">
+              {order.skid
+                ? `On ${order.skid.code}${order.skid.labelColor ? ` (${order.skid.labelColor} label)` : ""}${
+                    order.packedAt ? `, packed ${order.packedAt.toLocaleDateString()}` : ""
+                  }`
+                : "Not packed yet."}
+            </p>
+            {skids.filter((s) => !s.sentAt).length === 0 && !order.skid ? (
+              <EmptyState message="No skid is open for this show -- add one on the show page first." />
+            ) : (
+              <ActionForm action={packOntoSkidWithId} className="flex flex-wrap items-end gap-3">
+                <SelectField
+                  label="Skid"
+                  name="skidId"
+                  defaultValue={order.skidId ?? ""}
+                  options={[
+                    { value: "", label: "— not packed —" },
+                    ...skids
+                      .filter((s) => !s.sentAt || s.id === order.skidId)
+                      .map((s) => ({
+                        value: s.id,
+                        label: `${s.code}${s.labelColor ? ` (${s.labelColor})` : ""}${s.sentAt ? " — sent" : ""}`,
+                      })),
+                  ]}
+                />
+                <Button variant="secondary">Save</Button>
+              </ActionForm>
+            )}
           </Card>
         )}
 

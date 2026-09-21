@@ -3,7 +3,9 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
-import { assignOpportunityToShowAction, deleteShow, rolloverShowAction, updateShow } from "../actions";
+import { assignOpportunityToShowAction, createSkidAction, deleteShow, markSkidSentAction, rolloverShowAction, updateShow } from "../actions";
+import { ActionForm } from "@/components/action-form";
+import { listSkids } from "@/lib/skid-service";
 import { inviteToArtworkPortalAction } from "@/app/(app)/opportunities/[id]/artwork-actions";
 import { Button, Card, EmptyState, Field, PageHeader, SelectField, StatusBanner, StatusChip } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
@@ -30,6 +32,10 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
     },
   });
   if (!show) notFound();
+
+  const skids = await listSkids(show.id);
+  const createSkidWithId = createSkidAction.bind(null, show.id);
+  const markSkidSentWithId = markSkidSentAction.bind(null, show.id);
 
   const unassignedOpportunities = await db.opportunity.findMany({
     where: { deletedAt: null, showId: null, ...opportunityAccessWhere(user) },
@@ -201,6 +207,46 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
           </Link>{" "}
           directly under this show.
         </p>
+      </Card>
+
+      <Card className="p-6">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Skids</h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Crates of finished graphics. The code is whatever the sign shop wrote on the label, and the colour is how
+          it&apos;s told apart on a dock. A skid can&apos;t be sent empty, and nothing can be packed onto one that has
+          already left.
+        </p>
+        {skids.length === 0 ? (
+          <EmptyState message="No skids yet for this show." />
+        ) : (
+          <ul className="mb-4 divide-y divide-neutral-200 rounded-md border border-neutral-200">
+            {skids.map((skid) => (
+              <li key={skid.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-sm">
+                <span>
+                  <span className="font-medium">{skid.code}</span>
+                  {skid.labelColor && <span className="text-neutral-500"> · {skid.labelColor} label</span>}
+                  <span className="text-neutral-500">
+                    {" "}
+                    · {skid._count.artworkOrders} piece{skid._count.artworkOrders === 1 ? "" : "s"}
+                  </span>
+                </span>
+                {skid.sentAt ? (
+                  <StatusChip tone="good">Sent {skid.sentAt.toLocaleString()}</StatusChip>
+                ) : (
+                  <ActionForm action={markSkidSentWithId}>
+                    <input type="hidden" name="skidId" value={skid.id} />
+                    <Button variant="secondary">Mark sent</Button>
+                  </ActionForm>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <ActionForm action={createSkidWithId} className="flex flex-wrap items-end gap-3" resetOnSuccess>
+          <Field label="Skid code" name="code" placeholder="Item A" required />
+          <Field label="Label colour" name="labelColor" placeholder="orange" />
+          <Button variant="secondary">Add skid</Button>
+        </ActionForm>
       </Card>
 
       <Card className="p-6">

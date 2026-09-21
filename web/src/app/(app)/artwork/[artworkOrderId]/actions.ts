@@ -1,6 +1,7 @@
 "use server";
 
 import { setArtworkRouting, setHalfProductionStatus, type RoutingInput } from "@/lib/artwork-routing";
+import { packOntoSkid } from "@/lib/skid-service";
 import { revalidatePath } from "next/cache";
 import type { ArtworkOrderType, ArtworkProductionStatus, ArtworkReprintReason } from "@/generated/prisma/enums";
 import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
@@ -204,6 +205,19 @@ export async function requestReprintAction(
     const reason = String(formData.get("reprintReason") ?? "").trim();
     if (!reason) throw new UserError("Pick why this is being reprinted.");
     await requestReprint(artworkOrderId, { reason: reason as ArtworkReprintReason, note: String(formData.get("reprintNote") ?? "") }, actor);
+    revalidatePath(`/artwork/${artworkOrderId}`);
+  });
+}
+
+export async function packOntoSkidAction(
+  artworkOrderId: string,
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  await expoActor(artworkOrderId);
+  return catchUserError(async () => {
+    const skidId = String(formData.get("skidId") ?? "").trim();
+    await packOntoSkid(artworkOrderId, skidId || null);
     revalidatePath(`/artwork/${artworkOrderId}`);
   });
 }
