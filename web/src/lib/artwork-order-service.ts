@@ -9,7 +9,7 @@
 // who acted.
 import { randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
-import { setArtworkRouting } from "@/lib/artwork-routing";
+import { assignSingleVendor } from "@/lib/artwork-routing";
 import { UserError } from "@/lib/user-error";
 import {
   ArtworkOrderStatus,
@@ -583,11 +583,12 @@ export async function acceptArtworkOrder(artworkOrderId: string, actor: ArtworkA
 // action is uploading a proof, not accepting the job.
 export async function assignVendor(artworkOrderId: string, vendorId: string, actor: ArtworkActor) {
   // Writes the routing set too, so ArtworkOrder.vendorId and
-  // ArtworkOrder.routings can't drift while both exist. Assigning a single
-  // vendor through this path means exactly that -- one VENDOR routing,
-  // replacing whatever was there. A piece split between the sign shop and
-  // an outside vendor is set through setArtworkRouting instead.
-  await setArtworkRouting(artworkOrderId, [{ kind: "VENDOR", vendorId }]);
+  // ArtworkOrder.routings can't drift while both exist. This path means
+  // "the outside shop is X", so it replaces any other VENDOR entry but
+  // leaves in-house or AM/PM-coordinated halves alone -- assigning a
+  // vendor must not silently delete the fact that Miami is printing part
+  // of the same piece.
+  await assignSingleVendor(artworkOrderId, vendorId);
   await transitionArtworkOrder(artworkOrderId, "VENDOR_ASSIGNED", "ASSIGN_VENDOR", actor);
   return transitionArtworkOrder(artworkOrderId, "PROOF_IN_PROGRESS", "VENDOR_NOTIFIED", { type: "SYSTEM" });
 }

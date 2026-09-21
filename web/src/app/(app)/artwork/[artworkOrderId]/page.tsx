@@ -9,6 +9,8 @@ import { Card, PageHeader, StatusChip, Field, SelectField, TextareaField, Button
 import { CopyLinkBanner } from "@/components/copy-link-banner";
 import { PostShowPhotoUploadForm } from "@/components/post-show-photo-upload-form";
 import { ActionForm } from "@/components/action-form";
+import { ArtworkRoutingEditor } from "@/components/artwork-routing-editor";
+import { describeRouting, loadArtworkRouting, signShopOffices } from "@/lib/artwork-routing";
 import {
   assignVendorAction,
   confirmProofMatchAction,
@@ -24,6 +26,7 @@ import {
   reviewArtworkOrderAction,
   setProductionDetailAction,
   setProductionSpecAction,
+  setRoutingAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -70,6 +73,7 @@ export default async function ArtworkOrderPage({
   if (!(await canAccessArtworkOrder(user, order.opportunityId))) notFound();
 
   const vendors = await db.vendor.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } });
+  const [routings, signShops] = await Promise.all([loadArtworkRouting(order.id), signShopOffices()]);
   // Designers are internal staff in the DE ("Design") department -- see
   // department-home.ts's DEPARTMENT_LABELS for the code list. Falls back
   // to an empty list gracefully (just "Unassigned" in the dropdown) if no
@@ -81,6 +85,7 @@ export default async function ArtworkOrderPage({
   const reviewWithId = reviewArtworkOrderAction.bind(null, order.id);
   const issueQuoteWithId = issueCustomQuoteAction.bind(null, order.id);
   const assignVendorWithId = assignVendorAction.bind(null, order.id);
+  const setRoutingWithId = setRoutingAction.bind(null, order.id);
   const confirmMatchWithId = confirmProofMatchAction.bind(null, order.id);
   const requestRevisionWithId = requestProofRevisionAction.bind(null, order.id);
   const resolveEscalationWithId = resolveEscalationAction.bind(null, order.id);
@@ -335,6 +340,17 @@ export default async function ArtworkOrderPage({
             </div>
           </Card>
         )}
+
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Production routing</h2>
+          <p className="mb-4 text-sm text-neutral-600">{describeRouting(routings)}</p>
+          <ArtworkRoutingEditor
+            action={setRoutingWithId}
+            offices={signShops}
+            vendors={vendors.map((v) => ({ id: v.id, name: v.name }))}
+            current={routings.map((r) => ({ kind: r.kind, vendorId: r.vendorId, officeCode: r.officeCode }))}
+          />
+        </Card>
 
         {order.status === "ACCEPTED" && (
           <Card className="p-6">

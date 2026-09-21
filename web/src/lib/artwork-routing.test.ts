@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { describeRouting, loadArtworkRouting, setArtworkRouting, signShopOffices } from "@/lib/artwork-routing";
+import { assignSingleVendor, describeRouting, loadArtworkRouting, setArtworkRouting, signShopOffices } from "@/lib/artwork-routing";
 import { UserError } from "@/lib/user-error";
 
 afterEach(async () => {
@@ -127,5 +127,30 @@ describe("signShopOffices", () => {
   it("offers only offices that can actually produce, so the UI can't suggest a rejection", async () => {
     await fixture();
     expect((await signShopOffices()).map((o) => o.code)).toEqual(["MIA"]);
+  });
+});
+
+describe("assignSingleVendor", () => {
+  it("replaces the outside shop but keeps the in-house half", async () => {
+    const { order, binick, binca } = await fixture();
+    await setArtworkRouting(order.id, [
+      { kind: "EXPO_IN_HOUSE", officeCode: "MIA" },
+      { kind: "VENDOR", vendorId: binick.id },
+    ]);
+
+    await assignSingleVendor(order.id, binca.id);
+
+    const routings = await loadArtworkRouting(order.id);
+    // The in-house half survives -- assigning a vendor must not silently
+    // delete the fact that Miami is printing part of the same piece.
+    expect(routings.map((r) => r.kind).sort()).toEqual(["EXPO_IN_HOUSE", "VENDOR"]);
+    expect(routings.find((r) => r.kind === "VENDOR")?.vendorId).toBe(binca.id);
+  });
+
+  it("works on a piece with no routing yet", async () => {
+    const { order, binick } = await fixture();
+    const routings = await assignSingleVendor(order.id, binick.id);
+    expect(routings).toHaveLength(1);
+    expect(routings[0].vendorId).toBe(binick.id);
   });
 });

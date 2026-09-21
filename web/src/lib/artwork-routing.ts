@@ -113,6 +113,18 @@ export async function setArtworkRouting(artworkOrderId: string, entries: Routing
   return loadArtworkRouting(artworkOrderId);
 }
 
+// "This piece's outside shop is X." Replaces any VENDOR entries but keeps
+// the rest, so assigning a vendor to a piece that is ALSO being produced
+// in-house doesn't silently delete the in-house half -- which is a real
+// shape here: 50 of 282 Seatrade rows are split that way.
+export async function assignSingleVendor(artworkOrderId: string, vendorId: string) {
+  const existing = await loadArtworkRouting(artworkOrderId);
+  const kept: RoutingInput[] = existing
+    .filter((r) => r.kind !== "VENDOR")
+    .map((r) => ({ kind: r.kind, officeCode: r.officeCode, note: r.note }));
+  return setArtworkRouting(artworkOrderId, [...kept, { kind: "VENDOR", vendorId }]);
+}
+
 export async function loadArtworkRouting(artworkOrderId: string) {
   return db.artworkOrderRouting.findMany({
     where: { artworkOrderId },

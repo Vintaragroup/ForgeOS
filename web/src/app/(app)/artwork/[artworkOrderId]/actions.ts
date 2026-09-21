@@ -1,5 +1,6 @@
 "use server";
 
+import { setArtworkRouting, type RoutingInput } from "@/lib/artwork-routing";
 import { revalidatePath } from "next/cache";
 import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
 import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
@@ -147,6 +148,29 @@ export async function setProductionDetailAction(artworkOrderId: string, formData
     actor,
   );
   revalidatePath(`/artwork/${artworkOrderId}`);
+}
+
+export async function setRoutingAction(
+  artworkOrderId: string,
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  await expoActor(artworkOrderId);
+  return catchUserError(async () => {
+    const entries: RoutingInput[] = [];
+    if (formData.get("inHouse")) {
+      entries.push({ kind: "EXPO_IN_HOUSE", officeCode: String(formData.get("officeCode") ?? "").trim() || null });
+    }
+    for (const id of formData.getAll("vendorIds")) {
+      const vendorId = String(id).trim();
+      if (vendorId) entries.push({ kind: "VENDOR", vendorId });
+    }
+    if (formData.get("amPm")) {
+      entries.push({ kind: "AM_PM_COORDINATED", note: String(formData.get("amPmNote") ?? "") });
+    }
+    await setArtworkRouting(artworkOrderId, entries);
+    revalidatePath(`/artwork/${artworkOrderId}`);
+  });
 }
 
 export async function assignVendorAction(artworkOrderId: string, formData: FormData) {
