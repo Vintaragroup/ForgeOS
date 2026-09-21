@@ -399,6 +399,7 @@ export async function setProductionDetail(
     graphicCode?: string | null;
     finishingDetails?: string | null;
     artDueDate?: Date | null;
+    inHandDate?: Date | null;
     existingGraphicsStatus?: ExistingGraphicsStatus | null;
     verifiedSizes?: boolean;
     designerId?: string | null;
@@ -413,6 +414,7 @@ export async function setProductionDetail(
     "graphicCode",
     "finishingDetails",
     "artDueDate",
+    "inHandDate",
     "existingGraphicsStatus",
     "verifiedSizes",
     "designerId",

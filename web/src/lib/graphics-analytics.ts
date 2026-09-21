@@ -31,6 +31,38 @@ function artworkOrderAccessWhere(user: AnalyticsUser) {
   };
 }
 
+// When the work actually happened, for a "since" window.
+//
+// NOT createdAt. For the 639 pieces bulk-imported from the PGA control log
+// that field is the day of the import (2026-09-14), not the day of the
+// job -- so "last 90 days" counted a show that ran in January as this
+// week's work. The show's own date is the honest anchor, since everything
+// in this department schedules against it; the piece's own dates are the
+// fallback, and createdAt only for a row that has none of them.
+const JOB_DATE_SELECT = {
+  createdAt: true,
+  inHandDate: true,
+  artDueDate: true,
+  show: { select: { eventStartDate: true } },
+  opportunity: { select: { show: { select: { eventStartDate: true } } } },
+} as const;
+
+interface JobDated {
+  createdAt: Date;
+  inHandDate: Date | null;
+  artDueDate: Date | null;
+  show: { eventStartDate: Date | null } | null;
+  opportunity: { show: { eventStartDate: Date | null } | null } | null;
+}
+
+export function jobDate(o: JobDated): Date {
+  return o.show?.eventStartDate ?? o.opportunity?.show?.eventStartDate ?? o.inHandDate ?? o.artDueDate ?? o.createdAt;
+}
+
+function inWindow(o: JobDated, since: Date | null): boolean {
+  return since === null || jobDate(o).getTime() >= since.getTime();
+}
+
 export interface VendorTurnaround {
   vendorName: string;
   avgDays: number;
@@ -109,10 +141,11 @@ export async function getRevisionRoundsDistribution(
   user: AnalyticsUser,
   since: Date | null,
 ): Promise<RevisionRoundsBucket[]> {
-  const orders = await db.artworkOrder.findMany({
-    where: { ...artworkOrderAccessWhere(user), ...(since ? { createdAt: { gte: since } } : {}) },
-    select: { revisionRound: true, status: true },
+  const rows = await db.artworkOrder.findMany({
+    where: artworkOrderAccessWhere(user),
+    select: { revisionRound: true, status: true, ...JOB_DATE_SELECT },
   });
+  const orders = rows.filter((o) => inWindow(o, since));
 
   const buckets = { 0: 0, 1: 0, 2: 0, escalated: 0 };
   for (const o of orders) {
@@ -142,10 +175,11 @@ export interface ExistingVsNewSplit {
 }
 
 export async function getExistingVsNewSplit(user: AnalyticsUser, since: Date | null): Promise<ExistingVsNewSplit> {
-  const orders = await db.artworkOrder.findMany({
-    where: { ...artworkOrderAccessWhere(user), ...(since ? { createdAt: { gte: since } } : {}) },
-    select: { existingGraphicsStatus: true },
+  const rows = await db.artworkOrder.findMany({
+    where: artworkOrderAccessWhere(user),
+    select: { existingGraphicsStatus: true, ...JOB_DATE_SELECT },
   });
+  const orders = rows.filter((o) => inWindow(o, since));
   return {
     existingCount: orders.filter((o) => o.existingGraphicsStatus === "EXISTING").length,
     newCount: orders.filter((o) => o.existingGraphicsStatus === "NEW_IMAGE").length,

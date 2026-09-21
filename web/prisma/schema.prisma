@@ -3067,7 +3067,19 @@ model ArtworkOrder {
   // string, not a lookup table, matching how `material` above is itself
   // already a plain string rather than an FK/enum.
   finishingDetails       String?
+  // When the client's artwork is due in. The upstream end of the chain.
   artDueDate             DateTime?
+  // When the printed piece has to be physically in hand -- her tracker's
+  // "OS In-Hand Date", which is filled on all 282 rows of the Seatrade
+  // April 2026 export while artDueDate above has never been populated at
+  // all (0 of 639 in production).
+  //
+  // Deliberately a second field, not a rename. They are opposite ends of
+  // the same chain: art comes in, gets approved, goes to production for
+  // the material's turnaround, and the printed piece lands by this date.
+  // Folding hers into artDueDate would have claimed artwork was due on
+  // the day the finished graphic was needed.
+  inHandDate             DateTime?
   existingGraphicsStatus ExistingGraphicsStatus?
   verifiedSizes          Boolean                 @default(false)
 

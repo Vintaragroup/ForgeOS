@@ -195,6 +195,7 @@ export default async function ArtworkOrderPage({
             <ReadOnlyField label="Graphic code" value={order.graphicCode} />
             <ReadOnlyField label="Finishing details" value={order.finishingDetails} />
             <ReadOnlyField label="Art due" value={order.artDueDate ? order.artDueDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null} />
+            <ReadOnlyField label="In hand by" value={order.inHandDate ? order.inHandDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null} />
             <ReadOnlyField
               label="Existing graphics status"
               value={order.existingGraphicsStatus ? order.existingGraphicsStatus.replaceAll("_", " ") : null}
@@ -231,6 +232,12 @@ export default async function ArtworkOrderPage({
                 name="artDueDate"
                 type="date"
                 defaultValue={order.artDueDate ? order.artDueDate.toISOString().slice(0, 10) : ""}
+              />
+              <Field
+                label="In hand by"
+                name="inHandDate"
+                type="date"
+                defaultValue={order.inHandDate ? order.inHandDate.toISOString().slice(0, 10) : ""}
               />
               <SelectField
                 label="Existing graphics status"

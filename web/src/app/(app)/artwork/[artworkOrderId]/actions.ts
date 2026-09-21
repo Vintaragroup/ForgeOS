@@ -127,6 +127,7 @@ export async function setProductionDetailAction(artworkOrderId: string, formData
   const actor = await expoActor(artworkOrderId);
   const rawExistingStatus = String(formData.get("existingGraphicsStatus") ?? "").trim();
   const rawArtDue = String(formData.get("artDueDate") ?? "").trim();
+  const rawInHand = String(formData.get("inHandDate") ?? "").trim();
   const rawQty = String(formData.get("qty") ?? "").trim();
   const qty = rawQty ? Number(rawQty) : 1;
   if (!Number.isFinite(qty) || qty < 1) throw new Error("Enter a valid quantity.");
@@ -139,6 +140,7 @@ export async function setProductionDetailAction(artworkOrderId: string, formData
       graphicCode: String(formData.get("graphicCode") ?? "").trim() || null,
       finishingDetails: String(formData.get("finishingDetails") ?? "").trim() || null,
       artDueDate: rawArtDue ? new Date(rawArtDue) : null,
+      inHandDate: rawInHand ? new Date(rawInHand) : null,
       existingGraphicsStatus: EXISTING_GRAPHICS_STATUS_VALUES.includes(rawExistingStatus as ExistingGraphicsStatus)
         ? (rawExistingStatus as ExistingGraphicsStatus)
         : null,
