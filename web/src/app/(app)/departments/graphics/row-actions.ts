@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
 import { setProductionDetail, transitionArtworkOrder } from "@/lib/artwork-order-service";
+import { setHalfProductionStatus } from "@/lib/artwork-routing";
+import type { ArtworkProductionStatus } from "@/generated/prisma/enums";
 import { notifyVendorGoAhead } from "@/lib/artwork-notifications";
 import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
 
@@ -82,5 +84,32 @@ export async function issueGoAheadFromDashboardAction(_prev: ActionResult, formD
 
     revalidatePath("/departments/graphics");
     revalidatePath(`/artwork/${artworkOrderId}`);
+  });
+}
+
+// Move ONE half of a piece along, from the shop-floor row. The whole point
+// of per-half status is that the vendor coming back doesn't touch what the
+// sign shop is doing, so this never writes the other half -- see
+// setHalfProductionStatus's own comment.
+export async function setHalfStatusFromDashboardAction(_prev: ActionResult, formData: FormData): Promise<ActionResult> {
+  return catchUserError(async () => {
+    const routingId = String(formData.get("routingId") ?? "").trim();
+    const status = String(formData.get("productionStatus") ?? "").trim();
+    if (!routingId) throw new UserError("Missing the production half to update.");
+    if (!status) throw new UserError("Pick a status.");
+
+    // Access is checked against the routing's OWN order, looked up here
+    // rather than taken from the form -- a routingId is not something the
+    // browser should be able to pair with an arbitrary order id.
+    const routing = await db.artworkOrderRouting.findUnique({
+      where: { id: routingId },
+      select: { artworkOrderId: true },
+    });
+    if (!routing) throw new UserError("That production half no longer exists.");
+    await requireArtworkOrderAccess(routing.artworkOrderId);
+
+    await setHalfProductionStatus(routingId, status as ArtworkProductionStatus);
+    revalidatePath("/departments/graphics");
+    revalidatePath(`/artwork/${routing.artworkOrderId}`);
   });
 }

@@ -29,7 +29,8 @@ import { getMyClientGraphicsSummary, getGraphicsOrders, getWeeklyDeliveredCounts
 import { getGraphicsBreakdowns, getAllClientsSummary } from "@/lib/graphics-breakdowns";
 import { buildTodayBuckets } from "@/lib/graphics-today";
 import { APPROVAL_LEAD_BUSINESS_DAYS } from "@/lib/graphics-sla";
-import { AssignDesignerButton, IssueGoAheadButton } from "@/components/graphics-row-actions";
+import { AssignDesignerButton, IssueGoAheadButton, SetHalfStatusButton } from "@/components/graphics-row-actions";
+import { buildShopFloor } from "@/lib/graphics-shop-floor";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
 // generic Artwork review queue this page is a Graphics-specific front door
@@ -50,7 +51,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // turning the landing page into a scroll. Same rule as the Sales dashboard.
 const QUEUE_ROWS = 6;
 
-type GraphicsTabKey = "today" | "production" | "department";
+type GraphicsTabKey = "today" | "shopfloor" | "production" | "department";
 
 export default async function GraphicsHomePage({
   searchParams,
@@ -309,7 +310,13 @@ export default async function GraphicsHomePage({
   const needsPostShowReviewCount = orders.filter((o) => o.status === "DELIVERED_AT_SHOW" && o.postShowStatus === null).length;
 
   const tab: GraphicsTabKey =
-    tabParam === "production" ? "production" : tabParam === "department" && canSeeOversight ? "department" : "today";
+    tabParam === "shopfloor"
+      ? "shopfloor"
+      : tabParam === "production"
+        ? "production"
+        : tabParam === "department" && canSeeOversight
+          ? "department"
+          : "today";
 
   // Department-tab-only data -- deliberately fetched/computed ONLY when the
   // user can see oversight AND is actually on that tab. Every tab is now a
@@ -326,6 +333,27 @@ export default async function GraphicsHomePage({
         }
       : null;
 
+  // Only built for the tab that renders it -- the grouping walks every
+  // piece's routings, which is wasted work on the other three.
+  const shopFloor =
+    tab === "shopfloor"
+      ? buildShopFloor(
+          orders,
+          (o) => ({
+            status: o.status,
+            inHandDate: o.inHandDate,
+            routings: o.routings.map((r) => ({
+              id: r.id,
+              kind: r.kind,
+              productionStatus: r.productionStatus,
+              vendor: r.vendor,
+              office: r.office,
+            })),
+          }),
+          now,
+        )
+      : null;
+
   const today = new Date();
   const firstName = user.name.trim().split(/\s+/)[0] ?? user.name;
   // The one number the hero promises: every piece of work actually waiting
@@ -336,6 +364,7 @@ export default async function GraphicsHomePage({
   const tabHref = (key: GraphicsTabKey) => `/departments/graphics?tab=${key}`;
   const tabs: DashTab[] = [
     { key: "today", label: "Today", count: needsYou, href: tabHref("today"), active: tab === "today" },
+    { key: "shopfloor", label: "Shop floor", href: tabHref("shopfloor"), active: tab === "shopfloor" },
     {
       key: "production",
       label: "Production",
@@ -677,6 +706,104 @@ export default async function GraphicsHomePage({
             })),
             "Nothing is sitting with a client or a vendor.",
             { href: "/artwork", label: "Artwork queue" },
+          )}
+        </>
+      )}
+
+      {tab === "shopfloor" && shopFloor && (
+        <>
+          <div className="dash-section">
+            <DashStatStrip
+              stats={[
+                { value: String(shopFloor.openHalfCount), label: "Open at a shop" },
+                { value: String(shopFloor.lateHalfCount), label: "Past in-hand date" },
+                { value: String(shopFloor.shops.length), label: "Shops with work" },
+                { value: String(shopFloor.unrouted.length), label: "Not routed anywhere" },
+              ]}
+            />
+          </div>
+
+          {shopFloor.unrouted.length > 0 && (
+            <DashSection title={`NOWHERE TO BE MADE (${shopFloor.unrouted.length})`}>
+              <DashCard>
+                {shopFloor.unrouted.slice(0, QUEUE_ROWS).map((order) => (
+                  <DashRow
+                    key={order.id}
+                    href={`/artwork/${order.id}`}
+                    title={orderTitle(order)}
+                    sub={orderSub(order, "art accepted, no shop assigned")}
+                    right={<DashChip tone="critical">Not routed</DashChip>}
+                  />
+                ))}
+                {shopFloor.unrouted.length > QUEUE_ROWS && (
+                  <DashRow title={`+ ${shopFloor.unrouted.length - QUEUE_ROWS} more`} href="/artwork" />
+                )}
+              </DashCard>
+            </DashSection>
+          )}
+
+          {shopFloor.shops.length === 0 ? (
+            <DashSection title="SHOPS">
+              <DashEmpty>Nothing is out at a shop right now.</DashEmpty>
+            </DashSection>
+          ) : (
+            shopFloor.shops.map((shop) => (
+              <DashSection
+                key={shop.key}
+                title={`${shop.label.toUpperCase()} (${shop.open.length})`}
+                link={
+                  shop.kind === "VENDOR"
+                    ? { href: "/catalog/vendors", label: "Vendors" }
+                    : { href: "/departments/graphics/log", label: "Production log" }
+                }
+              >
+                <DashCard>
+                  {/* The shop's own summary line: where its open work
+                      actually sits, and how much it has already finished --
+                      context a list of six rows can't give on its own. */}
+                  <DashRow
+                    title={
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {shop.byStatus.map((s) => (
+                          <DashChip key={s.status} tone="neutral">
+                            {s.count} {s.label.toLowerCase()}
+                          </DashChip>
+                        ))}
+                      </span>
+                    }
+                    sub={`${shop.settledCount} already settled${shop.lateCount > 0 ? ` · ${shop.lateCount} past its in-hand date` : ""}`}
+                    right={shop.lateCount > 0 ? <DashChip tone="critical">{shop.lateCount} late</DashChip> : undefined}
+                  />
+                  {shop.open.slice(0, QUEUE_ROWS).map((half) => (
+                    <DashRow
+                      key={half.routingId}
+                      href={`/artwork/${half.order.id}`}
+                      title={orderTitle(half.order)}
+                      sub={orderSub(
+                        half.order,
+                        half.inHandDate
+                          ? `in hand ${half.inHandDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                          : "no in-hand date",
+                      )}
+                      right={half.late ? <DashChip tone="critical">Late</DashChip> : undefined}
+                      actions={
+                        <SetHalfStatusButton
+                          routingId={half.routingId}
+                          kind={half.kind}
+                          current={half.productionStatus}
+                        />
+                      }
+                    />
+                  ))}
+                  {shop.open.length > QUEUE_ROWS && (
+                    <DashRow
+                      title={`+ ${shop.open.length - QUEUE_ROWS} more at this shop`}
+                      href="/departments/graphics/log"
+                    />
+                  )}
+                </DashCard>
+              </DashSection>
+            ))
           )}
         </>
       )}

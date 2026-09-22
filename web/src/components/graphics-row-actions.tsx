@@ -2,7 +2,13 @@
 
 import { ActionForm } from "@/components/action-form";
 import { Popover, ROW_BUTTON_CLASS } from "@/components/row-popover";
-import { assignDesignerAction, issueGoAheadFromDashboardAction } from "@/app/(app)/departments/graphics/row-actions";
+import {
+  assignDesignerAction,
+  issueGoAheadFromDashboardAction,
+  setHalfStatusFromDashboardAction,
+} from "@/app/(app)/departments/graphics/row-actions";
+import { PRODUCTION_STATUSES_BY_KIND, PRODUCTION_STATUS_LABELS } from "@/lib/artwork-routing-vocab";
+import type { ArtworkProductionStatus, ArtworkRoutingKind } from "@/generated/prisma/enums";
 
 // The buttons on a Graphics queue row. Same popover Sales uses, same
 // reason: work the queue top to bottom without losing your place.
@@ -75,6 +81,45 @@ export function IssueGoAheadButton({ artworkOrderId }: { artworkOrderId: string 
           >
             Issue go-ahead
           </button>
+        </ActionForm>
+      )}
+    </Popover>
+  );
+}
+
+// The shop floor's own action: move one half along. The options come from
+// PRODUCTION_STATUSES_BY_KIND, so an in-house half is never offered "O.S
+// sent" and an outsourced one is never offered a bare "Printing" -- the
+// same table the server-side validator checks against, which is why that
+// module had to stop importing `db`.
+export function SetHalfStatusButton({
+  routingId,
+  kind,
+  current,
+}: {
+  routingId: string;
+  kind: ArtworkRoutingKind;
+  current: ArtworkProductionStatus;
+}) {
+  return (
+    <Popover label={PRODUCTION_STATUS_LABELS[current]} title="Move this half">
+      {(close) => (
+        <ActionForm action={setHalfStatusFromDashboardAction} className="flex flex-col gap-1.5">
+          <input type="hidden" name="routingId" value={routingId} />
+          {PRODUCTION_STATUSES_BY_KIND[kind].map((status) => (
+            <button
+              key={status}
+              type="submit"
+              name="productionStatus"
+              value={status}
+              disabled={status === current}
+              onClick={() => setTimeout(close, 0)}
+              className="rounded-md border border-neutral-300 px-2 py-1.5 text-left text-xs font-medium text-neutral-700 hover:border-neutral-500 disabled:cursor-default disabled:border-neutral-200 disabled:bg-neutral-50 disabled:text-neutral-400"
+            >
+              {PRODUCTION_STATUS_LABELS[status]}
+              {status === current && " (now)"}
+            </button>
+          ))}
         </ActionForm>
       )}
     </Popover>
