@@ -3,6 +3,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
+import { db } from "@/lib/db";
+import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { getGraphicsOrders } from "@/lib/artwork-hub";
 import { STATUS_GROUPS, clientLabelOf, getGraphicsBreakdowns } from "@/lib/graphics-breakdowns";
 import { PageHeader, Card, StatusChip, EmptyState, SelectField, Button } from "@/components/ui";
@@ -35,6 +37,8 @@ export default async function GraphicsProductionLogPage({
     logStatusGroup?: string;
     logVendor?: string;
     logMaterial?: string;
+    logShow?: string;
+    logArchived?: string;
   }>;
 }) {
   const user = await getCurrentUser();
@@ -48,14 +52,30 @@ export default async function GraphicsProductionLogPage({
   // this deep-dive.
   if (!isGrDept && !isAdmin) redirect("/departments/graphics");
 
-  const { logClient, logStatus, logStatusGroup, logVendor, logMaterial } = await searchParams;
+  const { logClient, logStatus, logStatusGroup, logVendor, logMaterial, logShow, logArchived } = await searchParams;
+  // Off by default: the log is a live work surface first.
+  const includeArchived = logArchived === "1";
 
-  const orders = await getGraphicsOrders(user);
+  const orders = await getGraphicsOrders(user, { includeArchived });
 
   const distinctClients = [...new Set(orders.map(clientLabelOf))].sort();
   const distinctVendors = [...new Set(orders.flatMap((o) => (o.vendor ? [o.vendor.name] : [])))].sort();
   const distinctMaterials = [...new Set(orders.flatMap((o) => (o.material ? [o.material] : [])))].sort();
   const distinctStatuses = [...new Set(orders.map((o) => o.status))].sort();
+  // A piece reaches its show either directly or through its opportunity --
+  // the same two paths the Hub reads.
+  const showOf = (o: (typeof orders)[number]) => o.show?.name ?? o.opportunity?.show?.name ?? null;
+  const distinctShows = [...new Set(orders.flatMap((o) => (showOf(o) ? [showOf(o)!] : [])))].sort();
+  // Counted separately, because when the toggle is off `orders` holds no
+  // archived rows to count. Without this the page can say "0 of 0" while
+  // 921 finished pieces sit behind a checkbox nobody knows to tick.
+  const archivedCount = await db.artworkOrder.count({
+    where: {
+      deletedAt: null,
+      archivedAt: { not: null },
+      ...(isGrDept ? {} : { opportunity: opportunityAccessWhere(user) }),
+    },
+  });
 
   const productionLogOrders = orders.filter((o) => {
     if (logClient && clientLabelOf(o) !== logClient) return false;
@@ -63,6 +83,7 @@ export default async function GraphicsProductionLogPage({
     if (logStatusGroup && !(STATUS_GROUPS[logStatusGroup]?.statuses.includes(o.status) ?? false)) return false;
     if (logVendor && o.vendor?.name !== logVendor) return false;
     if (logMaterial && o.material !== logMaterial) return false;
+    if (logShow && showOf(o) !== logShow) return false;
     return true;
   });
 
@@ -73,13 +94,15 @@ export default async function GraphicsProductionLogPage({
   // whatever's currently applied.
   const { statusGroupRows, vendorRows, clientRows } = getGraphicsBreakdowns(orders);
 
-  const hasActiveFilter = Boolean(logClient || logStatus || logStatusGroup || logVendor || logMaterial);
+  const hasActiveFilter = Boolean(logClient || logStatus || logStatusGroup || logVendor || logMaterial || logShow || includeArchived);
   const exportQuery = new URLSearchParams();
   if (logClient) exportQuery.set("logClient", logClient);
   if (logStatus) exportQuery.set("logStatus", logStatus);
   if (logStatusGroup) exportQuery.set("logStatusGroup", logStatusGroup);
   if (logVendor) exportQuery.set("logVendor", logVendor);
   if (logMaterial) exportQuery.set("logMaterial", logMaterial);
+  if (logShow) exportQuery.set("logShow", logShow);
+  if (includeArchived) exportQuery.set("logArchived", "1");
   const exportHref = `/departments/graphics/log/export${exportQuery.toString() ? `?${exportQuery}` : ""}`;
 
   return (
@@ -139,6 +162,19 @@ export default async function GraphicsProductionLogPage({
                 options={[{ value: "", label: "All materials" }, ...distinctMaterials.map((m) => ({ value: m, label: m }))]}
               />
             </div>
+            <div className="min-w-48">
+              <SelectField
+                label="Show"
+                name="logShow"
+                defaultValue={logShow ?? ""}
+                options={[{ value: "", label: "All shows" }, ...distinctShows.map((sh) => ({ value: sh, label: sh }))]}
+              />
+            </div>
+            <label className="flex items-center gap-2 pb-2 text-sm">
+              <input type="checkbox" name="logArchived" value="1" defaultChecked={includeArchived} className="h-4 w-4" />
+              Include past shows
+              {archivedCount > 0 && <span className="text-neutral-500">({archivedCount})</span>}
+            </label>
             <Button variant="secondary" type="submit">
               Apply
             </Button>
@@ -149,7 +185,13 @@ export default async function GraphicsProductionLogPage({
             )}
           </form>
           {productionLogOrders.length === 0 ? (
-            <EmptyState message="No graphic pieces match these filters." />
+            <EmptyState
+              message={
+                includeArchived
+                  ? "No graphic pieces match these filters."
+                  : "No live graphic pieces match these filters. Tick \u201cInclude past shows\u201d to search finished work too."
+              }
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">

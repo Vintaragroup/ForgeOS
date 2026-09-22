@@ -148,6 +148,9 @@ export default async function ArtworkOrderPage({
       measuredDims = null;
     }
   }
+  // opportunity.show isn't included on this page's query; showName is the
+  // string the opportunity carries either way.
+  const archivedShowName = order.show?.name ?? order.opportunity?.showName ?? null;
   const hasProductionSpec = order.customWidth != null || order.customHeight != null || order.bleedIn != null;
   const specDefaults = {
     widthIn: order.customWidth?.toString() ?? (measuredDims ? measuredDims.widthIn.toFixed(2) : ""),
@@ -163,11 +166,23 @@ export default async function ArtworkOrderPage({
             {order.jobCode}
             <StatusChip tone={STATUS_TONE[order.status] ?? "neutral"}>{order.status.replaceAll("_", " ")}</StatusChip>
             {overdue && <StatusChip tone="critical">SLA overdue</StatusChip>}
+            {order.archivedAt && <StatusChip tone="neutral">Archived</StatusChip>}
           </>
         }
         backHref="/artwork"
         backLabel="Artwork queue"
       />
+
+      {order.archivedAt && (
+        <Card className="mb-6 border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm text-amber-900">
+            <span className="font-semibold">This piece is history.</span> It belongs to{" "}
+            {archivedShowName ?? "a show that has already happened"}, so it is out of the live queues, the dashboard
+            counts and the SLA sweep. Everything below is still editable — correcting a past record is fine, but
+            changes here will not show up as work for anyone.
+          </p>
+        </Card>
+      )}
 
       <div className="flex flex-col gap-6">
         {invite && <CopyLinkBanner link={invite} />}

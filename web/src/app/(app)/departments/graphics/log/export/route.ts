@@ -28,14 +28,19 @@ export async function GET(request: Request) {
   const logStatusGroup = url.searchParams.get("logStatusGroup");
   const logVendor = url.searchParams.get("logVendor");
   const logMaterial = url.searchParams.get("logMaterial");
+  const logShow = url.searchParams.get("logShow");
+  // Mirrors the page exactly. An export that quietly covered a different
+  // set than the screen showed would be worse than no export.
+  const includeArchived = url.searchParams.get("logArchived") === "1";
 
-  const orders = await getGraphicsOrders(user);
+  const orders = await getGraphicsOrders(user, { includeArchived });
   const filtered = orders.filter((o) => {
     if (logClient && clientLabelOf(o) !== logClient) return false;
     if (logStatus && o.status !== logStatus) return false;
     if (logStatusGroup && !(STATUS_GROUPS[logStatusGroup]?.statuses.includes(o.status) ?? false)) return false;
     if (logVendor && o.vendor?.name !== logVendor) return false;
     if (logMaterial && o.material !== logMaterial) return false;
+    if (logShow && (o.show?.name ?? o.opportunity?.show?.name ?? null) !== logShow) return false;
     return true;
   });
 

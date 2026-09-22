@@ -83,8 +83,17 @@ export default async function GraphicsPostShowPage() {
   const notifiedSet = new Set(notifiedEvents.map((e) => e.artworkOrderId));
   const agingDecidedSet = new Set(agingDecidedEvents.map((e) => e.artworkOrderId));
 
-  const damagedAwaitingNotice = damaged.filter((o) => !notifiedSet.has(o.id));
-  const agingAwaitingFollowup = aging.filter((o) => !agingDecidedSet.has(o.id));
+  // Both of these are ACTION queues, not history, so archived pieces come
+  // out of them for the same reason they come out of needsReview above.
+  // Getting this wrong the first time left a red "Damaged -- awaiting
+  // client notice (50)" card on the page in which all 50 were archived
+  // PGA pieces: nobody is chasing a client about a graphic from a show
+  // that closed in January.
+  //
+  // The damaged/aging/discarded lists further down keep everything,
+  // archived included -- those really are history.
+  const damagedAwaitingNotice = damaged.filter((o) => !notifiedSet.has(o.id) && o.archivedAt === null);
+  const agingAwaitingFollowup = aging.filter((o) => !agingDecidedSet.has(o.id) && o.archivedAt === null);
 
   function Row({ order, chip }: { order: (typeof orders)[number]; chip: React.ReactNode }) {
     return (

@@ -74,10 +74,19 @@ export async function getMyClientGraphicsSummary(user: { id: string }): Promise<
 // (departments/graphics/log/page.tsx, for the full filterable table +
 // chart breakdowns) -- one query definition so the two pages' data can't
 // silently drift apart.
-export async function getGraphicsOrders(user: { id: string; systemRole: SystemRole; departmentCode: string | null }) {
+// `includeArchived` exists for the Production Log's "include past shows"
+// toggle, and nothing else. Archiving is right -- last January's graphics
+// are not work -- but with no way to see past it, a department whose
+// history had just been archived opened a log reading "0 of 0" against
+// 921 pieces on file, which reads as data loss rather than a filter.
+// Default stays off, so every other caller is unchanged.
+export async function getGraphicsOrders(
+  user: { id: string; systemRole: SystemRole; departmentCode: string | null },
+  opts: { includeArchived?: boolean } = {},
+) {
   return db.artworkOrder.findMany({
     where: {
-      ...ACTIVE_ARTWORK_ORDER,
+      ...(opts.includeArchived ? { deletedAt: null } : ACTIVE_ARTWORK_ORDER),
       ...(canAccessArtworkOrdersViaDepartment(user) ? {} : { opportunity: opportunityAccessWhere(user) }),
     },
     orderBy: { updatedAt: "desc" },
