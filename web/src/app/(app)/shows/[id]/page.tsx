@@ -36,6 +36,13 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
   const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
 
   const [skids, sections] = await Promise.all([listSkids(show.id), listShowSections(show.id)]);
+  // Pieces hang off a show either directly or through an opportunity --
+  // the same two paths the Graphics Hub reads.
+  const pieceWhere = { deletedAt: null, OR: [{ showId: show.id }, { opportunity: { showId: show.id } }] };
+  const [pieceCount, archivedPieceCount] = await Promise.all([
+    db.artworkOrder.count({ where: pieceWhere }),
+    db.artworkOrder.count({ where: { ...pieceWhere, archivedAt: { not: null } } }),
+  ]);
   const createSkidWithId = createSkidAction.bind(null, show.id);
   const markSkidSentWithId = markSkidSentAction.bind(null, show.id);
   const createSectionWithId = createShowSectionAction.bind(null, show.id);
@@ -116,20 +123,32 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
             <Button>Save changes</Button>
           </div>
         </form>
-        {/* deleteShow already calls requireAdmin(), so this was safe -- but
-            it rendered for everyone, and Graphics users now reach this page
-            to manage skids. A red button that only throws is worse than no
-            button. */}
-        {isAdmin && (
-          <ConfirmForm
-            action={deleteShowWithId}
-            confirmMessage="Delete this show? Its client opportunities stay, just unlinked from it."
-            className="mt-4 border-t border-neutral-200 pt-4"
-          >
-            <Button variant="danger">Delete show</Button>
-          </ConfirmForm>
-        )}
       </Card>
+
+      {pieceCount > 0 && (
+        <Card className="p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">Graphics</h2>
+              <p className="mt-1 text-sm text-neutral-600">
+                <span className="font-medium text-neutral-900">{pieceCount}</span> piece
+                {pieceCount === 1 ? "" : "s"} on this show
+                {archivedPieceCount > 0 && archivedPieceCount === pieceCount
+                  ? " — all finished and archived."
+                  : archivedPieceCount > 0
+                    ? `, ${archivedPieceCount} of them finished and archived.`
+                    : "."}
+              </p>
+            </div>
+            <Link
+              href={`/departments/graphics/log?logShow=${encodeURIComponent(show.name)}${archivedPieceCount > 0 ? "&logArchived=1" : ""}`}
+              className="rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              See its pieces →
+            </Link>
+          </div>
+        </Card>
+      )}
 
       <Card className="p-6">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
@@ -327,6 +346,21 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
           </ConfirmForm>
         )}
       </Card>
+
+      {/* Last on the page, below everything anyone actually came to do.
+          deleteShow already calls requireAdmin(), so this was never a
+          permission hole -- but it sat in the first card, in red, above
+          the clients, sections and skids. Graphics users reach this page
+          to manage skids now, which made its position worse. */}
+      {isAdmin && (
+        <ConfirmForm
+          action={deleteShowWithId}
+          confirmMessage="Delete this show? Its client opportunities stay, just unlinked from it."
+          className="border-t border-neutral-200 pt-6"
+        >
+          <Button variant="danger">Delete show</Button>
+        </ConfirmForm>
+      )}
     </div>
   );
 }

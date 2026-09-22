@@ -53,15 +53,31 @@ const STATUS_TONE: Record<string, "neutral" | "info" | "warning" | "good" | "cri
   DELIVERED_AT_SHOW: "good",
 };
 
+// Eight stacked cards with five separate save buttons became five tabs.
+// The cards themselves are unchanged -- this is about what a coordinator
+// has to scroll past to reach the one they want, and about not offering
+// five saves at once where pressing one silently abandons the others.
+const ARTWORK_TABS = [
+  { key: "details", label: "Details" },
+  { key: "production", label: "Production" },
+  { key: "postshow", label: "Post-show" },
+  { key: "files", label: "Files" },
+  { key: "history", label: "History" },
+] as const;
+
 export default async function ArtworkOrderPage({
   params,
   searchParams,
 }: {
   params: Promise<{ artworkOrderId: string }>;
-  searchParams: Promise<{ invite?: string }>;
+  searchParams: Promise<{ invite?: string; tab?: string }>;
 }) {
   const { artworkOrderId } = await params;
-  const { invite } = await searchParams;
+  const { invite, tab: tabParam } = await searchParams;
+  // Server-rendered tabs, same shape /sales already uses: the tab is in
+  // the URL, so a link can point at one and a reload keeps its place.
+  // Details first because it is what a coordinator opens the piece for.
+  const tab = ARTWORK_TABS.some((t) => t.key === tabParam) ? tabParam! : "details";
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
@@ -184,9 +200,27 @@ export default async function ArtworkOrderPage({
         </Card>
       )}
 
+      <div className="mb-6 flex flex-wrap gap-1 border-b border-neutral-200">
+        {ARTWORK_TABS.map((t) => (
+          <Link
+            key={t.key}
+            href={`/artwork/${order.id}?tab=${t.key}`}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+              tab === t.key
+                ? "border-neutral-900 text-neutral-900"
+                : "border-transparent text-neutral-500 hover:text-neutral-800"
+            }`}
+          >
+            {t.label}
+          </Link>
+        ))}
+      </div>
+
       <div className="flex flex-col gap-6">
         {invite && <CopyLinkBanner link={invite} />}
 
+        {tab === "details" && (
+          <>
         <Card className="p-6">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Order</h2>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -422,7 +456,11 @@ export default async function ArtworkOrderPage({
             </div>
           </Card>
         )}
+          </>
+        )}
 
+        {tab === "production" && (
+          <>
         {pieceShowId && (
           <Card className="p-6">
             <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Packing</h2>
@@ -697,7 +735,11 @@ export default async function ArtworkOrderPage({
             </form>
           </Card>
         )}
+          </>
+        )}
 
+        {tab === "postshow" && (
+          <>
         {order.status === "DELIVERED_AT_SHOW" && (
           <Card className="p-6">
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Post-show</h2>
@@ -824,7 +866,11 @@ export default async function ArtworkOrderPage({
             )}
           </Card>
         )}
+          </>
+        )}
 
+        {tab === "files" && (
+          <>
         <Card className="p-6">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Files</h2>
           {order.files.length === 0 ? (
@@ -858,7 +904,11 @@ export default async function ArtworkOrderPage({
             </ul>
           )}
         </Card>
+          </>
+        )}
 
+        {tab === "history" && (
+          <>
         <Card className="p-6">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Activity</h2>
           {order.events.length === 0 ? (
@@ -880,6 +930,8 @@ export default async function ArtworkOrderPage({
             </ul>
           )}
         </Card>
+          </>
+        )}
       </div>
     </>
   );
