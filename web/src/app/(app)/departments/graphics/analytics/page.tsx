@@ -8,6 +8,7 @@ import {
   getRevisionRoundsDistribution,
   getExistingVsNewSplit,
   getShowComparison,
+  jobDate,
 } from "@/lib/graphics-analytics";
 import { PageHeader, Card, Stat, EmptyState } from "@/components/ui";
 import { BarBreakdown } from "@/components/bar-breakdown";
@@ -43,7 +44,7 @@ export default async function GraphicsAnalyticsPage({
   const since = selectedRange.days ? new Date(now.getTime() - selectedRange.days * DAY_MS) : null;
 
   const [orders, vendorTurnaround, revisionDistribution, existingVsNew, weeklyDelivered] = await Promise.all([
-    getGraphicsOrders(user),
+    getGraphicsOrders(user, { includeArchived: true }),
     getVendorTurnaround(user, since),
     getRevisionRoundsDistribution(user, since),
     getExistingVsNewSplit(user, since),
@@ -52,8 +53,21 @@ export default async function GraphicsAnalyticsPage({
 
   const showComparison = getShowComparison(orders);
 
+  // Two fixes in one line.
+  //
+  // `orders` now includes archived pieces, because this page already
+  // reported on them everywhere else -- revision rounds and the
+  // existing/new split come from graphics-analytics.ts, which has no
+  // archive filter. One page was running two archive policies, and the
+  // visible result was "Delivered this period: 0" sitting beside "921
+  // pieces" on the same screen.
+  //
+  // And the window is jobDate, not updatedAt. updatedAt is when the ROW
+  // was last touched, which for every imported piece is the day of the
+  // import -- so a past show either vanished or all landed in whichever
+  // week it was imported.
   const deliveredInRange = orders.filter(
-    (o) => o.status === "DELIVERED_AT_SHOW" && (!since || o.updatedAt >= since),
+    (o) => o.status === "DELIVERED_AT_SHOW" && (!since || jobDate(o) >= since),
   ).length;
 
   const turnaroundSampleTotal = vendorTurnaround.reduce((sum, v) => sum + v.sampleSize, 0);
@@ -146,7 +160,7 @@ export default async function GraphicsAnalyticsPage({
         <Card className="p-5">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Existing vs. new artwork</h2>
           {existingTotal === 0 ? (
-            <EmptyState message="No orders in this range have existingGraphicsStatus set yet." />
+            <EmptyState message="No pieces in this range have been marked as reusing existing artwork or needing new design." />
           ) : (
             <>
               <div className="flex h-6 overflow-hidden rounded-md">

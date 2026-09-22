@@ -91,7 +91,11 @@ export async function getGraphicsOrders(
     },
     orderBy: { updatedAt: "desc" },
     include: {
-      opportunity: { include: { company: true, show: { select: { id: true, name: true } } } },
+      // eventStartDate matches what the direct `show` relation below
+      // already selects -- the show's date is how anything here tells a
+      // past occurrence from a live one, and it was missing on this path
+      // only.
+      opportunity: { include: { company: true, show: { select: { id: true, name: true, eventStartDate: true } } } },
       // Only set for a Hub/hanging-sign piece with no opportunity -- see
       // ArtworkOrder.showId's schema comment.
       show: { select: { id: true, name: true, eventStartDate: true } },

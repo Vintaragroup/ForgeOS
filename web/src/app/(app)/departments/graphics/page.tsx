@@ -188,14 +188,14 @@ export default async function GraphicsHomePage({
   // its own pipeline stage -- linking it to a show is what MAKES it
   // eligible per canStartArtworkOnboarding, not a result of already being
   // eligible).
-  const [shows, unassignedOpportunities, companies] = await Promise.all([
+  const [shows, unassignedOpportunities, companies, pastShowRows] = await Promise.all([
     // Soonest-first -- the show someone's actually about to work is the one
     // that matters most in a picker, not alphabetical order. A show with no
     // event date set yet (nulls) sorts last, after every dated show.
     db.show.findMany({
       where: { deletedAt: null },
       orderBy: { eventStartDate: { sort: "asc", nulls: "last" } },
-      select: { id: true, name: true },
+      select: { id: true, name: true, eventStartDate: true },
     }),
     db.opportunity.findMany({
       where: { ...startableWhere, deletedAt: null, showId: null },
@@ -209,6 +209,16 @@ export default async function GraphicsHomePage({
     canOnboardNewClient
       ? db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })
       : Promise.resolve([]),
+    // Shows that still have archived pieces on them. Archiving keeps
+    // finished work out of the queues, which is right -- but with no way
+    // to reach it, a department whose history had just been archived saw
+    // a dashboard of zeros and nothing else. This is that history's front
+    // door.
+    db.artworkOrder.groupBy({
+      by: ["showId"],
+      where: { deletedAt: null, archivedAt: { not: null }, showId: { not: null } },
+      _count: { _all: true },
+    }),
   ]);
 
   // Shared with the Production Log page (departments/graphics/log/page.tsx)
@@ -278,6 +288,15 @@ export default async function GraphicsHomePage({
   // In-flight count for the Production Log teaser card below -- everything
   // not yet delivered or cancelled.
   const inFlightLogCount = orders.filter((o) => o.status !== "DELIVERED_AT_SHOW" && o.status !== "CANCELLED").length;
+  // Newest first: last year's occurrence is the one someone rolls forward.
+  const showById = new Map(shows.map((sh) => [sh.id, sh]));
+  const pastShows: { id: string; name: string; eventStartDate: Date | null; pieces: number }[] = [];
+  for (const row of pastShowRows) {
+    const show = row.showId ? showById.get(row.showId) : undefined;
+    if (show) pastShows.push({ ...show, pieces: row._count._all });
+  }
+  pastShows.sort((a, b) => (b.eventStartDate?.getTime() ?? 0) - (a.eventStartDate?.getTime() ?? 0));
+
   const needsPostShowReviewCount = orders.filter((o) => o.status === "DELIVERED_AT_SHOW" && o.postShowStatus === null).length;
 
   // Department-mode-only data -- deliberately fetched/computed ONLY when
@@ -437,6 +456,40 @@ export default async function GraphicsHomePage({
           </Link>
         </div>
       </Card>
+
+      {pastShows.length > 0 && (
+        <Card className="p-5">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">Past shows</h2>
+          <p className="mb-3 text-xs text-neutral-500">
+            Finished work, kept out of the queues above. Open one to see what was produced, or roll it into next
+            year&apos;s occurrence.
+          </p>
+          <ul className="flex flex-col gap-2">
+            {pastShows.map((show) => (
+              <li key={show.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-neutral-200 px-3 py-2">
+                <span className="text-sm">
+                  <Link href={`/shows/${show.id}`} className="font-medium hover:underline">
+                    {show.name}
+                  </Link>
+                  {show.eventStartDate && (
+                    <span className="text-neutral-500">
+                      {" "}
+                      · {show.eventStartDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    </span>
+                  )}
+                  <span className="text-neutral-500"> · {show.pieces} piece{show.pieces === 1 ? "" : "s"}</span>
+                </span>
+                <Link
+                  href={`/departments/graphics/log?logShow=${encodeURIComponent(show.name)}&logArchived=1`}
+                  className="rounded-md border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  See its pieces →
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <div className="flex flex-wrap gap-4 text-sm">
         <Link href="/artwork" className="text-neutral-600 hover:underline">

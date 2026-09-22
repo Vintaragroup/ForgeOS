@@ -134,7 +134,7 @@ export function AppNav({
               id="global-search"
               type="search"
               name="q"
-              placeholder="Search…"
+              placeholder="Search clients, shows, pieces…"
               className="w-40 rounded-md border border-white/10 bg-white/5 py-1.5 pl-8 pr-2.5 text-sm text-neutral-100 placeholder:text-neutral-500 transition-colors focus:w-56 focus:border-white/20 focus:bg-white/10 focus:outline-none"
             />
           </div>
@@ -200,7 +200,7 @@ export function AppNav({
               id="global-search-mobile"
               type="search"
               name="q"
-              placeholder="Search…"
+              placeholder="Search clients, shows, pieces…"
               className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-base text-neutral-100 placeholder:text-neutral-500 focus:border-white/20 focus:bg-white/10 focus:outline-none"
             />
           </form>

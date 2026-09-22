@@ -434,7 +434,13 @@ export default async function ArtworkOrderPage({
                 : "Not packed yet."}
             </p>
             {skids.filter((s) => !s.sentAt).length === 0 && !order.skid ? (
-              <EmptyState message="No skid is open for this show -- add one on the show page first." />
+              <div className="rounded-md border border-dashed border-neutral-300 px-4 py-6 text-center text-sm text-neutral-500">
+                No skid is open for this show.{" "}
+                <Link href={`/shows/${pieceShowId}`} className="font-medium text-neutral-700 underline">
+                  Add one on the show page
+                </Link>{" "}
+                first.
+              </div>
             ) : (
               <ActionForm action={packOntoSkidWithId} className="flex flex-wrap items-end gap-3">
                 <SelectField
