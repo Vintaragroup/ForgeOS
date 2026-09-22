@@ -27,19 +27,21 @@ import {
 } from "@/components/dashboard-shell";
 import { getMyClientGraphicsSummary, getGraphicsOrders, getWeeklyDeliveredCounts, type GraphicsOrder } from "@/lib/artwork-hub";
 import { getGraphicsBreakdowns, getAllClientsSummary } from "@/lib/graphics-breakdowns";
+import { buildTodayBuckets } from "@/lib/graphics-today";
+import { APPROVAL_LEAD_BUSINESS_DAYS } from "@/lib/graphics-sla";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
 // generic Artwork review queue this page is a Graphics-specific front door
 // for -- a live queue, not something that should freeze at build time.
 export const dynamic = "force-dynamic";
 
-// A show starting this soon shows up in the "Starting soon" section below --
-// a Graphics-relevant heads-up window, not a hard business rule (no SLA is
-// tied to it).
-const UPCOMING_SHOW_WINDOW_DAYS = 14;
+// Show proximity is judged by the SOP's own 10-business-day approval lead
+// (APPROVAL_LEAD_BUSINESS_DAYS), not by the arbitrary 14-day "starting
+// soon" window this page used to invent for itself.
+//
 // A REJECTED order sitting this long without a client resubmission is
-// worth a nudge -- shorter than this and it's just normal turnaround time,
-// not something to flag.
+// worth calling out on its row -- shorter than this and it's just normal
+// turnaround time, not something to flag.
 const STALLED_REJECTION_DAYS = 3;
 const THROUGHPUT_WEEKS = 8;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -230,19 +232,6 @@ export default async function GraphicsHomePage({
 
   const now = new Date();
 
-  // ESCALATED gets its own section below rather than folding into this
-  // count -- it needs a manual resolution step, not just a look.
-  const reviewOrders = orders.filter((o) => o.status === "UNDER_ART_REVIEW" || o.status === "EXPO_PROOF_CHECK");
-  const escalatedOrders = orders.filter((o) => o.status === "ESCALATED");
-  // Same SLA rule artwork/page.tsx already uses (EXPO_PROOF_CHECK only) --
-  // not a new/wider definition of "overdue."
-  const slaOverdueOrders = orders.filter(
-    (o) => o.status === "EXPO_PROOF_CHECK" && o.slaDueAt != null && o.slaDueAt < now,
-  );
-  // The overdue ones already have their own section directly above this
-  // one -- listing them twice makes the page look busier than the work is.
-  const overdueIds = new Set(slaOverdueOrders.map((o) => o.id));
-  const reviewOnTimeOrders = reviewOrders.filter((o) => !overdueIds.has(o.id));
   const inFlightOrders = orders.filter((o) => o.status !== "DELIVERED_AT_SHOW");
   const sevenDaysAgo = new Date(now.getTime() - 7 * DAY_MS);
   const deliveredThisWeek = orders.filter((o) => o.status === "DELIVERED_AT_SHOW" && o.updatedAt >= sevenDaysAgo);
@@ -255,14 +244,20 @@ export default async function GraphicsHomePage({
   function eventStartDateOf(order: GraphicsOrder): Date | null {
     return order.opportunity?.eventStartDate ?? order.show?.eventStartDate ?? null;
   }
-  const upcomingWindowEnd = new Date(now.getTime() + UPCOMING_SHOW_WINDOW_DAYS * DAY_MS);
-  const upcomingShowOrders = orders
-    .filter((o) => o.status !== "DELIVERED_AT_SHOW")
-    .filter((o) => {
-      const eventStartDate = eventStartDateOf(o);
-      return eventStartDate != null && eventStartDate >= now && eventStartDate <= upcomingWindowEnd;
-    })
-    .sort((a, b) => eventStartDateOf(a)!.getTime() - eventStartDateOf(b)!.getTime());
+  // What actually has to happen today, per the Miami SOP -- see
+  // graphics-today.ts. Every row lands in exactly one bucket, so nothing is
+  // listed twice.
+  const todayBuckets = buildTodayBuckets(
+    orders,
+    (o) => ({
+      status: o.status,
+      inHandDate: o.inHandDate,
+      material: o.material,
+      graphicCode: o.graphicCode,
+      showStartDate: eventStartDateOf(o),
+    }),
+    now,
+  );
 
   const rejectedOrders = orders.filter((o) => o.status === "REJECTED");
   const rejectedEvents = rejectedOrders.length
@@ -280,10 +275,15 @@ export default async function GraphicsHomePage({
   for (const e of rejectedEvents) {
     if (!latestRejectedAt.has(e.artworkOrderId)) latestRejectedAt.set(e.artworkOrderId, e.createdAt);
   }
-  const stalledRejections = rejectedOrders
-    .map((order) => ({ order, rejectedAt: latestRejectedAt.get(order.id) ?? order.updatedAt }))
-    .filter(({ rejectedAt }) => now.getTime() - rejectedAt.getTime() >= STALLED_REJECTION_DAYS * DAY_MS)
-    .sort((a, b) => a.rejectedAt.getTime() - b.rejectedAt.getTime());
+  // A rejection the client has been sitting on for a while is worth saying
+  // out loud on its row -- the piece is already in "waiting on a client",
+  // this is how long it has been waiting.
+  function rejectionAgeLabel(order: GraphicsOrder): string | null {
+    if (order.status !== "REJECTED") return null;
+    const rejectedAt = latestRejectedAt.get(order.id) ?? order.updatedAt;
+    const days = Math.floor((now.getTime() - rejectedAt.getTime()) / DAY_MS);
+    return days >= STALLED_REJECTION_DAYS ? `rejected ${days}d ago` : null;
+  }
 
   // In-flight count for the Production tab -- everything not yet delivered
   // or cancelled.
@@ -320,9 +320,9 @@ export default async function GraphicsHomePage({
   const today = new Date();
   const firstName = user.name.trim().split(/\s+/)[0] ?? user.name;
   // The one number the hero promises: every piece of work actually waiting
-  // on this department right now.
-  const needsYou =
-    escalatedOrders.length + reviewOrders.length + stalledRejections.length + needsPostShowReviewCount;
+  // on this department right now. Counted by graphics-today, so it can't
+  // drift from what the sections below actually list.
+  const needsYou = todayBuckets.needsYou + needsPostShowReviewCount;
 
   const tabHref = (key: GraphicsTabKey) => `/departments/graphics?tab=${key}`;
   const tabs: DashTab[] = [
@@ -374,13 +374,20 @@ export default async function GraphicsHomePage({
       </span>
     );
   }
-  function orderSub(order: GraphicsOrder) {
+  // Always identifies the piece the same way -- which show, which job code
+  // -- with anything bucket-specific appended by the caller as `note`.
+  function orderSub(order: GraphicsOrder, note?: string | null) {
     const showName = order.opportunity ? order.opportunity.showName : order.show?.name;
-    return [showName, order.jobCode].filter(Boolean).join(" · ");
+    return [showName, order.jobCode, note].filter(Boolean).join(" · ");
+  }
+  interface QueueEntry {
+    order: GraphicsOrder;
+    right: React.ReactNode;
+    note?: string | null;
   }
   function queueSection(
     title: string,
-    rows: { order: GraphicsOrder; right: React.ReactNode }[],
+    rows: QueueEntry[],
     empty: string,
     link?: { href: string; label: string },
   ) {
@@ -390,12 +397,12 @@ export default async function GraphicsHomePage({
           <DashEmpty>{empty}</DashEmpty>
         ) : (
           <DashCard>
-            {rows.slice(0, QUEUE_ROWS).map(({ order, right }) => (
+            {rows.slice(0, QUEUE_ROWS).map(({ order, right, note }) => (
               <DashRow
                 key={order.id}
                 href={`/artwork/${order.id}`}
                 title={orderTitle(order)}
-                sub={orderSub(order)}
+                sub={orderSub(order, note)}
                 right={right}
               />
             ))}
@@ -407,6 +414,11 @@ export default async function GraphicsHomePage({
       </DashSection>
     );
   }
+
+  // A turnaround inferred from a piece with no material on file is a
+  // default, not a fact -- 282 imported Seatrade rows have none. The row
+  // says so rather than presenting the guess as a deadline.
+  const estimatedNote = (turnaroundIsKnown: boolean) => (turnaroundIsKnown ? null : "turnaround estimated");
 
   return (
     <DashboardShell
@@ -549,10 +561,10 @@ export default async function GraphicsHomePage({
           <div className="dash-section">
             <DashStatStrip
               stats={[
-                { value: String(reviewOrders.length), label: "Awaiting review", href: "/artwork" },
-                { value: String(slaOverdueOrders.length), label: "SLA overdue", href: "/artwork" },
+                { value: String(todayBuckets.waitingOnUs.length), label: "Waiting on us", href: "/artwork" },
+                { value: String(todayBuckets.overdue.length), label: "Past in-hand date", href: "/departments/graphics/log" },
+                { value: String(todayBuckets.rushRisk.length), label: "Rush-fee risk", href: "/departments/graphics/log" },
                 { value: String(inFlightOrders.length), label: "In flight", href: "/departments/graphics/log" },
-                { value: String(deliveredThisWeek.length), label: "Delivered this week", href: "/departments/graphics/log" },
                 {
                   value: String(needsPostShowReviewCount),
                   label: "Post-show to review",
@@ -562,70 +574,90 @@ export default async function GraphicsHomePage({
             />
           </div>
 
-          {escalatedOrders.length > 0 &&
+          {todayBuckets.escalated.length > 0 &&
             queueSection(
-              "ESCALATED — NEEDS MANUAL RESOLUTION",
-              escalatedOrders.map((order) => ({ order, right: <DashChip tone="critical">Escalated</DashChip> })),
+              "ESCALATED — NOTHING MOVES UNTIL THIS IS DECIDED",
+              todayBuckets.escalated.map(({ order, sla }) => ({
+                order,
+                right: <DashChip tone="critical">Escalated</DashChip>,
+                note: sla?.overdue ? `${Math.abs(sla.businessDaysRemaining)} business days past in-hand` : null,
+              })),
               "",
             )}
 
-          {slaOverdueOrders.length > 0 &&
+          {todayBuckets.overdue.length > 0 &&
             queueSection(
-              "SLA OVERDUE",
-              slaOverdueOrders.map((order) => ({
+              "PAST ITS IN-HAND DATE",
+              todayBuckets.overdue.map(({ order, sla, turnaroundIsKnown }) => ({
+                order,
+                right: <DashChip tone="critical">{Math.abs(sla.businessDaysRemaining)}d over</DashChip>,
+                note: estimatedNote(turnaroundIsKnown),
+              })),
+              "",
+              { href: "/departments/graphics/log", label: "Production log" },
+            )}
+
+          {todayBuckets.rushRisk.length > 0 &&
+            queueSection(
+              "RUSH-FEE RISK",
+              todayBuckets.rushRisk.map(({ order, sla, turnaroundIsKnown }) => ({
                 order,
                 right: (
                   <DashChip tone="critical">
-                    {Math.max(1, Math.floor((now.getTime() - order.slaDueAt!.getTime()) / DAY_MS))}d over
+                    {sla.businessDaysRemaining}d left, needs {sla.turnaroundDays}
+                  </DashChip>
+                ),
+                note: estimatedNote(turnaroundIsKnown),
+              })),
+              "",
+              { href: "/departments/graphics/log", label: "Production log" },
+            )}
+
+          {todayBuckets.approvalWindow.length > 0 &&
+            queueSection(
+              `NOT APPROVED, SHOW INSIDE ${APPROVAL_LEAD_BUSINESS_DAYS} BUSINESS DAYS`,
+              todayBuckets.approvalWindow.map(({ order, businessDaysToShow }) => ({
+                order,
+                right: (
+                  <DashChip tone={businessDaysToShow <= 0 ? "critical" : "info"}>
+                    {businessDaysToShow <= 0 ? "show has started" : `${businessDaysToShow}d to setup`}
                   </DashChip>
                 ),
               })),
               "",
-              { href: "/artwork", label: "Artwork queue" },
+              { href: "/shows", label: "All shows" },
             )}
 
           {queueSection(
-            "AWAITING REVIEW",
-            reviewOnTimeOrders.map((order) => ({
-              order,
-              right: (
-                <DashChip tone={order.status === "EXPO_PROOF_CHECK" ? "info" : "neutral"}>
-                  {order.status === "EXPO_PROOF_CHECK" ? "Proof check" : "Art review"}
-                </DashChip>
-              ),
-            })),
-            "Nothing is sitting in review.",
+            "WAITING ON US",
+            todayBuckets.waitingOnUs.map(({ order, nextStep }) => {
+              // The 24h proof-check timer is the one SLA the system has
+              // always enforced -- it outranks the generic next-step label.
+              const proofCheckLate = order.status === "EXPO_PROOF_CHECK" && order.slaDueAt != null && order.slaDueAt < now;
+              return {
+                order,
+                right: proofCheckLate ? (
+                  <DashChip tone="critical">
+                    Proof check {Math.max(1, Math.floor((now.getTime() - order.slaDueAt!.getTime()) / DAY_MS))}d over
+                  </DashChip>
+                ) : (
+                  <DashChip tone="info">{nextStep}</DashChip>
+                ),
+              };
+            }),
+            "Nothing is sitting with Graphics.",
             { href: "/artwork", label: "Artwork queue" },
           )}
 
           {queueSection(
-            `STARTING SOON — NEXT ${UPCOMING_SHOW_WINDOW_DAYS} DAYS`,
-            upcomingShowOrders.map((order) => {
-              const daysUntil = Math.ceil((eventStartDateOf(order)!.getTime() - now.getTime()) / DAY_MS);
-              return {
-                order,
-                right: (
-                  <DashChip tone={daysUntil <= 3 ? "critical" : "info"}>
-                    {daysUntil === 0 ? "Today" : `${daysUntil}d`}
-                  </DashChip>
-                ),
-              };
-            }),
-            "Nothing with an artwork order in flight is starting soon.",
-            { href: "/shows", label: "All shows" },
-          )}
-
-          {queueSection(
-            "AWAITING CLIENT RESUBMISSION",
-            stalledRejections.map(({ order, rejectedAt }) => ({
+            "WAITING ON A CLIENT OR VENDOR",
+            todayBuckets.waitingOnOthers.map(({ order, nextStep }) => ({
               order,
-              right: (
-                <DashChip tone="neutral">
-                  {Math.floor((now.getTime() - rejectedAt.getTime()) / DAY_MS)}d since rejected
-                </DashChip>
-              ),
+              right: <DashChip tone="neutral">{nextStep}</DashChip>,
+              note: rejectionAgeLabel(order),
             })),
-            "No rejected submissions have been sitting for a while.",
+            "Nothing is sitting with a client or a vendor.",
+            { href: "/artwork", label: "Artwork queue" },
           )}
         </>
       )}
