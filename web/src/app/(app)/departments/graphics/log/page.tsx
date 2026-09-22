@@ -89,6 +89,15 @@ export default async function GraphicsProductionLogPage({
 
   // Charts are computed from the FULL order set, not productionLogOrders --
   // they're a navigation surface into a filter, not a live summary of
+  // The table renders every filtered row into the DOM, which is fine at a
+  // few hundred and not at 1,200 -- the count with past shows included.
+  // Capped rather than paginated: this page's job is "find the piece I'm
+  // thinking of", which the filters above do, and the CSV export already
+  // carries the complete set for anyone who wants all of it.
+  const ROW_CAP = 200;
+  const visibleOrders = productionLogOrders.slice(0, ROW_CAP);
+  const hiddenRowCount = productionLogOrders.length - visibleOrders.length;
+
   // whatever's already filtered. Every row's own href replaces the filter
   // entirely (a fresh "show me all of X"), rather than merging with
   // whatever's currently applied.
@@ -208,7 +217,7 @@ export default async function GraphicsProductionLogPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {productionLogOrders.map((order) => (
+                  {visibleOrders.map((order) => (
                     <tr key={order.id} className="border-b border-neutral-100">
                       <td className="py-2 pr-3">
                         <Link href={`/artwork/${order.id}`} className="flex items-center gap-2 hover:underline">
@@ -234,6 +243,12 @@ export default async function GraphicsProductionLogPage({
                   ))}
                 </tbody>
               </table>
+              {hiddenRowCount > 0 && (
+                <p className="mt-3 text-xs text-neutral-500">
+                  Showing the first {ROW_CAP} of {productionLogOrders.length}. Narrow the filters above to find a
+                  specific piece, or export the CSV for the complete list.
+                </p>
+              )}
             </div>
           )}
         </Card>

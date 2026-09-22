@@ -17,7 +17,7 @@
 // a real "went overdue" event gets logged going forward.
 
 import { db } from "@/lib/db";
-import type { SystemRole } from "@/generated/prisma/enums";
+import type { ArtworkOrderStatus, SystemRole } from "@/generated/prisma/enums";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import type { GraphicsOrder } from "@/lib/artwork-hub";
@@ -137,6 +137,30 @@ export interface RevisionRoundsBucket {
 // revisionRound at 2 rather than incrementing to 3, so an escalation isn't
 // otherwise distinguishable from "capped out at 2 rounds, not escalated"
 // by revisionRound alone.
+// Once the client has signed the proof off, the piece's revision count is
+// a fact about how many rounds it took. Before that, revisionRound is just
+// its default of 0 -- and counting those as first-pass approvals reported
+// 281 pieces nobody had looked at yet as a perfect first-pass record, and
+// dragged "avg revision rounds" to 0.0 along with them.
+//
+// revisionRound > 0 also counts: a piece still mid-loop, or one cancelled
+// after a round or two, has demonstrably been reviewed.
+const PAST_PROOF_APPROVAL: ReadonlySet<ArtworkOrderStatus> = new Set([
+  "PROOF_APPROVED",
+  "PRODUCTION_GO_AHEAD",
+  "IN_PRODUCTION",
+  "RECEIVED_FROM_VENDOR",
+  "INSPECTED",
+  "REPRINT_REQUESTED",
+  "PACKAGED_READY",
+  "SHIPPED_TO_SHOW",
+  "DELIVERED_AT_SHOW",
+]);
+
+export function hasBeenThroughProofReview(order: { status: ArtworkOrderStatus; revisionRound: number }): boolean {
+  return PAST_PROOF_APPROVAL.has(order.status) || order.revisionRound > 0;
+}
+
 export async function getRevisionRoundsDistribution(
   user: AnalyticsUser,
   since: Date | null,
@@ -147,10 +171,12 @@ export async function getRevisionRoundsDistribution(
   });
   const orders = rows.filter((o) => inWindow(o, since));
 
-  const buckets = { 0: 0, 1: 0, 2: 0, escalated: 0 };
+  const buckets = { 0: 0, 1: 0, 2: 0, escalated: 0, unreviewed: 0 };
   for (const o of orders) {
     if (o.status === "ESCALATED") {
       buckets.escalated += 1;
+    } else if (!hasBeenThroughProofReview(o)) {
+      buckets.unreviewed += 1;
     } else if (o.revisionRound === 0) {
       buckets[0] += 1;
     } else if (o.revisionRound === 1) {
@@ -160,11 +186,15 @@ export async function getRevisionRoundsDistribution(
     }
   }
 
+  // "Not yet through proof review" sits LAST on purpose: the Analytics
+  // page averages the first three buckets by index, so a new bucket at the
+  // front would silently shift 1-round orders into the 0-round weighting.
   return [
     { label: "0 rounds (first-pass approval)", count: buckets[0] },
     { label: "1 round", count: buckets[1] },
     { label: "2 rounds", count: buckets[2] },
     { label: "Escalated (unresolved)", count: buckets.escalated },
+    { label: "Not yet through proof review", count: buckets.unreviewed },
   ];
 }
 

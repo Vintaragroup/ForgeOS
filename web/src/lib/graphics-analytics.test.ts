@@ -1,12 +1,7 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import type { GraphicsOrder } from "@/lib/artwork-hub";
-import {
-  getVendorTurnaround,
-  getRevisionRoundsDistribution,
-  getExistingVsNewSplit,
-  getShowComparison,
-} from "@/lib/graphics-analytics";
+import { getExistingVsNewSplit, getRevisionRoundsDistribution, getShowComparison, getVendorTurnaround, hasBeenThroughProofReview } from "@/lib/graphics-analytics";
 
 const grUser = { id: "gr-user", systemRole: "EMPLOYEE" as const, departmentCode: "GR" };
 
@@ -27,7 +22,7 @@ let jobCodeCounter = 0;
 async function makeOrder(overrides: {
   vendorId?: string | null;
   revisionRound?: number;
-  status?: "INVITED" | "ESCALATED";
+  status?: "INVITED" | "ESCALATED" | "PROOF_APPROVED";
   existingGraphicsStatus?: "EXISTING" | "NEW_IMAGE" | null;
   createdAt?: Date;
 }) {
@@ -107,7 +102,10 @@ describe("getVendorTurnaround", () => {
 
 describe("getRevisionRoundsDistribution", () => {
   it("buckets orders by revisionRound, with ESCALATED status as its own bucket regardless of revisionRound", async () => {
-    await makeOrder({ revisionRound: 0 });
+    // A 0-round order only counts as a first-pass approval once it has
+    // actually been approved -- makeOrder's default status has not, so it
+    // gets an explicit one here.
+    await makeOrder({ revisionRound: 0, status: "PROOF_APPROVED" });
     await makeOrder({ revisionRound: 1 });
     await makeOrder({ revisionRound: 2 });
     await makeOrder({ revisionRound: 2, status: "ESCALATED" });
@@ -118,7 +116,22 @@ describe("getRevisionRoundsDistribution", () => {
       { label: "1 round", count: 1 },
       { label: "2 rounds", count: 1 },
       { label: "Escalated (unresolved)", count: 1 },
+      { label: "Not yet through proof review", count: 0 },
     ]);
+  });
+
+  it("does not report work nobody has reviewed as a first-pass approval", async () => {
+    // The regression this bucket exists for: 281 rolled-over pieces at
+    // INVITED with revisionRound 0 were reported as perfect first-pass
+    // approvals, and pulled the page's "avg revision rounds" to 0.0.
+    await makeOrder({ revisionRound: 0, status: "INVITED" });
+    await makeOrder({ revisionRound: 0, status: "INVITED" });
+
+    const buckets = await getRevisionRoundsDistribution(grUser, null);
+    expect(buckets.find((b) => b.label.startsWith("0 rounds"))?.count).toBe(0);
+    expect(buckets.find((b) => b.label === "Not yet through proof review")?.count).toBe(2);
+    // Nothing is dropped: every order still lands in exactly one bucket.
+    expect(buckets.reduce((sum, b) => sum + b.count, 0)).toBe(2);
   });
 
   it("respects the since window via createdAt", async () => {
@@ -188,5 +201,32 @@ describe("getShowComparison", () => {
 
     const rows = getShowComparison(orders);
     expect(rows.map((r) => r.showName)).toEqual(["Big Show", "Small Show"]);
+  });
+});
+
+describe("hasBeenThroughProofReview", () => {
+  it("does not treat an untouched piece as a first-pass approval", () => {
+    // revisionRound defaults to 0. The 281 rolled-over Seatrade pieces sit
+    // at INVITED with 0 rounds, and reporting them as first-pass approvals
+    // claimed a perfect record for work nobody had looked at.
+    expect(hasBeenThroughProofReview({ status: "INVITED", revisionRound: 0 })).toBe(false);
+    expect(hasBeenThroughProofReview({ status: "UNDER_ART_REVIEW", revisionRound: 0 })).toBe(false);
+    expect(hasBeenThroughProofReview({ status: "EXPO_PROOF_CHECK", revisionRound: 0 })).toBe(false);
+  });
+
+  it("counts a piece the client has signed off", () => {
+    expect(hasBeenThroughProofReview({ status: "PROOF_APPROVED", revisionRound: 0 })).toBe(true);
+    expect(hasBeenThroughProofReview({ status: "DELIVERED_AT_SHOW", revisionRound: 0 })).toBe(true);
+  });
+
+  it("counts a piece that has demonstrably been round the loop, wherever it sits now", () => {
+    // Mid-loop with a round behind it, and cancelled after two -- both
+    // have been reviewed, whatever their current status says.
+    expect(hasBeenThroughProofReview({ status: "PROOF_IN_PROGRESS", revisionRound: 1 })).toBe(true);
+    expect(hasBeenThroughProofReview({ status: "CANCELLED", revisionRound: 2 })).toBe(true);
+  });
+
+  it("does not count a piece cancelled before anyone reviewed it", () => {
+    expect(hasBeenThroughProofReview({ status: "CANCELLED", revisionRound: 0 })).toBe(false);
   });
 });

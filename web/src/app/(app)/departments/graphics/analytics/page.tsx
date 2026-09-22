@@ -207,6 +207,13 @@ export default async function GraphicsAnalyticsPage({
                     <th className="py-2 pr-3">Pieces</th>
                     <th className="py-2 pr-3">Existing</th>
                     <th className="py-2 pr-3">New</th>
+                    {/* Existing + New rarely equals Pieces -- most imported
+                        history has no existingGraphicsStatus at all (78 of
+                        PGA 2026's 639, all 282 of Seatrade 2026). Without
+                        this column the row just silently fails to add up,
+                        which reads as a bug in the numbers rather than a
+                        gap in the data. */}
+                    <th className="py-2 pr-3">Not recorded</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -224,6 +231,9 @@ export default async function GraphicsAnalyticsPage({
                       <td className="py-2 pr-3 tabular-nums">{row.totalPieces}</td>
                       <td className="py-2 pr-3 tabular-nums text-neutral-500">{row.existingCount}</td>
                       <td className="py-2 pr-3 tabular-nums text-neutral-500">{row.newCount}</td>
+                      <td className="py-2 pr-3 tabular-nums text-neutral-400">
+                        {row.totalPieces - row.existingCount - row.newCount}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
