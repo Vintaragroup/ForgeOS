@@ -91,6 +91,11 @@ export default async function ArtworkOrderPage({
   // Skids belong to a show, and a piece reaches one either directly or
   // through its opportunity -- same two paths the Hub reads.
   const pieceShowId = order.showId ?? order.opportunity?.showId ?? null;
+  const materials = await db.graphicMaterial.findMany({
+    where: { deletedAt: null, isActive: true },
+    orderBy: { sortOrder: "asc" },
+    select: { name: true },
+  });
   const [skids, showSections] = pieceShowId
     ? await Promise.all([listSkids(pieceShowId), listShowSections(pieceShowId)])
     : [[], []];
@@ -251,7 +256,21 @@ export default async function ArtworkOrderPage({
           </p>
           <form action={setProductionDetailWithId} className="flex flex-col gap-3">
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <Field label="Material" name="material" defaultValue={order.material ?? ""} />
+              <SelectField
+                label="Material"
+                name="material"
+                defaultValue={order.material ?? ""}
+                options={[
+                  { value: "", label: "Not set" },
+                  ...materials.map((m) => ({ value: m.name, label: m.name })),
+                  // A value already on the piece that is no longer
+                  // offered still has to render, or saving the form would
+                  // silently wipe it.
+                  ...(order.material && !materials.some((m) => m.name === order.material)
+                    ? [{ value: order.material, label: `${order.material} (not in the list)` }]
+                    : []),
+                ]}
+              />
               <Field label="Qty" name="qty" type="number" defaultValue={String(order.qty)} />
               <Field label="Graphic code" name="graphicCode" defaultValue={order.graphicCode ?? ""} placeholder="e.g. A1" />
               <Field label="Finishing details" name="finishingDetails" defaultValue={order.finishingDetails ?? ""} placeholder="e.g. SEG" />

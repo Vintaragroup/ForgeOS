@@ -1297,6 +1297,45 @@ model Office {
   @@map("offices")
 }
 
+// The substrates Graphics actually prints on.
+//
+// A table, not an enum: the sign shop adds a substrate without a
+// migration. Seeded from the 20 distinct values in the PGA control log,
+// which is the only real vocabulary we have.
+//
+// materialClass is the point of it. The SOP's turnaround table is keyed
+// on material -- fabrics 5 business days, hanging signs 10, outsourced
+// rigids 5 -- and until now that was inferred by pattern-matching free
+// text. A picked material carries its class as a fact.
+model GraphicMaterial {
+  id   String @id @default(cuid())
+  // Canonical spelling. The log holds "Acrlyic / Plexi" three times and
+  // both "Foamboard" and "FoamBoard"; the import normalises onto these.
+  name String @unique
+
+  materialClass GraphicMaterialClass
+
+  // Still valid history, no longer offered. "Hanging Sign" was recorded
+  // in the material field although it describes the piece, not what it is
+  // printed on.
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("graphic_materials")
+}
+
+// Mirrors MaterialClass in graphics-sla.ts, which is where the turnaround
+// figures live.
+enum GraphicMaterialClass {
+  FABRIC
+  RIGID
+  HANGING_SIGN
+}
+
 // A stretch of show floor, defined by the booth numbers in it.
 //
 // Her tracker's Section column: "Section 1 (100-699)", "Section 2

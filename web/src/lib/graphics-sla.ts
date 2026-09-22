@@ -9,6 +9,8 @@
 // A leaf module: pure date arithmetic and lookup tables, no db import, so
 // both server code and a client component can use it.
 
+import { materialClassOf } from "@/lib/graphic-materials";
+
 export type MaterialClass = "FABRIC" | "HANGING_SIGN" | "RIGID";
 
 // Business days from production start to the piece being in hand.
@@ -49,11 +51,27 @@ export function classifyMaterial(material: string | null | undefined, graphicNam
   const name = `${graphicName ?? ""}`.toLowerCase();
   if (name.includes("hanging sign") || name.includes("hanging-sign")) return "HANGING_SIGN";
 
+  // A material picked from the list carries its class as a fact. Only
+  // free text that matches nothing falls through to pattern-matching
+  // below -- which is a guess, and says so.
+  const known = materialClassOf(material);
+  if (known) return known;
+
   const m = `${material ?? ""}`.toLowerCase();
   if (m.includes("fabric") || m.includes("seg")) return "FABRIC";
   // Everything else Expo prints -- PVC, vinyl, foamboard, ultraboard,
   // acrylic -- is rigid for scheduling purposes.
   return "RIGID";
+}
+
+// Whether the class above was looked up or guessed. A piece with no
+// material at all classifies as RIGID, which is a default rather than a
+// fact -- the Seatrade import produced 282 of them, since that tracker
+// carries no material column.
+export function materialClassIsKnown(material: string | null | undefined, graphicName?: string | null): boolean {
+  const name = `${graphicName ?? ""}`.toLowerCase();
+  if (name.includes("hanging sign") || name.includes("hanging-sign")) return true;
+  return materialClassOf(material) !== null;
 }
 
 // Calendar arithmetic over business days. Weekends only: Expo works
