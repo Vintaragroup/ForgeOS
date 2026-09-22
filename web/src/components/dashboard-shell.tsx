@@ -169,6 +169,31 @@ export function DashRow({
   );
 }
 
+// The small outlined button that sits at the right end of a DashRow. Lives
+// here rather than in one department's page so the second department to
+// need one gets the same button, not a near-copy of it.
+export function DashRowAction({
+  href,
+  children,
+  external = false,
+}: {
+  href: string;
+  children: ReactNode;
+  external?: boolean;
+}) {
+  const className =
+    "rounded-md border border-[color:var(--dash-border)] px-2.5 py-1 text-xs font-medium text-[color:var(--dash-text-soft)] hover:border-[color:var(--dash-navy)] hover:text-[color:var(--dash-navy)]";
+  return external ? (
+    <a href={href} target="_blank" rel="noreferrer" className={className}>
+      {children}
+    </a>
+  ) : (
+    <Link href={href} className={className}>
+      {children}
+    </Link>
+  );
+}
+
 export function DashChip({ tone = "neutral", children }: { tone?: "neutral" | "good" | "info" | "critical"; children: ReactNode }) {
   return <span className={`dash-chip dash-${tone}`}>{children}</span>;
 }

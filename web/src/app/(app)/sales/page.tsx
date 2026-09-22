@@ -1,5 +1,3 @@
-import Link from "next/link";
-import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
@@ -14,6 +12,7 @@ import {
   DashChip,
   DashEmpty,
   DashRow,
+  DashRowAction,
   DashSection,
   DashStatStrip,
   type QuickAction,
@@ -41,19 +40,6 @@ function percent(value: number | null) {
 
 // Small, quiet buttons that sit inside a dash-row without competing with
 // the row's own text.
-function RowAction({ href, children, external = false }: { href: string; children: ReactNode; external?: boolean }) {
-  const className =
-    "rounded-md border border-[color:var(--dash-border)] px-2.5 py-1 text-xs font-medium text-[color:var(--dash-text-soft)] hover:border-[color:var(--dash-navy)] hover:text-[color:var(--dash-navy)]";
-  return external ? (
-    <a href={href} target="_blank" rel="noreferrer" className={className}>
-      {children}
-    </a>
-  ) : (
-    <Link href={href} className={className}>
-      {children}
-    </Link>
-  );
-}
 
 function clientSub(c: ClientRow) {
   const bits = [`${money(c.lifetimeWonValue)} lifetime`, `${c.wonCount} job${c.wonCount === 1 ? "" : "s"}`];
@@ -212,7 +198,7 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                   </>
                 }
                 right={r.reviewMeetingAt ? <DashChip tone="info">meeting set</DashChip> : <DashChip tone="critical">no meeting yet</DashChip>}
-                actions={<RowAction href={`/opportunities/${r.id}/intake`}>Schedule &amp; assign</RowAction>}
+                actions={<DashRowAction href={`/opportunities/${r.id}/intake`}>Schedule &amp; assign</DashRowAction>}
               />
             ))}
           </DashCard>
@@ -247,11 +233,11 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                           <SnoozeButton queue="FOLLOW_UP" targetKey={c.companyId} />
                         </>
                       )}
-                      <RowAction href={`/companies/${c.companyId}`}>Open</RowAction>
+                      <DashRowAction href={`/companies/${c.companyId}`}>Open</DashRowAction>
                       {salesmate && (
-                        <RowAction href={salesmate} external>
+                        <DashRowAction href={salesmate} external>
                           Salesmate
-                        </RowAction>
+                        </DashRowAction>
                       )}
                     </>
                   }
@@ -291,11 +277,11 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                           <SnoozeButton queue="PAST_DUE" targetKey={a.salesmateId} />
                         </>
                       )}
-                      {a.companyId && <RowAction href={`/companies/${a.companyId}`}>Open</RowAction>}
+                      {a.companyId && <DashRowAction href={`/companies/${a.companyId}`}>Open</DashRowAction>}
                       {salesmate && (
-                        <RowAction href={salesmate} external>
+                        <DashRowAction href={salesmate} external>
                           Salesmate
-                        </RowAction>
+                        </DashRowAction>
                       )}
                     </>
                   }
@@ -341,11 +327,11 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                         </>
                       )}
                       {salesmate && (
-                        <RowAction href={salesmate} external>
+                        <DashRowAction href={salesmate} external>
                           Salesmate
-                        </RowAction>
+                        </DashRowAction>
                       )}
-                      <RowAction href={`/opportunities/new${d.companyId ? `?companyId=${d.companyId}` : ""}`}>Start intake</RowAction>
+                      <DashRowAction href={`/opportunities/new${d.companyId ? `?companyId=${d.companyId}` : ""}`}>Start intake</DashRowAction>
                     </>
                   }
                 />
@@ -377,7 +363,7 @@ export default async function SalesPage(props: PageProps<"/sales">) {
                         <SnoozeButton queue="WIN_BACK" targetKey={c.companyId} />
                       </>
                     )}
-                    <RowAction href={`/companies/${c.companyId}`}>Open</RowAction>
+                    <DashRowAction href={`/companies/${c.companyId}`}>Open</DashRowAction>
                   </>
                 }
               />
