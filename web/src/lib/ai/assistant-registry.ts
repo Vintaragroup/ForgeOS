@@ -13,6 +13,7 @@
 // an assistant that confidently answers from nothing.
 
 import { buildSalesAssistantContext, SALES_SUGGESTIONS } from "@/lib/ai/sales-assistant-context";
+import { buildGraphicsAssistantContext, GRAPHICS_SUGGESTIONS } from "@/lib/ai/graphics-assistant-context";
 import type { AssistantUser, DepartmentAssistant } from "@/lib/ai/assistant-contract";
 
 // Re-exported so callers have one import for "the assistant system".
@@ -26,6 +27,14 @@ const ASSISTANTS: DepartmentAssistant[] = [
     description: "Knows your clients, deals, scheduled work and contact history. Answers and links -- it can't change anything.",
     suggestions: SALES_SUGGESTIONS,
     buildContext: buildSalesAssistantContext,
+  },
+  {
+    departmentCode: "GR",
+    label: "Graphics",
+    description:
+      "Knows the live production board: what's late, what each shop owes, and whose move every piece is. Answers and links -- it can't change anything.",
+    suggestions: GRAPHICS_SUGGESTIONS,
+    buildContext: buildGraphicsAssistantContext,
   },
 ];
 

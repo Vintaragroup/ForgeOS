@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildCitationDirectory,
-  companyCitation,
-  documentCitation,
-  lineItemCitation,
-  renderCitationTokens,
-} from "@/lib/ai/citation-tokens";
+import { artworkCitation, buildCitationDirectory, companyCitation, documentCitation, lineItemCitation, renderCitationTokens } from "@/lib/ai/citation-tokens";
 
 const doc = documentCitation("opp1", { id: "doc1", filename: "Schedule A - SBLXI - 006. Final.pdf" });
 const item = lineItemCitation({ id: "li1", estimateId: "est1", description: '36 x 84" Compliant Door' });
@@ -49,5 +43,30 @@ describe("buildCitationDirectory", () => {
     expect(directory).toContain("[[doc:doc1]] Schedule A - SBLXI - 006. Final.pdf");
     expect(directory).toContain("[[company:co1]] Club Glove");
     expect(buildCitationDirectory([])).toBe("");
+  });
+});
+
+describe("artworkCitation", () => {
+  it("names a client's piece by the client", () => {
+    const c = artworkCitation({ id: "a1", jobCode: "9f3c", companyName: "Club Glove", showName: "PGA Show 2026" });
+    expect(c.label).toBe("Club Glove — 9f3c");
+    expect(c.href).toBe("/artwork/a1");
+    expect(c.token).toBe("art:a1");
+  });
+
+  it("names a show piece by its show -- it has no client to name", () => {
+    // A Hub/hanging-sign piece has no opportunity at all; labelling it
+    // after a client would attribute it to whoever happened to be nearby.
+    const c = artworkCitation({ id: "a2", jobCode: "1122", companyName: null, showName: "Seatrade Cruise Global 2027" });
+    expect(c.label).toBe("Seatrade Cruise Global 2027 (show piece) — 1122");
+  });
+
+  it("leads with the graphic code when there is one -- 'A1' is how the floor refers to it", () => {
+    const c = artworkCitation({ id: "a3", jobCode: "1122", companyName: "Acme", graphicCode: "A1" });
+    expect(c.label).toBe("Acme — A1 · 1122");
+  });
+
+  it("still produces a usable label when nothing is known but the job code", () => {
+    expect(artworkCitation({ id: "a4", jobCode: "dead" }).label).toBe("Unattributed piece — dead");
   });
 });

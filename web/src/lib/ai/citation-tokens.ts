@@ -85,3 +85,23 @@ export function opportunityCitation(opportunity: { id: string; showName: string;
     href: `/opportunities/${opportunity.id}`,
   };
 }
+
+// A piece of artwork. Labelled by who it's for plus its job code, since
+// "A1" or "Door panel" means nothing without the booth it belongs to --
+// and a Hub/hanging-sign piece has no client at all (see
+// ArtworkOrder.showId's schema comment), so it is named after its show.
+export function artworkCitation(order: {
+  id: string;
+  jobCode: string;
+  companyName?: string | null;
+  showName?: string | null;
+  graphicCode?: string | null;
+}): CitationTarget {
+  const who = order.companyName ?? (order.showName ? `${order.showName} (show piece)` : "Unattributed piece");
+  const what = order.graphicCode ? `${order.graphicCode} · ${order.jobCode}` : order.jobCode;
+  return { token: `art:${order.id}`, label: `${who} — ${what}`, href: `/artwork/${order.id}` };
+}
+
+export function showCitation(show: { id: string; name: string }): CitationTarget {
+  return { token: `show:${show.id}`, label: show.name, href: `/shows/${show.id}` };
+}

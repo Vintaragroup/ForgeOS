@@ -31,6 +31,9 @@ import { buildTodayBuckets } from "@/lib/graphics-today";
 import { APPROVAL_LEAD_BUSINESS_DAYS } from "@/lib/graphics-sla";
 import { AssignDesignerButton, IssueGoAheadButton, SetHalfStatusButton } from "@/components/graphics-row-actions";
 import { buildShopFloor } from "@/lib/graphics-shop-floor";
+import { AssistantWidget } from "@/components/assistant-widget";
+import { getDepartmentAssistant } from "@/lib/ai/assistant-registry";
+import { listAssistantThreads } from "@/lib/assistant-service";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
 // generic Artwork review queue this page is a Graphics-specific front door
@@ -228,6 +231,12 @@ export default async function GraphicsHomePage({
       _count: { _all: true },
     }),
   ]);
+
+  // The department's own assistant, if one is registered. Threads are
+  // listed here rather than fetched by the widget so the page arrives
+  // complete, same as /sales.
+  const assistant = getDepartmentAssistant("GR");
+  const assistantThreads = assistant ? await listAssistantThreads(user.id, "GR") : [];
 
   // Shared with the Production Log page (departments/graphics/log/page.tsx)
   // -- same department-wide widening for a GR user, one query definition
@@ -943,6 +952,19 @@ export default async function GraphicsHomePage({
             )}
           </DashSection>
         </>
+      )}
+      {assistant && (
+        <AssistantWidget
+          departmentCode={assistant.departmentCode}
+          label={assistant.label}
+          description={assistant.description}
+          suggestions={assistant.suggestions}
+          initialThreads={assistantThreads.map((t) => ({
+            id: t.id,
+            title: t.title,
+            lastMessageAt: t.lastMessageAt?.toISOString() ?? null,
+          }))}
+        />
       )}
     </DashboardShell>
   );

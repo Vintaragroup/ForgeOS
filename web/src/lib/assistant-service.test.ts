@@ -31,17 +31,25 @@ describe("who gets which assistant", () => {
   it("gives a rep their own department's, an admin every one, and nobody an unregistered department's", async () => {
     const rep = await makeUser("Terry", "SL");
     const graphics = await makeUser("Gina", "GR");
+    const warehouse = await makeUser("Wes", "WH");
     const admin = await makeUser("Ada", null, "ADMIN");
 
     expect(assistantsForUser(rep).map((a) => a.departmentCode)).toEqual(["SL"]);
-    // Graphics has no assistant registered yet -- so it offers none rather
-    // than a half-invented one.
-    expect(assistantsForUser(graphics)).toEqual([]);
-    expect(assistantsForUser(admin).map((a) => a.departmentCode)).toContain("SL");
+    expect(assistantsForUser(graphics).map((a) => a.departmentCode)).toEqual(["GR"]);
+    // A department with nothing registered offers none, rather than a
+    // half-invented assistant answering from nothing.
+    expect(assistantsForUser(warehouse)).toEqual([]);
+    expect(getDepartmentAssistant("WH")).toBeNull();
+    expect(assistantsForUser(admin).map((a) => a.departmentCode)).toEqual(
+      expect.arrayContaining(["SL", "GR"]),
+    );
 
     expect(canUseAssistant(rep, "SL")).toBe(true);
+    // Each department's board is its own: a rep cannot open Graphics's,
+    // and a producer cannot open Sales's.
     expect(canUseAssistant(rep, "GR")).toBe(false);
-    expect(getDepartmentAssistant("GR")).toBeNull();
+    expect(canUseAssistant(graphics, "SL")).toBe(false);
+    expect(canUseAssistant(graphics, "WH")).toBe(false);
   });
 });
 
@@ -52,8 +60,14 @@ describe("threads", () => {
     expect(thread).toMatchObject({ scope: "DEPARTMENT", userId: rep.id, departmentCode: "SL", title: null });
 
     await expect(createAssistantThread(rep, "GR")).rejects.toBeInstanceOf(UserError);
+
     const graphics = await makeUser("Gina", "GR");
-    await expect(createAssistantThread(graphics, "GR")).rejects.toThrow(/access/);
+    const grThread = await createAssistantThread(graphics, "GR");
+    expect(grThread).toMatchObject({ scope: "DEPARTMENT", userId: graphics.id, departmentCode: "GR" });
+
+    // Still nothing for a department with no assistant registered.
+    const warehouse = await makeUser("Wes", "WH");
+    await expect(createAssistantThread(warehouse, "WH")).rejects.toThrow(/access/);
   });
 
   it("never lets one rep open another rep's conversation, but an admin can", async () => {
