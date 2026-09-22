@@ -55,17 +55,22 @@ const PREAMBLE = [
   `Every show graphic is meant to be approved ${APPROVAL_LEAD_BUSINESS_DAYS} business days before show-site setup.`,
 ].join(" ");
 
-function who(order: GraphicsOrder): string {
-  return order.opportunity?.company.name ?? (order.show ? `${order.show.name} (show piece)` : "Unattributed");
-}
-
 function showNameOf(order: GraphicsOrder): string | null {
   return order.opportunity?.showName ?? order.show?.name ?? null;
 }
 
+// The token is the name. It renders as the piece's full label -- client or
+// show, graphic code, job code -- so writing the name beside it made every
+// answer say the same thing three times over:
+//
+//   Seatrade 2027 (show piece) [Seatrade 2027 (show piece) - 102A - ...] - 102A - ...
+//
+// Only facts the label does NOT already carry go alongside it: the show,
+// for a client's piece (a show piece is named after its show already), and
+// the material.
 function describe(order: GraphicsOrder): string {
-  const bits = [showNameOf(order), order.material, order.graphicCode].filter(Boolean);
-  return `${who(order)} [[art:${order.id}]]${bits.length ? ` (${bits.join(", ")})` : ""}`;
+  const bits = [order.opportunity ? showNameOf(order) : null, order.material].filter(Boolean);
+  return `[[art:${order.id}]]${bits.length ? ` (${bits.join(", ")})` : ""}`;
 }
 
 function citationFor(order: GraphicsOrder): CitationTarget {
