@@ -20,7 +20,7 @@ import {
 import { LocalTimestamp } from "@/components/local-timestamp";
 import { AssistantWidget } from "@/components/assistant-widget";
 import { ConfirmActivityButton, LogTouchButton, SnoozeButton } from "@/components/sales-row-actions";
-import { getDepartmentAssistant } from "@/lib/ai/assistant-registry";
+import { canUseAssistant, getDepartmentAssistant } from "@/lib/ai/assistant-registry";
 import { listAssistantThreads } from "@/lib/assistant-service";
 
 export const dynamic = "force-dynamic";
@@ -71,7 +71,11 @@ export default async function SalesPage(props: PageProps<"/sales">) {
   const tab = ["today", "clients", "numbers", "team"].includes(tabParam) ? tabParam : "today";
 
   // The rep's own assistant, if their department has one registered.
-  const assistant = getDepartmentAssistant("SL");
+  // Gated on canUseAssistant, not just on the assistant existing. Without
+  // it the widget rendered for anyone who could load this page -- a
+  // Graphics user opening /sales got a Sales assistant that failed the
+  // moment they typed into it.
+  const assistant = canUseAssistant(user, "SL") ? getDepartmentAssistant("SL") : null;
 
   const [overview, reps, viewed, leaderboard, reviews, assistantThreads] = await Promise.all([
     loadSalesOverview({ ownerUserId }),

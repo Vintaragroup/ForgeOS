@@ -56,6 +56,11 @@ export async function getVendorMatchApplyLog(estimateVersionId: string) {
   return db.vendorMatchApplyLog.findMany({
     where: { estimateVersionId },
     include: { actor: { select: { id: true, name: true } } },
-    orderBy: { createdAt: "desc" },
+    // id breaks the tie: two applies in the same click land on the same
+    // createdAt, and with no second key Postgres is free to return them
+    // either way round -- which showed up as a test that failed roughly
+    // one run in ten, and would have shown the log out of order for real.
+    // Same idiom as estimate-service's element-group ordering.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
   });
 }

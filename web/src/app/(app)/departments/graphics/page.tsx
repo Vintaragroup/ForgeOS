@@ -32,7 +32,7 @@ import { APPROVAL_LEAD_BUSINESS_DAYS } from "@/lib/graphics-sla";
 import { AssignDesignerButton, IssueGoAheadButton, SetHalfStatusButton } from "@/components/graphics-row-actions";
 import { buildShopFloor } from "@/lib/graphics-shop-floor";
 import { AssistantWidget } from "@/components/assistant-widget";
-import { getDepartmentAssistant } from "@/lib/ai/assistant-registry";
+import { canUseAssistant, getDepartmentAssistant } from "@/lib/ai/assistant-registry";
 import { listAssistantThreads } from "@/lib/assistant-service";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
@@ -235,7 +235,10 @@ export default async function GraphicsHomePage({
   // The department's own assistant, if one is registered. Threads are
   // listed here rather than fetched by the widget so the page arrives
   // complete, same as /sales.
-  const assistant = getDepartmentAssistant("GR");
+  // Same gate as /sales: a non-GR employee with no assigned clients falls
+  // through this page's AE rollup and renders the full dashboard, so
+  // "the page rendered" is not a permission check.
+  const assistant = canUseAssistant(user, "GR") ? getDepartmentAssistant("GR") : null;
   const assistantThreads = assistant ? await listAssistantThreads(user.id, "GR") : [];
 
   // Shared with the Production Log page (departments/graphics/log/page.tsx)

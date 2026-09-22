@@ -67,21 +67,25 @@ export function AssistantWidget({
     if (!open || !threadId || loadedThreadRef.current === threadId) return;
     loadedThreadRef.current = threadId;
     startTransition(async () => {
-      try {
-        setMessages(await loadAssistantThreadAction(threadId));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Couldn't load that conversation.");
-      }
+      const result = await loadAssistantThreadAction(threadId);
+      if (result.ok) setMessages(result.value);
+      else setError(result.error);
     });
   }, [open, threadId]);
 
-  async function ensureThread(): Promise<string> {
+  // Null when the thread couldn't be created -- the caller shows the
+  // reason rather than pressing on with no thread to send to.
+  async function ensureThread(): Promise<string | null> {
     if (threadId) return threadId;
-    const thread = await startAssistantThreadAction(departmentCode);
-    loadedThreadRef.current = thread.id;
-    setThreads((prev) => [thread, ...prev]);
-    setThreadId(thread.id);
-    return thread.id;
+    const result = await startAssistantThreadAction(departmentCode);
+    if (!result.ok) {
+      setError(result.error);
+      return null;
+    }
+    loadedThreadRef.current = result.value.id;
+    setThreads((prev) => [result.value, ...prev]);
+    setThreadId(result.value.id);
+    return result.value.id;
   }
 
   function send(text: string) {
@@ -91,14 +95,22 @@ export function AssistantWidget({
     setMessages((prev) => [...prev, { id: `pending-${Date.now()}`, role: "user", content }]);
     setInput("");
     startTransition(async () => {
-      try {
-        const id = await ensureThread();
-        const reply = await sendAssistantMessageAction(id, content);
-        setMessages((prev) => [...prev, reply]);
-        setThreads(await listAssistantThreadsAction(departmentCode));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Something went wrong sending that.");
+      const id = await ensureThread();
+      // Drop the optimistic user bubble again -- leaving it up next to an
+      // error reads as "sent, then failed", when nothing was sent.
+      if (!id) {
+        setMessages((prev) => prev.filter((m) => !m.id.startsWith("pending-")));
+        return;
       }
+      const reply = await sendAssistantMessageAction(id, content);
+      if (!reply.ok) {
+        setMessages((prev) => prev.filter((m) => !m.id.startsWith("pending-")));
+        setError(reply.error);
+        return;
+      }
+      setMessages((prev) => [...prev, reply.value]);
+      const listed = await listAssistantThreadsAction(departmentCode);
+      if (listed.ok) setThreads(listed.value);
     });
   }
 
