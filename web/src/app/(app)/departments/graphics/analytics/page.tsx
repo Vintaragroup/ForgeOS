@@ -10,7 +10,8 @@ import {
   getShowComparison,
   jobDate,
 } from "@/lib/graphics-analytics";
-import { PageHeader, Card, Stat, EmptyState } from "@/components/ui";
+import { Card, Stat, EmptyState } from "@/components/ui";
+import { PageShell } from "@/components/dashboard-shell";
 import { BarBreakdown } from "@/components/bar-breakdown";
 
 export const dynamic = "force-dynamic";
@@ -93,8 +94,12 @@ export default async function GraphicsAnalyticsPage({
   }));
 
   return (
-    <>
-      <PageHeader title="Analytics" backHref="/departments/graphics" backLabel="Graphics" />
+      <PageShell
+        id="forgeos-graphics-analytics"
+        title="Analytics"
+        backHref="/departments/graphics"
+        backLabel="Graphics"
+      >
       <div className="flex flex-col gap-6">
         <div className="flex flex-wrap gap-2">
           {RANGE_OPTIONS.map((opt) => (
@@ -248,6 +253,6 @@ export default async function GraphicsAnalyticsPage({
           only whether it&apos;s overdue right now (the dashboard&apos;s own SLA-overdue count).
         </p>
       </div>
-    </>
+      </PageShell>
   );
 }

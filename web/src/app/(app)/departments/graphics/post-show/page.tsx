@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
-import { PageHeader, Card, StatusChip, EmptyState } from "@/components/ui";
+import { Card, StatusChip, EmptyState } from "@/components/ui";
+import { PageShell } from "@/components/dashboard-shell";
 import { OrderIdentity } from "@/components/artwork-order-identity";
 
 // Same "always fresh" reasoning as the rest of the Graphics dashboard's own
@@ -113,8 +114,12 @@ export default async function GraphicsPostShowPage() {
   }
 
   return (
-    <>
-      <PageHeader title="Post-show" backHref="/departments/graphics" backLabel="Graphics" />
+      <PageShell
+        id="forgeos-graphics-post-show"
+        title="Post-show"
+        backHref="/departments/graphics"
+        backLabel="Graphics"
+      >
       <div className="flex flex-col gap-6">
         <Card className="p-5">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
@@ -197,6 +202,6 @@ export default async function GraphicsPostShowPage() {
           )}
         </Card>
       </div>
-    </>
+      </PageShell>
   );
 }

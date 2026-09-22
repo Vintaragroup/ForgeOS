@@ -5,7 +5,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { canAccessArtworkOrder } from "@/lib/opportunity-access";
 import { getArtworkFileBytes } from "@/lib/artwork-file-service";
 import { getPdfPageDimensionsInInches } from "@/lib/document-view-service";
-import { Card, PageHeader, StatusChip, Field, SelectField, TextareaField, Button, ReadOnlyField, EmptyState } from "@/components/ui";
+import { Card, StatusChip, Field, SelectField, TextareaField, Button, ReadOnlyField, EmptyState } from "@/components/ui";
+import { PageShell } from "@/components/dashboard-shell";
 import { CopyLinkBanner } from "@/components/copy-link-banner";
 import { PostShowPhotoUploadForm } from "@/components/post-show-photo-upload-form";
 import { ActionForm } from "@/components/action-form";
@@ -175,19 +176,19 @@ export default async function ArtworkOrderPage({
   };
 
   return (
-    <>
-      <PageHeader
-        title={
-          <>
-            {order.jobCode}
-            <StatusChip tone={STATUS_TONE[order.status] ?? "neutral"}>{order.status.replaceAll("_", " ")}</StatusChip>
-            {overdue && <StatusChip tone="critical">SLA overdue</StatusChip>}
-            {order.archivedAt && <StatusChip tone="neutral">Archived</StatusChip>}
-          </>
-        }
-        backHref="/artwork"
-        backLabel="Artwork queue"
-      />
+    <PageShell
+      id="forgeos-artwork-detail"
+      title={
+        <span className="flex flex-wrap items-center gap-2">
+          {order.jobCode}
+          <StatusChip tone={STATUS_TONE[order.status] ?? "neutral"}>{order.status.replaceAll("_", " ")}</StatusChip>
+          {overdue && <StatusChip tone="critical">SLA overdue</StatusChip>}
+          {order.archivedAt && <StatusChip tone="neutral">Archived</StatusChip>}
+        </span>
+      }
+      backHref="/artwork"
+      backLabel="Artwork queue"
+    >
 
       {order.archivedAt && (
         <Card className="mb-6 border-amber-300 bg-amber-50 p-4">
@@ -933,6 +934,6 @@ export default async function ArtworkOrderPage({
           </>
         )}
       </div>
-    </>
+    </PageShell>
   );
 }
