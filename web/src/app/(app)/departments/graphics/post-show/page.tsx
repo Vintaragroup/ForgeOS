@@ -46,7 +46,22 @@ export default async function GraphicsPostShowPage() {
     orderBy: { postShowRecordedAt: "desc" },
   });
 
-  const needsReview = orders.filter((o) => o.status === "DELIVERED_AT_SHOW" && o.postShowStatus === null);
+  // Archived pieces are excluded from "needs review" but kept everywhere
+  // else on this page. A disposition is a decision about a piece someone
+  // still has in hand; once a show is archived nobody is going to walk its
+  // graphics. Importing Seatrade put 197 finished pieces from a show that
+  // ran in April into this queue, which is work that will never be done
+  // and hides work that might.
+  //
+  // Deliberately only the queue: the damaged/aging/discarded lists below
+  // are history, and history is the reason this page reads archived rows
+  // in the first place.
+  const needsReview = orders.filter(
+    (o) => o.status === "DELIVERED_AT_SHOW" && o.postShowStatus === null && o.archivedAt === null,
+  );
+  const archivedWithoutDisposition = orders.filter(
+    (o) => o.status === "DELIVERED_AT_SHOW" && o.postShowStatus === null && o.archivedAt !== null,
+  ).length;
   const damaged = orders.filter((o) => o.postShowCondition === "DAMAGED");
   const aging = orders.filter((o) => o.postShowCondition === "AGING");
   const discarded = orders.filter((o) => o.postShowStatus === "DISCARDED").slice(0, 25);
@@ -96,7 +111,11 @@ export default async function GraphicsPostShowPage() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">
             Needs review ({needsReview.length})
           </h2>
-          <p className="mb-3 text-xs text-neutral-500">Delivered at the show, no post-show disposition recorded yet.</p>
+          <p className="mb-3 text-xs text-neutral-500">
+            Delivered at the show, no post-show disposition recorded yet.
+            {archivedWithoutDisposition > 0 &&
+              ` ${archivedWithoutDisposition} more sit on shows that are already closed — those are history, not a queue.`}
+          </p>
           {needsReview.length === 0 ? (
             <EmptyState message="Nothing new is waiting on a post-show review." />
           ) : (

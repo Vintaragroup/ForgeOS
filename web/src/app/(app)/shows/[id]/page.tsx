@@ -33,6 +33,7 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
     },
   });
   if (!show) notFound();
+  const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
 
   const [skids, sections] = await Promise.all([listSkids(show.id), listShowSections(show.id)]);
   const createSkidWithId = createSkidAction.bind(null, show.id);
@@ -115,13 +116,19 @@ export default async function ShowDetailPage(props: PageProps<"/shows/[id]">) {
             <Button>Save changes</Button>
           </div>
         </form>
-        <ConfirmForm
-          action={deleteShowWithId}
-          confirmMessage="Delete this show? Its client opportunities stay, just unlinked from it."
-          className="mt-4 border-t border-neutral-200 pt-4"
-        >
-          <Button variant="danger">Delete show</Button>
-        </ConfirmForm>
+        {/* deleteShow already calls requireAdmin(), so this was safe -- but
+            it rendered for everyone, and Graphics users now reach this page
+            to manage skids. A red button that only throws is worse than no
+            button. */}
+        {isAdmin && (
+          <ConfirmForm
+            action={deleteShowWithId}
+            confirmMessage="Delete this show? Its client opportunities stay, just unlinked from it."
+            className="mt-4 border-t border-neutral-200 pt-4"
+          >
+            <Button variant="danger">Delete show</Button>
+          </ConfirmForm>
+        )}
       </Card>
 
       <Card className="p-6">

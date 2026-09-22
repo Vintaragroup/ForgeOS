@@ -54,12 +54,28 @@ export const DEPARTMENT_NAV: Record<string, NavGroup[]> = {
       ],
     },
   ],
+  // Graphics stays narrow -- no pipeline, no directory, no shop floor --
+  // but it has to reach every page the department actually works in.
+  // It previously reached four of them and missed four: its own dashboard,
+  // post-show, analytics, and shows. That last one mattered most: skids
+  // and floor sections are managed on the show page, so the sign shop
+  // could not open the page that creates the skids it packs.
   GR: [
+    {
+      label: "Graphics",
+      items: [
+        { href: "/departments/graphics", label: "Dashboard" },
+        { href: "/departments/graphics/log", label: "Production Log" },
+        { href: "/departments/graphics/post-show", label: "Post-show" },
+        { href: "/departments/graphics/analytics", label: "Analytics" },
+      ],
+    },
     {
       label: "Production",
       items: [
         { href: "/artwork", label: "Artwork" },
-        { href: "/departments/graphics/log", label: "Production Log" },
+        // Skids and floor sections live on a show.
+        { href: "/shows", label: "Shows" },
         { href: "/tasks", label: "Tasks" },
         { href: "/calendar", label: "Calendar" },
       ],

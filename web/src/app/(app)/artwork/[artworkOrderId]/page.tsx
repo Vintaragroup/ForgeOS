@@ -189,9 +189,11 @@ export default async function ArtworkOrderPage({
               </>
             ) : (
               // A Show-owned Hub/hanging-sign piece has no client -- see
-              // ArtworkOrder.showId's schema comment.
+              // ArtworkOrder.showId's schema comment. Labelled for what it
+              // is rather than named after one show: "PGA Hub" here put
+              // another show's name on 282 Seatrade pieces.
               <>
-                <ReadOnlyField label="Client" value="PGA Hub" />
+                <ReadOnlyField label="Client" value="Show piece (no client)" />
                 <ReadOnlyField
                   label="Show"
                   value={

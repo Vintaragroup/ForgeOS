@@ -51,11 +51,14 @@ export const STATUS_GROUPS: Record<string, { label: string; statuses: ArtworkOrd
 // many bars stops being scannable at a glance.
 const TOP_N = 8;
 
-// A Hub/hanging-sign piece (no opportunity -- see ArtworkOrder.showId's
-// schema comment) is grouped under "PGA Hub" rather than its own show name,
-// since there's no company to attribute it to.
+// A Hub/hanging-sign piece has no opportunity (see ArtworkOrder.showId's
+// schema comment) and so no company to attribute it to. It is grouped
+// under its own show instead of a single literal: grouping every such
+// piece under "PGA Hub" put 282 Seatrade pieces and 67 PGA ones in one
+// bar labelled after the wrong show.
 export function clientLabelOf(o: GraphicsOrder): string {
-  return o.opportunity ? o.opportunity.company.name : "PGA Hub";
+  if (o.opportunity) return o.opportunity.company.name;
+  return o.show ? `${o.show.name} (show pieces)` : "Show pieces";
 }
 
 export interface GraphicsBreakdowns {
@@ -118,14 +121,18 @@ export function getAllClientsSummary(orders: GraphicsOrder[]): ClientSummaryRow[
   const byKey = new Map<string, ClientSummaryRow>();
   for (const o of orders) {
     const isHub = !o.opportunity;
-    const key = isHub ? "__hub__" : o.opportunity!.id;
+    // Keyed by SHOW for a show-level piece, not by a single "__hub__"
+    // literal. That literal collapsed every show's own pieces into one
+    // row: after the Seatrade import it merged 282 Seatrade pieces with
+    // 67 PGA ones and labelled the result after whichever was seen first.
+    const key = isHub ? `show:${o.show?.id ?? "none"}` : o.opportunity!.id;
     let row = byKey.get(key);
     if (!row) {
       row = {
         key,
-        label: isHub ? "PGA Hub" : o.opportunity!.company.name,
+        label: isHub ? "Show pieces" : o.opportunity!.company.name,
         showLabel: isHub ? (o.show?.name ?? "—") : o.opportunity!.showName,
-        href: isHub ? null : `/opportunities/${o.opportunity!.id}`,
+        href: isHub && o.show ? `/shows/${o.show.id}` : isHub ? null : `/opportunities/${o.opportunity!.id}`,
         totalPieces: 0,
         artReceivedCount: 0,
       };
