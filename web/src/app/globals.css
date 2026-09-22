@@ -533,6 +533,21 @@
 }
 .dash-row:last-child { border-bottom: none; }
 .dash-row:is(a):hover { background: var(--dash-bg); }
+/* A row that carries buttons can't be one big <a> -- a <button> inside an
+   <a> is invalid and every click would also navigate -- so DashRow makes
+   only the identity half a link. Negative margins stretch that link back
+   out over the row's own padding, so the hover target and highlight still
+   cover everything left of the buttons. */
+.dash-row-link {
+  display: block;
+  min-width: 0;
+  flex: 1;
+  margin: -0.875rem 0 -0.875rem -1.25rem;
+  padding: 0.875rem 0 0.875rem 1.25rem;
+  text-decoration: none;
+  color: inherit;
+}
+.dash-row-link:hover { background: var(--dash-bg); }
 .dash-row-title { font-weight: 600; font-size: 0.90625rem; }
 /* Spacing when a dash-chip sits directly under a row title -- the
    dashboard's calendar widget uses a tone-colored chip in place of the

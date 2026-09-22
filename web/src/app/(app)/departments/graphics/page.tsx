@@ -29,6 +29,7 @@ import { getMyClientGraphicsSummary, getGraphicsOrders, getWeeklyDeliveredCounts
 import { getGraphicsBreakdowns, getAllClientsSummary } from "@/lib/graphics-breakdowns";
 import { buildTodayBuckets } from "@/lib/graphics-today";
 import { APPROVAL_LEAD_BUSINESS_DAYS } from "@/lib/graphics-sla";
+import { AssignDesignerButton, IssueGoAheadButton } from "@/components/graphics-row-actions";
 
 // Same "always fresh" reasoning as the Opportunities pipeline board and the
 // generic Artwork review queue this page is a Graphics-specific front door
@@ -186,7 +187,7 @@ export default async function GraphicsHomePage({
   // (an opportunity gets shown here regardless of its own pipeline stage --
   // linking it to a show is what MAKES it eligible per
   // canStartArtworkOnboarding, not a result of already being eligible).
-  const [shows, unassignedOpportunities, companies, pastShowRows] = await Promise.all([
+  const [shows, unassignedOpportunities, companies, designers, pastShowRows] = await Promise.all([
     // Soonest-first -- the show someone's actually about to work is the one
     // that matters most in a picker, not alphabetical order. A show with no
     // event date set yet (nulls) sorts last, after every dated show.
@@ -207,6 +208,14 @@ export default async function GraphicsHomePage({
     canOnboardNewClient
       ? db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })
       : Promise.resolve([]),
+    // The designer pool the row-level "Assign" picker offers -- the same
+    // Design-department query the artwork detail page's own picker uses, so
+    // the two can't offer different people.
+    db.user.findMany({
+      where: { departmentCode: "DE", deletedAt: null },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
     // Shows that still have archived pieces on them. Archiving keeps
     // finished work out of the queues, which is right -- but with no way
     // to reach it, a department whose history had just been archived saw
@@ -404,6 +413,16 @@ export default async function GraphicsHomePage({
                 title={orderTitle(order)}
                 sub={orderSub(order, note)}
                 right={right}
+                actions={
+                  <>
+                    {order.status === "PROOF_APPROVED" && <IssueGoAheadButton artworkOrderId={order.id} />}
+                    <AssignDesignerButton
+                      artworkOrderId={order.id}
+                      designers={designers}
+                      currentDesignerId={order.designerId}
+                    />
+                  </>
+                }
               />
             ))}
             {rows.length > QUEUE_ROWS && (

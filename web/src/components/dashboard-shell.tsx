@@ -132,9 +132,13 @@ export function DashCard({ children, className = "" }: { children: ReactNode; cl
 }
 
 // A row is the unit of work on these pages: what it is, why it's here, and
-// what you can do about it. `href` makes the whole row a link (for rows
-// whose action is "go look at it"); `actions` puts buttons on the right
-// instead, for rows you act on without leaving the page.
+// what you can do about it. `href` makes the row navigate; `actions` puts
+// buttons on the right, for things you do without leaving the page.
+//
+// With BOTH, only the identity half is the link and the buttons sit outside
+// it -- a <button> nested inside an <a> is invalid HTML, and every click on
+// one would also navigate. Rows that only navigate stay a single <a>, so
+// the whole row remains one big target.
 export function DashRow({
   title,
   sub,
@@ -148,24 +152,38 @@ export function DashRow({
   actions?: ReactNode;
   href?: string;
 }) {
-  const body = (
-    <>
-      <div className="min-w-0">
-        <div className="dash-row-title truncate">{title}</div>
-        {sub && <div className="dash-row-sub">{sub}</div>}
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {right}
-        {actions}
-      </div>
-    </>
+  const identity = (
+    <div className="min-w-0">
+      <div className="dash-row-title truncate">{title}</div>
+      {sub && <div className="dash-row-sub">{sub}</div>}
+    </div>
   );
-  return href ? (
-    <Link href={href} className="dash-row">
-      {body}
-    </Link>
-  ) : (
-    <div className="dash-row">{body}</div>
+  const trailing = (
+    <div className="flex shrink-0 items-center gap-2">
+      {right}
+      {actions}
+    </div>
+  );
+
+  if (href && !actions) {
+    return (
+      <Link href={href} className="dash-row">
+        {identity}
+        {trailing}
+      </Link>
+    );
+  }
+  return (
+    <div className="dash-row">
+      {href ? (
+        <Link href={href} className="dash-row-link">
+          {identity}
+        </Link>
+      ) : (
+        identity
+      )}
+      {trailing}
+    </div>
   );
 }
 
