@@ -239,6 +239,62 @@
    every page carrying a .dash wrapper. That is the point -- but it also
    means a half-migrated flow flips between dark and light as someone
    clicks through it, so pages used in one sitting should move together. */
+/* Shared ui.tsx primitives inside a shell.
+
+   Card, SelectField, BarBreakdown, StatusChip and the plain tables are
+   built on fixed neutral/brand colours. That is correct everywhere else
+   in the app, and unreadable the moment a shell goes dark: the filter
+   selects rendered as black boxes with invisible labels, and half the
+   breakdown rows vanished into the background.
+
+   Remapped by utility class rather than by rewriting six shared
+   components used on dozens of pages, and scoped under .dash so nothing
+   outside a shell is touched. Specificity does the work (.dash[data-theme]
+   .bg-white beats .bg-white), so no !important anywhere.
+
+   This is a bridge. The primitives should eventually read these tokens
+   themselves; until they do, every page moved onto a shell needs its
+   controls checked in dark mode, not just in light. */
+.dash[data-theme="dark"] .bg-white { background-color: var(--dash-surface); }
+.dash[data-theme="dark"] .bg-neutral-50,
+.dash[data-theme="dark"] .hover\:bg-neutral-50:hover { background-color: var(--dash-bg); }
+.dash[data-theme="dark"] .bg-neutral-100 { background-color: var(--dash-border); }
+
+.dash[data-theme="dark"] .text-neutral-900,
+.dash[data-theme="dark"] .text-neutral-800 { color: var(--dash-text); }
+.dash[data-theme="dark"] .text-neutral-700,
+.dash[data-theme="dark"] .text-neutral-600,
+.dash[data-theme="dark"] .text-neutral-500 { color: var(--dash-text-soft); }
+.dash[data-theme="dark"] .text-neutral-400 { color: var(--dash-text-faint); }
+
+.dash[data-theme="dark"] .border-neutral-200,
+.dash[data-theme="dark"] .border-neutral-300 { border-color: var(--dash-border); }
+.dash[data-theme="dark"] .hover\:border-neutral-400:hover { border-color: var(--dash-navy); }
+
+/* The breakdown bar only covers part of its row, so its label sits over
+   the fill at one end and over the card at the other. A solid pale fill
+   works in light mode and strands the label in dark, whichever colour the
+   text takes -- so in dark the fill becomes the translucent teal the rest
+   of the theme uses, and one light label reads correctly across both. */
+.dash[data-theme="dark"] .bg-brand-teal-pale { background-color: var(--dash-teal-pale); }
+
+/* Form controls: Tailwind gives these no background class of their own,
+   so the browser's own light default shows through. */
+.dash[data-theme="dark"] select,
+.dash[data-theme="dark"] input[type="text"],
+.dash[data-theme="dark"] input[type="email"],
+.dash[data-theme="dark"] input[type="number"],
+.dash[data-theme="dark"] input[type="date"],
+.dash[data-theme="dark"] input[type="search"],
+.dash[data-theme="dark"] textarea {
+  background-color: var(--dash-surface);
+  color: var(--dash-text);
+  border-color: var(--dash-border);
+}
+.dash[data-theme="dark"] option { background-color: var(--dash-surface); color: var(--dash-text); }
+/* SelectField/Field print their label in a <label> with no colour class. */
+.dash[data-theme="dark"] label { color: var(--dash-text-soft); }
+
 .dash-page-head {
   display: flex;
   flex-wrap: wrap;
