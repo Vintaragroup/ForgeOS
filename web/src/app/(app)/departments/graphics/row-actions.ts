@@ -3,6 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireArtworkOrderAccess } from "@/lib/opportunity-access";
+import { getCurrentUser } from "@/lib/auth";
+import { canAccessArtworkOrdersViaDepartment } from "@/lib/department-access";
+import { markSkidSent } from "@/lib/skid-service";
 import { setProductionDetail, transitionArtworkOrder } from "@/lib/artwork-order-service";
 import { setHalfProductionStatus } from "@/lib/artwork-routing";
 import type { ArtworkProductionStatus } from "@/generated/prisma/enums";
@@ -111,5 +114,27 @@ export async function setHalfStatusFromDashboardAction(_prev: ActionResult, form
     await setHalfProductionStatus(routingId, status as ArtworkProductionStatus);
     revalidatePath("/departments/graphics");
     revalidatePath(`/artwork/${routing.artworkOrderId}`);
+  });
+}
+
+// A crate physically leaves. markSkidSent does the real checking (already
+// sent, nothing packed on it), so this only establishes who is asking --
+// a skid is show-scoped, not opportunity-scoped, so access is the
+// department grant rather than requireArtworkOrderAccess.
+export async function markSkidSentFromDashboardAction(_prev: ActionResult, formData: FormData): Promise<ActionResult> {
+  return catchUserError(async () => {
+    const skidId = String(formData.get("skidId") ?? "").trim();
+    if (!skidId) throw new UserError("Missing the skid to send.");
+
+    const user = await getCurrentUser();
+    if (!user) throw new Error("Not authenticated");
+    const isAdmin = user.systemRole === "ADMIN" || user.systemRole === "SUPER_ADMIN";
+    if (!isAdmin && !canAccessArtworkOrdersViaDepartment(user)) {
+      throw new UserError("Only Graphics can mark a skid as sent.");
+    }
+
+    await markSkidSent(skidId);
+    revalidatePath("/departments/graphics");
+    revalidatePath("/shows");
   });
 }

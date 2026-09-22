@@ -5,6 +5,7 @@ import { Popover, ROW_BUTTON_CLASS } from "@/components/row-popover";
 import {
   assignDesignerAction,
   issueGoAheadFromDashboardAction,
+  markSkidSentFromDashboardAction,
   setHalfStatusFromDashboardAction,
 } from "@/app/(app)/departments/graphics/row-actions";
 import { PRODUCTION_STATUSES_BY_KIND, PRODUCTION_STATUS_LABELS } from "@/lib/artwork-routing-vocab";
@@ -120,6 +121,34 @@ export function SetHalfStatusButton({
               {status === current && " (now)"}
             </button>
           ))}
+        </ActionForm>
+      )}
+    </Popover>
+  );
+}
+
+// Sending a crate is one-way -- there is no "un-send" -- so it sits
+// behind a confirm that says what is on it.
+export function MarkSkidSentButton({ skidId, code, pieceCount }: { skidId: string; code: string; pieceCount: number }) {
+  return (
+    <Popover label="Mark sent" title={`Send ${code}?`}>
+      {(close) => (
+        <ActionForm action={markSkidSentFromDashboardAction} className="flex flex-col gap-2">
+          <input type="hidden" name="skidId" value={skidId} />
+          <p className="text-[11px] leading-snug text-neutral-500">
+            {pieceCount === 0
+              ? "Nothing is packed on this skid yet, so it can't be sent."
+              : `Records ${code} as having left, with ${pieceCount} piece${pieceCount === 1 ? "" : "s"} on it. This can't be undone.`}
+          </p>
+          {pieceCount > 0 && (
+            <button
+              type="submit"
+              onClick={() => setTimeout(close, 0)}
+              className="rounded-md bg-brand-black px-3 py-1.5 text-sm font-medium text-white"
+            >
+              It has shipped
+            </button>
+          )}
         </ActionForm>
       )}
     </Popover>

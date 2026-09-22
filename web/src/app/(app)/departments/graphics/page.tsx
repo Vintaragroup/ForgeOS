@@ -29,8 +29,9 @@ import { getMyClientGraphicsSummary, getGraphicsOrders, getWeeklyDeliveredCounts
 import { getGraphicsBreakdowns, getAllClientsSummary } from "@/lib/graphics-breakdowns";
 import { buildTodayBuckets } from "@/lib/graphics-today";
 import { APPROVAL_LEAD_BUSINESS_DAYS } from "@/lib/graphics-sla";
-import { AssignDesignerButton, IssueGoAheadButton, SetHalfStatusButton } from "@/components/graphics-row-actions";
+import { AssignDesignerButton, IssueGoAheadButton, MarkSkidSentButton, SetHalfStatusButton } from "@/components/graphics-row-actions";
 import { buildShopFloor } from "@/lib/graphics-shop-floor";
+import { buildShipping } from "@/lib/graphics-shipping";
 import { AssistantWidget } from "@/components/assistant-widget";
 import { canUseAssistant, getDepartmentAssistant } from "@/lib/ai/assistant-registry";
 import { listAssistantThreads } from "@/lib/assistant-service";
@@ -54,7 +55,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // turning the landing page into a scroll. Same rule as the Sales dashboard.
 const QUEUE_ROWS = 6;
 
-type GraphicsTabKey = "today" | "shopfloor" | "production" | "department";
+type GraphicsTabKey = "today" | "shopfloor" | "shipping" | "production" | "department";
 
 export default async function GraphicsHomePage({
   searchParams,
@@ -324,7 +325,9 @@ export default async function GraphicsHomePage({
   const tab: GraphicsTabKey =
     tabParam === "shopfloor"
       ? "shopfloor"
-      : tabParam === "production"
+      : tabParam === "shipping"
+        ? "shipping"
+        : tabParam === "production"
         ? "production"
         : tabParam === "department" && canSeeOversight
           ? "department"
@@ -366,6 +369,44 @@ export default async function GraphicsHomePage({
         )
       : null;
 
+  // Only for the tab that renders it. Skids are show-scoped, so this asks
+  // for every live show's crates at once -- the dashboard's whole point is
+  // that you don't have to know which show a crate belongs to first.
+  const shipping =
+    tab === "shipping"
+      ? buildShipping(
+          orders,
+          (o) => ({
+            status: o.status,
+            skidId: o.skidId,
+            material: o.material,
+            graphicCode: o.graphicCode,
+            showStartDate: eventStartDateOf(o),
+          }),
+          (
+            await db.skid.findMany({
+              where: { deletedAt: null, show: { deletedAt: null } },
+              orderBy: [{ sentAt: "desc" }, { code: "asc" }],
+              select: {
+                id: true,
+                code: true,
+                labelColor: true,
+                sentAt: true,
+                showId: true,
+                show: { select: { name: true } },
+              },
+            })
+          ).map((sk) => ({
+            id: sk.id,
+            code: sk.code,
+            labelColor: sk.labelColor,
+            sentAt: sk.sentAt,
+            showId: sk.showId,
+            showName: sk.show.name,
+          })),
+        )
+      : null;
+
   const today = new Date();
   const firstName = user.name.trim().split(/\s+/)[0] ?? user.name;
   // The one number the hero promises: every piece of work actually waiting
@@ -377,6 +418,7 @@ export default async function GraphicsHomePage({
   const tabs: DashTab[] = [
     { key: "today", label: "Today", count: needsYou, href: tabHref("today"), active: tab === "today" },
     { key: "shopfloor", label: "Shop floor", href: tabHref("shopfloor"), active: tab === "shopfloor" },
+    { key: "shipping", label: "Shipping", href: tabHref("shipping"), active: tab === "shipping" },
     {
       key: "production",
       label: "Production",
@@ -816,6 +858,121 @@ export default async function GraphicsHomePage({
                 </DashCard>
               </DashSection>
             ))
+          )}
+        </>
+      )}
+
+      {tab === "shipping" && shipping && (
+        <>
+          <div className="dash-section">
+            <DashStatStrip
+              stats={[
+                { value: String(shipping.readyToPackCount), label: "Ready to pack" },
+                { value: String(shipping.onOpenSkidsCount), label: "Packed, not gone" },
+                { value: String(shipping.openSkids.length), label: "Skids on the dock" },
+                { value: String(shipping.sentSkids.length), label: "Skids sent" },
+              ]}
+            />
+          </div>
+
+          {shipping.shippedButNotMarked.length > 0 && (
+            <DashSection title={`ON A SKID THAT HAS ALREADY GONE (${shipping.shippedButNotMarked.length})`}>
+              <DashCard>
+                {shipping.shippedButNotMarked.slice(0, QUEUE_ROWS).map((order) => (
+                  <DashRow
+                    key={order.id}
+                    href={`/artwork/${order.id}`}
+                    title={orderTitle(order)}
+                    sub={orderSub(order, "its skid shipped, but the piece is still marked packaged")}
+                    right={<DashChip tone="critical">Out of step</DashChip>}
+                  />
+                ))}
+                {shipping.shippedButNotMarked.length > QUEUE_ROWS && (
+                  <DashRow title={`+ ${shipping.shippedButNotMarked.length - QUEUE_ROWS} more`} href="/artwork" />
+                )}
+              </DashCard>
+            </DashSection>
+          )}
+
+          <DashSection title={`READY TO PACK (${shipping.readyToPack.length})`} link={{ href: "/shows", label: "All shows" }}>
+            {shipping.readyToPack.length === 0 ? (
+              <DashEmpty>Nothing is finished and waiting for a crate.</DashEmpty>
+            ) : (
+              <DashCard>
+                {shipping.readyToPack.slice(0, QUEUE_ROWS).map((order) => (
+                  <DashRow
+                    key={order.id}
+                    href={`/artwork/${order.id}`}
+                    title={orderTitle(order)}
+                    sub={orderSub(order, order.material ?? "no material on file")}
+                    right={<DashChip tone="info">Needs a skid</DashChip>}
+                  />
+                ))}
+                {shipping.readyToPack.length > QUEUE_ROWS && (
+                  <DashRow title={`+ ${shipping.readyToPack.length - QUEUE_ROWS} more`} href="/artwork" />
+                )}
+              </DashCard>
+            )}
+          </DashSection>
+
+          {shipping.openSkids.length === 0 ? (
+            <DashSection title="SKIDS ON THE DOCK">
+              <DashEmpty>No skid is open. Start one from a show.</DashEmpty>
+            </DashSection>
+          ) : (
+            shipping.openSkids.map(({ skid, contents }) => (
+              <DashSection
+                key={skid.id}
+                title={`${skid.code.toUpperCase()} — ${skid.showName.toUpperCase()} (${contents.length})`}
+                link={{ href: `/shows/${skid.showId}`, label: "Show" }}
+              >
+                <DashCard>
+                  {/* Loaded heaviest first, per the SOP: PVC at the bottom,
+                      fabric on top. This is the order to physically stack
+                      it in, not a list sorted for reading. */}
+                  <DashRow
+                    title={
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {skid.labelColor && <DashChip tone="neutral">{skid.labelColor} label</DashChip>}
+                        <span>Load in this order — heaviest first</span>
+                      </span>
+                    }
+                    sub={contents.length === 0 ? "Nothing packed on it yet." : "PVC and acrylic at the bottom, fabric on top."}
+                    actions={<MarkSkidSentButton skidId={skid.id} code={skid.code} pieceCount={contents.length} />}
+                  />
+                  {contents.map((order, i) => (
+                    <DashRow
+                      key={order.id}
+                      href={`/artwork/${order.id}`}
+                      title={
+                        <span className="flex items-center gap-2">
+                          <span className="dash-row-sub tabular-nums">{i + 1}.</span>
+                          {orderTitle(order)}
+                        </span>
+                      }
+                      sub={orderSub(order, order.material ?? "no material on file")}
+                      right={<DashChip tone="neutral">{order.qty > 1 ? `${order.qty} up` : "1 up"}</DashChip>}
+                    />
+                  ))}
+                </DashCard>
+              </DashSection>
+            ))
+          )}
+
+          {shipping.sentSkids.length > 0 && (
+            <DashSection title={`ALREADY SENT (${shipping.sentSkids.length})`}>
+              <DashCard>
+                {shipping.sentSkids.slice(0, QUEUE_ROWS).map(({ skid, contents }) => (
+                  <DashRow
+                    key={skid.id}
+                    href={`/shows/${skid.showId}`}
+                    title={`${skid.code} — ${skid.showName}`}
+                    sub={`${contents.length} piece${contents.length === 1 ? "" : "s"} · left ${skid.sentAt?.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`}
+                    right={<DashChip tone="good">Gone</DashChip>}
+                  />
+                ))}
+              </DashCard>
+            </DashSection>
           )}
         </>
       )}
