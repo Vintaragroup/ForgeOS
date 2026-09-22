@@ -197,8 +197,15 @@ async function main() {
       select: { id: true },
     });
 
+    // vendorId is set from the first outside shop below, for the same
+    // reason setArtworkRouting does it: it still drives the vendor portal
+    // invite and the detail page's picker, and the two must not drift.
+    // The first version of this wrote routings directly and left
+    // vendorId null on 108 pieces.
+    let firstVendorId: string | null = null;
     for (const half of row.halves) {
       const vendor = half.normalizedShopName ? vendorByNormalized.get(half.normalizedShopName) : undefined;
+      if (half.kind === "VENDOR" && vendor && !firstVendorId) firstVendorId = vendor.id;
       await db.artworkOrderRouting.create({
         data: {
           artworkOrderId: order.id,
@@ -208,6 +215,9 @@ async function main() {
           productionStatus: half.productionStatus,
         },
       });
+    }
+    if (firstVendorId) {
+      await db.artworkOrder.update({ where: { id: order.id }, data: { vendorId: firstVendorId } });
     }
     created += 1;
   }

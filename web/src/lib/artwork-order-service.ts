@@ -9,7 +9,7 @@
 // who acted.
 import { randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
-import { assignSingleVendor } from "@/lib/artwork-routing";
+import { assignSingleVendor, defaultProductionStatus } from "@/lib/artwork-routing";
 import { reprintNoteRequired } from "@/lib/artwork-reprint";
 import { UserError } from "@/lib/user-error";
 import {
@@ -315,6 +315,30 @@ export async function rolloverArtworkOrder(
     }
   }
   if (!created) throw new Error("Failed to generate a unique artwork order job code after 5 attempts.");
+
+  // Carry last year's routing forward. Rollover predates the routing model
+  // and copied vendorId alone, which left the new piece pointing at a shop
+  // with no routing row to match -- the exact drift assignVendor exists to
+  // prevent. Where it was printed is as reusable as its material.
+  //
+  // Production status is NOT carried: each half starts at its own default.
+  // A piece that has not been made yet is not "O.S received" because last
+  // year's was.
+  const sourceRoutings = await db.artworkOrderRouting.findMany({
+    where: { artworkOrderId: source.id },
+    select: { kind: true, vendorId: true, officeCode: true },
+  });
+  for (const routing of sourceRoutings) {
+    await db.artworkOrderRouting.create({
+      data: {
+        artworkOrderId: created.id,
+        kind: routing.kind,
+        vendorId: routing.vendorId,
+        officeCode: routing.officeCode,
+        productionStatus: defaultProductionStatus(routing.kind),
+      },
+    });
+  }
 
   await transitionArtworkOrder(created.id, "INVITED", "ROLLED_OVER_FROM_PRIOR_SHOW", actor, {
     detail: { fromArtworkOrderId: source.id } as Prisma.InputJsonValue,
