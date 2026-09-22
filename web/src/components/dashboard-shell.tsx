@@ -103,6 +103,62 @@ export function DashboardShell({
   );
 }
 
+// The shell for the pages BELOW a dashboard -- the production log, a
+// piece's detail, post-show, analytics. Same .dash token block and
+// background as DashboardShell, so the two read as one product; a title
+// and a back crumb where the hero would be, because a greeting belongs on
+// the screen you arrive at, not on the one you clicked through to.
+//
+// `id` must be unique per page and is what ThemeToggle writes data-theme
+// onto. The toggle keeps one preference for the whole app, so dark
+// follows the reader onto every page that uses either shell -- see the
+// .dash-page-head comment in globals.css for why that makes migration
+// order matter.
+export function PageShell({
+  id,
+  title,
+  backHref,
+  backLabel,
+  action,
+  children,
+}: {
+  id: string;
+  title: ReactNode;
+  // Where "back" goes, beyond the always-present Dashboard crumb. Omit on
+  // a top-level page that isn't inside anything.
+  backHref?: string;
+  backLabel?: string;
+  // Buttons that belong to the page as a whole, beside the title.
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div id={id} className="dash dash-full-bleed -my-8">
+      <div className="dash-wrap">
+        <div className="dash-page-head">
+          <div className="dash-crumbs">
+            {/* "/" is every user's own home: an admin lands on the main
+                dashboard, a GR member is redirected to Graphics. One crumb
+                that is correct for both rather than a hardcoded target. */}
+            <Link href="/" className="dash-crumb">
+              Dashboard
+            </Link>
+            {backHref && (
+              <Link href={backHref} className="dash-crumb">
+                {backLabel ?? "Back"}
+              </Link>
+            )}
+          </div>
+          <h1 className="dash-page-title">{title}</h1>
+          {action}
+          <ThemeToggle targetId={id} />
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function DashSection({
   title,
   link,

@@ -227,6 +227,50 @@
    down both sides in dark mode. .dash-wrap's own max-width still
    centers that content at the same 1152px column, just with the correct
    background now filling the full row behind it. */
+/* Page header, for the pages BELOW a dashboard. DashboardShell's hero is
+   landing-page furniture -- a greeting and quick actions belong on the
+   screen you arrive at, not on the production log you clicked through to.
+   PageShell reuses the same .dash token block and background so the two
+   read as one product, and swaps the hero for a title, a back crumb and
+   the theme toggle.
+
+   Worth knowing before adopting this on another page: the toggle writes
+   ONE localStorage key for the whole app, so dark follows the reader onto
+   every page carrying a .dash wrapper. That is the point -- but it also
+   means a half-migrated flow flips between dark and light as someone
+   clicks through it, so pages used in one sitting should move together. */
+.dash-page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.875rem;
+  padding-top: 2rem;
+  margin-bottom: 1.75rem;
+}
+.dash-page-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  font-size: 1.875rem;
+  color: var(--dash-text);
+  margin: 0;
+  margin-right: auto;
+}
+.dash-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: 1px solid var(--dash-border);
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--dash-text-soft);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.dash-crumb:hover { border-color: var(--dash-navy); color: var(--dash-navy); }
+.dash-crumbs { display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%; }
+
 .dash-full-bleed {
   width: 100vw;
   margin-left: calc(50% - 50vw);

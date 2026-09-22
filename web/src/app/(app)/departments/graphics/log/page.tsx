@@ -7,7 +7,8 @@ import { db } from "@/lib/db";
 import { opportunityAccessWhere } from "@/lib/opportunity-access";
 import { getGraphicsOrders } from "@/lib/artwork-hub";
 import { STATUS_GROUPS, clientLabelOf, getGraphicsBreakdowns } from "@/lib/graphics-breakdowns";
-import { PageHeader, Card, StatusChip, EmptyState, SelectField, Button } from "@/components/ui";
+import { StatusChip, EmptyState, SelectField, Button } from "@/components/ui";
+import { DashCard, DashSection, PageShell } from "@/components/dashboard-shell";
 import { OrderIdentity } from "@/components/artwork-order-identity";
 import { BarBreakdown } from "@/components/bar-breakdown";
 
@@ -115,27 +116,31 @@ export default async function GraphicsProductionLogPage({
   const exportHref = `/departments/graphics/log/export${exportQuery.toString() ? `?${exportQuery}` : ""}`;
 
   return (
-    <>
-      <PageHeader title="Production log" backHref="/departments/graphics" backLabel="Graphics" />
-      <div className="flex flex-col gap-6">
-        <Card className="p-5">
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-            <BarBreakdown title="By status" rows={statusGroupRows} />
-            <BarBreakdown title="By vendor" rows={vendorRows} emptyMessage="No vendor assigned yet." />
-            <BarBreakdown title="By client" rows={clientRows} />
-          </div>
-        </Card>
+    <PageShell
+      id="forgeos-graphics-log"
+      title="Production log"
+      backHref="/departments/graphics"
+      backLabel="Graphics"
+    >
+      <>
+        <DashSection title="BREAKDOWN">
+          <DashCard>
+            <div className="grid grid-cols-1 gap-6 p-5 md:grid-cols-3">
+              <BarBreakdown title="By status" rows={statusGroupRows} />
+              <BarBreakdown title="By vendor" rows={vendorRows} emptyMessage="No vendor assigned yet." />
+              <BarBreakdown title="By client" rows={clientRows} />
+            </div>
+          </DashCard>
+        </DashSection>
 
-        <Card className="p-5">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
-              Production log ({productionLogOrders.length} of {orders.length})
-            </h2>
-            <Link href={exportHref} className="text-sm font-medium text-neutral-600 hover:underline">
-              Export CSV{hasActiveFilter ? " (filtered)" : ""} →
-            </Link>
-          </div>
-          <form method="get" className="mb-4 flex flex-wrap items-end gap-3">
+        <DashSection
+          title={`PRODUCTION LOG (${productionLogOrders.length} OF ${orders.length})`}
+          link={{ href: exportHref, label: `Export CSV${hasActiveFilter ? " (filtered)" : ""}` }}
+        >
+          <DashCard>
+            <div className="p-5">
+              {/* The section's own link carries Export CSV now. */}
+              <form method="get" className="mb-4 flex flex-wrap items-end gap-3">
             <div className="min-w-48">
               <SelectField
                 label="Client"
@@ -251,8 +256,10 @@ export default async function GraphicsProductionLogPage({
               )}
             </div>
           )}
-        </Card>
-      </div>
-    </>
+          </div>
+          </DashCard>
+        </DashSection>
+      </>
+    </PageShell>
   );
 }
