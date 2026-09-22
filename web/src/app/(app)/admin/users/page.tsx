@@ -11,7 +11,10 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export default async function AdminUsersPage() {
-  const users = await db.user.findMany({ orderBy: { name: "asc" } });
+  const users = await db.user.findMany({
+    orderBy: { name: "asc" },
+    include: { departmentRef: { select: { name: true } } },
+  });
 
   return (
     <div>
@@ -49,8 +52,19 @@ export default async function AdminUsersPage() {
                     <div className="text-sm text-neutral-500">{user.email}</div>
                     {user.adminNote && <div className="text-sm text-amber-700">{user.adminNote}</div>}
                   </div>
-                  <div className="text-sm text-neutral-500">
-                    {ROLE_LABELS[user.systemRole] ?? user.systemRole}
+                  {/* Department, not just system role. Assigning people to
+                      departments is what gates the department dashboards
+                      and their assistants, and with only the role shown
+                      there was no way to see who was still unassigned
+                      without opening all 25 records one at a time. */}
+                  <div className="flex shrink-0 items-center gap-2 text-sm text-neutral-500">
+                    {user.departmentRef ? (
+                      <StatusChip tone="neutral">{user.departmentRef.name}</StatusChip>
+                    ) : (
+                      <StatusChip tone="warning">No department</StatusChip>
+                    )}
+                    {user.isDepartmentHead && <StatusChip tone="good">Head</StatusChip>}
+                    <span>{ROLE_LABELS[user.systemRole] ?? user.systemRole}</span>
                   </div>
                 </Link>
               </li>
