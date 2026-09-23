@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
+import { PageActionsMenu } from "@/components/page-actions-menu";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
@@ -1062,9 +1063,21 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
               <LinkButton href={`/opportunities/${opportunity.id}/intake`} variant="secondary">
                 Intake &amp; review
               </LinkButton>
-              <ConfirmForm action={deleteWithId} confirmMessage="Delete this opportunity? This can't be undone.">
-                <Button variant="danger">Delete opportunity</Button>
-              </ConfirmForm>
+              {/* Delete lives behind the kebab now. It was the heaviest
+                  element on the page -- solid red, full weight -- sitting
+                  directly beside a routine workflow button. Visual weight
+                  should track how often an action is wanted, and this is
+                  the rarest one here. The confirm dialog is unchanged. */}
+              <PageActionsMenu label="More actions for this opportunity">
+                <ConfirmForm action={deleteWithId} confirmMessage="Delete this opportunity? This can't be undone.">
+                  <button
+                    type="submit"
+                    className="w-full rounded-md px-3 py-2 text-left text-sm font-medium text-red-700 hover:bg-red-50"
+                  >
+                    Delete opportunity
+                  </button>
+                </ConfirmForm>
+              </PageActionsMenu>
             </div>
           }
         />
@@ -1103,7 +1116,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
               >
                 <span className={item.urgent ? "text-red-800" : "text-neutral-800"}>{item.label}</span>
                 <Link href={item.href} className="shrink-0 text-xs font-medium text-brand-navy hover:underline">
-                  Go →
+                  {item.actionLabel} →
                 </Link>
               </li>
             ))}
@@ -1281,9 +1294,11 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                   {e.name ?? `Estimate ${e.id.slice(0, 8)}`} — {e.status}
                   {e.taxRate ? ` · ${taxRateLabel(e.taxRate)}` : ""}
                 </span>
-                <Link href={`/estimates/${e.id}`} className="text-neutral-900 hover:underline">
-                  Open estimate →
-                </Link>
+                {/* A real button, not text with an arrow. Opening the
+                    estimate is the most valuable thing on this page and it
+                    was the faintest affordance in the section, sitting
+                    above two solid buttons that both CREATE another one. */}
+                <LinkButton href={`/estimates/${e.id}`}>Open estimate</LinkButton>
               </li>
             ))}
           </ul>
@@ -1305,8 +1320,17 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
           </form>
           {buildEstimateWithIds && (
             <form action={buildEstimateWithIds}>
-              <SubmitButton pendingText="Building…" variant="primary">
-                Build estimate from &quot;{pricingScheduleDoc!.filename}&quot;
+              {/* Secondary, and the filename moved to a title. As a primary
+                  button carrying a whole filename it was the loudest thing
+                  in the section -- louder than opening the estimate that
+                  already exists, which is not the order anyone wants these
+                  in once there IS one. */}
+              <SubmitButton
+                pendingText="Building…"
+                variant="secondary"
+                title={`Build from "${pricingScheduleDoc!.filename}"`}
+              >
+                Build from pricing document
               </SubmitButton>
             </form>
           )}

@@ -12,6 +12,11 @@
 export interface DealChecklistItem {
   id: string;
   label: string;
+  // What the link itself says. Every one of these used to render as the
+  // word "Go", so three links pointing at details, documents and a $1M
+  // estimate were indistinguishable from each other -- and a screen
+  // reader announced "Go, Go, Go". The sentence explains, the verb acts.
+  actionLabel: string;
   href: string;
   urgent: boolean;
 }
@@ -75,6 +80,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
     return [
       {
         id: "convert-to-project",
+        actionLabel: "Convert",
         label: "Convert this won deal to a Project to start production.",
         href: `/opportunities/${input.opportunityId}#project`,
         urgent: false,
@@ -85,14 +91,21 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
   const items: DealChecklistItem[] = [];
 
   if (!input.primaryContactId) {
-    items.push({ id: "primary-contact", label: "Add a primary contact.", href: detailsHref, urgent: false });
+    items.push({ id: "primary-contact", label: "Add a primary contact.", actionLabel: "Add contact", href: detailsHref, urgent: false });
   }
   if (!input.ownerId) {
-    items.push({ id: "owner", label: "Assign an owner so this deal has a clear driver.", href: detailsHref, urgent: false });
+    items.push({
+      id: "owner",
+      label: "Assign an owner so this deal has a clear driver.",
+      actionLabel: "Assign owner",
+      href: detailsHref,
+      urgent: false,
+    });
   }
   if (input.pendingFieldSuggestionCount > 0) {
     items.push({
       id: "field-suggestions",
+      actionLabel: "Review fields",
       label: `Review ${input.pendingFieldSuggestionCount} field${input.pendingFieldSuggestionCount === 1 ? "" : "s"} suggested from documents.`,
       href: detailsHref,
       urgent: false,
@@ -101,6 +114,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
   if (input.documentsNeedingAnalysisCount > 0) {
     items.push({
       id: "analyze-documents",
+      actionLabel: "Open documents",
       label: `Analyze ${input.documentsNeedingAnalysisCount} uploaded document${input.documentsNeedingAnalysisCount === 1 ? "" : "s"}.`,
       // ?open=documents, not just the bare #documents hash -- Documents
       // defaults to collapsed now (opportunities/[id]/page.tsx), and native
@@ -115,6 +129,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
   if (input.hasScopeDocuments && input.recommendedClarificationQuestionCount > 0) {
     items.push({
       id: "clarification-questions",
+      actionLabel: "Review questions",
       label:
         `Review ${input.recommendedClarificationQuestionCount} recommended clarification question` +
         `${input.recommendedClarificationQuestionCount === 1 ? "" : "s"} to send the client` +
@@ -133,6 +148,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
     // a client-ready document from actually being complete.
     items.push({
       id: "timeline-incomplete",
+      actionLabel: "Open timeline",
       label:
         `Fill in ${input.missingTimelineMilestoneCount} missing Timeline milestone` +
         `${input.missingTimelineMilestoneCount === 1 ? "" : "s"} before the proposal goes out.`,
@@ -144,6 +160,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
   if (!input.estimateId) {
     items.push({
       id: "start-estimate",
+      actionLabel: "Start estimate",
       label: "Start an estimate.",
       href: `/opportunities/${input.opportunityId}#estimates`,
       urgent: false,
@@ -155,6 +172,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
   } else if (!(input.currentVersion.isLocked && input.currentVersion.isApproved)) {
     items.push({
       id: "finalize-estimate",
+      actionLabel: "Open estimate",
       label: "Lock and approve the estimate before it can become a proposal.",
       href: `/estimates/${input.estimateId}`,
       urgent: false,
@@ -164,6 +182,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
     if (!latestProposal) {
       items.push({
         id: "generate-proposal",
+        actionLabel: "Open estimate",
         label: "Generate a proposal from the approved estimate.",
         href: `/estimates/${input.estimateId}`,
         urgent: false,
@@ -171,6 +190,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
     } else if (!latestProposal.sentAt) {
       items.push({
         id: "send-proposal",
+        actionLabel: "Open estimate",
         label: "Send the generated proposal to the client.",
         href: `/estimates/${input.estimateId}`,
         urgent: false,
@@ -180,6 +200,7 @@ export function buildDealChecklist(input: DealChecklistInput): DealChecklistItem
       if (days >= FOLLOW_UP_AFTER_DAYS) {
         items.push({
           id: "follow-up-proposal",
+          actionLabel: "Open estimate",
           label: `Follow up -- the proposal was sent ${days} days ago with no signature yet.`,
           href: `/estimates/${input.estimateId}`,
           urgent: true,

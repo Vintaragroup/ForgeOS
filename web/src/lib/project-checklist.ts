@@ -26,6 +26,7 @@ export function buildProjectChecklist(input: ProjectChecklistInput): DealCheckli
   if (!input.jobNumber) {
     items.push({
       id: "missing-job-number",
+      actionLabel: "Add job number",
       label: "Add the job number for this project.",
       href: `/projects/${input.projectId}#details`,
       urgent: false,
@@ -35,6 +36,7 @@ export function buildProjectChecklist(input: ProjectChecklistInput): DealCheckli
   if (!input.workOrder) {
     items.push({
       id: "start-work-order",
+      actionLabel: "Start work order",
       label: "Start the work order to begin tracking production.",
       href: `/projects/${input.projectId}#work-order`,
       urgent: false,
@@ -52,6 +54,7 @@ export function buildProjectChecklist(input: ProjectChecklistInput): DealCheckli
   if (missingDateCount > 0) {
     items.push({
       id: "work-order-dates-incomplete",
+      actionLabel: "Open work order",
       label: `Fill in ${missingDateCount} missing production date${missingDateCount === 1 ? "" : "s"} on the work order.`,
       href: `/projects/${input.projectId}#work-order`,
       urgent: false,

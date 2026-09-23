@@ -1,6 +1,7 @@
 import { Fragment, Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
+import { PageActionsMenu } from "@/components/page-actions-menu";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
@@ -864,12 +865,31 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
 
   return (
     <div className="flex flex-col gap-8">
+      {/* The parent link belongs in the crumb slot beside Dashboard, where
+          every other page in the app puts it -- it used to sit top-RIGHT
+          as loose text while the Dashboard crumb sat top-LEFT, two
+          navigation affordances in opposite corners doing the same job.
+          Crumbs left, actions right. */}
       <PageHeader
         title={`Estimate — ${estimate.opportunity.showName}`}
+        backHref={`/opportunities/${estimate.opportunity.id}`}
+        backLabel={estimate.opportunity.company.name}
         action={
-          <Link href={`/opportunities/${estimate.opportunity.id}`} className="text-sm text-neutral-500 hover:text-neutral-900">
-            ← {estimate.opportunity.company.name}
-          </Link>
+          !estimate.archivedAt ? (
+            <PageActionsMenu label="More actions for this estimate">
+              <ConfirmForm
+                action={archiveEstimateWithIds}
+                confirmMessage="Archive this estimate? It's hidden from the Opportunity's active Estimates list and becomes read-only, but stays fully viewable under Archived estimates and can be unarchived later."
+              >
+                <button
+                  type="submit"
+                  className="w-full rounded-md px-3 py-2 text-left text-sm font-medium text-red-700 hover:bg-red-50"
+                >
+                  Archive estimate
+                </button>
+              </ConfirmForm>
+            </PageActionsMenu>
+          ) : undefined
         }
       />
 
@@ -913,15 +933,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             </div>
           )}
         </form>
-        {!estimate.archivedAt && (
-          <ConfirmForm
-            action={archiveEstimateWithIds}
-            confirmMessage="Archive this estimate? It's hidden from the Opportunity's active Estimates list and becomes read-only, but stays fully viewable under Archived estimates and can be unarchived later."
-            className="mt-4 border-t border-neutral-200 pt-4"
-          >
-            <Button variant="danger">Archive estimate</Button>
-          </ConfirmForm>
-        )}
+
       </Card>
 
       {!currentVersion ? (
