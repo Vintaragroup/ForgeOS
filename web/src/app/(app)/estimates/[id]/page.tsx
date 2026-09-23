@@ -458,6 +458,24 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
 
   const olderVersions: VersionSummary[] = versionSummaries.filter((v) => v.id !== currentVersionId);
 
+  // Every proposal on this ESTIMATE, not just the current version's.
+  //
+  // The panel used to read version.proposals, which meant the moment an
+  // estimate change request opened version 2 the proposal disappeared --
+  // it belongs to version 1. That is exactly backwards: while you are
+  // re-costing is when you most need to see that the client was sent
+  // $1,013,374 on 9 September and asked for $850k. Each one is labelled
+  // with the version it was built from, which is also what "proposal v2"
+  // means (see Proposal's own schema comment on not storing a number).
+  const estimateProposals = await db.proposal.findMany({
+    where: { deletedAt: null, estimateVersion: { estimateId: estimate.id } },
+    orderBy: { createdAt: "desc" },
+    include: {
+      estimateVersion: { select: { versionNumber: true } },
+      events: { orderBy: { createdAt: "desc" }, include: { byUser: { select: { name: true } } } },
+    },
+  });
+
   const [
     users,
     proposalTemplates,
@@ -1117,6 +1135,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     proposalTemplates={proposalTemplates}
                     olderVersions={olderVersions}
                     viewerIsProposalManager={viewerIsProposalManager}
+                    estimateProposals={estimateProposals}
                   />
                 ),
                 history: (
@@ -1209,6 +1228,13 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
 // documents) just to show three numbers per row was real, wasted work that
 // grows with every revision an estimate goes through -- see this file's own
 // versionSummaries query below.
+type EstimateProposal = Prisma.ProposalGetPayload<{
+  include: {
+    estimateVersion: { select: { versionNumber: true } };
+    events: { include: { byUser: { select: { name: true } } } };
+  };
+}>;
+
 type VersionSummary = Prisma.EstimateVersionGetPayload<{
   select: {
     id: true;
@@ -6521,12 +6547,17 @@ function ProposalApprovalTab({
   proposalTemplates,
   olderVersions,
   viewerIsProposalManager,
+  estimateProposals,
 }: {
   estimateId: string;
   version: VersionWithSections;
   users: { id: string; name: string }[];
   proposalTemplates: { id: string; name: string }[];
   olderVersions: VersionSummary[];
+  // Every proposal on the estimate, not just this version's -- see the
+  // query's own comment for why the panel cannot key on the current
+  // version.
+  estimateProposals: EstimateProposal[];
   // A manager moves a proposal on their own authority; everyone else has
   // to confirm they discussed it. UI only -- recordProposalStatus
   // re-derives this server-side.
@@ -6621,13 +6652,22 @@ function ProposalApprovalTab({
                       </SubmitButton>
                     </form>
                   )}
-                  {version.proposals.length > 0 && (
+                  {estimateProposals.length > 0 && (
                     <div className="mt-4 flex flex-col gap-4 border-t border-neutral-200 pt-3 text-sm">
-                      {version.proposals.map((p) => (
+                      {estimateProposals.map((p) => (
                         <div key={p.id}>
-                          <Link href={`/proposals/${p.id}`} className="text-neutral-900 hover:underline">
-                            Open the proposal →
-                          </Link>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Link href={`/proposals/${p.id}`} className="text-neutral-900 hover:underline">
+                              Open the proposal →
+                            </Link>
+                            {/* Which version it was built from -- that IS
+                                its version number, rather than a second
+                                one stored on the proposal itself. */}
+                            <span className="text-xs text-neutral-500">
+                              from version {p.estimateVersion.versionNumber}
+                              {p.estimateVersion.versionNumber !== version.versionNumber && " (an earlier version)"}
+                            </span>
+                          </div>
                           <ProposalStatusPanel
                             proposalId={p.id}
                             status={p.status}
@@ -6692,6 +6732,49 @@ function ProposalApprovalTab({
           </p>
         )}
       </Card>
+
+      {/* Outside the locked branch on purpose. An unlocked version is
+          exactly the state you are in WHILE re-costing after a client
+          asked for a change -- which is when the proposal they are
+          holding matters most, and when it used to vanish because it
+          belongs to the previous version. */}
+      {!version.isLocked && estimateProposals.length > 0 && (
+        <Card className="p-6">
+          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            Where the client stands
+          </h2>
+          <p className="mb-3 text-sm text-neutral-500">
+            This version is still being edited. These are the proposals already out on this estimate.
+          </p>
+          {estimateProposals.map((p) => (
+            <div key={p.id} className="border-t border-neutral-200 pt-2">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Link href={`/proposals/${p.id}`} className="text-neutral-900 hover:underline">
+                  Open the proposal →
+                </Link>
+                <span className="text-xs text-neutral-500">from version {p.estimateVersion.versionNumber}</span>
+              </div>
+              <ProposalStatusPanel
+                proposalId={p.id}
+                status={p.status}
+                sentAt={p.sentAt?.toISOString() ?? null}
+                signedAt={p.signedAt?.toISOString() ?? null}
+                signedByName={p.signedByName}
+                requiresManagerConsent={!viewerIsProposalManager}
+                nextStatuses={PROPOSAL_TRANSITIONS[p.status]}
+                events={p.events.map((e) => ({
+                  id: e.id,
+                  toStatus: e.toStatus,
+                  note: e.note,
+                  byName: e.byUser?.name ?? null,
+                  managerConsulted: e.managerConsulted,
+                  at: e.createdAt.toISOString(),
+                }))}
+              />
+            </div>
+          ))}
+        </Card>
+      )}
 
       {olderVersions.length > 0 && (
         <Card className="p-6">
