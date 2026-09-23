@@ -118,6 +118,47 @@ async function main() {
     }
   }
 
+  // Second pass, for anything the section pairing could not place. This
+  // estimate has two sections called "Labor" as well as two called
+  // "Audio/Visual", and four items landed in the wrong one of the pair --
+  // they exist in the source, just not in the section we looked in.
+  //
+  // Matched across the WHOLE source version, and only when the
+  // description occurs exactly once there: a unique description is an
+  // unambiguous identification wherever it sits, and a repeated one is
+  // exactly the case where guessing across sections would be wrong.
+  const stillEmpty = target.sections.flatMap((sec) =>
+    sec.lineItems.filter((li) => li.category === null).map((li) => ({ li, sectionName: sec.name })),
+  );
+  const allSourceItems = source.sections.flatMap((sec) => sec.lineItems);
+  let rescued = 0;
+  for (const { li } of stillEmpty) {
+    const matches = allSourceItems.filter((s) => s.description === li.description);
+    if (matches.length !== 1) continue;
+    const src = matches[0];
+    if (src.category === null) continue;
+    rescued++;
+    if (APPLY) {
+      await db.lineItem.update({
+        where: { id: li.id },
+        data: {
+          category: src.category,
+          subgroupLabel: src.subgroupLabel,
+          sortOrder: src.sortOrder,
+          isClientOwned: src.isClientOwned,
+          usageTag: src.usageTag,
+          unit: src.unit,
+          positionCode: src.positionCode,
+          includeInProposal: src.includeInProposal,
+          documentId: src.documentId,
+          sourceQuote: src.sourceQuote,
+          sourcePageNumber: src.sourcePageNumber,
+        },
+      });
+    }
+  }
+  if (rescued) console.log(`  ${rescued} ${APPLY ? "rescued" : "would be rescued"} by unique description across sections`);
+
   console.log(`  ${repaired} line item(s) ${APPLY ? "repaired" : "would be repaired"}`);
   console.log(`  ${alreadyFine} already correct`);
   if (skipped.length) {
