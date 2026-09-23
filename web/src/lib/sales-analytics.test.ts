@@ -12,6 +12,7 @@ afterEach(async () => {
   await db.salesmateDeal.deleteMany();
   await db.salesmateCompany.deleteMany();
   await db.contact.deleteMany();
+  await db.proposalEvent.deleteMany();
   await db.proposal.deleteMany();
   await db.proposalTemplate.deleteMany();
   await db.estimateVersion.deleteMany();

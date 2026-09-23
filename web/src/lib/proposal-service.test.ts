@@ -10,6 +10,7 @@ import {
 } from "@/lib/proposal-service";
 
 afterEach(async () => {
+  await db.proposalEvent.deleteMany();
   await db.proposal.deleteMany();
   await db.proposalTemplate.deleteMany();
   await db.project.deleteMany();

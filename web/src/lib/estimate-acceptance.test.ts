@@ -29,6 +29,7 @@ import { computeDepartmentVariance, computeLineItemVariance, recordCostActual } 
 
 afterEach(async () => {
   await db.costActual.deleteMany();
+  await db.proposalEvent.deleteMany();
   await db.proposal.deleteMany();
   await db.proposalTemplate.deleteMany();
   await db.changeOrder.deleteMany();

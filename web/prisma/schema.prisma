@@ -172,6 +172,7 @@ model User {
   salesmateSyncRuns SalesmateSyncRun[]
 
   @@map("users")
+  proposalEvents ProposalEvent[]
 }
 
 model Company {
@@ -1797,6 +1798,7 @@ model EstimateVersion {
   internalCosts             InternalCost[]
 
   @@map("estimate_versions")
+  proposalEvents ProposalEvent[]
 }
 
 enum LineItemAuditAction {
@@ -2574,6 +2576,15 @@ model Proposal {
   template          ProposalTemplate @relation(fields: [templateId], references: [id])
 
   templateConfigSnapshot Json?
+
+  // Kept ALONGSIDE the timestamps below rather than replacing them:
+  // sentAt/signedAt are read in a dozen places and remain the honest
+  // answer to "when", while status answers "where is this now" -- which a
+  // pair of nullable timestamps cannot express, since sent, reviewed and
+  // revisions-requested all look identical to them (sentAt set, signedAt
+  // null). Transitions keep both in step; see proposal-service.ts.
+  status ProposalStatus @default(DRAFT)
+
   sentAt                 DateTime?
   signedAt               DateTime?
   // A typed-name attestation, not a real e-signature (DocuSign/HelloSign-
@@ -2587,7 +2598,47 @@ model Proposal {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  // No versionNumber here on purpose. A proposal is built from exactly one
+  // EstimateVersion, which already numbers itself, and a second numbering
+  // scheme would be free to drift from the first with nothing to say which
+  // one was right -- "proposal v2" means the proposal built from estimate
+  // version 2, derived rather than stored.
+  events ProposalEvent[]
+
   @@map("proposals")
+}
+
+// One row per transition, the same shape StageChangeEvent already uses for
+// an Opportunity's own stages. This is what makes a version history
+// readable: the note on a REVISIONS_REQUESTED event is the reason the next
+// EstimateVersion exists at all.
+model ProposalEvent {
+  id         String   @id @default(cuid())
+  proposalId String
+  proposal   Proposal @relation(fields: [proposalId], references: [id])
+
+  fromStatus ProposalStatus?
+  toStatus   ProposalStatus
+  // What the client actually said. Required at the action layer for a
+  // revision request -- "they want changes" with no note is the row
+  // someone returns to in three weeks and cannot act on.
+  note       String?
+
+  // Who recorded it. Nullable because a client-portal signature has no
+  // internal user behind it, the same split ArtworkOrderEvent already
+  // makes between an EXPO actor and a client one.
+  byUserId String?
+  byUser   User?   @relation(fields: [byUserId], references: [id])
+
+  // Which version was current when this happened, so the history can say
+  // what number the client was actually looking at.
+  estimateVersionId String?
+  estimateVersion   EstimateVersion? @relation(fields: [estimateVersionId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([proposalId])
+  @@map("proposal_events")
 }
 
 // An alternate/upgrade pricing path within one estimate (e.g. "Option 3:
@@ -2753,6 +2804,24 @@ enum ChangeOrderStatus {
   DRAFT
   APPROVED
   REJECTED
+}
+
+// Where a proposal stands with the client. Proposal carried only sentAt
+// and signedAt, so everything between "we sent it" and "they signed it" --
+// the review, the meeting, the request that produced the next version --
+// left no trace at all. A new EstimateVersion would simply appear with
+// nothing to say why it existed.
+//
+// DECLINED is terminal and deliberately distinct from a revision request:
+// a client asking for changes is still in the conversation, one who
+// declines is not.
+enum ProposalStatus {
+  DRAFT
+  SENT
+  UNDER_REVIEW
+  REVISIONS_REQUESTED
+  SIGNED
+  DECLINED
 }
 
 // Stored as two full EstimateVersion snapshots (base + result) rather
