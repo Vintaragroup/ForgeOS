@@ -1633,7 +1633,15 @@ export function computeOptionTotal(sections: { lineItems: { totalCost: DecimalIn
 // describes, just checked against a whole set instead of one id.
 export async function createBidPackage(
   estimateVersionId: string,
-  data: { name: string; vendorName?: string | null; lineItemIds: string[] },
+  data: {
+    name: string;
+    vendorName?: string | null;
+    // Which trade this package is out to bid for -- AV, Graphics,
+    // Rigging. A Department code, so "every AV bid on this job" and
+    // "this trade's quotes across jobs" are the same question.
+    tradeCode?: string | null;
+    lineItemIds: string[];
+  },
 ) {
   await assertUnlocked(estimateVersionId);
   if (data.lineItemIds.length === 0) throw new Error("Select at least one line item for this bid package.");
@@ -1647,7 +1655,12 @@ export async function createBidPackage(
 
   return db.$transaction(async (tx) => {
     const bidPackage = await tx.bidPackage.create({
-      data: { estimateVersionId, name: data.name, vendorName: data.vendorName ?? null },
+      data: {
+        estimateVersionId,
+        name: data.name,
+        vendorName: data.vendorName ?? null,
+        tradeCode: data.tradeCode || null,
+      },
     });
     await tx.lineItem.updateMany({
       where: { id: { in: data.lineItemIds } },

@@ -14,8 +14,18 @@ import { useBidPackageSelection } from "@/components/bid-package-selection";
 // is a direct call, not a form submission.
 export function CreateBidPackageBar({
   createBidPackage,
+  trades,
 }: {
-  createBidPackage: (data: { name: string; vendorName?: string; lineItemIds: string[] }) => Promise<void>;
+  createBidPackage: (data: {
+    name: string;
+    vendorName?: string;
+    tradeCode?: string;
+    lineItemIds: string[];
+  }) => Promise<void>;
+  // The department codes a package can be tagged with -- AV, Graphics,
+  // Rigging. Passed in rather than fetched here so this stays a client
+  // component with no data access of its own.
+  trades: { code: string; name: string }[];
 }) {
   const selection = useBidPackageSelection();
   const [isPending, startTransition] = useTransition();
@@ -29,13 +39,14 @@ export function CreateBidPackageBar({
     const formData = new FormData(e.currentTarget);
     const name = String(formData.get("name") ?? "").trim();
     const vendorName = String(formData.get("vendorName") ?? "").trim();
+    const tradeCode = String(formData.get("tradeCode") ?? "").trim();
     if (!name) {
       setError("Name this bid package before creating it.");
       return;
     }
     startTransition(async () => {
       try {
-        await createBidPackage({ name, vendorName, lineItemIds: [...selection!.selectedIds] });
+        await createBidPackage({ name, vendorName, tradeCode, lineItemIds: [...selection!.selectedIds] });
         selection!.clear();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Couldn't create this bid package.");
@@ -54,6 +65,24 @@ export function CreateBidPackageBar({
         </div>
         <div className="w-48">
           <Field label="Vendor (optional)" name="vendorName" placeholder="e.g. ShowRig" />
+        </div>
+        {/* Which trade is being bid. Optional, because a package that
+            spans trades is a real thing and forcing a single code would
+            just get a wrong one. */}
+        <div className="w-40">
+          <label className="mb-1 block text-sm font-medium text-neutral-700">Trade (optional)</label>
+          <select
+            name="tradeCode"
+            defaultValue=""
+            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none focus:border-neutral-500"
+          >
+            <option value="">— none —</option>
+            {trades.map((t) => (
+              <option key={t.code} value={t.code}>
+                {t.name}
+              </option>
+            ))}
+          </select>
         </div>
         <button
           type="submit"

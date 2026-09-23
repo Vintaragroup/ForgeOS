@@ -40,7 +40,7 @@ import { recordVendorMatchApply, type VendorMatchApplyMethod } from "@/lib/vendo
 export async function createBidPackageAction(
   estimateId: string,
   versionId: string,
-  data: { name: string; vendorName?: string; lineItemIds: string[] },
+  data: { name: string; vendorName?: string; tradeCode?: string; lineItemIds: string[] },
 ) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
@@ -50,6 +50,7 @@ export async function createBidPackageAction(
   await createBidPackage(versionId, {
     name,
     vendorName: data.vendorName?.trim() || null,
+    tradeCode: data.tradeCode?.trim() || null,
     lineItemIds: data.lineItemIds,
   });
   revalidatePath(`/estimates/${estimateId}`);

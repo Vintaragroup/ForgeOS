@@ -415,6 +415,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             where: { deletedAt: null },
             orderBy: { createdAt: "asc" },
             include: {
+              // The trade this package is out to bid for.
+              trade: { select: { code: true, name: true } },
               lineItems: {
                 select: {
                   id: true,
@@ -467,6 +469,15 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   // $1,013,374 on 9 September and asked for $850k. Each one is labelled
   // with the version it was built from, which is also what "proposal v2"
   // means (see Proposal's own schema comment on not storing a number).
+  // The trades a bid package can be tagged with. Same Department table
+  // that already holds the 21 codes -- not a new enum, so a trade means
+  // the same thing here as it does on a task or a user.
+  const trades = await db.department.findMany({
+    where: { deletedAt: null },
+    select: { code: true, name: true },
+    orderBy: { name: "asc" },
+  });
+
   const estimateProposals = await db.proposal.findMany({
     where: { deletedAt: null, estimateVersion: { estimateId: estimate.id } },
     orderBy: { createdAt: "desc" },
@@ -1011,6 +1022,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     estimateId={estimate.id}
                     opportunityId={estimate.opportunityId}
                     version={currentVersion}
+                    trades={trades}
                     categories={categories}
                     categoryMarginOverrides={categoryMarginOverrides}
                     categoryOptions={categoryOptions}
@@ -1196,6 +1208,7 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
     };
     bidPackages: {
       include: {
+        trade: { select: { code: true; name: true } };
         lineItems: {
           select: {
             id: true;
@@ -1643,10 +1656,13 @@ function LineItemsTab({
   auditLog,
   categoryProposalSummaries,
   sectionCategoryDescriptions,
+  trades,
 }: {
   estimateId: string;
   opportunityId: string;
   version: VersionWithSections;
+  // Offered by the create-bid-package bar, which lives on this tab.
+  trades: { code: string; name: string }[];
   categories: { id: string; name: string; key: string; parentId: string | null }[];
   categoryMarginOverrides: { categoryId: string; marginPct: Prisma.Decimal }[];
   categoryOptions: { value: string; label: string }[];
@@ -2056,7 +2072,10 @@ function LineItemsTab({
               paint directly on top of each other instead of stacking
               (confirmed live: only the second one was ever visible). */}
           <div className="sticky bottom-4 z-10 mt-4 flex flex-col gap-3">
-            <CreateBidPackageBar createBidPackage={createBidPackageAction.bind(null, estimateId, version.id)} />
+            <CreateBidPackageBar
+              createBidPackage={createBidPackageAction.bind(null, estimateId, version.id)}
+              trades={trades}
+            />
             <MoveSelectedItemsBar
               moveSelected={bulkMoveLineItemsCategoryAction.bind(null, estimateId, version.id)}
               categoryOptions={categoryOptions.filter((o) => o.value !== "")}
@@ -2657,7 +2676,16 @@ function BidPackageCard({
     <Card id={`bid-package-${bidPackage.id}`} className="p-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="font-medium">{bidPackage.name}</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-medium">{bidPackage.name}</h3>
+            {/* Which trade is out to bid. Scannable so a page of packages
+                can be read by trade rather than by whoever named them. */}
+            {bidPackage.trade && (
+              <span className="rounded-full bg-brand-teal-pale px-2 py-0.5 text-xs font-semibold text-neutral-900">
+                {bidPackage.trade.name}
+              </span>
+            )}
+          </div>
           {bidPackage.vendorName && <p className="text-sm text-neutral-500">{bidPackage.vendorName}</p>}
         </div>
         <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs text-neutral-600">
