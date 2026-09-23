@@ -25,6 +25,15 @@ export function isPricedDocumentType(documentType: string): boolean {
   return PRICED_TYPES.has(documentType);
 }
 
+// A pricing schedule is not a priced document, despite the name. Its
+// parser reads category/item/description/unit/qty and no price at all --
+// the cost comes from the catalog at import. So it can be compared on
+// scope, never on money, and it has no analysis step to wait for. See
+// scope-diff.ts.
+export function isScheduleDocumentType(documentType: string): boolean {
+  return documentType === "PRICING_SCHEDULE";
+}
+
 export interface RecostingDocument {
   id: string;
   filename: string;
@@ -72,6 +81,14 @@ export type RecostingState =
       request: RecostingInput["request"];
       document: RecostingDocument;
     }
+  // A revised schedule, which needs importing rather than analysing --
+  // and whose comparison is scope, not money.
+  | {
+      kind: "READY_TO_IMPORT";
+      versionNumber: number;
+      request: RecostingInput["request"];
+      document: RecostingDocument;
+    }
   // There is something to read.
   | {
       kind: "READY";
@@ -103,6 +120,16 @@ export function resolveRecostingState(input: RecostingInput): RecostingState {
   const document = candidates[0];
   if (!document) return { kind: "AWAITING_DOCUMENT", versionNumber, request };
 
+  // A spreadsheet never goes through analysis at all, so it is never
+  // waiting for one. ForgeOS parses a workbook on demand at import and
+  // stores nothing on the document, which is why a PRICING_SCHEDULE sits
+  // at PENDING with zero parsed rows forever -- that is its correct
+  // resting state, not a stuck job. Sending it down the analysis branch
+  // parks it on "being read now" for good.
+  if (isScheduleDocumentType(document.documentType)) {
+    return { kind: "READY_TO_IMPORT", versionNumber, request, document };
+  }
+
   if (document.extractionStatus === "FAILED" || document.extractionStatus === "UNSUPPORTED") {
     return { kind: "ANALYSIS_FAILED", versionNumber, request, document };
   }
@@ -127,6 +154,8 @@ export function recostingNextStep(state: RecostingState): string | null {
       return "Reading it now — nothing can be compared until this finishes.";
     case "ANALYSIS_FAILED":
       return "This file couldn't be read, so nothing can be compared against it.";
+    case "READY_TO_IMPORT":
+      return "See what the client changed, then import it into this version.";
     case "READY":
       return "Review what changed, then apply it to this version.";
   }

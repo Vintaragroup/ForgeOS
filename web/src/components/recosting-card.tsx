@@ -49,6 +49,14 @@ export function RecostingCard({
   const nextStep = recostingNextStep(state);
   const hasDocument = state.kind !== "AWAITING_DOCUMENT";
   const readable = state.kind === "READY";
+  // A revised schedule is imported, not analysed, and its comparison is
+  // scope rather than money -- both of which happen on the import
+  // preview, where the workbook is already being parsed.
+  const importable = state.kind === "READY_TO_IMPORT";
+  const importHref =
+    state.kind === "READY_TO_IMPORT"
+      ? `/estimates/${estimateId}?tab=documents&importDocumentId=${state.document.id}`
+      : null;
 
   return (
     <Card className="border-amber-200 bg-amber-50/40 p-6">
@@ -95,8 +103,22 @@ export function RecostingCard({
           )}
         </Step>
 
-        <Step n={2} done={readable}>
-          {state.kind === "READY" && state.document.supersedesFilename ? (
+        <Step n={2} done={readable || importable}>
+          {importHref ? (
+            <>
+              <Link href={importHref} className="font-medium text-brand-navy hover:underline">
+                See what changed and import →
+              </Link>
+              {/* Said plainly rather than left to be discovered: a
+                  schedule carries no prices for ForgeOS to read, so the
+                  money question is answered by the re-priced total, not
+                  by the sheet. */}
+              <p className="mt-1 text-xs text-neutral-500">
+                Shows what the client dropped, added and re-counted. A schedule carries no prices — the new cost
+                comes from the catalog when you import, and lands in version {state.versionNumber}.
+              </p>
+            </>
+          ) : state.kind === "READY" && state.document.supersedesFilename ? (
             <DocumentDiffSummary
               predecessorFilename={state.document.supersedesFilename}
               extracted
@@ -117,7 +139,11 @@ export function RecostingCard({
         </Step>
 
         <Step n={3} done={false}>
-          {readable ? (
+          {importable ? (
+            <span className="text-neutral-600">
+              Check version {state.versionNumber}&apos;s new total against what the client asked for.
+            </span>
+          ) : readable ? (
             <Link
               href={`/estimates/${estimateId}?tab=documents`}
               className="font-medium text-brand-navy hover:underline"

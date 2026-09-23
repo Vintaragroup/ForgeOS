@@ -6,8 +6,11 @@ const REQUESTED_AT = new Date("2026-09-23T22:00:00Z");
 function doc(over: Partial<RecostingDocument> = {}): RecostingDocument {
   return {
     id: "d1",
-    filename: "estimates updated 091826.xlsx",
-    documentType: "PRICING_SCHEDULE",
+    // A vendor quote by default: it really does carry prices, so it
+    // exercises the analysis branch. The schedule branch is asserted
+    // explicitly in its own test.
+    filename: "369711-Version-2-Expo-CCI.pdf",
+    documentType: "VENDOR_QUOTE",
     extractionStatus: "COMPLETE",
     supersedesId: "old",
     supersedesFilename: "ABCA_2027_Exhibit_Cost_Breakout.xlsx",
@@ -98,11 +101,36 @@ describe("resolveRecostingState", () => {
     }
   });
 
+  // The bug that made the card useless for the case it was built for: a
+  // PRICING_SCHEDULE never goes through analysis, so it sits at PENDING
+  // with zero parsed rows forever. Treating that as "being read now"
+  // parks the card on a step that will never complete.
+  it("sends a revised schedule to import rather than waiting on an analysis it never gets", () => {
+    const state = resolveRecostingState(
+      input({
+        documents: [doc({ documentType: "PRICING_SCHEDULE", extractionStatus: "PENDING", hasPricedRows: false })],
+      }),
+    );
+    expect(state.kind).toBe("READY_TO_IMPORT");
+    expect(recostingNextStep(state)).toMatch(/import it/i);
+  });
+
+  // A vendor quote PDF really does carry prices, so it keeps the
+  // analysis branch.
+  it("still waits on analysis for a vendor quote, which does carry prices", () => {
+    const state = resolveRecostingState(
+      input({
+        documents: [doc({ documentType: "VENDOR_QUOTE", extractionStatus: "PENDING", hasPricedRows: false })],
+      }),
+    );
+    expect(state.kind).toBe("AWAITING_ANALYSIS");
+  });
+
   it("is ready once a linked document has priced rows, and names it", () => {
     const state = resolveRecostingState(input());
     expect(state.kind).toBe("READY");
     if (state.kind !== "READY") return;
-    expect(state.document.filename).toBe("estimates updated 091826.xlsx");
+    expect(state.document.filename).toBe("369711-Version-2-Expo-CCI.pdf");
     expect(state.document.supersedesFilename).toBe("ABCA_2027_Exhibit_Cost_Breakout.xlsx");
     expect(state.versionNumber).toBe(2);
     expect(state.request?.note).toBe("Get it to 250k.");
@@ -112,8 +140,8 @@ describe("resolveRecostingState", () => {
     const state = resolveRecostingState(
       input({
         documents: [
-          doc({ id: "first", filename: "first.xlsx", createdAt: new Date("2026-09-23T22:10:00Z") }),
-          doc({ id: "second", filename: "second.xlsx", createdAt: new Date("2026-09-23T23:00:00Z") }),
+          doc({ id: "first", filename: "first.pdf", createdAt: new Date("2026-09-23T22:10:00Z") }),
+          doc({ id: "second", filename: "second.pdf", createdAt: new Date("2026-09-23T23:00:00Z") }),
         ],
       }),
     );
