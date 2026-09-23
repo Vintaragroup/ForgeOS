@@ -1,22 +1,46 @@
-// ChangeOrder authoring (docs/migration-plan.md Phase 4) -- a post-
-// approval modification to an estimate, stored as a diff against the
-// approved EstimateVersion rather than the workbook's from-scratch
-// "short form estimate" pattern (data-model-v0.md's ChangeOrder entity,
+// ChangeOrder authoring (docs/migration-plan.md Phase 4) -- a change to
+// work a client has already SIGNED FOR, stored as a diff against the
+// signed EstimateVersion rather than the workbook's from-scratch "short
+// form estimate" pattern (data-model-v0.md's ChangeOrder entity,
 // schema.prisma's comment). Deliberately reuses estimate-service.ts's
 // existing version/section/line-item machinery instead of a parallel
 // delta-storage model: a ChangeOrder's resultVersion is a normal
 // EstimateVersion, editable with the same addSection/addLineItem/
 // lockEstimateVersion functions already built for Phase 3.
+//
+// A change order is a PRODUCTION term and it means something specific:
+// the client signed, and is now adding scope beyond what they signed
+// for. It is not what happens when a client reads a proposal and asks
+// for a different number -- nothing has been ordered yet, so there is no
+// order to change. That is an Estimate Change Request, and it lives in
+// proposal-service.ts (requestProposalRevisions).
+//
+// This file used to gate on "locked and approved", which is INTERNAL
+// approval -- an Expo estimator signing off on their own number. It
+// would open a change order against an estimate no client had ever seen,
+// let alone signed. The gate is a signed proposal now, so the term can
+// only ever be recorded against something the word actually fits.
 
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { createNewVersionFromLocked } from "@/lib/estimate-service";
+import { UserError } from "@/lib/user-error";
 
-async function assertBaseIsLockedAndApproved(baseVersionId: string) {
-  const base = await db.estimateVersion.findUniqueOrThrow({ where: { id: baseVersionId } });
+async function assertBaseIsSigned(baseVersionId: string) {
+  const base = await db.estimateVersion.findUniqueOrThrow({
+    where: { id: baseVersionId },
+    include: { proposals: { where: { signedAt: { not: null }, deletedAt: null }, take: 1 } },
+  });
   if (!base.isLocked || !base.isApproved) {
-    throw new Error(
-      `EstimateVersion ${baseVersionId} must be locked and approved before a ChangeOrder can be opened against it.`,
+    throw new UserError("This version has to be locked and approved before anything can be changed against it.");
+  }
+  // The distinction the word depends on. Without a signature there is no
+  // order, so there is nothing to change -- what the client is asking for
+  // is an Estimate Change Request, which revises the estimate instead.
+  if (base.proposals.length === 0) {
+    throw new UserError(
+      "Nobody has signed this estimate, so there's no order to change. Use Request an estimate change instead -- " +
+        "a change order is for scope a client adds after they've signed.",
     );
   }
   return base;
@@ -28,7 +52,7 @@ async function assertBaseIsLockedAndApproved(baseVersionId: string) {
 // estimator edits resultVersion with the normal estimate UI, then locks
 // it and calls approveChangeOrder below.
 export async function createChangeOrder(estimateId: string, baseVersionId: string, description: string) {
-  const base = await assertBaseIsLockedAndApproved(baseVersionId);
+  const base = await assertBaseIsSigned(baseVersionId);
   if (base.estimateId !== estimateId) {
     throw new Error(`EstimateVersion ${baseVersionId} does not belong to Estimate ${estimateId}.`);
   }

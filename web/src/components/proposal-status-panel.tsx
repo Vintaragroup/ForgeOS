@@ -20,7 +20,7 @@ const STATUS_LABELS: Record<ProposalStatus, string> = {
   DRAFT: "Draft",
   SENT: "Sent to client",
   UNDER_REVIEW: "Client reviewing",
-  REVISIONS_REQUESTED: "Revisions requested",
+  REVISIONS_REQUESTED: "Change requested",
   SIGNED: "Signed",
   DECLINED: "Declined",
 };
@@ -104,7 +104,7 @@ export function ProposalStatusPanel({
               onClick={() => setOpen(open === "REVISIONS_REQUESTED" ? null : "REVISIONS_REQUESTED")}
               className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
             >
-              Request updated costing
+              Request an estimate change
             </button>
           )}
           {nextStatuses
@@ -130,6 +130,10 @@ export function ProposalStatusPanel({
           <p className="text-xs text-amber-900">
             Records what the client asked for and opens the next version for re-costing. The sent version stays
             exactly as it is — it&apos;s the record of what they actually received.
+            {" "}
+            {/* The distinction that keeps the two words apart. */}
+            This is not a change order: nothing has been ordered yet, so there is nothing to change. A change order
+            is for scope a client adds after they&apos;ve signed.
           </p>
           <textarea
             name="note"
@@ -141,7 +145,7 @@ export function ProposalStatusPanel({
           <ManagerConsent required={requiresManagerConsent} />
           <div>
             <button type="submit" className="rounded-md bg-brand-black px-3 py-1.5 text-sm font-medium text-white">
-              Request updated costing
+              Request an estimate change
             </button>
           </div>
         </ActionForm>

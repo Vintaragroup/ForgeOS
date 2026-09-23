@@ -164,6 +164,23 @@ describe("Yoku Moku through the Phase 4 workflow", () => {
     const user = await db.user.create({ data: { name: "Approver", email: `a-${Date.now()}@example.com` } });
     await approveEstimateVersion(version.id, user.id);
 
+    // A change order is a change to work somebody ORDERED, so this has to
+    // get all the way to a signature -- approval alone is an Expo
+    // estimator signing off on their own number, not a client agreeing to
+    // anything. Before signing, a client asking for a different price is
+    // an Estimate Change Request instead.
+    const template = await db.proposalTemplate.create({ data: { name: `T-${Date.now()}` } });
+    await db.proposal.create({
+      data: {
+        estimateVersionId: version.id,
+        templateId: template.id,
+        status: "SIGNED",
+        sentAt: new Date(),
+        signedAt: new Date(),
+        signedByName: "Yoku Moku",
+      },
+    });
+
     // Real Booksy-scale add-on: Phase 1's second validated job (Booksy,
     // $58,311.18) -- used here only as a realistic magnitude for a
     // "add a second job's worth of scope" change order, not claiming

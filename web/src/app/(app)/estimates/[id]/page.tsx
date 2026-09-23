@@ -6650,17 +6650,26 @@ function ProposalApprovalTab({
                     </div>
                   )}
 
-                  <form action={createChangeOrderWithIds} className="mt-4 flex items-end gap-3 border-t border-neutral-200 pt-3">
-                    <div className="flex-1">
-                      <Field
-                        label="Start a change order"
-                        name="description"
-                        placeholder="What's changing? e.g. Upgrade flooring"
-                        required
-                      />
-                    </div>
-                    <Button variant="secondary">Start change order</Button>
-                  </form>
+                  {/* Only once a client has actually signed. A change
+                      order is a production term for scope added to work
+                      somebody ordered -- with no signature there is no
+                      order to change, and what the client is asking for
+                      is an estimate change, above. The service refuses it
+                      either way; this stops the two reading as
+                      interchangeable on screen. */}
+                  {version.proposals.some((p) => p.signedAt) && (
+                    <form action={createChangeOrderWithIds} className="mt-4 flex items-end gap-3 border-t border-neutral-200 pt-3">
+                      <div className="flex-1">
+                        <Field
+                          label="Start a change order"
+                          name="description"
+                          placeholder="What is the client adding beyond what they signed for?"
+                          required
+                        />
+                      </div>
+                      <Button variant="secondary">Start change order</Button>
+                    </form>
+                  )}
                   {version.changeOrdersAsBase.length > 0 && (
                     <ul className="mt-4 flex flex-col gap-1 border-t border-neutral-200 pt-3 text-sm">
                       {version.changeOrdersAsBase.map((co) => (

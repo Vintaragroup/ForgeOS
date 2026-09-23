@@ -17,6 +17,9 @@ import {
 
 afterEach(async () => {
   await db.changeOrder.deleteMany();
+  await db.proposalEvent.deleteMany();
+  await db.proposal.deleteMany();
+  await db.proposalTemplate.deleteMany();
   await db.lineItem.deleteMany();
   await db.estimateSection.deleteMany();
   await db.lineItemAuditLog.deleteMany();
@@ -31,7 +34,10 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
-async function makeApprovedVersion() {
+// A change order is a change to work somebody ORDERED, so the fixture has
+// to go all the way to a signed proposal. Approval alone is an Expo
+// estimator signing off on their own number, which is not an order.
+async function makeApprovedVersion({ signed = true }: { signed?: boolean } = {}) {
   const company = await db.company.create({ data: { name: "Test Co" } });
   const opportunity = await db.opportunity.create({ data: { companyId: company.id, showName: "Test Show" } });
   const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
@@ -41,6 +47,20 @@ async function makeApprovedVersion() {
   await lockEstimateVersion(version.id);
   const user = await db.user.create({ data: { name: "Approver", email: `a-${Date.now()}@example.com` } });
   await approveEstimateVersion(version.id, user.id);
+
+  if (signed) {
+    const template = await db.proposalTemplate.create({ data: { name: `T-${Date.now()}` } });
+    await db.proposal.create({
+      data: {
+        estimateVersionId: version.id,
+        templateId: template.id,
+        status: "SIGNED",
+        sentAt: new Date(),
+        signedAt: new Date(),
+        signedByName: "A Client",
+      },
+    });
+  }
   return { estimate, version, section, user };
 }
 
@@ -54,6 +74,16 @@ describe("createChangeOrder", () => {
 
     await expect(createChangeOrder(estimate.id, version.id, "Add flooring")).rejects.toThrow(
       /locked and approved/,
+    );
+  });
+
+  it("refuses a change order on an estimate nobody has signed", async () => {
+    // The distinction the word depends on: approval is internal, a
+    // signature is an order. Without one there is nothing to change, and
+    // what the client is asking for is an Estimate Change Request.
+    const { estimate, version } = await makeApprovedVersion({ signed: false });
+    await expect(createChangeOrder(estimate.id, version.id, "Add flooring")).rejects.toThrow(
+      /no order to change/i,
     );
   });
 
