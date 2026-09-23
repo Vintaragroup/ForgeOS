@@ -119,6 +119,27 @@ export async function generateProposal(estimateVersionId: string, templateId: st
 // somebody got round to typing it in, which makes every "sent 14 days
 // ago" reading wrong for exactly the deals that pre-date adoption.
 export async function sendProposal(proposalId: string, sentAt?: Date) {
+  // Goes through the lifecycle rather than writing sentAt directly, so
+  // status and timestamp can never disagree and the send lands in the
+  // history like every other transition. The gate itself lives in
+  // recordProposalStatus -- see assertSendable.
+  return recordProposalStatus(proposalId, "SENT", { at: sentAt });
+}
+
+// Everything that has to be true before a proposal reaches a client.
+//
+// This lives with the SENT transition rather than inside sendProposal
+// because there are two doors to SENT: the send form on the proposal
+// page, and "Mark sent to client" on the estimate's proposal panel. The
+// category gate used to guard only the first one, which meant the button
+// most people actually reach for could put a proposal in front of a
+// client with line items in no category at all. A gate one of two doors
+// enforces is not a gate.
+//
+// UserError throughout: every one of these is something the person can
+// go and fix, and Next.js redacts anything else thrown out of a Server
+// Action in production.
+async function assertSendable(proposalId: string, when: Date | undefined) {
   const proposal = await db.proposal.findUniqueOrThrow({
     where: { id: proposalId },
     include: {
@@ -128,7 +149,7 @@ export async function sendProposal(proposalId: string, sentAt?: Date) {
     },
   });
   if (proposal.sentAt) {
-    throw new Error(`Proposal ${proposalId} was already sent at ${proposal.sentAt.toISOString()}.`);
+    throw new UserError(`This proposal was already sent at ${proposal.sentAt.toISOString()}.`);
   }
 
   // Hard gate, no override -- matches every other gate in this file.
@@ -139,24 +160,20 @@ export async function sendProposal(proposalId: string, sentAt?: Date) {
   const categories = await db.category.findMany({ where: { deletedAt: null } });
   const audit = auditLineItemCategories(proposal.estimateVersion.sections, categories);
   if (!audit.isClean) {
-    throw new Error(
-      `Proposal ${proposalId} has ${audit.issues.length} line item(s) with an unresolved category ` +
+    throw new UserError(
+      `${audit.issues.length} line item(s) have an unresolved category ` +
         `(e.g. "${audit.issues[0].description.slice(0, 60)}") -- fix them on the estimate before sending.`,
     );
   }
 
-  // Goes through the lifecycle rather than writing sentAt directly, so
-  // status and timestamp can never disagree and the send lands in the
-  // history like every other transition.
-  if (sentAt) {
-    // A send in the future is a typo, and one before the version was
-    // even locked could not have happened.
-    if (sentAt.getTime() > Date.now()) throw new UserError("A proposal can't have been sent in the future.");
-    if (proposal.estimateVersion.lockedAt && sentAt < proposal.estimateVersion.lockedAt) {
+  // A send in the future is a typo, and one before the version was even
+  // locked could not have happened.
+  if (when) {
+    if (when.getTime() > Date.now()) throw new UserError("A proposal can't have been sent in the future.");
+    if (proposal.estimateVersion.lockedAt && when < proposal.estimateVersion.lockedAt) {
       throw new UserError("That's before this version was locked, so it can't be when the proposal went out.");
     }
   }
-  return recordProposalStatus(proposalId, "SENT", { at: sentAt });
 }
 
 // Records that a client signed outside ForgeOS (wet signature, DocuSign,
@@ -288,7 +305,15 @@ export async function recordProposalStatus(
     managerConsulted = authority.requiresManagerConsultation;
   }
 
+  // Applies to every status, not just SENT: a meeting held tomorrow has
+  // not been held.
+  if (opts.at && opts.at.getTime() > Date.now()) {
+    throw new UserError("That date is in the future -- record what happened, not what's planned.");
+  }
+
   const when = opts.at ?? new Date();
+  if (toStatus === "SENT") await assertSendable(proposalId, opts.at);
+
   return db.$transaction(async (tx) => {
     const updated = await tx.proposal.update({
       where: { id: proposalId },

@@ -4,6 +4,7 @@ import { addLineItem, addSection, createEstimateVersion, createNewVersionFromLoc
 import {
   approveEstimateVersion,
   generateProposal,
+  recordProposalStatus,
   revokeApproval,
   sendProposal,
   signProposal,
@@ -196,7 +197,11 @@ describe("send / sign lifecycle", () => {
     const proposal = await generateProposal(version.id, template.id);
     await sendProposal(proposal.id);
 
-    await expect(sendProposal(proposal.id)).rejects.toThrow(/already sent/);
+    // Caught by the transition table (sent cannot move to sent) before
+    // the send gate's own already-sent check gets a look in. Either would
+    // refuse it; this is the one that speaks first, and it says the
+    // clearer thing.
+    await expect(sendProposal(proposal.id)).rejects.toThrow(/can't move to sent/);
   });
 
   // Backdating exists because proposals go out by email and get logged
@@ -238,6 +243,28 @@ describe("send / sign lifecycle", () => {
 
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
     await expect(sendProposal(proposal.id, tomorrow)).rejects.toThrow(/future/);
+  });
+
+  // The estimate page's "Mark sent to client" button goes through
+  // recordProposalStatus, not sendProposal. It used to skip the category
+  // gate entirely, so the button most people reach for could put
+  // uncategorized line items in front of a client. Both doors, one gate.
+  it("blocks an unresolved category on the panel's route to sent, not just sendProposal's", async () => {
+    const { version, user } = await makeLockedVersion("PanelGate");
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: "Standard-PanelGate" } });
+    const proposal = await generateProposal(version.id, template.id);
+
+    // Renaming the category out from under the line item is how this
+    // happens for real -- the item keeps a string that now matches
+    // nothing.
+    await db.category.updateMany({ where: { key: "panelgate" }, data: { name: "Renamed Since" } });
+
+    await expect(recordProposalStatus(proposal.id, "SENT")).rejects.toThrow(/unresolved category/);
+
+    const untouched = await db.proposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(untouched.status).toBe("DRAFT");
+    expect(untouched.sentAt).toBeNull();
   });
 
   // The version's lock is the earliest moment this proposal's numbers

@@ -6,14 +6,21 @@ import type { ProposalStatus } from "@/generated/prisma/enums";
 import { requireProposalAccess } from "@/lib/opportunity-access";
 import { revalidatePath } from "next/cache";
 
+// Blank means "now", which is the normal case. A date is only given when
+// recording something that already happened outside ForgeOS. Noon local
+// rather than midnight: a date-only input has no timezone, and midnight
+// lands on the previous day for anyone behind UTC.
+function parseWhen(formData: FormData | undefined, field: string): Date | undefined {
+  const raw = String(formData?.get(field) ?? "").trim();
+  if (!raw) return undefined;
+  const at = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(at.getTime())) throw new UserError("That isn't a date.");
+  return at;
+}
+
 export async function sendProposalAction(proposalId: string, formData?: FormData) {
   await requireProposalAccess(proposalId);
-  // Blank means "now", which is the normal case. A date is only given
-  // when recording a send that already happened outside ForgeOS.
-  const raw = String(formData?.get("sentAt") ?? "").trim();
-  const sentAt = raw ? new Date(`${raw}T12:00:00`) : undefined;
-  if (sentAt && Number.isNaN(sentAt.getTime())) throw new UserError("That isn't a date.");
-  await sendProposal(proposalId, sentAt);
+  await sendProposal(proposalId, parseWhen(formData, "sentAt"));
   revalidatePath(`/proposals/${proposalId}`);
   revalidatePath("/estimates", "layout");
 }
@@ -61,6 +68,11 @@ export async function recordProposalStatusAction(
       byUserId: user.id,
       actor,
       managerConsulted: formData.get("managerConsulted") === "on",
+      // Every one of these records something that happened in a client
+      // conversation, and those get typed in after the fact. The date
+      // the meeting happened is the useful one, not the date somebody
+      // got round to logging it.
+      at: parseWhen(formData, "at"),
     });
     revalidatePath(`/proposals/${proposalId}`);
     revalidatePath("/estimates", "layout");

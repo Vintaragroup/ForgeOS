@@ -163,6 +163,20 @@ export function ProposalStatusPanel({
             placeholder="Anything worth recording? (optional)"
             className="resize-none rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
           />
+          {/* These get logged after the fact -- a proposal emailed on
+              Tuesday, typed in on Friday. Blank means today, which is the
+              common case, so this stays out of the way rather than
+              demanding a date every time. */}
+          <label className="flex flex-wrap items-center gap-2 text-xs text-neutral-600">
+            <span>When did this happen?</span>
+            <input
+              type="date"
+              name="at"
+              max={new Date().toISOString().slice(0, 10)}
+              className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+            />
+            <span className="text-neutral-400">Leave blank for today.</span>
+          </label>
           <ManagerConsent required={requiresManagerConsent} />
           <div>
             <button type="submit" className="rounded-md bg-brand-black px-3 py-1.5 text-sm font-medium text-white">
