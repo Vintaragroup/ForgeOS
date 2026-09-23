@@ -154,18 +154,22 @@ describe("generateTasksFromEstimate", () => {
       category: category.name,
     });
     await lockEstimateVersion(v1.id);
-    // createNewVersionFromLocked deliberately does not copy `category`
-    // forward. resolveEffectiveCategory (the same function the rest of
-    // the app trusts for this) falls back to "Other" with no `category`
-    // and no groupLabel/buildType signal to recompose from -- exactly
-    // like the client-facing proposal view would render it -- so this
-    // real case correctly lands in the "needs review" bucket rather than
-    // crashing or silently inventing a department that isn't there.
     const v2 = await createNewVersionFromLocked(v1.id);
-    await lockEstimateVersion(v2.id);
 
+    // An item can still end up with no category -- added by hand and
+    // never categorized, or imported from a source that named nothing --
+    // and resolveEffectiveCategory (the same function the rest of the app
+    // trusts) has to fall back to the unassigned bucket rather than crash
+    // or invent a department. Cleared explicitly here.
+    //
+    // This used to rely on createNewVersionFromLocked DROPPING the
+    // category, which it did until that turned a real $1M estimate's
+    // version 2 into 369 uncategorized rows it could not be sent from.
+    // The copy carries category now; the fallback below is still worth
+    // holding onto, so the premise is set up on purpose instead.
     const copiedItem = await db.lineItem.findFirstOrThrow({ where: { section: { estimateVersionId: v2.id } } });
-    expect(copiedItem.category).toBeNull(); // sanity check the premise
+    await db.lineItem.update({ where: { id: copiedItem.id }, data: { category: null } });
+    await lockEstimateVersion(v2.id);
 
     const result = await generateTasksFromEstimate(project.id, workOrder.id);
     expect(result).toEqual({ created: 1, updated: 0, unassignedCount: 1 });

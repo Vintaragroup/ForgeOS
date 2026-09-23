@@ -2605,24 +2605,72 @@ export async function clearCategoryPendingSummary(estimateVersionId: string, cat
   });
 }
 
+// Everything that describes WHAT a line item is travels with it into the
+// next version. Only what belongs to the old version specifically is left
+// behind.
+//
+// This used to copy six fields and drop the rest, which meant every
+// copied item lost its `category`. Real consequence, found on a $1M
+// estimate: opening version 2 turned 369 line items into uncategorized
+// rows -- "they'll fall into Other instead of their real category" -- and
+// because sendProposal hard-gates on a clean category audit, that version
+// could not be sent to anyone until all 369 were fixed by hand. Every
+// ChangeOrder had the same problem, silently, since ChangeOrders copy
+// through here too.
+//
+// It also dropped `documentId`, which is the only record of which
+// document a line item came from. That provenance is what lets a revised
+// vendor quote be compared against the rows the previous one produced, and
+// it was being destroyed on every new version.
 function lineItemCreateData(li: {
   lineType: LineItemType;
   description: string;
   department: string | null;
+  category: string | null;
+  subgroupLabel: string | null;
+  sortOrder: number;
+  isClientOwned: boolean;
+  usageTag: LineItemUsageTag | null;
   qty: Decimal;
+  unit: string | null;
   unitCost: Decimal;
   totalCost: Decimal;
+  documentId: string | null;
+  sourceQuote: string | null;
+  sourcePageNumber: number | null;
+  positionCode: string | null;
+  includeInProposal: boolean;
 }) {
   return {
     lineType: li.lineType,
     description: li.description,
     department: li.department,
+    // What the item IS. Dropping these was the bug.
+    category: li.category,
+    subgroupLabel: li.subgroupLabel,
+    sortOrder: li.sortOrder,
+    isClientOwned: li.isClientOwned,
+    usageTag: li.usageTag,
+    unit: li.unit,
+    positionCode: li.positionCode,
+    includeInProposal: li.includeInProposal,
     qty: li.qty,
     unitCost: li.unitCost,
     totalCost: li.totalCost,
-    // isDraft/attachmentId deliberately not copied -- a new version starts
-    // with only confirmed line items, matching lockEstimateVersion's own
-    // totals (which already excluded drafts).
+    // Where it came from. Survives the copy so a later document can still
+    // be diffed against the rows its predecessor produced.
+    documentId: li.documentId,
+    sourceQuote: li.sourceQuote,
+    sourcePageNumber: li.sourcePageNumber,
+    // Deliberately NOT copied, because each belongs to the version being
+    // left behind rather than to the item:
+    //   isDraft/attachmentId -- a new version starts with only confirmed
+    //     items, matching lockEstimateVersion's own totals.
+    //   bidPackageId -- packages belong to the old version; a copied item
+    //     pointing at one would claim to be out for bid when it isn't.
+    //   taskId -- same, for the old version's production tasks.
+    //   aiProposalSnapshot -- a record of one AI proposal against one
+    //     version, not a property of the item.
   };
 }
 
