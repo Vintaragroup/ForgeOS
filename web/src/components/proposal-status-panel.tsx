@@ -145,6 +145,8 @@ export function ProposalStatusPanel({
         <ActionForm
           action={requestProposalRevisionsAction.bind(null, proposalId)}
           className="mt-3 flex flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3"
+          resetOnSuccess
+          onSuccess={() => setOpen(null)}
         >
           <p className="text-xs text-amber-900">
             Records what the client asked for and opens the next version for re-costing. The sent version stays
@@ -178,6 +180,8 @@ export function ProposalStatusPanel({
         <ActionForm
           action={recordProposalStatusAction.bind(null, proposalId)}
           className="mt-3 flex flex-col gap-2 rounded-md border border-green-200 bg-green-50 p-3"
+          resetOnSuccess
+          onSuccess={() => setOpen(null)}
         >
           <input type="hidden" name="toStatus" value="SIGNED" />
           <p className="text-xs text-green-900">
@@ -226,6 +230,8 @@ export function ProposalStatusPanel({
         <ActionForm
           action={recordProposalStatusAction.bind(null, proposalId)}
           className="mt-3 flex flex-col gap-2 rounded-md border border-neutral-200 bg-neutral-50 p-3"
+          resetOnSuccess
+          onSuccess={() => setOpen(null)}
         >
           <input type="hidden" name="toStatus" value={open} />
           <textarea

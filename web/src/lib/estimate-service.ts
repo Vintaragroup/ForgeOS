@@ -2783,12 +2783,28 @@ export async function createNewVersionFromLocked(estimateVersionId: string) {
   assertEstimateNotArchived(source.estimate);
 
   return db.$transaction(async (tx) => {
-    await tx.estimateVersion.update({ where: { id: source.id }, data: { isCurrent: false } });
+    // Every current version steps down, not only the source. Copying
+    // from a version that ISN'T the current one -- which is exactly what
+    // a revision request against the locked, already-superseded version
+    // the client is holding does -- used to leave the old current one
+    // untouched, so two rows both claimed to be current.
+    await tx.estimateVersion.updateMany({
+      where: { estimateId: source.estimateId, isCurrent: true },
+      data: { isCurrent: false },
+    });
+
+    // Numbered from the highest version this estimate has, not from the
+    // source. source + 1 produced a second "v2" the moment anything
+    // copied from v1 while a v2 already existed.
+    const highest = await tx.estimateVersion.aggregate({
+      where: { estimateId: source.estimateId },
+      _max: { versionNumber: true },
+    });
 
     const created = await tx.estimateVersion.create({
       data: {
         estimateId: source.estimateId,
-        versionNumber: source.versionNumber + 1,
+        versionNumber: (highest._max.versionNumber ?? source.versionNumber) + 1,
         marginTargetPct: source.marginTargetPct,
         // Sections/line items are an exact copy of source (below), so its
         // already-computed totals carry over too -- otherwise the new

@@ -5,6 +5,7 @@ import {
   approveEstimateVersion,
   generateProposal,
   recordProposalStatus,
+  requestProposalRevisions,
   revokeApproval,
   sendProposal,
   signProposal,
@@ -315,6 +316,64 @@ describe("send / sign lifecycle", () => {
     const locked = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
     const tooEarly = new Date(locked.lockedAt!.getTime() - 60 * 60 * 1000);
     await expect(sendProposal(proposal.id, tooEarly)).rejects.toThrow(/locked/);
+  });
+});
+
+describe("requestProposalRevisions", () => {
+  const MANAGER = {
+    actor: { systemRole: "ADMIN" as const, isSalesManager: true, isDepartmentHead: false },
+    managerConsulted: false,
+  };
+
+  async function makeSentProposalOn(label: string) {
+    const { version, user } = await makeLockedVersion(label);
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: `Standard-${label}` } });
+    const proposal = await generateProposal(version.id, template.id);
+    await sendProposal(proposal.id);
+    return { version, proposal, user };
+  }
+
+  it("opens the next version when there isn't one", async () => {
+    const { version, proposal } = await makeSentProposalOn("RevFresh");
+
+    const result = await requestProposalRevisions(proposal.id, "Lower the price.", null, MANAGER);
+
+    expect(result.versionNumber).toBe(2);
+    const reloaded = await db.proposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(reloaded.status).toBe("REVISIONS_REQUESTED");
+
+    const all = await db.estimateVersion.findMany({ where: { estimateId: version.estimateId } });
+    expect(all).toHaveLength(2);
+  });
+
+  // ABC Chicago hit this: a v2 was already open when the client's change
+  // request was recorded, and the unconditional copy made a SECOND v2
+  // beside it -- same number, both current, the re-costing work split
+  // across two places. Recording the request is still right; making
+  // somewhere new for it to land is not.
+  it("uses the version already open rather than making a second one", async () => {
+    const { version, proposal } = await makeSentProposalOn("RevExisting");
+    const existing = await createNewVersionFromLocked(version.id);
+
+    const result = await requestProposalRevisions(proposal.id, "Lower the price.", null, MANAGER);
+
+    expect(result.newVersionId).toBe(existing.id);
+    expect(result.versionNumber).toBe(existing.versionNumber);
+
+    const all = await db.estimateVersion.findMany({ where: { estimateId: version.estimateId } });
+    expect(all).toHaveLength(2);
+    expect(all.filter((v) => v.isCurrent)).toHaveLength(1);
+
+    // The request itself is still recorded -- that is the part that must
+    // never be skipped.
+    const reloaded = await db.proposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(reloaded.status).toBe("REVISIONS_REQUESTED");
+  });
+
+  it("refuses without a note, because the note is why the next version exists", async () => {
+    const { proposal } = await makeSentProposalOn("RevNoNote");
+    await expect(requestProposalRevisions(proposal.id, "   ", null, MANAGER)).rejects.toThrow(/asked to change/);
   });
 });
 

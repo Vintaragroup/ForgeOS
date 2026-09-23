@@ -408,6 +408,22 @@ export async function requestProposalRevisions(
     actor: authority.actor,
     managerConsulted: authority.managerConsulted,
   });
+
+  // If a version is already open for editing, that IS where the revised
+  // pricing goes. This used to copy unconditionally, so requesting a
+  // change on an estimate that already had a new version underway
+  // created a second one alongside it -- same number, both current,
+  // the re-costing work split across two places. Recording the client's
+  // request is still right; making somewhere new for it to land is not.
+  const alreadyOpen = await db.estimateVersion.findFirst({
+    where: { estimateId: proposal.estimateVersion.estimateId, isLocked: false },
+    orderBy: { versionNumber: "desc" },
+    select: { id: true, versionNumber: true },
+  });
+  if (alreadyOpen) {
+    return { newVersionId: alreadyOpen.id, versionNumber: alreadyOpen.versionNumber };
+  }
+
   // Reuses the same copy machinery "Create new version" and ChangeOrders
   // already use, rather than a third way of duplicating a version.
   const next = await createNewVersionFromLocked(proposal.estimateVersionId);

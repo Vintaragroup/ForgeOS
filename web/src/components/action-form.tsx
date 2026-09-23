@@ -25,6 +25,7 @@ export function ActionForm({
   action,
   className,
   resetOnSuccess = false,
+  onSuccess,
   children,
 }: {
   action: (prevState: ActionResult, formData: FormData) => Promise<ActionResult>;
@@ -33,17 +34,27 @@ export function ActionForm({
   // after a successful submit. Off by default: an edit form should keep
   // showing the values that were just saved.
   resetOnSuccess?: boolean;
+  // Fired once after a submit that returned no error. For a form the
+  // parent opened and should now close -- without it a disclosure form
+  // stays open over its own result, looking like nothing happened.
+  onSuccess?: () => void;
   children: ReactNode;
 }) {
   const [state, dispatch, pending] = useActionState(action, undefined);
   const formRef = useRef<HTMLFormElement>(null);
   const submittedRef = useRef(false);
 
+  // submittedRef is what makes this safe to re-run: it's cleared before
+  // anything fires, so a caller passing an inline arrow (which changes
+  // identity every render, and whose own setState causes another one)
+  // re-enters here and returns immediately rather than firing twice.
   useEffect(() => {
     if (pending || !submittedRef.current) return;
     submittedRef.current = false;
-    if (resetOnSuccess && !state?.error) formRef.current?.reset();
-  }, [pending, state, resetOnSuccess]);
+    if (state?.error) return;
+    if (resetOnSuccess) formRef.current?.reset();
+    onSuccess?.();
+  }, [pending, state, resetOnSuccess, onSuccess]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

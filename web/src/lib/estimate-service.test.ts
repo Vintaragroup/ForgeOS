@@ -560,6 +560,30 @@ describe("estimate version lifecycle", () => {
     expect(summaries[0].summary).toBe("All graphics across the show.");
   });
 
+  // Copying from a version that isn't the current one is the normal case
+  // for a revision request: the client is holding v1, locked and already
+  // superseded by an open v2. Numbering from the source gave that copy
+  // the number v2 already had, and stepping only the source down from
+  // current left two rows both claiming it.
+  it("numbers from the estimate's highest version and leaves exactly one current", async () => {
+    const estimate = await makeEstimate();
+    const v1 = await createEstimateVersion(estimate.id, 50);
+    const section = await addSection(v1.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    await addLineItem(v1.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+    await lockEstimateVersion(v1.id);
+
+    const v2 = await createNewVersionFromLocked(v1.id);
+    expect(v2.versionNumber).toBe(2);
+
+    // Again from v1, which is now neither current nor the highest.
+    const v3 = await createNewVersionFromLocked(v1.id);
+    expect(v3.versionNumber).toBe(3);
+
+    const all = await db.estimateVersion.findMany({ where: { estimateId: estimate.id } });
+    expect(all.filter((v) => v.isCurrent).map((v) => v.versionNumber)).toEqual([3]);
+    expect(all.map((v) => v.versionNumber).sort()).toEqual([1, 2, 3]);
+  });
+
   it("carries over the source version's totals so the copy isn't shown as $0 before its first edit", async () => {
     const estimate = await makeEstimate();
     const v1 = await createEstimateVersion(estimate.id, 50);
