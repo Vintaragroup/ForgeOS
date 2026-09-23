@@ -2635,6 +2635,12 @@ model ProposalEvent {
   estimateVersionId String?
   estimateVersion   EstimateVersion? @relation(fields: [estimateVersionId], references: [id])
 
+  // A rep moving a proposal's status attests that they talked to their
+  // manager or the department head first. Managers and admins move it on
+  // their own authority, so this stays false for them -- it records a
+  // claim someone actually made, not a box that was always ticked.
+  managerConsulted Boolean @default(false)
+
   createdAt DateTime @default(now())
 
   @@index([proposalId])

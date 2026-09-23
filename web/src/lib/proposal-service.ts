@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import type { ProposalStatus } from "@/generated/prisma/enums";
 import { createNewVersionFromLocked } from "@/lib/estimate-service";
 import { UserError } from "@/lib/user-error";
+import { proposalAuthority, type ProposalActor } from "@/lib/proposal-authority";
 import { auditLineItemCategories } from "@/lib/category-audit";
 import { changeOpportunityStage } from "@/lib/opportunity-service";
 import { convertOpportunityToProject } from "@/lib/project-service";
@@ -212,7 +213,15 @@ export function canTransitionProposal(from: ProposalStatus, to: ProposalStatus):
 export async function recordProposalStatus(
   proposalId: string,
   toStatus: ProposalStatus,
-  opts: { note?: string | null; byUserId?: string | null } = {},
+  opts: {
+    note?: string | null;
+    byUserId?: string | null;
+    // Omitted for system-driven moves (sendProposal, signProposal), which
+    // are already gated by their own rules and are not somebody deciding
+    // where a client conversation stands.
+    actor?: ProposalActor | null;
+    managerConsulted?: boolean;
+  } = {},
 ) {
   const proposal = await db.proposal.findFirstOrThrow({
     where: { id: proposalId, deletedAt: null },
@@ -227,6 +236,16 @@ export async function recordProposalStatus(
   const note = opts.note?.trim() || null;
   if (toStatus === "REVISIONS_REQUESTED" && !note) {
     throw new UserError("Say what the client asked to change -- that note is the reason the next version exists.");
+  }
+
+  // A manager moves a proposal on their own authority; anyone else has to
+  // say they discussed it first, and that claim is recorded rather than
+  // just checked -- see proposal-authority.ts.
+  let managerConsulted = false;
+  if (opts.actor) {
+    const authority = proposalAuthority(opts.actor, opts.managerConsulted ?? false);
+    if (!authority.allowed) throw new UserError(authority.reason ?? "You can't change this proposal's status.");
+    managerConsulted = authority.requiresManagerConsultation;
   }
 
   return db.$transaction(async (tx) => {
@@ -248,6 +267,7 @@ export async function recordProposalStatus(
         note,
         byUserId: opts.byUserId ?? null,
         estimateVersionId: proposal.estimateVersionId,
+        managerConsulted,
       },
     });
     return updated;
@@ -268,6 +288,7 @@ export async function requestProposalRevisions(
   proposalId: string,
   note: string,
   byUserId: string | null,
+  authority: { actor: ProposalActor; managerConsulted: boolean },
 ): Promise<{ newVersionId: string; versionNumber: number }> {
   const proposal = await db.proposal.findFirstOrThrow({
     where: { id: proposalId, deletedAt: null },
@@ -277,7 +298,12 @@ export async function requestProposalRevisions(
     throw new UserError("This proposal's version isn't locked, so there's nothing to revise from.");
   }
 
-  await recordProposalStatus(proposalId, "REVISIONS_REQUESTED", { note, byUserId });
+  await recordProposalStatus(proposalId, "REVISIONS_REQUESTED", {
+    note,
+    byUserId,
+    actor: authority.actor,
+    managerConsulted: authority.managerConsulted,
+  });
   // Reuses the same copy machinery "Create new version" and ChangeOrders
   // already use, rather than a third way of duplicating a version.
   const next = await createNewVersionFromLocked(proposal.estimateVersionId);
