@@ -109,3 +109,21 @@ describe("edges", () => {
     expect(diff.netDelta).toBe(-30000);
   });
 });
+
+// extractPricedRows lives in document-service (it reads Prisma Json), but
+// the rule it encodes is the one worth pinning: a row with no usable
+// price is dropped, never counted as free.
+describe("rows that carry no price", () => {
+  it("would report a whole quote as given away if $0 rows were kept", () => {
+    // Scope analysis stores its results in the same field a priced
+    // spreadsheet uses, but carries no unitCost. Treating those as $0
+    // turns every line into a giveaway -- this asserts what that would
+    // look like, which is why the service filters them out instead.
+    const asIfZero = computeDocumentDiff(
+      [row("LED Wall", 1, 30000), row("Rigging", 1, 10000)],
+      [row("LED Wall", 1, 0), row("Rigging", 1, 0)],
+    );
+    expect(asIfZero.netDelta).toBe(-40000);
+    expect(asIfZero.rows.every((r) => r.kind === "CHANGED")).toBe(true);
+  });
+});

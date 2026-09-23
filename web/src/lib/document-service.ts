@@ -7,8 +7,7 @@
 import { db } from "@/lib/db";
 import { UserError } from "@/lib/user-error";
 import { validateSupersedes } from "@/lib/document-revisions";
-import { computeDocumentDiff } from "@/lib/document-diff";
-import type { VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
+import { computeDocumentDiff, type DiffableRow } from "@/lib/document-diff";
 import { Prisma } from "@/generated/prisma/client";
 import type { DocumentType } from "@/generated/prisma/enums";
 import { buildStorageKey, deleteObject, getObject, headPrivateObject, putObject } from "@/lib/storage";
@@ -218,6 +217,40 @@ export async function setDocumentSupersedes(
   await db.document.update({ where: { id: documentId }, data: { supersedesId } });
 }
 
+
+// Pulls priced rows out of whichever field holds them, and refuses to
+// invent a price where there isn't one.
+//
+// Both shapes are stored as loose JSON, so this reads them structurally
+// rather than trusting a type assertion: a vendor quote line carries
+// `unitPrice`, an imported spreadsheet row carries `unitCost`, and a
+// scope-analysis row carries neither. A row without a usable number is
+// dropped rather than counted as free -- one $0 row in a diff reads as
+// "the vendor gave this away", which is worse than not showing it.
+function extractPricedRows(vendorQuoteLineItems: unknown, proposedLineItems: unknown): DiffableRow[] {
+  const read = (raw: unknown, priceKey: "unitPrice" | "unitCost"): DiffableRow[] => {
+    if (!Array.isArray(raw)) return [];
+    const rows: DiffableRow[] = [];
+    for (const entry of raw) {
+      if (!entry || typeof entry !== "object") continue;
+      const row = entry as Record<string, unknown>;
+      const description = typeof row.description === "string" ? row.description : null;
+      const price = row[priceKey];
+      if (!description || typeof price !== "number" || !Number.isFinite(price)) continue;
+      // A line with no quantity of its own is one of something, which is
+      // how the rest of the pipeline already reads it.
+      const qty = typeof row.qty === "number" && Number.isFinite(row.qty) ? row.qty : 1;
+      rows.push({ description, qty, unitCost: price });
+    }
+    return rows;
+  };
+
+  const fromQuote = read(vendorQuoteLineItems, "unitPrice");
+  // Quote extraction wins where both exist: it is the more specific
+  // reading of the two, run deliberately against a known vendor document.
+  return fromQuote.length > 0 ? fromQuote : read(proposedLineItems, "unitCost");
+}
+
 // What a revised document changes against the one it replaces.
 //
 // Compares the new document's extracted vendor-quote lines against the
@@ -234,10 +267,23 @@ export async function setDocumentSupersedes(
 export async function diffDocumentAgainstPredecessor(opportunityId: string, documentId: string) {
   const doc = await db.document.findFirst({
     where: { id: documentId, opportunityId, deletedAt: null },
-    select: { id: true, filename: true, supersedesId: true, vendorQuoteLineItems: true },
+    select: {
+      id: true,
+      filename: true,
+      supersedesId: true,
+      documentType: true,
+      vendorQuoteLineItems: true,
+      proposedLineItems: true,
+    },
   });
   if (!doc) throw new UserError("That document isn't on this opportunity.");
   if (!doc.supersedesId) return null;
+  // A drawing or a scope writeup has no prices to compare, so prompting
+  // someone to analyse one "to see what changed" is an instruction that
+  // can never pay off.
+  if (doc.documentType === "DRAWING" || doc.documentType === "SCOPE_OF_WORK" || doc.documentType === "MEETING_NOTES") {
+    return null;
+  }
 
   const predecessor = await db.document.findFirst({
     where: { id: doc.supersedesId, deletedAt: null },
@@ -245,10 +291,21 @@ export async function diffDocumentAgainstPredecessor(opportunityId: string, docu
   });
   if (!predecessor) return null;
 
-  const lines = (doc.vendorQuoteLineItems as unknown as VendorQuoteLine[] | null) ?? [];
-  // Nothing extracted yet is not the same as nothing changed -- saying
-  // "no changes" here would be a confident lie about a document nobody
-  // has read.
+  // A document's prices land in one of two places depending on how it was
+  // read, and the diff has to accept both or it silently only works for
+  // documents that happened to go through a bid package:
+  //
+  //   vendorQuoteLineItems -- a vendor quote extracted via a bid package
+  //   proposedLineItems    -- a pricing spreadsheet, imported
+  //
+  // proposedLineItems is ALSO where scope and drawing analysis put their
+  // results, and those carry no price at all. Diffing them would read
+  // every row as $0 and report a whole quote as zeroed out, so the rows
+  // are only used when they actually carry a unit cost.
+  const lines = extractPricedRows(doc.vendorQuoteLineItems, doc.proposedLineItems);
+  // Nothing priced yet is not the same as nothing changed -- saying "no
+  // changes" here would be a confident lie about a document nobody has
+  // read.
   if (lines.length === 0) {
     return { predecessor, extracted: false as const, diff: null };
   }
@@ -260,9 +317,7 @@ export async function diffDocumentAgainstPredecessor(opportunityId: string, docu
 
   const diff = computeDocumentDiff(
     previousRows.map((r) => ({ description: r.description, qty: r.qty.toNumber(), unitCost: r.unitCost.toNumber() })),
-    // A quote line without its own quantity is one of something, which is
-    // how the rest of the vendor-match pipeline already reads it.
-    lines.map((l) => ({ description: l.description, qty: l.qty ?? 1, unitCost: l.unitPrice })),
+    lines,
   );
   return { predecessor, extracted: true as const, diff };
 }
