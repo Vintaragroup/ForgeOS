@@ -445,7 +445,17 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
           </div>
         )}
         {!proposal.sentAt && (
-          <form action={sendWithId}>
+          <form action={sendWithId} className="flex flex-wrap items-end gap-3">
+            {/* Blank means now. A date is for recording a send that
+                already happened outside ForgeOS -- without it, a job that
+                pre-dates adoption can only ever claim it was sent the day
+                someone typed it in, which makes every "sent 14 days ago"
+                reading wrong for exactly those deals. */}
+            <Field
+              label="Sent on (leave blank for today)"
+              name="sentAt"
+              type="date"
+            />
             <Button>Send proposal</Button>
           </form>
         )}

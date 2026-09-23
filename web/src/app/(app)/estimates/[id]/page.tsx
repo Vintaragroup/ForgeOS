@@ -6647,7 +6647,7 @@ function ProposalApprovalTab({
                   <form action={approveVersionWithIds} className="flex items-end gap-3">
                     <input type="hidden" name="approvedById" value={priorApproval.approvedById!} />
                     <p className="text-sm text-neutral-600">
-                      This estimate was approved by{" "}
+                      This estimate was approved internally by{" "}
                       <span className="font-medium text-neutral-900">{priorApproval.approvedBy?.name ?? "unknown"}</span>{" "}
                       (version {priorApproval.versionNumber}) -- only they can approve this version.
                     </p>
@@ -6657,19 +6657,25 @@ function ProposalApprovalTab({
                   <form action={approveVersionWithIds} className="flex items-end gap-3">
                     <div className="w-56">
                       <SelectField
-                        label="Approved by"
+                        label="Approved internally by"
                         name="approvedById"
                         required
                         options={users.map((u) => ({ value: u.id, label: u.name }))}
                       />
                     </div>
-                    <Button variant="secondary">Approve version</Button>
+                    <Button variant="secondary">Approve internally</Button>
                   </form>
                 )
               ) : (
                 <>
+                  {/* "Internally" is load-bearing. This flag means an
+                      estimator signed off on the numbers; it says nothing
+                      about the client, whose position is the proposal's
+                      status and is shown in "Where the client stands"
+                      below. Reading this as client approval is exactly
+                      the mistake the bare word invited. */}
                   <p className="mb-3 text-sm text-neutral-500">
-                    Approved by {version.approvedBy?.name ?? "unknown"}
+                    Approved internally by {version.approvedBy?.name ?? "unknown"}
                     {version.approvedAt
                       ? ` on ${version.approvedAt.toISOString().slice(0, 16).replace("T", " ")}`
                       : ""}

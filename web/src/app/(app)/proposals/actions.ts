@@ -6,10 +6,16 @@ import type { ProposalStatus } from "@/generated/prisma/enums";
 import { requireProposalAccess } from "@/lib/opportunity-access";
 import { revalidatePath } from "next/cache";
 
-export async function sendProposalAction(proposalId: string) {
+export async function sendProposalAction(proposalId: string, formData?: FormData) {
   await requireProposalAccess(proposalId);
-  await sendProposal(proposalId);
+  // Blank means "now", which is the normal case. A date is only given
+  // when recording a send that already happened outside ForgeOS.
+  const raw = String(formData?.get("sentAt") ?? "").trim();
+  const sentAt = raw ? new Date(`${raw}T12:00:00`) : undefined;
+  if (sentAt && Number.isNaN(sentAt.getTime())) throw new UserError("That isn't a date.");
+  await sendProposal(proposalId, sentAt);
   revalidatePath(`/proposals/${proposalId}`);
+  revalidatePath("/estimates", "layout");
 }
 
 export async function signProposalAction(proposalId: string, formData: FormData) {

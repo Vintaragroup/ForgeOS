@@ -57,7 +57,7 @@ export default async function EstimatesPage() {
                     <div className="flex flex-col items-end gap-1.5 text-sm text-neutral-500">
                       <div>
                         {version
-                          ? `$${version.grandTotal.toString()}${version.isLocked ? " · locked" : ""}${version.isApproved ? " · approved" : ""}`
+                          ? `$${version.grandTotal.toString()}${version.isLocked ? " · locked" : ""}${version.isApproved ? " · approved internally" : ""}`
                           : "No version started"}
                       </div>
                       <EstimateStatusChip status={estimate.status} />

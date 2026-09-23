@@ -113,7 +113,12 @@ export async function generateProposal(estimateVersionId: string, templateId: st
 // Immutable once sent (data-model-v0.md's Proposal versioning note) --
 // re-sends create a new Proposal row via generateProposal above rather
 // than mutating this one.
-export async function sendProposal(proposalId: string) {
+// `sentAt` is for recording a send that already happened outside ForgeOS
+// -- a proposal emailed before this was being tracked. Without it, a
+// system adopted mid-job can only ever say a thing was sent the day
+// somebody got round to typing it in, which makes every "sent 14 days
+// ago" reading wrong for exactly the deals that pre-date adoption.
+export async function sendProposal(proposalId: string, sentAt?: Date) {
   const proposal = await db.proposal.findUniqueOrThrow({
     where: { id: proposalId },
     include: {
@@ -143,7 +148,15 @@ export async function sendProposal(proposalId: string) {
   // Goes through the lifecycle rather than writing sentAt directly, so
   // status and timestamp can never disagree and the send lands in the
   // history like every other transition.
-  return recordProposalStatus(proposalId, "SENT");
+  if (sentAt) {
+    // A send in the future is a typo, and one before the version was
+    // even locked could not have happened.
+    if (sentAt.getTime() > Date.now()) throw new UserError("A proposal can't have been sent in the future.");
+    if (proposal.estimateVersion.lockedAt && sentAt < proposal.estimateVersion.lockedAt) {
+      throw new UserError("That's before this version was locked, so it can't be when the proposal went out.");
+    }
+  }
+  return recordProposalStatus(proposalId, "SENT", { at: sentAt });
 }
 
 // Records that a client signed outside ForgeOS (wet signature, DocuSign,
@@ -243,6 +256,11 @@ export async function recordProposalStatus(
     // where a client conversation stands.
     actor?: ProposalActor | null;
     managerConsulted?: boolean;
+    // When this actually happened. Defaults to now; passed explicitly
+    // when recording something that took place before ForgeOS was
+    // tracking it, so the history reads as the truth rather than as the
+    // day somebody typed it in.
+    at?: Date;
   } = {},
 ) {
   const proposal = await db.proposal.findFirstOrThrow({
@@ -270,6 +288,7 @@ export async function recordProposalStatus(
     managerConsulted = authority.requiresManagerConsultation;
   }
 
+  const when = opts.at ?? new Date();
   return db.$transaction(async (tx) => {
     const updated = await tx.proposal.update({
       where: { id: proposalId },
@@ -277,8 +296,8 @@ export async function recordProposalStatus(
       // code still reads them, and they remain the honest answer to "when".
       data: {
         status: toStatus,
-        ...(toStatus === "SENT" ? { sentAt: new Date() } : {}),
-        ...(toStatus === "SIGNED" ? { signedAt: new Date() } : {}),
+        ...(toStatus === "SENT" ? { sentAt: when } : {}),
+        ...(toStatus === "SIGNED" ? { signedAt: when } : {}),
       },
     });
     await tx.proposalEvent.create({
@@ -290,6 +309,7 @@ export async function recordProposalStatus(
         byUserId: opts.byUserId ?? null,
         estimateVersionId: proposal.estimateVersionId,
         managerConsulted,
+        createdAt: when,
       },
     });
     return updated;

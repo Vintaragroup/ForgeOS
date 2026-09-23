@@ -198,6 +198,61 @@ describe("send / sign lifecycle", () => {
 
     await expect(sendProposal(proposal.id)).rejects.toThrow(/already sent/);
   });
+
+  // Backdating exists because proposals go out by email and get logged
+  // here afterwards, sometimes days later. Stamping today would make the
+  // record present but false, and every later "how long has the client
+  // had this?" reads off that date.
+  it("records a send on the date it actually went out", async () => {
+    const { version, user } = await makeLockedVersion("Backdate");
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: "Standard-Backdate" } });
+    const proposal = await generateProposal(version.id, template.id);
+
+    // The fixture locks the version at "now", so the lock is moved back
+    // first -- otherwise a send six days ago correctly fails the
+    // before-locked check, which is the next test's job.
+    await db.estimateVersion.update({
+      where: { id: version.id },
+      data: { lockedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000) },
+    });
+
+    const when = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
+    const sent = await sendProposal(proposal.id, when);
+    expect(sent.sentAt?.getTime()).toBe(when.getTime());
+
+    // The event is the history, so it has to carry the same date --
+    // a timeline that says "sent today" beside a proposal dated last
+    // week is worse than no timeline.
+    const event = await db.proposalEvent.findFirstOrThrow({
+      where: { proposalId: proposal.id, toStatus: "SENT" },
+    });
+    expect(event.createdAt.getTime()).toBe(when.getTime());
+  });
+
+  it("refuses a send date in the future", async () => {
+    const { version, user } = await makeLockedVersion("Future");
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: "Standard-Future" } });
+    const proposal = await generateProposal(version.id, template.id);
+
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await expect(sendProposal(proposal.id, tomorrow)).rejects.toThrow(/future/);
+  });
+
+  // The version's lock is the earliest moment this proposal's numbers
+  // existed, so a send before it is describing a document that hadn't
+  // been written yet -- almost always a typo'd year.
+  it("refuses a send date before the version was locked", async () => {
+    const { version, user } = await makeLockedVersion("PreLock");
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: "Standard-PreLock" } });
+    const proposal = await generateProposal(version.id, template.id);
+
+    const locked = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    const tooEarly = new Date(locked.lockedAt!.getTime() - 60 * 60 * 1000);
+    await expect(sendProposal(proposal.id, tooEarly)).rejects.toThrow(/locked/);
+  });
 });
 
 describe("signProposal -- production handoff trigger", () => {
