@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { agedOffPipeline, pipelineClosedOn } from "@/lib/pipeline-window";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
@@ -44,9 +45,10 @@ function daysBetween(a: Date, b: Date) {
 export default async function OpportunitiesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ stage?: string }>;
+  searchParams: Promise<{ stage?: string; closed?: string }>;
 }) {
-  const { stage: highlightStage } = await searchParams;
+  const { stage: highlightStage, closed: closedParam } = await searchParams;
+  const showAllClosed = closedParam === "all";
   const now = new Date();
 
   const user = await getCurrentUser();
@@ -67,6 +69,8 @@ export default async function OpportunitiesPage({
         },
       },
       stageEvents: { orderBy: { changedAt: "desc" }, take: 1 },
+      // The show's date is what dates an imported deal. See closedOn below.
+      show: { select: { eventStartDate: true } },
     },
   });
 
@@ -77,11 +81,24 @@ export default async function OpportunitiesPage({
     const lastStageChange = opp.stageEvents[0]?.changedAt ?? opp.createdAt;
     const daysInStage = daysBetween(now, lastStageChange);
     const daysToMoveIn = opp.targetMoveIn ? daysBetween(opp.targetMoveIn, now) : null;
-    return { opp, value, daysInStage, daysToMoveIn };
+    // See pipeline-window.ts for why this is not simply lastStageChange.
+    const closedOn = pipelineClosedOn({
+      eventStartDate: opp.eventStartDate,
+      show: opp.show,
+      lastStageChange,
+    });
+    return { opp, value, daysInStage, daysToMoveIn, closedOn };
   });
 
   const byStage = Object.fromEntries(STAGES.map((s) => [s.value, [] as typeof rows]));
+  // Counted rather than silently dropped -- a column that just gets
+  // shorter looks like data loss.
+  let hiddenClosed = 0;
   for (const row of rows) {
+    if (!showAllClosed && agedOffPipeline(row.opp.stage, row.closedOn, now)) {
+      hiddenClosed += 1;
+      continue;
+    }
     byStage[row.opp.stage]?.push(row);
   }
 
@@ -91,6 +108,26 @@ export default async function OpportunitiesPage({
         title="Opportunities"
         action={<LinkButton href="/opportunities/new">New opportunity</LinkButton>}
       />
+      {(hiddenClosed > 0 || showAllClosed) && (
+        <p className="mb-4 text-xs text-neutral-500">
+          {showAllClosed ? (
+            <>
+              Showing every closed deal, however old.{" "}
+              <Link href="/opportunities" className="font-medium text-neutral-700 hover:underline">
+                Back to the last 6 months →
+              </Link>
+            </>
+          ) : (
+            <>
+              Won and Lost show the last 6 months. {hiddenClosed} older closed deal
+              {hiddenClosed === 1 ? " is" : "s are"} hidden — they stay on their client and in reports.{" "}
+              <Link href="/opportunities?closed=all" className="font-medium text-neutral-700 hover:underline">
+                Show all →
+              </Link>
+            </>
+          )}
+        </p>
+      )}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {STAGES.map((stage) => {
           const stageRows = byStage[stage.value];
