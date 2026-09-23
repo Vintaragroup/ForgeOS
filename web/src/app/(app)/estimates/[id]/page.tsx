@@ -2,6 +2,9 @@ import { Fragment, Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { PageActionsMenu } from "@/components/page-actions-menu";
+import { ProposalStatusPanel } from "@/components/proposal-status-panel";
+import { PROPOSAL_TRANSITIONS } from "@/lib/proposal-service";
+import { isProposalManager } from "@/lib/proposal-authority";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
@@ -337,6 +340,10 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  // A manager moves a proposal on their own authority; everyone else
+  // confirms they discussed it first. UI nicety only -- the real gate is
+  // in recordProposalStatus, which re-derives this server-side.
+  const viewerIsProposalManager = isProposalManager(user);
   // Profitability tab: admin-only edit, everyone else with access to the
   // opportunity gets read-only -- this is only a UI nicety (the real gate
   // is requireAdmin() in the actions themselves, same split requireAdmin's
@@ -425,7 +432,18 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             },
           },
           approvedBy: true,
-          proposals: { orderBy: { createdAt: "desc" } },
+          proposals: {
+            orderBy: { createdAt: "desc" },
+            include: {
+              // The history behind the status chip. Newest first so the
+              // panel reads top-down as "here's where it is, here's how it
+              // got there".
+              events: {
+                orderBy: { createdAt: "desc" },
+                include: { byUser: { select: { name: true } } },
+              },
+            },
+          },
           changeOrdersAsBase: { orderBy: { createdAt: "desc" } },
           // True-company-profitability tab -- see InternalCost's own
           // schema comment. section is only for display (which booth a
@@ -1098,6 +1116,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     users={users}
                     proposalTemplates={proposalTemplates}
                     olderVersions={olderVersions}
+                    viewerIsProposalManager={viewerIsProposalManager}
                   />
                 ),
                 history: (
@@ -1175,7 +1194,7 @@ type VersionWithSections = Prisma.EstimateVersionGetPayload<{
       };
     };
     approvedBy: true;
-    proposals: true;
+    proposals: { include: { events: { include: { byUser: { select: { name: true } } } } } };
     changeOrdersAsBase: true;
     internalCosts: {
       include: { section: { select: { id: true; name: true; groupLabel: true } } };
@@ -6501,12 +6520,17 @@ function ProposalApprovalTab({
   users,
   proposalTemplates,
   olderVersions,
+  viewerIsProposalManager,
 }: {
   estimateId: string;
   version: VersionWithSections;
   users: { id: string; name: string }[];
   proposalTemplates: { id: string; name: string }[];
   olderVersions: VersionSummary[];
+  // A manager moves a proposal on their own authority; everyone else has
+  // to confirm they discussed it. UI only -- recordProposalStatus
+  // re-derives this server-side.
+  viewerIsProposalManager: boolean;
 }) {
   const approveVersionWithIds = approveVersionAction.bind(null, estimateId, version.id);
   const generateProposalWithIds = generateProposalAction.bind(null, estimateId, version.id);
@@ -6598,18 +6622,32 @@ function ProposalApprovalTab({
                     </form>
                   )}
                   {version.proposals.length > 0 && (
-                    <ul className="mt-4 flex flex-col gap-1 border-t border-neutral-200 pt-3 text-sm">
+                    <div className="mt-4 flex flex-col gap-4 border-t border-neutral-200 pt-3 text-sm">
                       {version.proposals.map((p) => (
-                        <li key={p.id} className="flex items-center justify-between">
+                        <div key={p.id}>
                           <Link href={`/proposals/${p.id}`} className="text-neutral-900 hover:underline">
-                            Proposal {p.id.slice(0, 8)}
+                            Open the proposal →
                           </Link>
-                          <span className="text-neutral-500">
-                            {p.signedAt ? "Signed" : p.sentAt ? "Sent" : "Draft"}
-                          </span>
-                        </li>
+                          <ProposalStatusPanel
+                            proposalId={p.id}
+                            status={p.status}
+                            sentAt={p.sentAt?.toISOString() ?? null}
+                            signedAt={p.signedAt?.toISOString() ?? null}
+                            signedByName={p.signedByName}
+                            requiresManagerConsent={!viewerIsProposalManager}
+                            nextStatuses={PROPOSAL_TRANSITIONS[p.status]}
+                            events={p.events.map((e) => ({
+                              id: e.id,
+                              toStatus: e.toStatus,
+                              note: e.note,
+                              byName: e.byUser?.name ?? null,
+                              managerConsulted: e.managerConsulted,
+                              at: e.createdAt.toISOString(),
+                            }))}
+                          />
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                   )}
 
                   <form action={createChangeOrderWithIds} className="mt-4 flex items-end gap-3 border-t border-neutral-200 pt-3">
