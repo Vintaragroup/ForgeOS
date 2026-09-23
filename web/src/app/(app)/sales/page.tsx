@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canViewWholeTeam, COLD_DAYS, loadLeaderboard, loadSalesOverview, type ClientRow } from "@/lib/sales-analytics";
+import { listDepartmentMembers } from "@/lib/department-viewing";
 import { pendingClientReviews } from "@/lib/opportunity-intake";
 import { ageLabel } from "@/lib/contact-aging";
 import { salesmateRecordUrl } from "@/lib/salesmate-links";
@@ -64,7 +65,15 @@ export default async function SalesPage(props: PageProps<"/sales">) {
   const params = await props.searchParams;
   const repParam = (Array.isArray(params.rep) ? params.rep[0] : params.rep) ?? "";
   const viewingTeam = canSeeTeam && repParam === "all";
-  const ownerUserId = viewingTeam ? null : canSeeTeam && repParam ? repParam : user.id;
+  // With no ?rep=, a manager or admin lands on the Sales department head
+  // rather than on themselves. An admin owns no Salesmate deals, so their
+  // own book is empty -- this page used to greet them with no clients, no
+  // pipeline and nothing to do, which told them nothing about Sales.
+  // Falls back to their own view when no head is set, rather than picking
+  // a rep arbitrarily and presenting them as the department.
+  const salesDepartment = canSeeTeam ? await listDepartmentMembers("SL") : [];
+  const defaultOwnerId = salesDepartment.find((m) => m.isDepartmentHead)?.id ?? user.id;
+  const ownerUserId = viewingTeam ? null : canSeeTeam && repParam ? repParam : canSeeTeam ? defaultOwnerId : user.id;
   const viewingSelf = ownerUserId === user.id;
   // Tabs, not one long scroll: the landing view is only what needs doing.
   const tabParam = (Array.isArray(params.tab) ? params.tab[0] : params.tab) ?? "today";
@@ -85,7 +94,15 @@ export default async function SalesPage(props: PageProps<"/sales">) {
       ? db.user.findMany({
           where: {
             deletedAt: null,
-            OR: [{ salesmateOwnedDeals: { some: { removedAt: null } } }, { salesmateOwnedCompanies: { some: { removedAt: null } } }],
+            // Deal owners OR anyone in the Sales department. Ownership
+            // alone missed a rep who has not been assigned anything yet,
+            // and the department alone would drop an owner who sits
+            // outside it -- both need to be pickable.
+            OR: [
+              { salesmateOwnedDeals: { some: { removedAt: null } } },
+              { salesmateOwnedCompanies: { some: { removedAt: null } } },
+              { departmentCode: "SL" },
+            ],
           },
           select: { id: true, name: true },
           orderBy: { name: "asc" },
@@ -99,7 +116,14 @@ export default async function SalesPage(props: PageProps<"/sales">) {
 
   const { kpis } = overview;
   const today = new Date();
-  const firstName = user.name.trim().split(/\s+/)[0] ?? user.name;
+  // Whose name sits in the hero. Reading another rep's book names THEM,
+  // and the team view says so outright -- a greeting addressed to the
+  // reader over somebody else's numbers is how you misread a page.
+  const firstName = viewingTeam
+    ? "the team"
+    : viewed
+      ? `${viewed.name.trim().split(/\s+/)[0] ?? viewed.name}'s`
+      : (user.name.trim().split(/\s+/)[0] ?? user.name);
   // The one number the hero promises: everything waiting on this person.
   // Counts, not list lengths -- staleOpenDeals and lapsed are trimmed for
   // display, so adding their .length quietly under-reports for exactly the

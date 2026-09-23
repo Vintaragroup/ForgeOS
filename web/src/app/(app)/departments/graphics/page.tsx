@@ -32,6 +32,7 @@ import { APPROVAL_LEAD_BUSINESS_DAYS } from "@/lib/graphics-sla";
 import { AssignDesignerButton, IssueGoAheadButton, MarkSkidSentButton, SetHalfStatusButton } from "@/components/graphics-row-actions";
 import { buildShopFloor } from "@/lib/graphics-shop-floor";
 import { buildShipping } from "@/lib/graphics-shipping";
+import { listDepartmentMembers, resolveDepartmentView } from "@/lib/department-viewing";
 import { AssistantWidget } from "@/components/assistant-widget";
 import { canUseAssistant, getDepartmentAssistant } from "@/lib/ai/assistant-registry";
 import { listAssistantThreads } from "@/lib/assistant-service";
@@ -60,15 +61,12 @@ type GraphicsTabKey = "today" | "shopfloor" | "shipping" | "production" | "depar
 export default async function GraphicsHomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ opportunityId?: string; openAction?: string; tab?: string }>;
+  searchParams: Promise<{ opportunityId?: string; openAction?: string; tab?: string; as?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  // TS doesn't retain the null-narrowing above across the row helpers
-  // declared further down -- a separately bound const does.
-  const currentUserId = user.id;
 
-  const { opportunityId: selectedOpportunityId, tab: tabParam } = await searchParams;
+  const { opportunityId: selectedOpportunityId, tab: tabParam, as: asParam } = await searchParams;
   const isGrDept = canAccessArtworkOrdersViaDepartment(user);
 
   // Gates "Onboard a new client" and "Link a deal to a show" -- matches
@@ -82,7 +80,18 @@ export default async function GraphicsHomePage({
   // it. Everyday operational access (working any piece, the queues below)
   // stays department-wide for all GR staff, unchanged -- see
   // canViewDepartmentOversight's own comment.
-  const canSeeOversight = canViewDepartmentOversight(user);
+  // Whose view of Graphics this is. An admin lands on the department head
+  // rather than on themselves -- their own view of a shared board is just
+  // their own name over everyone else's work. Read-only: `isSelf` gates
+  // every row action below, so an admin can see what Gabriella sees and
+  // cannot act in her name.
+  const departmentMembers = await listDepartmentMembers("GR");
+  const view = resolveDepartmentView(user, departmentMembers, asParam);
+  // Oversight follows the VIEWED person, not the viewer -- that is what
+  // makes "see what they see" mean anything. An admin viewing an ordinary
+  // member loses the Department tab, exactly as that member does.
+  const viewedIsHead = departmentMembers.find((m) => m.id === view.viewedId)?.isDepartmentHead ?? false;
+  const canSeeOversight = view.isSelf ? canViewDepartmentOversight(user) : viewedIsHead;
 
   // A non-Graphics-department, non-admin user with assigned clients gets a
   // dedicated, read-only rollup instead of this whole page -- mirrors the
@@ -408,13 +417,21 @@ export default async function GraphicsHomePage({
       : null;
 
   const today = new Date();
-  const firstName = user.name.trim().split(/\s+/)[0] ?? user.name;
+  // Whose name sits in the hero. Viewing someone else names THEM, so it is
+  // never ambiguous whose board is on screen -- "Gabriella's Graphics"
+  // rather than a greeting addressed to the admin reading it.
+  const firstName = view.isSelf
+    ? (user.name.trim().split(/\s+/)[0] ?? user.name)
+    : `${view.viewedName.trim().split(/\s+/)[0] ?? view.viewedName}'s`;
   // The one number the hero promises: every piece of work actually waiting
   // on this department right now. Counted by graphics-today, so it can't
   // drift from what the sections below actually list.
   const needsYou = todayBuckets.needsYou + needsPostShowReviewCount;
 
-  const tabHref = (key: GraphicsTabKey) => `/departments/graphics?tab=${key}`;
+  // Carries the viewed person across tabs -- switching tabs should not
+  // silently drop you back into your own view.
+  const asQuery = view.isSelf ? "" : `&as=${encodeURIComponent(view.viewedId)}`;
+  const tabHref = (key: GraphicsTabKey) => `/departments/graphics?tab=${key}${asQuery}`;
   const tabs: DashTab[] = [
     { key: "today", label: "Today", count: needsYou, href: tabHref("today"), active: tab === "today" },
     { key: "shopfloor", label: "Shop floor", href: tabHref("shopfloor"), active: tab === "shopfloor" },
@@ -447,19 +464,24 @@ export default async function GraphicsHomePage({
     { href: "/departments/graphics/post-show", label: "Post-show", tone: "red" },
   ];
 
-  const subgreeting =
+  const baseSubgreeting =
     needsYou === 0
       ? "Nothing is waiting on Graphics right now."
       : `${needsYou} thing${needsYou === 1 ? "" : "s"} need${needsYou === 1 ? "s" : ""} Graphics today.`;
+  const subgreeting = view.isSelf
+    ? baseSubgreeting
+    : `${baseSubgreeting} You're reading ${view.viewedName}'s view — actions are off.`;
 
-  // The dot marks a piece assigned to THIS user specifically (via
+  // The dot marks a piece assigned to the person whose view this is (via
   // designerId) -- visible on every tab, so a producer scanning
-  // department-wide urgent items can still spot their own at a glance.
+  // department-wide urgent items can still spot their own at a glance. It
+  // follows the VIEWED person, which is what makes an admin's "see what
+  // Gabriella sees" show Gabriella's own pieces rather than the admin's.
   function orderTitle(order: GraphicsOrder) {
     const name = order.opportunity ? order.opportunity.company.name : "Show piece";
     return (
       <span className="flex items-center gap-2">
-        {order.designerId === currentUserId && (
+        {order.designerId === view.viewedId && (
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--dash-teal)]" title="Assigned to you" />
         )}
         {name}
@@ -496,15 +518,19 @@ export default async function GraphicsHomePage({
                 title={orderTitle(order)}
                 sub={orderSub(order, note)}
                 right={right}
+                // Read-only while looking at someone else's view: an
+                // admin can see what they see, not write in their name.
                 actions={
-                  <>
-                    {order.status === "PROOF_APPROVED" && <IssueGoAheadButton artworkOrderId={order.id} />}
-                    <AssignDesignerButton
-                      artworkOrderId={order.id}
-                      designers={designers}
-                      currentDesignerId={order.designerId}
-                    />
-                  </>
+                  view.isSelf ? (
+                    <>
+                      {order.status === "PROOF_APPROVED" && <IssueGoAheadButton artworkOrderId={order.id} />}
+                      <AssignDesignerButton
+                        artworkOrderId={order.id}
+                        designers={designers}
+                        currentDesignerId={order.designerId}
+                      />
+                    </>
+                  ) : undefined
                 }
               />
             ))}
@@ -531,6 +557,43 @@ export default async function GraphicsHomePage({
       quickActions={quickActions}
       tabs={tabs}
     >
+      {view.options.length > 0 && (
+        <div className="dash-section">
+          <div className="dash-section-head">
+            <h2 className="dash-section-title">VIEWING</h2>
+          </div>
+          <DashCard>
+            {/* A GET form, so the choice lands in the URL and the whole
+                page re-renders from it -- same pattern as /sales' own rep
+                switcher, and it means a viewed board can be linked to. */}
+            <form action="/departments/graphics" className="flex flex-wrap items-center gap-2 px-5 py-3">
+              <input type="hidden" name="tab" value={tab} />
+              <select
+                name="as"
+                defaultValue={view.viewedId}
+                className="rounded-md border border-[color:var(--dash-border)] bg-transparent px-3 py-1.5 text-sm"
+              >
+                {view.options.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                    {o.isDepartmentHead ? " — department head" : ""}
+                  </option>
+                ))}
+              </select>
+              <button type="submit" className="dash-qa dash-c-navy">
+                <span className="dash-dot" />
+                View
+              </button>
+              {!view.isSelf && (
+                <span className="dash-row-sub">
+                  Reading {view.viewedName}&apos;s view. Actions are disabled until you switch back to yourself.
+                </span>
+              )}
+            </form>
+          </DashCard>
+        </div>
+      )}
+
       {canOnboardNewClient && (
         <DashboardActionModal title="Onboard a new client" openParam="openAction" openValue="client" clearParams={["openAction"]}>
           <p className="mb-4 text-sm text-neutral-500">
@@ -841,11 +904,13 @@ export default async function GraphicsHomePage({
                       )}
                       right={half.late ? <DashChip tone="critical">Late</DashChip> : undefined}
                       actions={
-                        <SetHalfStatusButton
-                          routingId={half.routingId}
-                          kind={half.kind}
-                          current={half.productionStatus}
-                        />
+                        view.isSelf ? (
+                          <SetHalfStatusButton
+                            routingId={half.routingId}
+                            kind={half.kind}
+                            current={half.productionStatus}
+                          />
+                        ) : undefined
                       }
                     />
                   ))}
@@ -938,7 +1003,11 @@ export default async function GraphicsHomePage({
                       </span>
                     }
                     sub={contents.length === 0 ? "Nothing packed on it yet." : "PVC and acrylic at the bottom, fabric on top."}
-                    actions={<MarkSkidSentButton skidId={skid.id} code={skid.code} pieceCount={contents.length} />}
+                    actions={
+                      view.isSelf ? (
+                        <MarkSkidSentButton skidId={skid.id} code={skid.code} pieceCount={contents.length} />
+                      ) : undefined
+                    }
                   />
                   {contents.map((order, i) => (
                     <DashRow
