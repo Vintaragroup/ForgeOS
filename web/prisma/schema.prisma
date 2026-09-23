@@ -827,6 +827,19 @@ model Document {
   uploadedById String?
   uploadedBy   User?   @relation(fields: [uploadedById], references: [id])
 
+  // The document this one replaces -- a revised vendor quote pointing at
+  // the quote it supersedes, a v2 pricing schedule at its v1.
+  //
+  // A RELATIONSHIP rather than a typed-in "V2" label, because the label
+  // can then be derived instead of maintained: the version number is the
+  // depth of this chain, the current document is the one nothing
+  // supersedes, and the pair to diff is a document and its predecessor.
+  // A hand-typed version drifts the first time someone uploads the third
+  // revision and calls it V2, and nothing can then say which is newer.
+  supersedesId String?
+  supersedes   Document?  @relation("DocumentRevision", fields: [supersedesId], references: [id])
+  supersededBy Document[] @relation("DocumentRevision")
+
   createdAt DateTime  @default(now())
   deletedAt DateTime?
 
@@ -838,6 +851,7 @@ model Document {
   vendorMatchApplyLogs VendorMatchApplyLog[]
   chunks               DocumentChunk[]
 
+  @@index([supersedesId])
   @@map("documents")
 }
 
@@ -1122,6 +1136,7 @@ model Department {
   laborRates LaborRate[]
 
   @@map("departments")
+  bidPackages BidPackage[]
 }
 
 model LaborRate {
@@ -2708,6 +2723,21 @@ model BidPackage {
   estimateVersion   EstimateVersion @relation(fields: [estimateVersionId], references: [id])
 
   name       String
+
+  // Which trade this package is for -- AV, Graphics, Rigging. Keyed to
+  // the Department table that already holds 21 codes rather than a new
+  // enum, so "every AV bid on this job" and "this trade's quotes across
+  // jobs" are the same question asked twice.
+  tradeCode String?
+  trade     Department? @relation(fields: [tradeCode], references: [code])
+
+  // The real vendor, where one is known. vendorName below is free text
+  // and cannot join to anything -- which is why a bid package can name a
+  // shop today and still tell you nothing about it. Kept alongside for
+  // the packages that only ever had a typed name.
+  vendorId String?
+  vendor   Vendor? @relation(fields: [vendorId], references: [id])
+
   vendorName String?
   status     BidPackageStatus @default(AWAITING_QUOTE)
 
@@ -3117,6 +3147,7 @@ model Vendor {
   artworkRoutings ArtworkOrderRouting[]
 
   @@map("vendors")
+  bidPackages BidPackage[]
 }
 
 // ---------------------------------------------------------------------
