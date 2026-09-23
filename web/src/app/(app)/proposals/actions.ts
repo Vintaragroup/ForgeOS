@@ -29,7 +29,7 @@ export async function signProposalAction(proposalId: string, formData: FormData)
   await requireProposalAccess(proposalId);
   const signedByName = String(formData.get("signedByName") ?? "");
   const signedByTitle = String(formData.get("signedByTitle") ?? "");
-  await signProposal(proposalId, signedByName, signedByTitle || null);
+  await signProposal(proposalId, signedByName, signedByTitle || null, parseWhen(formData, "signedAt"));
   revalidatePath(`/proposals/${proposalId}`);
 }
 
@@ -63,11 +63,19 @@ export async function recordProposalStatusAction(
     const toStatus = String(formData.get("toStatus") ?? "").trim() as ProposalStatus;
     if (!toStatus) throw new UserError("Pick a status.");
 
+    // Only SIGNED carries one, and recordProposalStatus refuses SIGNED
+    // without it -- that requirement is what keeps the deal-closing move
+    // off a single click.
+    const signedByName = String(formData.get("signedByName") ?? "").trim();
+
     await recordProposalStatus(proposalId, toStatus, {
       note: String(formData.get("note") ?? ""),
       byUserId: user.id,
       actor,
       managerConsulted: formData.get("managerConsulted") === "on",
+      signature: signedByName
+        ? { byName: signedByName, byTitle: String(formData.get("signedByTitle") ?? "").trim() || null }
+        : null,
       // Every one of these records something that happened in a client
       // conversation, and those get typed in after the fact. The date
       // the meeting happened is the useful one, not the date somebody

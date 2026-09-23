@@ -181,6 +181,42 @@ describe("send / sign lifecycle", () => {
     expect(signed.signedByTitle).toBe("Owner");
   });
 
+  // ABC Chicago was signed by a stray click: the panel's bare "Mark
+  // signed" button reached SIGNED through recordProposalStatus, which
+  // set signedAt and nothing else -- no signer, no WON, no Project. One
+  // door to SIGNED now, and it asks who signed.
+  it("refuses to record a signature with no signer", async () => {
+    const { version, user } = await makeLockedVersion("NoSigner");
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: "Standard-NoSigner" } });
+    const proposal = await generateProposal(version.id, template.id);
+    await sendProposal(proposal.id);
+
+    await expect(recordProposalStatus(proposal.id, "SIGNED")).rejects.toThrow(/name of the person who signed/);
+
+    const untouched = await db.proposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(untouched.status).toBe("SENT");
+    expect(untouched.signedAt).toBeNull();
+  });
+
+  it("carries the signer onto the proposal in the same write as the status", async () => {
+    const { version, user } = await makeLockedVersion("Signer");
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: "Standard-Signer" } });
+    const proposal = await generateProposal(version.id, template.id);
+    await sendProposal(proposal.id);
+
+    await recordProposalStatus(proposal.id, "SIGNED", {
+      signature: { byName: "  Dana Reyes ", byTitle: " VP Marketing " },
+    });
+
+    const signed = await db.proposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(signed.status).toBe("SIGNED");
+    expect(signed.signedByName).toBe("Dana Reyes");
+    expect(signed.signedByTitle).toBe("VP Marketing");
+    expect(signed.signedAt).not.toBeNull();
+  });
+
   it("rejects signing before sending", async () => {
     const { version, user } = await makeLockedVersion();
     await approveEstimateVersion(version.id, user.id);

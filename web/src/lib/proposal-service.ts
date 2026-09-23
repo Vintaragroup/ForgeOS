@@ -181,51 +181,62 @@ async function assertSendable(proposalId: string, when: Date | undefined) {
 // account/API credentials that don't exist yet). This is a typed-name
 // attestation instead of a bare timestamp: captures who marked it signed,
 // not just when, without pretending it's cryptographically binding.
-export async function signProposal(proposalId: string, signedByName: string, signedByTitle?: string | null) {
-  if (!signedByName.trim()) {
-    throw new Error("A signer name is required.");
-  }
+export async function signProposal(
+  proposalId: string,
+  signedByName: string,
+  signedByTitle?: string | null,
+  signedAt?: Date,
+) {
   const proposal = await db.proposal.findUniqueOrThrow({
     where: { id: proposalId },
-    include: { estimateVersion: { include: { estimate: { select: { opportunityId: true } } } } },
+    select: { sentAt: true, signedAt: true },
   });
+  // Both are covered by the transition table too, but only as "draft
+  // can't move to signed" -- these say which part is missing.
   if (!proposal.sentAt) {
-    throw new Error(`Proposal ${proposalId} must be sent before it can be marked signed.`);
+    throw new UserError("A proposal must be sent before a client can approve it.");
   }
   if (proposal.signedAt) {
-    throw new Error(`Proposal ${proposalId} was already signed at ${proposal.signedAt.toISOString()}.`);
+    throw new UserError(`This proposal was already signed at ${proposal.signedAt.toISOString()}.`);
   }
-  // Status and signedAt together, then the attestation. Same reasoning as
-  // sendProposal above: one path, so they cannot drift apart.
-  await recordProposalStatus(proposalId, "SIGNED", {
-    note: `Signed by ${signedByName.trim()}${signedByTitle?.trim() ? `, ${signedByTitle.trim()}` : ""}.`,
+  // Thin wrapper, like sendProposal. Everything that makes a signature a
+  // signature -- the attestation, WON, the Project -- lives on the
+  // transition, so there is only one way to reach SIGNED.
+  return recordProposalStatus(proposalId, "SIGNED", {
+    signature: { byName: signedByName, byTitle: signedByTitle ?? null },
+    at: signedAt,
   });
-  const signed = await db.proposal.update({
-    where: { id: proposalId },
-    data: {
-      signedByName: signedByName.trim(),
-      signedByTitle: signedByTitle?.trim() || null,
-    },
-  });
+}
 
-  // A signed proposal is the deal closing -- advance the opportunity to
-  // WON (if it isn't already) and start production in the same gesture,
-  // collapsing what used to be two disconnected manual steps (mark WON,
-  // then separately click "Convert to Project") into the one moment that
-  // actually represents the deal closing. Reuses changeOpportunityStage
-  // (opportunity-service.ts) and convertOpportunityToProject
-  // (project-service.ts) as-is rather than reimplementing the
-  // stage/StageChangeEvent or Project-creation logic here -- the latter is
-  // now idempotent specifically so it's safe to call from a second site
-  // like this one without duplicating its own "already converted" guard.
+// What a signature sets off, once the status itself is recorded.
+//
+// This used to live in signProposal, which meant the panel's "Mark
+// signed" button -- which goes through recordProposalStatus -- set
+// signedAt and nothing else: no signer, no WON, no Project. Two doors to
+// SIGNED, and only one of them did what signing means. That is how ABC
+// Chicago ended up signed by a stray click.
+//
+// A signed proposal is the deal closing, so the opportunity advances to
+// WON and production starts in the same gesture, collapsing what used to
+// be two disconnected manual steps (mark WON, then separately click
+// "Convert to Project") into the one moment that actually represents the
+// deal closing. Reuses changeOpportunityStage (opportunity-service.ts)
+// and convertOpportunityToProject (project-service.ts) as-is rather than
+// reimplementing the stage/StageChangeEvent or Project-creation logic
+// here -- the latter is idempotent specifically so it's safe to call
+// from a second site without duplicating its own "already converted"
+// guard.
+async function applySignatureEffects(proposalId: string) {
+  const proposal = await db.proposal.findUniqueOrThrow({
+    where: { id: proposalId },
+    select: { estimateVersion: { select: { estimate: { select: { opportunityId: true } } } } },
+  });
   const opportunityId = proposal.estimateVersion.estimate.opportunityId;
   const opportunity = await db.opportunity.findUniqueOrThrow({ where: { id: opportunityId } });
   if (opportunity.stage !== "WON") {
     await changeOpportunityStage(opportunityId, "WON", "Auto-advanced: proposal signed");
   }
   await convertOpportunityToProject(opportunityId);
-
-  return signed;
 }
 
 // --- lifecycle ---------------------------------------------------------
@@ -278,6 +289,11 @@ export async function recordProposalStatus(
     // tracking it, so the history reads as the truth rather than as the
     // day somebody typed it in.
     at?: Date;
+    // Required to reach SIGNED, and the reason there is no one-click
+    // path to it. Signing advances the deal to WON and starts
+    // production, so it asks who signed -- which makes it a deliberate
+    // act rather than something a stray click can do.
+    signature?: { byName: string; byTitle?: string | null } | null;
   } = {},
 ) {
   const proposal = await db.proposal.findFirstOrThrow({
@@ -290,9 +306,20 @@ export async function recordProposalStatus(
         `${toStatus.replaceAll("_", " ").toLowerCase()}.`,
     );
   }
-  const note = opts.note?.trim() || null;
+  let note = opts.note?.trim() || null;
   if (toStatus === "REVISIONS_REQUESTED" && !note) {
     throw new UserError("Say what the client asked to change -- that note is the reason the next version exists.");
+  }
+
+  // No signer, no signature. This is what stops SIGNED being reachable
+  // by one click from the same panel that sends the proposal.
+  const signerName = opts.signature?.byName?.trim();
+  const signerTitle = opts.signature?.byTitle?.trim() || null;
+  if (toStatus === "SIGNED") {
+    if (!signerName) {
+      throw new UserError("Recording a client's approval needs the name of the person who signed.");
+    }
+    note = note ?? `Signed by ${signerName}${signerTitle ? `, ${signerTitle}` : ""}.`;
   }
 
   // A manager moves a proposal on their own authority; anyone else has to
@@ -314,15 +341,19 @@ export async function recordProposalStatus(
   const when = opts.at ?? new Date();
   if (toStatus === "SENT") await assertSendable(proposalId, opts.at);
 
-  return db.$transaction(async (tx) => {
-    const updated = await tx.proposal.update({
+  const updated = await db.$transaction(async (tx) => {
+    const row = await tx.proposal.update({
       where: { id: proposalId },
       // sentAt/signedAt are kept in step rather than superseded: plenty of
       // code still reads them, and they remain the honest answer to "when".
       data: {
         status: toStatus,
         ...(toStatus === "SENT" ? { sentAt: when } : {}),
-        ...(toStatus === "SIGNED" ? { signedAt: when } : {}),
+        // The attestation lands in the same write as the status, so a
+        // signed proposal can never exist without a signer on it.
+        ...(toStatus === "SIGNED"
+          ? { signedAt: when, signedByName: signerName, signedByTitle: signerTitle }
+          : {}),
       },
     });
     await tx.proposalEvent.create({
@@ -337,8 +368,14 @@ export async function recordProposalStatus(
         createdAt: when,
       },
     });
-    return updated;
+    return row;
   });
+
+  // Outside the transaction, as before: these reach across into the
+  // opportunity and project services, which run their own writes.
+  if (toStatus === "SIGNED") await applySignatureEffects(proposalId);
+
+  return updated;
 }
 
 // "Updated costing requested." Records the request against the proposal

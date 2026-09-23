@@ -135,6 +135,7 @@ export function Field({
   placeholder,
   list,
   max,
+  autoComplete,
 }: {
   label: string;
   name: string;
@@ -158,6 +159,10 @@ export function Field({
   // too; this only stops the picker offering an answer that would be
   // refused.
   max?: string;
+  // "off" on a field the browser would otherwise helpfully pre-fill --
+  // a signer name is a statement about someone else, and an autofilled
+  // one turns a consequential form into a single click.
+  autoComplete?: string;
 }) {
   const valueProps = onChange
     ? { value: value ?? "", onChange: (e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value) }
@@ -177,6 +182,7 @@ export function Field({
         placeholder={placeholder}
         list={list}
         max={max}
+        autoComplete={autoComplete}
         step={type === "number" ? "any" : undefined}
         className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none focus:border-neutral-500"
       />

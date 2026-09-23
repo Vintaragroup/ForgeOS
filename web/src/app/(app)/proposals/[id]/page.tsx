@@ -234,10 +234,27 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
           </form>
         )}
         {proposal.sentAt && !proposal.signedAt && (
-          <form action={signWithId} className="flex flex-wrap items-end gap-3">
-            <Field label="Signer name" name="signedByName" required />
-            <Field label="Title (optional)" name="signedByTitle" />
-            <Button variant="secondary">Mark as signed</Button>
+          <form action={signWithId} className="flex flex-col gap-2 rounded-md border border-green-200 bg-green-50 p-3">
+            {/* This form replaces the send form in the same slot the
+                moment a proposal goes out, so the click that sends and
+                the click that closes the deal land in nearly the same
+                place. autoComplete="off" is doing real work here: with
+                the browser filling in a name, "signed" was one stray
+                click from "sent". */}
+            <p className="text-xs text-green-900">
+              Records the client&apos;s acceptance, advances the deal to Won, and starts production.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label="Signed by" name="signedByName" required autoComplete="off" />
+              <Field label="Title (optional)" name="signedByTitle" autoComplete="off" />
+              <Field
+                label="When (leave blank for today)"
+                name="signedAt"
+                type="date"
+                max={new Date().toISOString().slice(0, 10)}
+              />
+              <Button variant="secondary">Confirm client approval</Button>
+            </div>
           </form>
         )}
       </Card>
