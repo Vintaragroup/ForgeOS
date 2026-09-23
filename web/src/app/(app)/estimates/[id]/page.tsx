@@ -1288,7 +1288,22 @@ function VersionSummaryBar({
         <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
           Version {version.versionNumber} {version.isLocked ? "· locked" : "· editing"}
         </h2>
-        {version.isLocked && !version.isApproved && (
+        {/* Shown on any locked version, approved or not.
+            
+            It used to hide once a version was approved, on the reasoning
+            that an approved estimate should be revised through a change
+            order instead. That reasoning stopped holding the moment a
+            change order started requiring a signed proposal -- an
+            estimate that is locked and approved but never sent then had
+            no way forward at all: no new version, no estimate change
+            request (nothing was sent), and no change order (nothing was
+            signed). Full Swing American Baseball Chicago was in exactly
+            that state.
+            
+            Approval means this version's number is signed off, not that
+            the estimate is finished. Making a NEW version never alters
+            the approved one. */}
+        {version.isLocked && (
           <form action={createNewVersionWithIds}>
             <Button variant="secondary">Create new version</Button>
           </form>
