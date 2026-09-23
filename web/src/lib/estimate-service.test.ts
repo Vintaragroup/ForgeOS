@@ -468,6 +468,98 @@ describe("estimate version lifecycle", () => {
     await addLineItem(v2.id, v2Sections[0].id, { lineType: "MATERIAL", description: "Extra", qty: 1, unitCost: 5 });
   });
 
+  // The guard, not just a check of today's fields.
+  //
+  // "Create new version" carried name/sectionType/sortOrder and dropped
+  // the other fifteen: the booth grouping, the build type, every piece of
+  // written copy, and the deliberate decisions about what a client sees
+  // (summarizeOnProposal, omittedFromProposal) and what counts toward the
+  // total (excludedFromTotals). ABC Chicago lost 10 booths, 41 booth
+  // summaries and 31 orderings this way.
+  //
+  // So this compares EVERY scalar column rather than a hand-written list.
+  // Add a field to EstimateSection and this fails until sectionCreateData
+  // names it or SKIPPED says why not -- which is the point: the failure
+  // is the reminder that a new field is a copy decision too.
+  it("copies every section field into the new version, not just the three it used to", async () => {
+    // Identity and parentage, which must differ, plus timestamps.
+    const SKIPPED = new Set(["id", "estimateVersionId", "optionId", "createdAt", "updatedAt"]);
+
+    const estimate = await makeEstimate();
+    const v1 = await createEstimateVersion(estimate.id, 50);
+    const section = await addSection(v1.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    await addLineItem(v1.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+
+    // Every nullable/defaulted column set to something that is NOT its
+    // default, so a field the copy silently skips shows up as a
+    // difference rather than coincidentally matching.
+    await db.estimateSection.update({
+      where: { id: section.id },
+      data: {
+        groupLabel: "Section 203 - Booth - Page 2 & 3",
+        buildType: "CUSTOM_BUILD",
+        description: "Platform",
+        pendingDescription: "Platform (suggested)",
+        boothDescription: "Main Booth",
+        boothPendingDescription: "Main Booth (suggested)",
+        boothSummary: "A two-storey booth with an LED wall.",
+        boothPendingSummary: "A two-storey booth. (suggested)",
+        elementSummary: "Structural steel and decking.",
+        elementPendingSummary: "Structural steel. (suggested)",
+        includeInProposal: false,
+        summarizeOnProposal: true,
+        excludedFromTotals: true,
+        omittedFromProposal: true,
+        proposalSortOrder: 7,
+      },
+    });
+    await lockEstimateVersion(v1.id);
+
+    const v2 = await createNewVersionFromLocked(v1.id);
+
+    const before = await db.estimateSection.findUniqueOrThrow({ where: { id: section.id } });
+    const after = await db.estimateSection.findFirstOrThrow({ where: { estimateVersionId: v2.id } });
+
+    const missed: string[] = [];
+    for (const key of Object.keys(before)) {
+      if (SKIPPED.has(key)) continue;
+      const a = (before as Record<string, unknown>)[key];
+      const b = (after as Record<string, unknown>)[key];
+      if (String(a) !== String(b)) missed.push(`${key}: ${String(a)} -> ${String(b)}`);
+    }
+    expect(missed).toEqual([]);
+  });
+
+  it("copies the written copy that hangs off a section and a version", async () => {
+    const estimate = await makeEstimate();
+    const v1 = await createEstimateVersion(estimate.id, 50);
+    const section = await addSection(v1.id, { name: "COMPONENT 1", sectionType: "COMPONENT" });
+    await addLineItem(v1.id, section.id, { lineType: "MATERIAL", description: "Plywood", qty: 10, unitCost: 20 });
+    const category = await db.category.create({
+      data: { name: `Copy ${Date.now()}`, key: `copy-${Date.now()}` },
+    });
+    await db.estimateSectionCategoryDescription.create({
+      data: { sectionId: section.id, categoryId: category.id, description: "Graphics for this booth." },
+    });
+    await db.estimateCategorySummary.create({
+      data: { estimateVersionId: v1.id, categoryId: category.id, summary: "All graphics across the show." },
+    });
+    await lockEstimateVersion(v1.id);
+
+    const v2 = await createNewVersionFromLocked(v1.id);
+
+    const copiedSection = await db.estimateSection.findFirstOrThrow({
+      where: { estimateVersionId: v2.id },
+      include: { categoryDescriptions: true },
+    });
+    expect(copiedSection.categoryDescriptions).toHaveLength(1);
+    expect(copiedSection.categoryDescriptions[0].description).toBe("Graphics for this booth.");
+
+    const summaries = await db.estimateCategorySummary.findMany({ where: { estimateVersionId: v2.id } });
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].summary).toBe("All graphics across the show.");
+  });
+
   it("carries over the source version's totals so the copy isn't shown as $0 before its first edit", async () => {
     const estimate = await makeEstimate();
     const v1 = await createEstimateVersion(estimate.id, 50);

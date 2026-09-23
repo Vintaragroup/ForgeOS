@@ -2687,6 +2687,75 @@ function lineItemCreateData(li: {
   };
 }
 
+// Everything a section carries that is a property of the SECTION rather
+// than of the version it happens to sit in.
+//
+// This existed only as `name, sectionType, sortOrder` inline, which meant
+// "Create new version" silently dropped fifteen fields. On ABC Chicago
+// that was 42 sections' booth grouping (10 booths), 41 booth summaries,
+// 41 build types and 31 custom proposal orderings -- the groups, the
+// sub-headings and the client-facing copy, all gone, on a version whose
+// numbers were otherwise identical.
+//
+// Two of them are worse than cosmetic. summarizeOnProposal (47 sections)
+// and omittedFromProposal (14) are deliberate decisions to NOT show a
+// client the detail or the cost of something; resetting them to default
+// means the next proposal itemizes what someone chose to bury.
+// excludedFromTotals is the same shape in the other direction -- reset
+// it and internal reference scope silently re-enters the grand total.
+//
+// Listed explicitly rather than spread, so adding a field to
+// EstimateSection is a decision about this copy too. The paired test
+// (estimate-service.test.ts, "copies every section field") fails on any
+// new field until it is named here or named as deliberately skipped.
+function sectionCreateData(section: {
+  name: string;
+  sectionType: SectionType;
+  sortOrder: number;
+  groupLabel: string | null;
+  buildType: SectionBuildType | null;
+  description: string | null;
+  pendingDescription: string | null;
+  boothDescription: string | null;
+  boothPendingDescription: string | null;
+  boothSummary: string | null;
+  boothPendingSummary: string | null;
+  elementSummary: string | null;
+  elementPendingSummary: string | null;
+  includeInProposal: boolean;
+  summarizeOnProposal: boolean;
+  excludedFromTotals: boolean;
+  omittedFromProposal: boolean;
+  proposalSortOrder: number;
+}) {
+  return {
+    name: section.name,
+    sectionType: section.sectionType,
+    sortOrder: section.sortOrder,
+    // What this section IS and belongs to. Dropping these was the bug.
+    groupLabel: section.groupLabel,
+    buildType: section.buildType,
+    // The written copy -- headings and client-facing body text, both the
+    // approved values and the AI suggestions still awaiting a decision.
+    description: section.description,
+    pendingDescription: section.pendingDescription,
+    boothDescription: section.boothDescription,
+    boothPendingDescription: section.boothPendingDescription,
+    boothSummary: section.boothSummary,
+    boothPendingSummary: section.boothPendingSummary,
+    elementSummary: section.elementSummary,
+    elementPendingSummary: section.elementPendingSummary,
+    // Deliberate decisions about what a client sees and what counts.
+    includeInProposal: section.includeInProposal,
+    summarizeOnProposal: section.summarizeOnProposal,
+    excludedFromTotals: section.excludedFromTotals,
+    omittedFromProposal: section.omittedFromProposal,
+    proposalSortOrder: section.proposalSortOrder,
+    // Deliberately NOT copied: estimateVersionId and optionId, which the
+    // caller supplies for the new version, and id/createdAt/updatedAt.
+  };
+}
+
 // Duplicates a locked version's sections/line items -- AND its Options,
 // each with their own sections/line items -- into a fresh unlocked
 // version rather than mutating history -- the "Create new version" flow
@@ -2699,9 +2768,12 @@ export async function createNewVersionFromLocked(estimateVersionId: string) {
   const source = await db.estimateVersion.findUniqueOrThrow({
     where: { id: estimateVersionId },
     include: {
-      sections: { where: { optionId: null }, include: { lineItems: true } },
-      options: { include: { sections: { include: { lineItems: true } } } },
+      sections: { where: { optionId: null }, include: { lineItems: true, categoryDescriptions: true } },
+      options: { include: { sections: { include: { lineItems: true, categoryDescriptions: true } } } },
       categoryMarginOverrides: true,
+      // The Proposal PDF's per-category copy. Version-scoped, so it needs
+      // copying for the same reason the section text above does.
+      categoryProposalSummaries: true,
       estimate: { select: { id: true, archivedAt: true } },
     },
   });
@@ -2726,33 +2798,66 @@ export async function createNewVersionFromLocked(estimateVersionId: string) {
         grossMarginPct: source.grossMarginPct,
         isCurrent: true,
         isLocked: false,
-        sections: {
-          create: source.sections.map((section) => ({
-            name: section.name,
-            sectionType: section.sectionType,
-            sortOrder: section.sortOrder,
-            lineItems: { create: section.lineItems.map(lineItemCreateData) },
-          })),
-        },
       },
     });
 
-    for (const option of source.options) {
-      await tx.option.create({
+    // One section at a time rather than a nested create, because each
+    // section's own category descriptions need the new section's id,
+    // which a nested create never hands back.
+    for (const section of source.sections) {
+      const copy = await tx.estimateSection.create({
         data: {
           estimateVersionId: created.id,
-          name: option.name,
-          sortOrder: option.sortOrder,
-          sections: {
-            create: option.sections.map((section) => ({
-              estimateVersionId: created.id,
-              name: section.name,
-              sectionType: section.sectionType,
-              sortOrder: section.sortOrder,
-              lineItems: { create: section.lineItems.map(lineItemCreateData) },
-            })),
-          },
+          ...sectionCreateData(section),
+          lineItems: { create: section.lineItems.map(lineItemCreateData) },
         },
+      });
+      if (section.categoryDescriptions.length > 0) {
+        await tx.estimateSectionCategoryDescription.createMany({
+          data: section.categoryDescriptions.map((d) => ({
+            sectionId: copy.id,
+            categoryId: d.categoryId,
+            description: d.description,
+            pendingDescription: d.pendingDescription,
+          })),
+        });
+      }
+    }
+
+    for (const option of source.options) {
+      const optionCopy = await tx.option.create({
+        data: { estimateVersionId: created.id, name: option.name, sortOrder: option.sortOrder },
+      });
+      for (const section of option.sections) {
+        const copy = await tx.estimateSection.create({
+          data: {
+            estimateVersionId: created.id,
+            optionId: optionCopy.id,
+            ...sectionCreateData(section),
+            lineItems: { create: section.lineItems.map(lineItemCreateData) },
+          },
+        });
+        if (section.categoryDescriptions.length > 0) {
+          await tx.estimateSectionCategoryDescription.createMany({
+            data: section.categoryDescriptions.map((d) => ({
+              sectionId: copy.id,
+              categoryId: d.categoryId,
+              description: d.description,
+              pendingDescription: d.pendingDescription,
+            })),
+          });
+        }
+      }
+    }
+
+    if (source.categoryProposalSummaries.length > 0) {
+      await tx.estimateCategorySummary.createMany({
+        data: source.categoryProposalSummaries.map((s) => ({
+          estimateVersionId: created.id,
+          categoryId: s.categoryId,
+          summary: s.summary,
+          pendingSummary: s.pendingSummary,
+        })),
       });
     }
 
@@ -2771,5 +2876,10 @@ export async function createNewVersionFromLocked(estimateVersionId: string) {
     }
 
     return created;
-  });
+  },
+  // A real estimate is dozens of sections and hundreds of line items,
+  // and sections are now created one at a time so their descriptions can
+  // follow. ABC Chicago alone is 54 sections / 225 items, which is well
+  // past the 5s default.
+  { timeout: 120_000, maxWait: 20_000 });
 }
