@@ -74,16 +74,38 @@ export async function generateProposal(estimateVersionId: string, templateId: st
     );
   }
   const template = await db.proposalTemplate.findUniqueOrThrow({ where: { id: templateId } });
+  const snapshot = {
+    brandingConfig: template.brandingConfig ?? undefined,
+    layoutConfig: template.layoutConfig ?? undefined,
+  };
+
+  // One unsent draft per version, refreshed rather than duplicated.
+  //
+  // This used to create a row every time it was called, so pressing
+  // "Generate proposal" twice left two identical drafts with nothing to
+  // say which one to send. A real estimate reached EIGHT, none of them
+  // sent -- and with the proposal panel rendering each, the page became a
+  // list of indistinguishable copies of the same document.
+  //
+  // The immutability rule this file already states is "immutable once
+  // SENT", and that still holds below: a sent proposal is never touched,
+  // and a re-send genuinely does make a new row. A draft nobody has sent
+  // is just the current rendering of this version, and regenerating it is
+  // what someone means when they press the button again -- usually after
+  // changing the template.
+  const existingDraft = await db.proposal.findFirst({
+    where: { estimateVersionId, sentAt: null, deletedAt: null },
+    orderBy: { createdAt: "desc" },
+  });
+  if (existingDraft) {
+    return db.proposal.update({
+      where: { id: existingDraft.id },
+      data: { templateId, templateConfigSnapshot: snapshot },
+    });
+  }
 
   return db.proposal.create({
-    data: {
-      estimateVersionId,
-      templateId,
-      templateConfigSnapshot: {
-        brandingConfig: template.brandingConfig ?? undefined,
-        layoutConfig: template.layoutConfig ?? undefined,
-      },
-    },
+    data: { estimateVersionId, templateId, templateConfigSnapshot: snapshot },
   });
 }
 

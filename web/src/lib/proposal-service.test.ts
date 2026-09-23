@@ -274,3 +274,47 @@ describe("signProposal -- production handoff trigger", () => {
     expect(projects).toHaveLength(1);
   });
 });
+
+describe("generating a proposal more than once", () => {
+  it("refreshes the one unsent draft instead of piling up copies", async () => {
+    // A real estimate reached eight unsent drafts, none distinguishable
+    // from the others, because every press of the button made a row.
+    const { version, user } = await makeLockedVersion();
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: `T-${Date.now()}` } });
+    const first = await generateProposal(version.id, template.id);
+    const second = await generateProposal(version.id, template.id);
+
+    expect(second.id).toBe(first.id);
+    const count = await db.proposal.count({ where: { estimateVersionId: version.id, deletedAt: null } });
+    expect(count).toBe(1);
+  });
+
+  it("picks up a template change on the second press", async () => {
+    // Regenerating is what someone means after changing the template --
+    // returning the stale draft unchanged would look like nothing
+    // happened.
+    const { version, user } = await makeLockedVersion();
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: `T-${Date.now()}` } });
+    const other = await db.proposalTemplate.create({ data: { name: `Other-${Date.now()}` } });
+    await generateProposal(version.id, template.id);
+    const again = await generateProposal(version.id, other.id);
+    expect(again.templateId).toBe(other.id);
+  });
+
+  it("still makes a new row once the draft has been sent", async () => {
+    // The immutability rule holds where it was always meant to: a SENT
+    // proposal is the record of what a client received and is never
+    // rewritten.
+    const { version, user } = await makeLockedVersion();
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: `T-${Date.now()}` } });
+    const sentOne = await generateProposal(version.id, template.id);
+    await db.proposal.update({ where: { id: sentOne.id }, data: { sentAt: new Date(), status: "SENT" } });
+
+    const fresh = await generateProposal(version.id, template.id);
+    expect(fresh.id).not.toBe(sentOne.id);
+    expect(await db.proposal.count({ where: { estimateVersionId: version.id, deletedAt: null } })).toBe(2);
+  });
+});
