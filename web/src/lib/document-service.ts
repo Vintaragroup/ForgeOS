@@ -5,6 +5,8 @@
 // feature's roadmap.
 
 import { db } from "@/lib/db";
+import { UserError } from "@/lib/user-error";
+import { validateSupersedes } from "@/lib/document-revisions";
 import { Prisma } from "@/generated/prisma/client";
 import type { DocumentType } from "@/generated/prisma/enums";
 import { buildStorageKey, deleteObject, getObject, headPrivateObject, putObject } from "@/lib/storage";
@@ -188,4 +190,28 @@ export async function assignDocumentEstimate(opportunityId: string, documentId: 
 export async function assignDocumentBidPackage(opportunityId: string, documentId: string, bidPackageId: string | null) {
   const existing = await db.document.findFirstOrThrow({ where: { id: documentId, opportunityId, deletedAt: null } });
   return db.document.update({ where: { id: existing.id }, data: { bidPackageId } });
+}
+
+// Records that one document replaces another. The version label is then
+// derived from the chain rather than typed in -- see
+// document-revisions.ts for why that distinction matters.
+//
+// Both documents must be on the same opportunity: a revision chain that
+// reached across deals would let one client's pricing supersede another's.
+export async function setDocumentSupersedes(
+  opportunityId: string,
+  documentId: string,
+  supersedesId: string | null,
+) {
+  const documents = await db.document.findMany({
+    where: { opportunityId, deletedAt: null },
+    select: { id: true, filename: true, supersedesId: true, createdAt: true },
+  });
+  if (!documents.some((d) => d.id === documentId)) {
+    throw new UserError("That document isn't on this opportunity.");
+  }
+  const problem = validateSupersedes(documents, documentId, supersedesId);
+  if (problem) throw new UserError(problem);
+
+  await db.document.update({ where: { id: documentId }, data: { supersedesId } });
 }

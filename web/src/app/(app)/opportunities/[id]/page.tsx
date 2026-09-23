@@ -1,6 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { PageActionsMenu } from "@/components/page-actions-menu";
+import { DocumentRevisionPicker } from "@/components/document-revision-picker";
+import { buildRevisionChains, revisionNumber } from "@/lib/document-revisions";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
@@ -863,6 +865,8 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       db.show.findMany({ where: { deletedAt: null }, orderBy: { eventStartDate: "desc" } }),
     ]);
 
+  const revisionChains = buildRevisionChains(documents);
+
   const updateWithId = updateOpportunity.bind(null, opportunity.id);
   const deleteWithId = deleteOpportunity.bind(null, opportunity.id);
   const changeStageWithId = changeStage.bind(null, opportunity.id);
@@ -1353,6 +1357,9 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         )}
       </CollapsibleSection>
 
+      {/* Version labels are derived from the supersedes links, not stored
+          -- see document-revisions.ts. Built once for the list rather
+          than per row. */}
       <CollapsibleSection title="Documents" id="documents" defaultOpen={openSection === "documents"}>
         <p className="mb-4 text-sm text-neutral-500">
           RFP packages, scope of work, drawings, contracts — anything client-supplied. Uploaded
@@ -1379,6 +1386,38 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                   </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  {/* Derived from the supersedes chain, never typed. A
+                      document that replaces nothing and is replaced by
+                      nothing is V1, which is true and worth saying. */}
+                  {(() => {
+                    const chain = revisionChains.find((c) => c.documents.some((d) => d.id === doc.id));
+                    const n = chain ? revisionNumber(chain, doc.id) : null;
+                    if (!chain || n === null || chain.documents.length < 2) return null;
+                    const isCurrent = chain.current.id === doc.id;
+                    return (
+                      <span
+                        title={
+                          isCurrent
+                            ? "The current revision -- nothing replaces it."
+                            : `Replaced by ${chain.documents[n]?.filename ?? "a later revision"}.`
+                        }
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          isCurrent ? "bg-brand-teal-pale text-neutral-900" : "bg-neutral-200 text-neutral-500"
+                        }`}
+                      >
+                        V{n}
+                        {!isCurrent && " · superseded"}
+                      </span>
+                    );
+                  })()}
+                  <DocumentRevisionPicker
+                    opportunityId={opportunity.id}
+                    documentId={doc.id}
+                    currentSupersedesId={doc.supersedesId}
+                    candidates={documents
+                      .filter((d) => d.id !== doc.id)
+                      .map((d) => ({ id: d.id, filename: d.filename }))}
+                  />
                   <ExtractionStatusChip status={doc.extractionStatus} documentType={doc.documentType} />
                   {isMultiProject && (
                     <form

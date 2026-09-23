@@ -6,8 +6,10 @@ import {
   assignDocumentEstimate,
   deleteDocument,
   finalizeUploadedDocument,
+  setDocumentSupersedes,
   updateDocumentType,
 } from "@/lib/document-service";
+import { catchUserError, type ActionResult } from "@/lib/user-error";
 import { analyzeDocument } from "@/lib/ai/analyze-document";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import type { DocumentType } from "@/generated/prisma/enums";
@@ -69,4 +71,23 @@ export async function analyzeDocumentAction(opportunityId: string, documentId: s
     throw err;
   }
   revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+// "This replaces …" -- the link a version label is derived from rather
+// than typed. Returns its refusal instead of throwing, because every way
+// this can fail is something the person can fix on the form (the wrong
+// document picked, a chain that would fork or loop), and Next.js redacts
+// thrown Server Action errors in production.
+export async function setDocumentSupersedesAction(
+  opportunityId: string,
+  documentId: string,
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  return catchUserError(async () => {
+    await requireOpportunityAccess(opportunityId);
+    const raw = String(formData.get("supersedesId") ?? "").trim();
+    await setDocumentSupersedes(opportunityId, documentId, raw || null);
+    revalidatePath(`/opportunities/${opportunityId}`);
+  });
 }
