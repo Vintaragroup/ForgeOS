@@ -134,6 +134,7 @@ export function Field({
   required,
   placeholder,
   list,
+  max,
 }: {
   label: string;
   name: string;
@@ -152,6 +153,11 @@ export function Field({
   // typed value, unlike SelectField which can only ever submit one of
   // its fixed options.
   list?: string;
+  // Upper bound for a date or number input -- e.g. today, on a field
+  // recording something that already happened. The server validates it
+  // too; this only stops the picker offering an answer that would be
+  // refused.
+  max?: string;
 }) {
   const valueProps = onChange
     ? { value: value ?? "", onChange: (e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value) }
@@ -170,6 +176,7 @@ export function Field({
         required={required}
         placeholder={placeholder}
         list={list}
+        max={max}
         step={type === "number" ? "any" : undefined}
         className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none focus:border-neutral-500"
       />

@@ -188,6 +188,60 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
         }
       />
 
+      {/* Above the document, not below it. This card holds the only two
+          things on the page you can act on, and everything under it is
+          the proposal itself, which on a real job runs for screens. They
+          used to sit at the very bottom, so sending and signing -- the
+          reason the page exists -- were the furthest things to reach. */}
+      <Card className="p-6">
+        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Status</h2>
+        <dl className="mb-4 grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <dt className="text-neutral-500">Sent</dt>
+            <dd>{proposal.sentAt ? proposal.sentAt.toISOString().slice(0, 16).replace("T", " ") : "Not sent"}</dd>
+          </div>
+          <div>
+            <dt className="text-neutral-500">Signed</dt>
+            <dd>
+              {proposal.signedAt
+                ? `${proposal.signedByName ?? "Unknown"}${proposal.signedByTitle ? `, ${proposal.signedByTitle}` : ""} — ${proposal.signedAt.toISOString().slice(0, 16).replace("T", " ")}`
+                : "Not signed"}
+            </dd>
+          </div>
+        </dl>
+        {project && (
+          <div className="mb-4 flex items-center justify-between rounded-md bg-green-50 px-4 py-3 text-sm text-green-800">
+            <span>Signed — production started</span>
+            <Link href={`/projects/${project.id}`} className="font-medium text-brand-navy hover:underline">
+              Go to project →
+            </Link>
+          </div>
+        )}
+        {!proposal.sentAt && (
+          <form action={sendWithId} className="flex flex-wrap items-end gap-3">
+            {/* Blank means now. A date is for recording a send that
+                already happened outside ForgeOS -- without it, a job that
+                pre-dates adoption can only ever claim it was sent the day
+                someone typed it in, which makes every "sent 14 days ago"
+                reading wrong for exactly those deals. */}
+            <Field
+              label="Sent on (leave blank for today)"
+              name="sentAt"
+              type="date"
+              max={new Date().toISOString().slice(0, 10)}
+            />
+            <Button>Send proposal</Button>
+          </form>
+        )}
+        {proposal.sentAt && !proposal.signedAt && (
+          <form action={signWithId} className="flex flex-wrap items-end gap-3">
+            <Field label="Signer name" name="signedByName" required />
+            <Field label="Title (optional)" name="signedByTitle" />
+            <Button variant="secondary">Mark as signed</Button>
+          </form>
+        )}
+      </Card>
+
       <Card className="overflow-hidden p-0">
         <div
           className="h-1.5"
@@ -418,54 +472,6 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
             </div>
           </div>
         </div>
-      </Card>
-
-      <Card className="p-6">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">Status</h2>
-        <dl className="mb-4 grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <dt className="text-neutral-500">Sent</dt>
-            <dd>{proposal.sentAt ? proposal.sentAt.toISOString().slice(0, 16).replace("T", " ") : "Not sent"}</dd>
-          </div>
-          <div>
-            <dt className="text-neutral-500">Signed</dt>
-            <dd>
-              {proposal.signedAt
-                ? `${proposal.signedByName ?? "Unknown"}${proposal.signedByTitle ? `, ${proposal.signedByTitle}` : ""} — ${proposal.signedAt.toISOString().slice(0, 16).replace("T", " ")}`
-                : "Not signed"}
-            </dd>
-          </div>
-        </dl>
-        {project && (
-          <div className="mb-4 flex items-center justify-between rounded-md bg-green-50 px-4 py-3 text-sm text-green-800">
-            <span>Signed — production started</span>
-            <Link href={`/projects/${project.id}`} className="font-medium text-brand-navy hover:underline">
-              Go to project →
-            </Link>
-          </div>
-        )}
-        {!proposal.sentAt && (
-          <form action={sendWithId} className="flex flex-wrap items-end gap-3">
-            {/* Blank means now. A date is for recording a send that
-                already happened outside ForgeOS -- without it, a job that
-                pre-dates adoption can only ever claim it was sent the day
-                someone typed it in, which makes every "sent 14 days ago"
-                reading wrong for exactly those deals. */}
-            <Field
-              label="Sent on (leave blank for today)"
-              name="sentAt"
-              type="date"
-            />
-            <Button>Send proposal</Button>
-          </form>
-        )}
-        {proposal.sentAt && !proposal.signedAt && (
-          <form action={signWithId} className="flex flex-wrap items-end gap-3">
-            <Field label="Signer name" name="signedByName" required />
-            <Field label="Title (optional)" name="signedByTitle" />
-            <Button variant="secondary">Mark as signed</Button>
-          </form>
-        )}
       </Card>
 
       <p className="text-center text-[10px] font-medium uppercase tracking-widest text-neutral-400">

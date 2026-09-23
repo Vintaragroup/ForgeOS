@@ -139,7 +139,7 @@ import { getVendorMatchApplyLog } from "@/lib/vendor-match-apply-log-service";
 import { buildTypeTotals, type MethodTotal } from "@/lib/type-totals";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
-import { Button, Card, Field, Notice, PageHeader, ReadOnlyField, SelectField } from "@/components/ui";
+import { Button, Card, Field, LinkButton, Notice, PageHeader, ReadOnlyField, SelectField } from "@/components/ui";
 import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
 import { CategoryMethodFilter } from "@/components/category-method-filter";
@@ -923,19 +923,31 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         backLabel={estimate.opportunity.company.name}
         action={
           !estimate.archivedAt ? (
-            <PageActionsMenu label="More actions for this estimate">
-              <ConfirmForm
-                action={archiveEstimateWithIds}
-                confirmMessage="Archive this estimate? It's hidden from the Opportunity's active Estimates list and becomes read-only, but stays fully viewable under Archived estimates and can be unarchived later."
-              >
-                <button
-                  type="submit"
-                  className="w-full rounded-md px-3 py-2 text-left text-sm font-medium text-red-700 hover:bg-red-50"
+            <div className="flex items-center gap-2">
+              {/* Straight to the proposal, without going through the
+                  Proposal & approval tab and scrolling. It's where
+                  sending, signing and the client-facing PDF all live, so
+                  it gets reached for constantly. estimateProposals is
+                  newest-first, so this is the one in play. */}
+              {estimateProposals[0] && (
+                <LinkButton href={`/proposals/${estimateProposals[0].id}`} variant="secondary">
+                  Open the proposal
+                </LinkButton>
+              )}
+              <PageActionsMenu label="More actions for this estimate">
+                <ConfirmForm
+                  action={archiveEstimateWithIds}
+                  confirmMessage="Archive this estimate? It's hidden from the Opportunity's active Estimates list and becomes read-only, but stays fully viewable under Archived estimates and can be unarchived later."
                 >
-                  Archive estimate
-                </button>
-              </ConfirmForm>
-            </PageActionsMenu>
+                  <button
+                    type="submit"
+                    className="w-full rounded-md px-3 py-2 text-left text-sm font-medium text-red-700 hover:bg-red-50"
+                  >
+                    Archive estimate
+                  </button>
+                </ConfirmForm>
+              </PageActionsMenu>
+            </div>
           ) : undefined
         }
       />
@@ -6706,9 +6718,13 @@ function ProposalApprovalTab({
                       {estimateProposals.map((p) => (
                         <div key={p.id}>
                           <div className="flex flex-wrap items-center gap-2">
-                            <Link href={`/proposals/${p.id}`} className="text-neutral-900 hover:underline">
-                              Open the proposal →
-                            </Link>
+                            {/* A real button, not a text arrow. This is
+                                the way to the send/sign form and to the
+                                client-facing document, and it was styled
+                                like a footnote. */}
+                            <LinkButton href={`/proposals/${p.id}`} variant="secondary">
+                              Open the proposal
+                            </LinkButton>
                             {/* Which version it was built from -- that IS
                                 its version number, rather than a second
                                 one stored on the proposal itself. */}
@@ -6798,9 +6814,9 @@ function ProposalApprovalTab({
           {estimateProposals.map((p) => (
             <div key={p.id} className="border-t border-neutral-200 pt-2">
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                <Link href={`/proposals/${p.id}`} className="text-neutral-900 hover:underline">
-                  Open the proposal →
-                </Link>
+                <LinkButton href={`/proposals/${p.id}`} variant="secondary">
+                  Open the proposal
+                </LinkButton>
                 <span className="text-xs text-neutral-500">from version {p.estimateVersion.versionNumber}</span>
               </div>
               <ProposalStatusPanel
