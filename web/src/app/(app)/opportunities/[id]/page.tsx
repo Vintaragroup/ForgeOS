@@ -3,6 +3,8 @@ import Link from "next/link";
 import { PageActionsMenu } from "@/components/page-actions-menu";
 import { DocumentRevisionPicker } from "@/components/document-revision-picker";
 import { buildRevisionChains, revisionNumber } from "@/lib/document-revisions";
+import { diffDocumentAgainstPredecessor } from "@/lib/document-service";
+import { DocumentDiffSummary } from "@/components/document-diff-summary";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
@@ -867,6 +869,15 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
 
   const revisionChains = buildRevisionChains(documents);
 
+  // What each revised document changes against the one it replaces.
+  // Only for documents that actually supersede something -- everything
+  // else has nothing to be compared against.
+  const documentDiffs = new Map<string, Awaited<ReturnType<typeof diffDocumentAgainstPredecessor>>>();
+  for (const doc of documents) {
+    if (!doc.supersedesId) continue;
+    documentDiffs.set(doc.id, await diffDocumentAgainstPredecessor(opportunity.id, doc.id));
+  }
+
   const updateWithId = updateOpportunity.bind(null, opportunity.id);
   const deleteWithId = deleteOpportunity.bind(null, opportunity.id);
   const changeStageWithId = changeStage.bind(null, opportunity.id);
@@ -1374,16 +1385,31 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                 key={doc.id}
                 className="flex items-center justify-between gap-3 rounded-md bg-neutral-50 px-3 py-2"
               >
-                <div className="flex min-w-0 items-center gap-2">
-                  <a
-                    href={`/opportunities/${opportunity.id}/documents/${doc.id}/view`}
-                    className="truncate font-medium text-neutral-900 hover:underline"
-                  >
-                    {doc.filename}
-                  </a>
-                  <span className="shrink-0 text-neutral-400">
-                    {fmtBytes(doc.sizeBytes)} · {doc.uploadedBy?.name ?? "Unknown"}
-                  </span>
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <a
+                      href={`/opportunities/${opportunity.id}/documents/${doc.id}/view`}
+                      className="truncate font-medium text-neutral-900 hover:underline"
+                    >
+                      {doc.filename}
+                    </a>
+                    <span className="shrink-0 text-neutral-400">
+                      {fmtBytes(doc.sizeBytes)} · {doc.uploadedBy?.name ?? "Unknown"}
+                    </span>
+                  </div>
+                  {/* Only on a document that replaces another -- the rest
+                      have nothing to be compared against. */}
+                  {(() => {
+                    const d = documentDiffs.get(doc.id);
+                    if (!d) return null;
+                    return (
+                      <DocumentDiffSummary
+                        predecessorFilename={d.predecessor.filename}
+                        extracted={d.extracted}
+                        diff={d.diff}
+                      />
+                    );
+                  })()}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {/* Derived from the supersedes chain, never typed. A

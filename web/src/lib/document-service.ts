@@ -7,6 +7,8 @@
 import { db } from "@/lib/db";
 import { UserError } from "@/lib/user-error";
 import { validateSupersedes } from "@/lib/document-revisions";
+import { computeDocumentDiff } from "@/lib/document-diff";
+import type { VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
 import { Prisma } from "@/generated/prisma/client";
 import type { DocumentType } from "@/generated/prisma/enums";
 import { buildStorageKey, deleteObject, getObject, headPrivateObject, putObject } from "@/lib/storage";
@@ -214,4 +216,53 @@ export async function setDocumentSupersedes(
   if (problem) throw new UserError(problem);
 
   await db.document.update({ where: { id: documentId }, data: { supersedesId } });
+}
+
+// What a revised document changes against the one it replaces.
+//
+// Compares the new document's extracted vendor-quote lines against the
+// LINE ITEMS THE PREVIOUS DOCUMENT PRODUCED -- which is only possible
+// because LineItem.documentId records where each row came from. That
+// provenance was being destroyed on every new estimate version until
+// lineItemCreateData was fixed; this is what it was for.
+//
+// Deliberately compares against a scope narrower than the whole estimate.
+// "12 things changed somewhere in this estimate" is not actionable;
+// "your AV vendor dropped 3 lines and raised 4 prices" is, and scoping to
+// one vendor's own previous rows is also what makes a REMOVED row
+// trustworthy enough to act on rather than merely note.
+export async function diffDocumentAgainstPredecessor(opportunityId: string, documentId: string) {
+  const doc = await db.document.findFirst({
+    where: { id: documentId, opportunityId, deletedAt: null },
+    select: { id: true, filename: true, supersedesId: true, vendorQuoteLineItems: true },
+  });
+  if (!doc) throw new UserError("That document isn't on this opportunity.");
+  if (!doc.supersedesId) return null;
+
+  const predecessor = await db.document.findFirst({
+    where: { id: doc.supersedesId, deletedAt: null },
+    select: { id: true, filename: true },
+  });
+  if (!predecessor) return null;
+
+  const lines = (doc.vendorQuoteLineItems as unknown as VendorQuoteLine[] | null) ?? [];
+  // Nothing extracted yet is not the same as nothing changed -- saying
+  // "no changes" here would be a confident lie about a document nobody
+  // has read.
+  if (lines.length === 0) {
+    return { predecessor, extracted: false as const, diff: null };
+  }
+
+  const previousRows = await db.lineItem.findMany({
+    where: { documentId: predecessor.id, section: { estimateVersion: { isCurrent: true } } },
+    select: { description: true, qty: true, unitCost: true },
+  });
+
+  const diff = computeDocumentDiff(
+    previousRows.map((r) => ({ description: r.description, qty: r.qty.toNumber(), unitCost: r.unitCost.toNumber() })),
+    // A quote line without its own quantity is one of something, which is
+    // how the rest of the vendor-match pipeline already reads it.
+    lines.map((l) => ({ description: l.description, qty: l.qty ?? 1, unitCost: l.unitPrice })),
+  );
+  return { predecessor, extracted: true as const, diff };
 }
