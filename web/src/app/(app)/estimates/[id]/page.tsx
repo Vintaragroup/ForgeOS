@@ -140,6 +140,9 @@ import { buildTypeTotals, type MethodTotal } from "@/lib/type-totals";
 import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, LinkButton, Notice, PageHeader, ReadOnlyField, SelectField } from "@/components/ui";
+import { RecostingCard } from "@/components/recosting-card";
+import { resolveRecostingState, type ExtractionStatusLike } from "@/lib/recosting";
+import { diffDocumentAgainstPredecessor, documentHasPricedRows } from "@/lib/document-service";
 import { SubmitButton } from "@/components/submit-button";
 import { Tabs } from "@/components/tabs";
 import { CategoryMethodFilter } from "@/components/category-method-filter";
@@ -478,6 +481,25 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     orderBy: { name: "asc" },
   });
 
+  // "The client wants a lower number" as one card, on the page where the
+  // re-costing actually happens -- see recosting.ts. Everything it needs
+  // is resolved here; the card itself only renders a decision.
+  const recostingDocuments = await db.document.findMany({
+    where: { opportunityId: estimate.opportunityId, deletedAt: null, supersedesId: { not: null } },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      filename: true,
+      documentType: true,
+      extractionStatus: true,
+      supersedesId: true,
+      createdAt: true,
+      vendorQuoteLineItems: true,
+      proposedLineItems: true,
+      supersedes: { select: { filename: true } },
+    },
+  });
+
   const estimateProposals = await db.proposal.findMany({
     where: { deletedAt: null, estimateVersion: { estimateId: estimate.id } },
     orderBy: { createdAt: "desc" },
@@ -486,6 +508,35 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
       events: { orderBy: { createdAt: "desc" }, include: { byUser: { select: { name: true } } } },
     },
   });
+
+  // The proposal the client is actually holding -- newest first, so this
+  // is the one whose status decides whether a re-costing is underway.
+  const liveProposal = estimateProposals[0] ?? null;
+  const revisionEvent = liveProposal?.events.find((e) => e.toStatus === "REVISIONS_REQUESTED") ?? null;
+  const openVersion = versionSummaries.find((v) => !v.isLocked) ?? null;
+
+  const recostingState = resolveRecostingState({
+    proposalStatus: liveProposal?.status ?? null,
+    request: revisionEvent ? { note: revisionEvent.note, at: revisionEvent.createdAt } : null,
+    openVersion: openVersion ? { id: openVersion.id, versionNumber: openVersion.versionNumber } : null,
+    documents: recostingDocuments.map((d) => ({
+      id: d.id,
+      filename: d.filename,
+      documentType: d.documentType,
+      extractionStatus: d.extractionStatus as ExtractionStatusLike,
+      supersedesId: d.supersedesId,
+      supersedesFilename: d.supersedes?.filename ?? null,
+      createdAt: d.createdAt,
+      hasPricedRows: documentHasPricedRows(d.vendorQuoteLineItems, d.proposedLineItems),
+    })),
+  });
+
+  // Only fetched when there is actually something to show -- the diff
+  // reads line items across the whole current version.
+  const recostingDiff =
+    recostingState.kind === "READY"
+      ? (await diffDocumentAgainstPredecessor(estimate.opportunityId, recostingState.document.id))?.diff ?? null
+      : null;
 
   const [
     users,
@@ -950,6 +1001,15 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             </div>
           ) : undefined
         }
+      />
+
+      {/* Above Details on purpose: when a client has asked for a new
+          number, that is the only thing anyone opens this page to do. */}
+      <RecostingCard
+        state={recostingState}
+        diff={recostingDiff}
+        estimateId={estimate.id}
+        opportunityId={estimate.opportunityId}
       />
 
       <Card className="p-6">

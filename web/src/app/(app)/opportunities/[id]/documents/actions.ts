@@ -10,6 +10,8 @@ import {
   updateDocumentType,
 } from "@/lib/document-service";
 import { catchUserError, type ActionResult } from "@/lib/user-error";
+import { db } from "@/lib/db";
+import { isPricedDocumentType } from "@/lib/recosting";
 import { analyzeDocument } from "@/lib/ai/analyze-document";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import type { DocumentType } from "@/generated/prisma/enums";
@@ -85,9 +87,40 @@ export async function setDocumentSupersedesAction(
   formData: FormData,
 ): Promise<ActionResult> {
   return catchUserError(async () => {
-    await requireOpportunityAccess(opportunityId);
+    const user = await requireOpportunityAccess(opportunityId);
     const raw = String(formData.get("supersedesId") ?? "").trim();
     await setDocumentSupersedes(opportunityId, documentId, raw || null);
+
+    // Saying "this replaces that" IS the request to be told what changed
+    // -- there is no other reason to link two priced documents. Making
+    // it a second, separate click is how a revised quote sat unread with
+    // nothing saying so. Only on linking, never on every upload, so the
+    // spend follows a stated intent.
+    if (raw) await analyzeIfWorthIt(opportunityId, documentId, user.id);
+
     revalidatePath(`/opportunities/${opportunityId}`);
   });
+}
+
+// Best-effort, and deliberately quiet: the link is the thing the person
+// asked for and it has already been saved. A failed or unconfigured
+// analysis leaves the document in a state the page reports for itself
+// ("couldn't be read", "nothing can be compared yet"), which is a better
+// place to learn it than an error on a form about something else.
+async function analyzeIfWorthIt(opportunityId: string, documentId: string, userId: string) {
+  const doc = await db.document.findFirst({
+    where: { id: documentId, opportunityId, deletedAt: null },
+    select: { documentType: true, extractionStatus: true },
+  });
+  if (!doc || !isPricedDocumentType(doc.documentType)) return;
+  // Don't spend again on something already read, in flight, or that this
+  // pipeline can't read at all.
+  if (doc.extractionStatus !== "PENDING") return;
+
+  try {
+    await analyzeDocument(opportunityId, documentId, userId);
+  } catch (err) {
+    if (err instanceof AiNotConfiguredError) return;
+    console.error(`[documents] auto-analysis failed for ${documentId}`, err);
+  }
 }

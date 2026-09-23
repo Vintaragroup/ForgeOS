@@ -251,6 +251,17 @@ function extractPricedRows(vendorQuoteLineItems: unknown, proposedLineItems: unk
   return fromQuote.length > 0 ? fromQuote : read(proposedLineItems, "unitCost");
 }
 
+// Whether analysis has actually produced anything with a price on it.
+//
+// Distinct from extractionStatus === "COMPLETE": a document can finish
+// extraction and still yield nothing priced (a scope writeup read as
+// proposed items, a spreadsheet whose price column was not recognised).
+// Treating COMPLETE as readable is how a document nothing could be read
+// out of ends up reporting "no changes".
+export function documentHasPricedRows(vendorQuoteLineItems: unknown, proposedLineItems: unknown): boolean {
+  return extractPricedRows(vendorQuoteLineItems, proposedLineItems).length > 0;
+}
+
 // What a revised document changes against the one it replaces.
 //
 // Compares the new document's extracted vendor-quote lines against the
