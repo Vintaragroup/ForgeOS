@@ -1491,43 +1491,55 @@ function VersionSummaryBar({
             Approval means this version's number is signed off, not that
             the estimate is finished. Making a NEW version never alters
             the approved one. */}
-        {/* The thing somebody is looking for the moment they lock a
-            version, put where they are already looking.
+        {/* One action at a time, in the order the work actually
+            happens: lock it, create the proposal, send it, and only then
+            revise.
 
-            It was not here. The only action on a locked version was
-            "Create new version", so an estimator who had just locked
-            version 2 and wanted to send it clicked the only button
-            there was -- and got version 3, which is unlocked, which put
-            proposal generation behind "lock this version first" again.
-            Generating one lived on the Proposal & Approval tab, below
-            the fold, behind a template dropdown, and only ever operated
-            on the CURRENT version -- so version 2 could no longer reach
-            it at all. */}
-        {version.isLocked && !version.proposals.some((p) => !p.deletedAt) && proposalTemplates.length > 0 && (
-          <form action={generateProposalAction.bind(null, estimateId, version.id)}>
-            <input type="hidden" name="templateId" value={proposalTemplates[0].id} />
-            {/* primary, not bare: SubmitButton applies no styling at all
-                without a variant, so the one action somebody is looking
-                for rendered as plain text beside a properly drawn
-                "Create new version". */}
-            <SubmitButton pendingText="Creating…" variant="primary">
-              Create the proposal
-            </SubmitButton>
-          </form>
-        )}
-        {version.isLocked && version.proposals.find((p) => !p.deletedAt) && (
-          <LinkButton
-            href={`/proposals/${version.proposals.find((p) => !p.deletedAt)!.id}`}
-            variant="secondary"
-          >
-            Open the proposal
-          </LinkButton>
-        )}
-        {version.isLocked && (
-          <form action={createNewVersionWithIds}>
-            <Button variant="secondary">Create new version</Button>
-          </form>
-        )}
+            Before this, a locked version offered exactly one button and
+            it was "Create new version". Somebody who had just locked
+            version 2 and wanted to send it clicked the only thing there
+            was, got a version 3, and version 2 became unreachable for
+            proposal generation entirely. So "Create new version" no
+            longer competes with the step that comes first -- it is a
+            quiet link until the proposal has actually gone out.
+
+            Never removed outright, though. A proposal created with a
+            mistake in it, before anybody has sent anything, still needs a
+            way forward, and a hidden action is how the original dead end
+            was built. */}
+        {version.isLocked &&
+          (() => {
+            const proposal = version.proposals.find((p) => !p.deletedAt);
+            const alreadySent = proposal?.sentAt != null;
+            return (
+              <>
+                {!proposal && proposalTemplates.length > 0 && (
+                  <form action={generateProposalAction.bind(null, estimateId, version.id)}>
+                    <input type="hidden" name="templateId" value={proposalTemplates[0].id} />
+                    <SubmitButton pendingText="Creating…" variant="primary">
+                      Create the proposal
+                    </SubmitButton>
+                  </form>
+                )}
+                {proposal && (
+                  <LinkButton href={`/proposals/${proposal.id}`}>
+                    {alreadySent ? "Open the proposal" : "Open the proposal — not sent yet"}
+                  </LinkButton>
+                )}
+                {alreadySent ? (
+                  <form action={createNewVersionWithIds}>
+                    <Button variant="secondary">Create new version</Button>
+                  </form>
+                ) : (
+                  <form action={createNewVersionWithIds}>
+                    <button type="submit" className="text-xs text-neutral-400 underline hover:text-neutral-700">
+                      Need to change something? Start a new version
+                    </button>
+                  </form>
+                )}
+              </>
+            );
+          })()}
         {!version.isLocked && (
           <form action={lockVersionWithIds}>
             <Button variant="secondary">Lock version</Button>
