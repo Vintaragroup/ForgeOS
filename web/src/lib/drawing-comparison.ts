@@ -51,3 +51,30 @@ export interface DrawingComparison {
   revisedCharacter: DrawingCharacter;
   comparedAt: string;
 }
+
+
+// Drops a REMOVED finding when the same subject is also reported as
+// MOVED or CHANGED.
+//
+// The model emits both for one subject: Full Swing's hanging banners
+// came back as "[REMOVED] no longer present" AND "[MOVED] now hang from
+// the batting cage structure". Both cannot be true, and the removal is
+// the one that is wrong -- it is also the expensive one to believe,
+// because relocated scope read as removed is cost cut from a job that
+// still has it.
+//
+// Done here rather than by prompting. The prompt already says to search
+// every page before calling something REMOVED, and it did search -- that
+// is where the MOVED came from. Three attempts at tightening this prompt
+// each cost real findings elsewhere, so this is the deterministic fix:
+// a contradiction one pass can see is not worth another round of asking
+// nicely.
+export function dropContradictedRemovals(findings: DrawingChangeFinding[]): DrawingChangeFinding[] {
+  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+
+  const stillPresent = new Set(
+    findings.filter((f) => f.kind === "MOVED" || f.kind === "CHANGED").map((f) => normalize(f.subject)),
+  );
+
+  return findings.filter((f) => !(f.kind === "REMOVED" && stillPresent.has(normalize(f.subject))));
+}

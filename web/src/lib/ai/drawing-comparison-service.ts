@@ -29,7 +29,7 @@ import {
   characterMismatchGuidance,
   charactersDiffer,
 } from "@/lib/ai/drawing-character";
-import type { DrawingChangeFinding, DrawingComparison } from "@/lib/drawing-comparison";
+import { dropContradictedRemovals, type DrawingChangeFinding, type DrawingComparison } from "@/lib/drawing-comparison";
 
 // The scope lines an extraction produced, which is what character is
 // read from. Returns [] for a document that was never analysed, which
@@ -255,7 +255,9 @@ export async function compareDrawingToPredecessor(
     previousFilename: previous.filename,
     revisedDocumentId: revised.id,
     revisedFilename: revised.filename,
-    findings: (parsed.findings ?? []).map((f) => ({
+    // A subject reported as both REMOVED and MOVED is a contradiction,
+    // and the removal is the wrong half -- see dropContradictedRemovals.
+    findings: dropContradictedRemovals(parsed.findings ?? []).map((f) => ({
       kind: f.kind,
       subject: f.subject,
       detail: f.detail,
