@@ -53,6 +53,22 @@ export interface DrawingComparison {
 }
 
 
+// A stored comparison, cleaned on the way out.
+//
+// dropContradictedRemovals runs when a comparison is written, but
+// comparisons written before it existed are still in the database and
+// still being rendered -- Full Swing's is one, and it shows the hanging
+// banners as both REMOVED and MOVED to this day. Running it again on
+// read costs nothing, is idempotent on a clean record, and means a fix
+// to a contradiction applies to the comparisons already sitting there
+// rather than only to the next expensive vision run.
+export function readStoredComparison(stored: unknown): DrawingComparison | null {
+  if (!stored || typeof stored !== "object") return null;
+  const comparison = stored as DrawingComparison;
+  if (!Array.isArray(comparison.findings)) return null;
+  return { ...comparison, findings: dropContradictedRemovals(comparison.findings) };
+}
+
 // Drops a REMOVED finding when the same subject is also reported as
 // MOVED or CHANGED.
 //

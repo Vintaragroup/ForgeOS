@@ -1,7 +1,10 @@
 # Re-cost review
 
-Status: proposed, not built. Written 2026-09-23 against Full Swing
-American Baseball Chicago, which is the worked example throughout.
+Status: steps 1-4 built and running on production as of 2026-09-24;
+steps 5-6 (the AI proposal stage, and apply + audit) not started. Written
+2026-09-23 against Full Swing American Baseball Chicago, which is the
+worked example throughout and is still the job every number below comes
+from.
 
 ## The problem
 
@@ -650,7 +653,15 @@ source and it needs no AI at all.
    by $308,146, with the Fuse quote's $46,830 held separately as
    unpriced rather than counted as a saving.*
 4. **Drawing comparison into the review** — corroboration, plus the
-   changes no spreadsheet covers, like the sign.
+   changes no spreadsheet covers, like the sign. *Built —
+   `recost-corroboration.ts` pairs each drawing finding with a schedule
+   row by token containment, never by a model. On Full Swing the two
+   sources agree about the reception counter ($7,469, "Eliminated 091827
+   TA" and gone from sheet 7) and disagree about six other things,
+   including two additions nobody has priced. `readStoredComparison`
+   also cleans contradictions out of comparisons written before that fix
+   existed, which is why the hanging banners stopped reading as both
+   removed and moved.*
 5. **The AI proposal stage** for what is left: mapping an observation
    onto line items, and the Recommend-and-Confirm questions.
 6. **Apply + audit.**

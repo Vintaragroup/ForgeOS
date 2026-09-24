@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dropContradictedRemovals, type DrawingChangeFinding } from "@/lib/drawing-comparison";
+import { dropContradictedRemovals, readStoredComparison, type DrawingChangeFinding } from "@/lib/drawing-comparison";
 
 function f(over: Partial<DrawingChangeFinding>): DrawingChangeFinding {
   return { kind: "REMOVED", subject: "x", detail: "", previousPage: 1, revisedPage: null, ...over };
@@ -48,5 +48,41 @@ describe("dropContradictedRemovals", () => {
 
   it("leaves an empty set alone", () => {
     expect(dropContradictedRemovals([])).toEqual([]);
+  });
+});
+
+describe("readStoredComparison", () => {
+  // Full Swing's stored comparison was written before the contradiction
+  // fix existed and still holds the hanging banners as both REMOVED and
+  // MOVED. Cleaning on read is what makes the fix reach it without
+  // paying for another vision run.
+  it("cleans a comparison stored before the contradiction fix", () => {
+    const stored = {
+      revisedFilename: "REVISED.pdf",
+      findings: [
+        f({ kind: "REMOVED", subject: "hanging banners" }),
+        f({ kind: "MOVED", subject: "hanging banners", revisedPage: 5 }),
+        f({ kind: "REMOVED", subject: "front structure" }),
+      ],
+    };
+    const out = readStoredComparison(stored);
+    expect(out!.findings.map((x) => `${x.kind} ${x.subject}`)).toEqual([
+      "MOVED hanging banners",
+      "REMOVED front structure",
+    ]);
+  });
+
+  it("leaves a clean comparison untouched", () => {
+    const stored = { findings: [f({ kind: "REMOVED", subject: "front structure" })] };
+    expect(readStoredComparison(stored)!.findings).toHaveLength(1);
+  });
+
+  // A document with no comparison, and a column holding something that
+  // is not one, are both "nothing to show" rather than a crash.
+  it("returns null for anything that is not a comparison", () => {
+    expect(readStoredComparison(null)).toBeNull();
+    expect(readStoredComparison("{}")).toBeNull();
+    expect(readStoredComparison({})).toBeNull();
+    expect(readStoredComparison({ findings: "lots" })).toBeNull();
   });
 });

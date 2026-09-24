@@ -19,6 +19,8 @@ import { readSummaryFromBytes } from "@/lib/recost-summary-reader";
 import { pairSummaryRows, summariseChanges, type ElementChange } from "@/lib/recost-status";
 import { groupStaleLineItems, type ValiditySource } from "@/lib/document-validity";
 import { buildRecostRollup, parseTargetAmount, untouchedCandidates, type RecostLine } from "@/lib/recost-rollup";
+import { corroborateDrawingAgainstSchedule, corroborationHeadline } from "@/lib/recost-corroboration";
+import { readStoredComparison } from "@/lib/drawing-comparison";
 import type { RecostReview } from "@/lib/recost-review";
 
 export type { RecostReview };
@@ -54,6 +56,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
       validity: true,
       validityNote: true,
       supersedesId: true,
+      revisionComparison: true,
     },
   });
 
@@ -138,6 +141,33 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     notes.push("No document on this opportunity has been superseded or withdrawn, so there is nothing to re-cost yet.");
   }
 
+  // The second witness. A revised drawing compared against the one it
+  // replaces sees what no spreadsheet does -- scope added, scope moved,
+  // a sign that changed shape -- and it saw it without knowing what the
+  // estimator wrote down. Newest comparison wins when there are several.
+  const comparisons = documents
+    .map((d) => readStoredComparison(d.revisionComparison))
+    .filter((c): c is NonNullable<typeof c> => c !== null)
+    .sort((a, b) => b.comparedAt.localeCompare(a.comparedAt));
+  const comparison = comparisons[0] ?? null;
+
+  const drawing = comparison
+    ? (() => {
+        const findings = corroborateDrawingAgainstSchedule({
+          findings: comparison.findings,
+          elements: elementChanges,
+          charactersMismatched: comparison.charactersMismatched,
+        });
+        return {
+          revisedFilename: comparison.revisedFilename,
+          previousFilename: comparison.previousFilename,
+          headline: corroborationHeadline(findings, comparison.revisedFilename),
+          charactersMismatched: comparison.charactersMismatched,
+          findings,
+        };
+      })()
+    : null;
+
   const currentCost = version.totalCost.toNumber();
   const currentSell = version.grandTotal.toNumber();
   const target = parseTargetAmount(revisionEvent?.note ?? null);
@@ -170,6 +200,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     rollup,
     elementChanges,
     suggestions,
+    drawing,
     notes,
   };
 }

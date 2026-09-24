@@ -1,4 +1,5 @@
 import type { RecostReview } from "@/lib/recost-review";
+import type { CorroborationKind } from "@/lib/recost-corroboration";
 import { rollupHeadline } from "@/lib/recost-rollup";
 
 // Where the re-cost stands against the client's number.
@@ -22,12 +23,23 @@ function signedMoney(n: number): string {
   return `${n > 0 ? "+" : n < 0 ? "−" : ""}${money(Math.abs(n))}`;
 }
 
+// Named for what the reader has to do about it, not for what the model
+// reported. "Removed" says nothing about whether anyone has acted on it;
+// "still priced" says the money is in the estimate right now.
+const LABELS: Record<CorroborationKind, { text: string; className: string }> = {
+  STILL_PRICED: { text: "still priced", className: "bg-red-100 text-red-800" },
+  ADDED_NOT_PRICED: { text: "not priced", className: "bg-amber-100 text-amber-900" },
+  DRAWN_NOT_PRICED: { text: "check", className: "bg-neutral-200 text-neutral-700" },
+  CORROBORATED: { text: "confirmed", className: "bg-green-100 text-green-800" },
+};
+
 export function RecostReviewCard({ review }: { review: RecostReview | null }) {
   if (!review) return null;
   const { rollup } = review;
-  // Nothing priced and nothing at risk is a review with no content --
-  // the steps card above is already saying what to do about that.
-  if (rollup.lines.length === 0) return null;
+  // Nothing priced, nothing at risk, and no drawing compared is a review
+  // with no content -- the steps card above is already saying what to do
+  // about that. A drawing on its own is still worth the screen.
+  if (rollup.lines.length === 0 && !review.drawing?.findings.length) return null;
 
   const over = rollup.gap !== null && rollup.gap > 0;
 
@@ -121,6 +133,49 @@ export function RecostReviewCard({ review }: { review: RecostReview | null }) {
             Marked as no change on the revised schedule. Named here because the gap is still open, not because
             anything says they should move.
           </p>
+        </div>
+      )}
+
+      {/* The second witness. Kept below the money because it does not
+          change any of it -- nothing here has been priced, which is
+          exactly the point of showing it. */}
+      {review.drawing && review.drawing.findings.length > 0 && (
+        <div className="mt-5 border-t border-neutral-200 pt-4">
+          <h3 className="text-sm font-semibold text-neutral-900">What the revised drawing shows</h3>
+          <p className="mt-1 text-sm text-neutral-600">{review.drawing.headline}</p>
+
+          <ul className="mt-3 flex flex-col gap-2">
+            {review.drawing.findings.map((f) => (
+              <li key={`${f.kind}-${f.subject}`} className="flex gap-3 text-sm">
+                <span
+                  className={`mt-0.5 h-fit shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${LABELS[f.kind].className}`}
+                >
+                  {LABELS[f.kind].text}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <span className="font-medium text-neutral-900">{f.subject}</span>
+                  {f.element && <span className="text-neutral-500"> — {f.element}</span>}
+                  {/* The drawing's own words, not a paraphrase: a
+                      finding is checkable or it is gossip. */}
+                  <span className="block text-xs text-neutral-500">
+                    {f.detail}
+                    {f.pages && <span className="text-neutral-400"> ({f.pages})</span>}
+                  </span>
+                </div>
+                {f.amount !== null && f.amount > 0 && (
+                  <span className="shrink-0 whitespace-nowrap tabular-nums text-neutral-700">{money(f.amount)}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          {review.drawing.charactersMismatched && (
+            <p className="mt-3 text-xs text-amber-800">
+              {review.drawing.previousFilename} and {review.drawing.revisedFilename} are different kinds of drawing —
+              one dimensioned, one a rendering. The same object drawn two ways can read as removed and added, so
+              treat these as worth checking rather than as settled.
+            </p>
+          )}
         </div>
       )}
 

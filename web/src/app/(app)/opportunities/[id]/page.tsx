@@ -8,7 +8,7 @@ import { DocumentDiffSummary } from "@/components/document-diff-summary";
 import { isScheduleDocumentType } from "@/lib/recosting";
 import { DrawingComparisonSummary } from "@/components/drawing-comparison-summary";
 import { DocumentValidityControl } from "@/components/document-validity-control";
-import type { DrawingComparison } from "@/lib/drawing-comparison";
+import { readStoredComparison } from "@/lib/drawing-comparison";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
@@ -1410,7 +1410,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                       opportunityId={opportunity.id}
                       documentId={doc.id}
                       predecessorFilename={doc.supersedes.filename}
-                      comparison={(doc.revisionComparison as unknown as DrawingComparison | null) ?? null}
+                      comparison={readStoredComparison(doc.revisionComparison)}
                     />
                   )}
 
