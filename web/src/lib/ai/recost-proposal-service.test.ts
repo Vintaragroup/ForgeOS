@@ -207,6 +207,34 @@ describe("proposeRecostChanges", () => {
     expect(rows[0].lineItemId).toBeNull();
   });
 
+  // The first production run put both structure removals against "Booth
+  // Structure & Walls" -- 0 rows, $0. A proposal to remove nothing.
+  it("never offers a section with no line items in it", async () => {
+    const empty = await db.estimateSection.create({
+      data: {
+        estimateVersionId: versionId,
+        name: "Booth Structure & Walls",
+        sectionType: "CATEGORY",
+      },
+    });
+    respond([
+      {
+        findingId: "F1",
+        action: "REMOVE",
+        lineItemIds: [],
+        sectionId: empty.id,
+        reason: "The structure is gone from the revised drawing.",
+        sourceQuote: "The front structure with monitors and LED elements is no longer present.",
+        confidence: "NEED_YOUR_DECISION",
+      },
+    ]);
+
+    const run = await proposeRecostChanges(estimateId, "user-1");
+    expect(run.proposed).toBe(0);
+    expect(run.rejected[0].why).toMatch(/does not name a line item or section/);
+    expect(await db.recostProposal.count()).toBe(0);
+  });
+
   // A re-run is a re-read of the same documents. Two runs' worth of
   // proposals side by side is a list nobody can act on -- but a decision
   // a person already made is not a model's to overwrite.

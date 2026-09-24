@@ -150,7 +150,7 @@ export async function proposeRecostChanges(
   });
   if (!drawingDocument) throw new UserError("The compared drawing is no longer on this opportunity.");
 
-  const sections = await db.estimateSection.findMany({
+  const allSections = await db.estimateSection.findMany({
     where: { estimateVersionId: review.estimateVersionId },
     select: {
       id: true,
@@ -159,6 +159,19 @@ export async function proposeRecostChanges(
       lineItems: { select: { id: true, description: true, totalCost: true }, orderBy: { totalCost: "desc" } },
     },
   });
+
+  // A section with no line items in it cannot be the subject of
+  // anything. ABC Chicago carries four of them -- "Booth Structure &
+  // Walls", "Doors & Hardware" and friends are catalog categories that
+  // were created and never filled -- and offered as candidates they are
+  // exactly what a model reaches for: the first run put both structure
+  // removals against "Booth Structure & Walls", $0 across 0 rows, which
+  // is a proposal to remove nothing. Not the model's mistake. It was
+  // shown a plausible name and had no way to know it was empty.
+  const sections = allSections.filter((s) => s.lineItems.length > 0);
+  if (sections.length === 0) {
+    throw new UserError("This version has no priced line items to map findings onto yet.");
+  }
 
   // Numbered, because a model asked to work through a list needs the
   // list to have handles. Ids are opaque cuids and stay that way -- an
