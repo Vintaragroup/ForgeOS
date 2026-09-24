@@ -1,7 +1,7 @@
 # Re-cost review
 
-Status: steps 1-4 built and running on production as of 2026-09-24;
-steps 5-6 (the AI proposal stage, and apply + audit) not started. Written
+Status: steps 1-5 built as of 2026-09-24, steps 1-4 verified on
+production; step 6 (apply + audit) not started. Written
 2026-09-23 against Full Swing American Baseball Chicago, which is the
 worked example throughout and is still the job every number below comes
 from.
@@ -663,7 +663,14 @@ source and it needs no AI at all.
    existed, which is why the hanging banners stopped reading as both
    removed and moved.*
 5. **The AI proposal stage** for what is left: mapping an observation
-   onto line items, and the Recommend-and-Confirm questions.
+   onto line items, and the Recommend-and-Confirm questions. *Built —
+   `ai/recost-proposal-service.ts` on ADVANCED_MODEL, opt-in behind a
+   button, writing RecostProposal rows that are all PROPOSED. Everything
+   it returns passes `recost-proposal.ts` first: every id must exist in
+   this estimate, every quote must appear verbatim in the source it
+   cites, every number must appear in that quote, and a removal on a
+   value-engineering job is never pre-confirmed. What fails is logged
+   with a reason rather than silently dropped.*
 6. **Apply + audit.**
 
 Steps 1-3 carry most of the value and none of the risk. If the AI stage

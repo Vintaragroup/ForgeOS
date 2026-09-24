@@ -1,6 +1,7 @@
 import type { RecostReview } from "@/lib/recost-review";
 import type { CorroborationKind } from "@/lib/recost-corroboration";
 import { rollupHeadline } from "@/lib/recost-rollup";
+import { RunRecostProposalsButton } from "@/components/run-recost-proposals-button";
 
 // Where the re-cost stands against the client's number.
 //
@@ -33,7 +34,7 @@ const LABELS: Record<CorroborationKind, { text: string; className: string }> = {
   CORROBORATED: { text: "confirmed", className: "bg-green-100 text-green-800" },
 };
 
-export function RecostReviewCard({ review }: { review: RecostReview | null }) {
+export function RecostReviewCard({ review, estimateId }: { review: RecostReview | null; estimateId: string }) {
   if (!review) return null;
   const { rollup } = review;
   // Nothing priced, nothing at risk, and no drawing compared is a review
@@ -175,6 +176,59 @@ export function RecostReviewCard({ review }: { review: RecostReview | null }) {
               one dimensioned, one a rendering. The same object drawn two ways can read as removed and added, so
               treat these as worth checking rather than as settled.
             </p>
+          )}
+        </div>
+      )}
+
+      {/* The one AI stage, and everything about it is opt-in: it costs a
+          model call, and nothing on this screen changes until a person
+          decides. Every row below already survived validation against
+          real ids and a verbatim quote — see recost-proposal.ts. */}
+      {review.drawing && review.drawing.findings.some((f) => f.kind !== "CORROBORATED") && (
+        <div className="mt-5 border-t border-neutral-200 pt-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold text-neutral-900">
+              What these findings are about in this estimate
+            </h3>
+            <RunRecostProposalsButton
+              estimateId={estimateId}
+              hasProposals={review.proposals.length > 0}
+            />
+          </div>
+
+          {review.proposals.length === 0 ? (
+            <p className="mt-1 text-sm text-neutral-500">
+              Nothing mapped yet. The findings above are in the drawing&apos;s words; this works out which rows of
+              the estimate they are about, and proposes nothing you have not confirmed.
+            </p>
+          ) : (
+            <ul className="mt-3 flex flex-col gap-3">
+              {review.proposals.map((p) => (
+                <li key={p.id} className="rounded-md border border-neutral-200 p-3 text-sm">
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span className="rounded bg-neutral-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                      {p.action.replace("_", " ")}
+                    </span>
+                    <span className="font-medium text-neutral-900">{p.target}</span>
+                    {p.amount !== null && (
+                      <span className="ml-auto whitespace-nowrap tabular-nums text-neutral-700">
+                        {money(p.amount)}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-neutral-700">{p.reason}</p>
+                  {/* The citation, verbatim, with the document it came
+                      from. A proposal that cannot be checked against its
+                      own source has no business being acted on. */}
+                  <p className="mt-1 text-xs text-neutral-500">
+                    “{p.sourceQuote}” — {p.sourceFilename}
+                  </p>
+                  <p className="mt-1 text-xs font-medium text-amber-800">
+                    {p.confidence === "NEED_YOUR_DECISION" ? "Needs your decision" : "Recommended — confirm"}
+                  </p>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

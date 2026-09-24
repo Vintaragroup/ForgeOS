@@ -592,6 +592,13 @@ enum AiFeature {
   // comparing proposed items against existing estimate line items instead
   // of a vendor quote against them.
   LINE_ITEM_DUPLICATE_MATCH
+  // Maps a re-cost finding onto the line items it is about -- "the front
+  // structure with monitors and LED elements is no longer present" onto
+  // the rows that ARE that structure. The only AI in the re-cost review
+  // (docs/recost-review.md step 5); everything before it is
+  // deterministic, and everything it returns is validated against real
+  // ids and verbatim quotes before a human sees it.
+  RECOST_PROPOSALS
 }
 
 // One row per OpenAI call, for case-based model routing's cost/token
@@ -4345,6 +4352,11 @@ enum RecostAction {
   // screens with no revised AV quote. Becomes a bid package, not a
   // number, because the catalog has no honest price for it.
   NEEDS_QUOTE
+  // Same scope, different vendor or cost basis -- Fuse's rented AV
+  // package becoming five purchased monitors. Neither a removal nor a
+  // reprice, and the estimating rules keep rental and purchased as
+  // distinct cost bases (Estimate-Guidelines s13, s14).
+  RE_SOURCE
 }
 
 // The estimating rules' own two question types (Estimate-Guidelines s1),

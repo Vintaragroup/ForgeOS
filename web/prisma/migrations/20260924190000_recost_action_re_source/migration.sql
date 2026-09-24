@@ -1,0 +1,15 @@
+-- A changed vendor is not a removal and not a reprice.
+--
+-- Fuse Technical Group is off Full Swing ABCA Chicago, so their AV quote
+-- is dead -- but the AV is not. Five 100" monitors are being purchased at
+-- $2,800 each instead of rented, which is the same scope on a different
+-- cost basis. Calling that REMOVE cuts scope the job still has; calling
+-- it REPRICE loses the fact that the vendor and the basis both changed.
+--
+-- The estimating rules already carry the distinction: s13 separates
+-- existing, rental and purchased property and warns against pricing a
+-- rental as a new build, and s14 lists Rental and Purchased as distinct
+-- cost bases.
+--
+-- Expand-only: adding a value to an enum invalidates no existing row.
+ALTER TYPE "RecostAction" ADD VALUE 'RE_SOURCE';

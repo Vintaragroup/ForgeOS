@@ -168,6 +168,62 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
       })()
     : null;
 
+  // What the AI stage proposed last time it ran, still undecided. Read
+  // here rather than re-run: a proposal costs a model call and the
+  // findings behind it do not change until another document arrives.
+  //
+  // Targets are resolved with their own queries because RecostProposal
+  // deliberately holds lineItemId as a plain column rather than a
+  // relation -- a proposal outlives the row it is about, and a proposal
+  // that vanished when somebody deleted a line item would take the
+  // reason it was raised with it.
+  const stored = await db.recostProposal.findMany({
+    where: { estimateVersionId: version.id, status: "PROPOSED" },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const proposalLineItems = new Map(
+    (
+      await db.lineItem.findMany({
+        where: { id: { in: stored.map((p) => p.lineItemId).filter((id): id is string => id !== null) } },
+        select: { id: true, description: true, totalCost: true },
+      })
+    ).map((li) => [li.id, li]),
+  );
+  const proposalSections = new Map(
+    (
+      await db.estimateSection.findMany({
+        where: { id: { in: stored.map((p) => p.sectionId).filter((id): id is string => id !== null) } },
+        select: { id: true, name: true, groupLabel: true },
+      })
+    ).map((sec) => [sec.id, sec]),
+  );
+  const proposalDocuments = new Map(
+    (
+      await db.document.findMany({
+        where: { id: { in: [...new Set(stored.map((p) => p.sourceDocumentId))] } },
+        select: { id: true, filename: true },
+      })
+    ).map((d) => [d.id, d]),
+  );
+
+  const proposals = stored.map((p) => {
+    const lineItem = p.lineItemId ? proposalLineItems.get(p.lineItemId) : undefined;
+    const section = p.sectionId ? proposalSections.get(p.sectionId) : undefined;
+    return {
+      id: p.id,
+      action: p.action,
+      confidence: p.confidence,
+      reason: p.reason,
+      target:
+        lineItem?.description ??
+        (section ? [section.groupLabel, section.name].filter(Boolean).join(" / ") : "(no longer in this estimate)"),
+      amount: lineItem?.totalCost.toNumber() ?? p.newUnitCost?.toNumber() ?? null,
+      sourceQuote: p.sourceQuote,
+      sourceFilename: proposalDocuments.get(p.sourceDocumentId)?.filename ?? "(source removed)",
+    };
+  });
+
   const currentCost = version.totalCost.toNumber();
   const currentSell = version.grandTotal.toNumber();
   const target = parseTargetAmount(revisionEvent?.note ?? null);
@@ -201,6 +257,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     elementChanges,
     suggestions,
     drawing,
+    proposals,
     notes,
   };
 }

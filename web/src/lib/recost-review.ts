@@ -31,6 +31,20 @@ export interface RecostReview {
     charactersMismatched: boolean;
     findings: CorroborationFinding[];
   } | null;
+  // What the AI stage proposed, still awaiting a decision. Empty until
+  // somebody runs it, and every row here has already survived
+  // validation against real ids and verbatim quotes -- see
+  // recost-proposal.ts.
+  proposals: {
+    id: string;
+    action: string;
+    confidence: string;
+    reason: string;
+    target: string;
+    amount: number | null;
+    sourceQuote: string;
+    sourceFilename: string;
+  }[];
   // Said out loud rather than left to be noticed: a review assembled
   // from a schedule alone has not seen the quotes.
   notes: string[];

@@ -1062,7 +1062,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
 
       {/* Directly under the steps: the steps stop mattering once they
           are done, and "are we there yet" does not. */}
-      <RecostReviewCard review={recostReview} />
+      <RecostReviewCard review={recostReview} estimateId={estimate.id} />
 
       <Card className="p-6">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">
