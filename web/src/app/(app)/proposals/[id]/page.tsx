@@ -141,6 +141,22 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   );
   const opportunity = version.estimate.opportunity;
   const sendWithId = sendProposalAction.bind(null, proposal.id);
+  // The document on this page is built from ONE version. If a newer one
+  // has since been locked, the PDF below is not the estimate anybody has
+  // been working on -- and the moment that matters is the moment someone
+  // downloads it to send. On ABC Chicago this page was showing version 1
+  // at $658,785 while version 2 sat locked at $273,311, and it was caught
+  // at the download.
+  const newerLocked = await db.estimateVersion.findFirst({
+    where: {
+      estimateId: proposal.estimateVersion.estimateId,
+      isLocked: true,
+      versionNumber: { gt: proposal.estimateVersion.versionNumber },
+    },
+    orderBy: { versionNumber: "desc" },
+    select: { versionNumber: true, grandTotal: true, proposals: { where: { deletedAt: null }, select: { id: true }, take: 1 } },
+  });
+
   const signWithId = signProposalAction.bind(null, proposal.id);
   const unwindSignatureWithId = unwindProposalSignatureAction.bind(null, proposal.id);
 
@@ -298,6 +314,40 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
           </ActionForm>
         )}
       </Card>
+
+      {newerLocked && (
+        <div className="rounded-md border border-red-300 bg-red-50 p-4">
+          <p className="text-sm font-semibold text-red-900">
+            This is the version {proposal.estimateVersion.versionNumber} proposal — version{" "}
+            {newerLocked.versionNumber} is locked and newer.
+          </p>
+          <p className="mt-1 text-sm text-red-800">
+            Everything below, including the PDF, is built from version{" "}
+            {proposal.estimateVersion.versionNumber} at{" "}
+            {proposal.estimateVersion.grandTotal.toNumber().toLocaleString("en-US", {
+              style: "currency",
+              currency: "USD",
+              maximumFractionDigits: 0,
+            })}
+            . Version {newerLocked.versionNumber} is{" "}
+            {newerLocked.grandTotal.toNumber().toLocaleString("en-US", {
+              style: "currency",
+              currency: "USD",
+              maximumFractionDigits: 0,
+            })}
+            .{" "}
+            {newerLocked.proposals.length === 0
+              ? "It has no proposal yet — generate one on the estimate's Proposal & approval tab before sending anything."
+              : "Open that version's own proposal instead."}
+          </p>
+          <Link
+            href={`/estimates/${proposal.estimateVersion.estimateId}?tab=proposal`}
+            className="mt-2 inline-block text-sm font-medium text-red-900 underline"
+          >
+            Go to Proposal &amp; approval →
+          </Link>
+        </div>
+      )}
 
       <Card className="overflow-hidden p-0">
         <div

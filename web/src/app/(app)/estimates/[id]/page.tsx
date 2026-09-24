@@ -517,6 +517,18 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   // The proposal the client is actually holding -- newest first, so this
   // is the one whose status decides whether a re-costing is underway.
   const liveProposal = estimateProposals[0] ?? null;
+
+  // Which version the newest proposal was actually built from, against
+  // the newest version anybody has locked. When they disagree, the
+  // document somebody is about to send is not the estimate they have
+  // been working on -- see the header button's own comment.
+  const newestProposalVersion = estimateProposals[0]?.estimateVersion.versionNumber ?? null;
+  const newestLockedVersionNumber = versionSummaries
+    .filter((v) => v.isLocked)
+    .reduce<number | null>((best, v) => (best === null || v.versionNumber > best ? v.versionNumber : best), null);
+  const lockedVersionNeedsProposal =
+    newestLockedVersionNumber !== null &&
+    (newestProposalVersion === null || newestProposalVersion < newestLockedVersionNumber);
   const revisionEvent = liveProposal?.events.find((e) => e.toStatus === "REVISIONS_REQUESTED") ?? null;
   const openVersion = versionSummaries.find((v) => !v.isLocked) ?? null;
 
@@ -1027,11 +1039,25 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
               {/* Straight to the proposal, without going through the
                   Proposal & approval tab and scrolling. It's where
                   sending, signing and the client-facing PDF all live, so
-                  it gets reached for constantly. estimateProposals is
-                  newest-first, so this is the one in play. */}
-              {estimateProposals[0] && (
+                  it gets reached for constantly.
+
+                  This used to open estimateProposals[0] unlabelled, on
+                  the reasoning that newest-first meant "the one in play".
+                  That stops being true the moment a newer version is
+                  locked without a proposal of its own: on ABC Chicago it
+                  opened the version 1 proposal at $658,785 while version
+                  2 sat locked at $273,311, and the difference was only
+                  noticed at the point of downloading the PDF to send. So
+                  the button names its version, and says plainly when the
+                  version you just locked has no proposal yet. */}
+              {newestProposalVersion !== null && !lockedVersionNeedsProposal && estimateProposals[0] && (
                 <LinkButton href={`/proposals/${estimateProposals[0].id}`} variant="secondary">
-                  Open the proposal
+                  Open the version {newestProposalVersion} proposal
+                </LinkButton>
+              )}
+              {lockedVersionNeedsProposal && (
+                <LinkButton href={`/estimates/${estimate.id}?tab=proposal`} variant="secondary">
+                  Version {newestLockedVersionNumber} has no proposal yet
                 </LinkButton>
               )}
               <PageActionsMenu label="More actions for this estimate">
