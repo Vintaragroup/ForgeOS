@@ -1506,7 +1506,13 @@ function VersionSummaryBar({
         {version.isLocked && !version.proposals.some((p) => !p.deletedAt) && proposalTemplates.length > 0 && (
           <form action={generateProposalAction.bind(null, estimateId, version.id)}>
             <input type="hidden" name="templateId" value={proposalTemplates[0].id} />
-            <SubmitButton pendingText="Creating…">Create the proposal</SubmitButton>
+            {/* primary, not bare: SubmitButton applies no styling at all
+                without a variant, so the one action somebody is looking
+                for rendered as plain text beside a properly drawn
+                "Create new version". */}
+            <SubmitButton pendingText="Creating…" variant="primary">
+              Create the proposal
+            </SubmitButton>
           </form>
         )}
         {version.isLocked && version.proposals.find((p) => !p.deletedAt) && (
