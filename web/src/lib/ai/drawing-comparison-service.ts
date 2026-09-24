@@ -66,7 +66,9 @@ HARD RULES. These override any instinct to be helpful:
 - Never infer freight, installation, engineering, repairs or refurbishment.
 - If you cannot tell whether something changed, do not report it. A missing finding is recoverable; an invented one is not.
 - Different camera angles between the two sets are not a change. Only report a difference in the thing itself.
-- A different way of DRAWING something is not a change either. A dimensioned elevation and a photorealistic view of the same counter are the same counter. Report a difference only when the thing itself is genuinely absent from, or new to, the booth.
+- A different way of DRAWING something is not by itself a change. A dimensioned elevation and a photorealistic view of the same counter are the same counter. When a thing is present in both but drawn differently, report it as CHANGED or MOVED rather than as REMOVED plus ADDED -- but do still report it. Never stay silent about something just because the two sets draw it differently.
+
+When a COMPONENT INVENTORY from the previous design is given below, work through it item by item: for each specified component, decide whether it is still visible in the revised set. An inventory item you cannot find anywhere in the revised pages is a REMOVED finding, and it is the most reliable kind you can produce, because something explicitly specified is not ambiguous about having existed. Quote the inventory line you are answering.
 
 If nothing differs, return an empty array.`;
 
@@ -172,7 +174,8 @@ export async function compareDrawingToPredecessor(
   // first real run of this called Full Swing's batting cage ADDED when
   // it is in both sets, because a dimension label on an elevation and a
   // photorealistic chain-link enclosure do not look alike.
-  const previousCharacter = assessDrawingCharacter(scopeTextsOf(previous.extractedSummary));
+  const previousSpecs = scopeTextsOf(previous.extractedSummary);
+  const previousCharacter = assessDrawingCharacter(previousSpecs);
   const revisedCharacter = assessDrawingCharacter(scopeTextsOf(revised.extractedSummary));
   const mismatched = charactersDiffer(previousCharacter.character, revisedCharacter.character);
 
@@ -188,6 +191,18 @@ export async function compareDrawingToPredecessor(
         `The previous drawing's pages come first, then the revised drawing's.` +
         (mismatched
           ? `\n\n${characterMismatchGuidance(previousCharacter.character, revisedCharacter.character)}`
+          : "") +
+        // The previous design's own written specification, when it has
+        // one. This is the strongest input the comparison gets: one side
+        // stops being a picture to interpret and becomes a checklist to
+        // work through. Full Swing's superseded drawing specifies "8x4
+        // LED monitor array - 32 LED panels" and "L SHAPE RECEPTION
+        // COUNTER 8' X 6' X 40"" in writing, so asking whether each is
+        // still visible is a far more reliable question than asking what
+        // looks different between two renderings.
+        (previousSpecs.length > 0
+          ? `\n\nCOMPONENT INVENTORY specified in the previous design. Work through each one and decide whether it is still visible in the revised pages:\n` +
+            previousSpecs.map((t, i) => `${i + 1}. ${t}`).join("\n")
           : ""),
     },
   ];

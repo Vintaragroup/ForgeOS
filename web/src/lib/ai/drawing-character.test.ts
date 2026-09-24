@@ -72,10 +72,21 @@ describe("charactersDiffer", () => {
 });
 
 describe("characterMismatchGuidance", () => {
-  it("tells the comparison what not to conclude, naming both kinds", () => {
+  it("names both kinds and biases toward CHANGED rather than silence", () => {
     const g = characterMismatchGuidance("DIMENSIONED", "RENDERING");
     expect(g).toMatch(/dimensioned component drawings/);
     expect(g).toMatch(/renderings/);
-    expect(g).toMatch(/Do not report something as REMOVED or ADDED because it is drawn differently/);
+    expect(g).toMatch(/prefer CHANGED or MOVED/);
+  });
+
+  // The correction that cost three runs: a suppression rule told the
+  // model to stay silent, and it did -- losing the reception counter's
+  // sibling findings along with the batting cage false positive. An
+  // unreported change is worse than a caveated one, and the UI already
+  // carries the caveat.
+  it("never instructs the comparison to stay silent", () => {
+    const g = characterMismatchGuidance("DIMENSIONED", "RENDERING");
+    expect(g).toMatch(/Do NOT stay silent/);
+    expect(g).not.toMatch(/Do not report something as REMOVED or ADDED/);
   });
 });

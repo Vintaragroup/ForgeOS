@@ -18,6 +18,16 @@
 // which is told to expect it. A wrong finding a human has to catch is
 // much worse than a caveated one, and this is the caveat.
 //
+// What this must NOT do is read "carries written specifications" as
+// "different kind of document". Full Swing's superseded drawing is the
+// SAME renderings as the original design with component specs added --
+// page 1 is the identical hero view, and pages 2-7 break each component
+// out with dimensions. It is a superset, not a different kind, and its
+// spec pages are the most useful input the comparison has. Treating it
+// as incomparable suppressed real findings for three runs. Hence the
+// guidance below is a bias toward CHANGED/MOVED, never an instruction
+// to stay silent.
+//
 // A leaf module: pure functions over plain rows, no db import.
 
 export type DrawingCharacter = "DIMENSIONED" | "RENDERING" | "MIXED" | "UNKNOWN";
@@ -83,10 +93,12 @@ export function describeCharacter(c: DrawingCharacter): string {
 // something that was in both sets all along.
 export function characterMismatchGuidance(previous: DrawingCharacter, revised: DrawingCharacter): string {
   return (
-    `IMPORTANT: the previous set is ${describeCharacter(previous)} and the revised set is ` +
-    `${describeCharacter(revised)}. These depict the same booth in different ways, so the SAME object will look ` +
-    `completely different between them -- a dimensioned elevation of a batting cage and a photorealistic view of ` +
-    `one are the same cage. Do not report something as REMOVED or ADDED because it is drawn differently. Report it ` +
-    `only if the thing itself is genuinely absent from, or new to, the booth.`
+    `NOTE: the previous set is ${describeCharacter(previous)} and the revised set is ` +
+    `${describeCharacter(revised)}. They may document the same booth at different levels of detail -- one set can ` +
+    `be the same renderings with component specifications added. So the same object can look different between ` +
+    `them without having changed: a dimensioned elevation of a batting cage and a photorealistic view of one are ` +
+    `the same cage. When something is present in both but drawn differently, prefer CHANGED or MOVED over a ` +
+    `REMOVED plus ADDED pair. Do NOT stay silent about a difference just because the two sets draw things ` +
+    `differently -- an unreported change is worse than a caveated one.`
   );
 }
