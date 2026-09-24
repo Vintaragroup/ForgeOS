@@ -59,32 +59,90 @@ So: **no single document carries the whole change.** The scope change is
 in the spreadsheet, the AV change is in the AV quote, and the design
 change is in the drawing. A re-cost review has to read all three.
 
-## The correctness risk that shapes everything
+## What a revised document actually does
 
-**Absence is not evidence of removal.**
+A document being replaced does not remove anything from the estimate. It
+stops being the authority for what it produced.
 
-A line item missing from the revised spreadsheet may have been cut — or
-may simply live in a different document. The fabrication sheet never
-mentioned the video wall; that does not mean the video wall was removed,
-it means the video wall was never that sheet's business. Proposing its
-removal on that basis would be confidently wrong.
+This is the correction that reshaped the whole feature, and it came from
+the estimator: *"the line items do not disappear unless the client has
+requested a full redesign which changes all elements within the exhibit.
+If the client loves the design but they want it value engineered to save
+costs, all line items need to be flagged as potentially changing but not
+necessarily being removed."*
 
-This already bit us once this session, in the other direction: two vendor
-quotes were suggested as a revision pair when they were an AV quote and a
-graphics quote for the same job. Same error class — inferring a
-relationship from proximity rather than provenance.
+So when `ABCA_2027_Exhibit_Cost_Breakout.xlsx` is superseded, its 192
+line items do not go anywhere. They keep sitting in the estimate costing
+money, and they carry a flag: **sourced from a document that is no longer
+current**. That flag is the whole output of stage 1. Everything after it
+decides what to do about each one.
 
-Two rules follow, and they are the spine of this feature:
+### Two ways a source stops being current
 
-1. **Scope every comparison by provenance.** `LineItem.documentId` records
-   which document produced each row (212 of v2's 225 carry one). A
-   revised document may only propose changes to line items whose
-   `documentId` is its own predecessor. A fabrication sheet can propose
-   removing fabrication lines and nothing else.
+Conflating these is a bug, and they are genuinely different situations:
 
-2. **Rank by evidence, and never pre-select a weak one.** A removal
-   supported only by absence is a *question*, not a proposal. It is shown
-   unchecked, raised as Need Your Decision, and requires a human tick.
+- **SUPERSEDED** — a newer version of the same document exists. The
+  revised schedule against the original schedule. There is a replacement
+  to compare against.
+- **WITHDRAWN** — the source is no longer valid and nothing replaces it.
+  On this job Fuse Technical Group is no longer supplying the AV, so
+  quote 369711 V2 is dead: its 16 line items, $46,830 including $18,700
+  of Fuse crew and $8,330 of their travel, all come out together. Not
+  because anyone reasoned about dependent costs, but because the vendor
+  went and took their quote with them.
+
+### Two modes, and the mode sets the default
+
+- **VALUE_ENGINEERING** — the client likes the design and wants cost out.
+  Every affected line item is *may change*. `REMOVE` is never
+  pre-selected and removals are not what the screen leads with.
+- **REDESIGN** — the client wants something different. Removals are
+  genuinely on the table.
+
+This job is value engineering, and the numbers show why the distinction
+matters: of roughly forty elements, exactly **two** are true eliminations
+— the reception counter and one diamond sign logo. Everything else is
+repriced, reduced, or re-sourced. A review built to lead with removals
+would be wrong about 95% of the job and would push an estimator toward
+deleting scope that is only being re-quoted.
+
+### Actions, in the order they actually occur
+
+| action | means | this job |
+| --- | --- | --- |
+| `REPRICE` | same scope, new number | hanging sign $55,943 → ~$13,000 |
+| `RE_SOURCE` | new vendor or cost basis | AV: Fuse rental → purchased screens |
+| `REDUCE_QTY` | less of the same thing | hitting bay wall, spines |
+| `REMOVE` | genuinely gone | reception counter, one diamond sign |
+| `NEEDS_QUOTE` | changed, nobody has priced it | the revised sign |
+
+`RE_SOURCE` is not a removal and not a reprice. The estimating rules
+already carry the distinction: §13 separates existing, rental and
+purchased property and warns against pricing a rental as a new build,
+and §14 lists Rental and Purchased as distinct cost bases.
+
+## Absence is still not evidence of removal
+
+The scoping rules below stand, and they matter most in REDESIGN mode
+where removal is a live option. In VALUE_ENGINEERING they do quieter
+work: they decide which line items a given document is even allowed to
+raise a question about.
+
+A line missing from the revised fabrication sheet may have been cut, or
+may simply never have been that sheet's business — the video wall was
+never on it either way. This already bit us once in the other direction:
+two vendor quotes were suggested as a revision pair when they were an AV
+quote and a graphics quote for the same job. Inferring a relationship
+from proximity rather than provenance.
+
+1. **Scope every comparison by provenance.** `LineItem.documentId`
+   records which document produced each row (212 of v2's 225 carry one).
+   A revised document may only speak about line items whose `documentId`
+   is its own predecessor.
+
+2. **Rank by evidence, and never pre-select a weak one.** A finding
+   supported only by absence is a *question*, not a proposal. Shown
+   unchecked, raised as Need Your Decision.
 
 ### Drawings need a second scoping rule
 
@@ -94,38 +152,33 @@ is a path that proposes line items from a drawing, so `documentId` may be
 set; in practice on a real job it is not, and a rule that only works when
 somebody happened to use that path is not a rule.
 
-So a drawing observation is scoped by **booth** instead. Sections carry
-`groupLabel` — `FS - Reception Counter`, `SS - Lit Spines Hit Bay` — and
-that is the vocabulary a rendering actually speaks: the model describes a
-reception counter, not a line item. A drawing observation resolves to a
-booth, and may propose changes only to that booth's sections.
+So a drawing observation is scoped by **booth** instead, falling back to
+a specific line item when it names one unambiguously. Sections carry
+`groupLabel` — and note those prefixes are CLIENT names, not positions:
+`FS -` is Full Swing and `SS -` is Second Swing, two customers sharing
+one workbook. The V1 breakout subtotals them separately ($101,504 and
+$100,406) and its own Data Notes tab records three source files that
+arrived under the wrong client's name. Stripping the prefix to match a
+booth would conflate two customers.
 
-An observation that resolves to no booth is reported to the estimator as
-an unmatched finding rather than dropped. "The drawing shows something
-changed and I could not tell you where" is useful; silently discarding it
-is not.
+An observation that resolves to nothing is reported as an unmatched
+finding rather than dropped. "Something changed and I could not tell you
+where" is worth an estimator's attention.
 
 ### Corroboration is the confidence signal
 
-The three sources overlap, and where they agree the evidence is strong:
-
 | finding | drawing | schedule | AV quote | raised as |
 | --- | --- | --- | --- | --- |
-| reception counter gone | absent | absent | — | **Recommend and Confirm** — two independent sources |
-| video wall gone | absent | never present | needs the revised quote | Need Your Decision |
-| hanging sign simplified | changed shape | — | — | Need Your Decision |
+| reception counter gone | absent | `Eliminated 091827 TA` | — | **Recommend and Confirm** |
+| hanging sign changed | visibly simpler | — | — | Need Your Decision |
+| AV re-sourced | screens differ | — | vendor withdrawn | Need Your Decision |
 
-Agreement between two sources that were scoped independently makes a
-finding **Recommend and Confirm** — a method can be recommended, and the
-estimator confirms. A single source, especially a single absence, is
-**Need Your Decision**: the documentation does not support a reliable
-determination. Those are the estimating rules' own two question types
-(§1); see "What the estimating rules already settle" below.
+Agreement between two independently scoped sources makes a finding
+**Recommend and Confirm**. A single source, especially a single absence,
+is **Need Your Decision**. Those are the estimating rules' own two
+question types (§1).
 
-**Conflict is surfaced, never resolved silently.** If the schedule still
-carries a reception counter row and the drawing no longer shows one, that
-is a real question for a human — the drawing may be older, or the sheet
-may not have been updated. The review shows both and proposes neither.
+**Conflict is surfaced, never resolved silently.**
 
 ## What is being compared against what
 
@@ -249,33 +302,42 @@ repaired.
 
 ### 3. Review
 
-One screen, grouped by booth, because that is how the estimator and the
-client both talk about it.
+One screen, grouped by element, and it **leads with the gap rather than
+the saving**. On this job the reductions are large and still nowhere
+near the target, and a screen that celebrates $180,000 of savings while
+the number is $111,000 over is actively misleading.
 
 ```
-RE-COST REVIEW — version 2                    target $250,000
-current $658,785      proposed $?????      still over by $?????
+RE-COST REVIEW — version 2        value engineering
+target $250,000
 
-FS - Reception Counter                         −$7,917   [x] remove booth
-  25 items · absent from the revised drawing
-  "no reception counter shown"            drawing p7   inferred
+  fabrication   re-costed by TA 9/18            −61,028
+  hanging sign  needs a revised quote           −42,943  est.
+  lit letters   optional, appears out           −43,750  ?
+  AV            Fuse withdrawn, 5 x $2,800      −32,830  + labour
+  banners, G-Floor                               no change
 
-RENTAL                                        −$16,460   [x] remove
-  LED Screen 8'h x 11.39'w — and monitor
-  "video wall removed, 100in LED TV mounted"  AV quote   stated
+  projected                                    ~$361,000
+  STILL OVER BY                                 ~$111,000
+
+  the only untouched items with that much in them:
+    FS - Lit Angled Spines (Lounge)              37,281   no change
+    SS - Lounge Wall Structure                   47,798   no change
 ```
 
 Rules for this screen:
 
-- Nothing is applied until the estimator presses apply.
-- Every row shows its source and its quote. A row with no citation does
-  not exist.
-- `inferred` rows start unchecked. `stated` rows start checked.
-- The running total updates as boxes change, against the client's number.
-  Getting to the target is the whole job; the screen should answer "are
-  we there yet" without arithmetic.
-- Nothing here touches a locked version. The review only ever writes to
-  the open one.
+- Nothing applies until the estimator presses apply.
+- Every row shows its source and a verbatim quote. A row with no citation
+  does not exist.
+- In VALUE_ENGINEERING, `REMOVE` is never pre-checked and never leads.
+- `Recommend and Confirm` rows start checked; `Need Your Decision` rows
+  start unchecked.
+- A removal whose replacement is unpriced is **never shown as a saving**.
+  The AV line reads "−$32,830 + labour", not "−$32,830".
+- The gap to the client's number is the headline, and when the changes
+  do not reach it the screen says so and names where the remaining money
+  actually is.
 
 ### 4. Apply
 
@@ -288,83 +350,98 @@ Rules for this screen:
   weeks.
 - The whole apply is one transaction, then one `recomputeVersionTotals`.
 
-## Two worked cases
+## Three worked cases, from the real job
 
-### The clean one: the reception counter
+These are the three shapes a finding takes. Every element on ABC Chicago
+is one of them.
 
-Every source agrees, and none of them needed a label.
+### 1. Written down — read it, do not infer it
 
-The superseded drawing described it from the picture alone — no tag, no
-callout naming it:
+`Full Swing @ ABCA 2027 estimates updated 091826.xlsx` carries a status
+column, initialled and dated by the estimator:
 
 ```
-p7: L shape reception counter dimensions: 8' x 6' x 40".
-p7: Counter thickness: 20".
-p7: Include 3" white LED toe kick, 5 lockable doors, 1 shelf ...
-p7: 4'6" x 1' pierce logo with white LED glow.
+FS - Hitting Bay Wall     43,849 → 19,202   Updated 091826 TA
+FS - Diamond Sign 3'1      6,110 →  2,542   Updated 091827 TA
+FS - Diamond Sign 5'4      2,508 →      0   Eliminated 091827 TA
+FS - Diamond Sign 6'6      4,288 →  2,550   Updated 091827 TA
+FS - Reception Counter     7,469 →      0   Eliminated 091827 TA
+FS - Lit Spines (Lounge)  37,281 → 37,281   No change 091827 TA
+SS - Lit Spines (Hit Bay) 52,608 → 31,510   Updated 091827 TA
+SS - Lounge Wall          47,798 → 47,798   No change 091827 TA
+                         201,910 → 140,883        −61,028
 ```
 
-The revised drawing: absent from all 33 extracted items. The revised
-schedule: absent from all 150 rows — no `reception`, no `counter`. The
-estimate: `FS - Reception Counter`, 25 line items, **$7,917**.
+**This is the primary source and it beats every inference.** It is
+deterministic, exactly citable, and signed by the person who made the
+decision. No vision call competes with it, and the review must read it
+rather than re-derive it from renderings.
 
-Two independently scoped sources agree, so this is `stated`, checked by
-default, and applies as one booth-level removal. No judgement call.
+It is also why the drawing comparison's job is smaller than it first
+looked: it exists to corroborate this, and to cover what this does not —
+which is most of the money.
 
-### The hard one: AV with no revised quote
+### 2. Visible but unspecified — describe it, suggest, and ask
 
-This is the case that shapes the feature, and the naive answer is wrong.
+The system can see *what* changed and cannot price it. That is exactly
+Recommend and Confirm: state the observation, propose a treatment, ask
+for the number. It must never invent the missing spec.
 
-**A removal is not one line.** The video wall's own line is $16,460. The
-AV quote produced sixteen line items totalling $46,830:
+```
+HANGING SIGN — changed, needs a revised quote     Recommend and Confirm
 
-| | |
-| --- | --- |
-| LED Screen 8'h x 11.39'w | $16,460 |
-| LED Lead Engineer (4 entries) | $8,550 |
-| Media Server Programmer (2 entries) | $6,750 |
-| Video Utility (3 entries) | $3,400 |
-| Power Package, Data Package | $1,600 |
-| Truck, airfare, hotel, per diem | $10,070 |
+  v1 specified   90' x 20' x 8' tapered (8' thickest → 4' thinnest)
+                 double-sided stretch fabric
+                 2 large can letter sets 24' x 5'9"
+                 1 small can letter set 13' x 3'
+                 1 edge-lit diamond sign 5'3.5" sq
+                                       COMPONENTS.pdf p2
 
-A Media Server Programmer for four days exists **because there is an LED
-wall to drive**. Two 100" televisions on brackets do not need one, and do
-not need him flown in and housed for fifteen nights. A line-by-line diff
-cuts $16,460 and leaves $30,370 of crew and travel for equipment that is
-no longer in the booth.
+  v2 shows       one uniform height, no dimensional letters,
+                 printed fabric only
+                                       90X20 9-16-2026.pdf p1, p5
 
-So removals carry **dependent costs**, and the review has to propose the
-dependents alongside the thing itself — grouped, so the estimator sees
-"remove the video wall and its crew, −$46,830" as one decision with its
-parts visible, not sixteen unrelated rows. Getting this wrong is not a
-rounding error; on this job it is most of the gap to the client's number.
+  Suggested      single-height tension-fabric (pillowcase) sign;
+                 the can letter sets and the edge-lit diamond
+                 appear to be out
 
-Dependents are proposed at `inferred` and never auto-applied. The link
-between an LED engineer and an LED wall is real but it is a judgement,
-and the estimator is the one who knows whether that engineer is also
-running something else.
+  Currently      $55,943  Hanging Sign        (IAC 55672)
+                 $43,750  Lit Letters & Logo  — marked Optional
+```
 
-**The replacement cannot be priced, and must not be guessed.** The
-catalog has `43"`, `55"` and `65" Flat Screen Monitor & Mount Bracket` —
-no 100" entry, and every one of those carries a null unit cost. There is
-no honest number available for two 100" screens.
+The discipline is in "appears to be out". No sheet states the new height,
+so the review does not state one either. The estimator supplies the
+dimension; the system supplies the observation that it changed, the
+evidence for it, and a proposed treatment.
 
-What the review does instead:
+### 3. Vendor withdrawn — the quote goes, the scope does not
 
-1. Proposes the removals, with their dependents, at `inferred`.
-2. Raises a **gap**: this booth now has scope with no price.
-3. Proposes a **bid package** for the AV trade, with the scope read off
-   the drawing — *"two 100" LED screens, mounted"* — which is the artifact
-   you send the vendor to get the number. `BidPackage.tradeCode` already
-   exists for exactly this.
+```
+AUDIO VISUAL — vendor changed                      Need Your Decision
 
-The estimate is then honestly incomplete rather than dishonestly
-complete, and the next action is obvious and belongs to a person.
+  Fuse Technical Group is no longer supplying this scope.
+  Withdrawing quote 369711 V2 removes 16 line items, $46,830:
 
-**A removal whose replacement is unpriced is never silently a saving.**
-The running total must show the booth as unpriced, not as $46,830
-cheaper — otherwise the review reports hitting the client's budget by
-deleting scope that is coming straight back at an unknown price.
+     35 Brompton LED tiles + processor + fibre + media server
+     8 x 55" portrait monitors, 2 x 65" flown monitors
+     $18,700 Fuse crew   (LED engineer 9d, media server prog 5d)
+     $8,330 travel       (2 airfare, 15 hotel, 15 per diem)
+
+  Replaced by    5 x 100" monitors purchased at $2,800 = $14,000
+                 plus in-house install labour
+  Needs          the labour estimate
+```
+
+The crew and the travel leave because the vendor leaves. Nothing has to
+reason about dependent costs here — vendor withdrawal takes its whole
+quote with it, which is both simpler and more correct than inferring that
+an LED engineer follows an LED wall.
+
+### And the fourth shape: silence
+
+Banners $5,098 and G-Floor $21,655 are unchanged. They are recorded as
+unchanged and **not raised as questions**. A review that lists everything
+is a review nobody reads twice.
 
 ## What the estimating rules already settle
 
@@ -477,41 +554,66 @@ estimating a job, not revising one.
 
 ## Data model
 
-One new table. Proposals are durable because the review is not a single
-sitting — an estimator will run it, leave, and come back.
+Three additions, and the first is the one that carries the reframe.
+
+**Document validity.** A document is `CURRENT`, `SUPERSEDED` (a newer
+version exists) or `WITHDRAWN` (the source is dead, nothing replaces it).
+Today ForgeOS models only the supersedes link, which makes those last two
+indistinguishable — and they are completely different situations for the
+line items hanging off them.
 
 ```prisma
-model RecostProposal {
-  id                String   @id @default(cuid())
-  estimateVersionId String            // the OPEN version being re-costed
-  proposalId        String?           // the REVISIONS_REQUESTED proposal
-  lineItemId        String?
-  sectionId         String?
-  action            RecostAction      // REMOVE | REDUCE_QTY | REPRICE | ADD | NEEDS_QUOTE
-  dependsOnId       String?           // the removal this one follows from --
-                                      // an LED engineer removed because the
-                                      // LED wall was. Grouped in the review,
-                                      // decided together, never automatic --
-                                      // the rules forbid assuming freight,
-                                      // installation or engineering without
-                                      // supporting scope (§15), and the
-                                      // converse is not written down at all.
-  newQty            Decimal?
-  newUnitCost       Decimal?
-  reason            String
-  sourceDocumentId  String
-  sourceQuote       String
-  confidence        RecostConfidence  // RECOMMEND_AND_CONFIRM | NEED_YOUR_DECISION
-                                      // -- the estimating rules' own two
-                                      // question types (§1), not a
-                                      // second vocabulary for the same idea
-  status            RecostStatus      // PROPOSED | ACCEPTED | REJECTED | APPLIED
-  decidedById       String?
-  decidedAt         DateTime?
+enum DocumentValidity { CURRENT  SUPERSEDED  WITHDRAWN }
+
+model Document {
+  // ...
+  validity       DocumentValidity @default(CURRENT)
+  // Why it stopped being current, in the estimator's words -- "Fuse is
+  // no longer supplying AV on this job". Read by the review, so it is
+  // worth a sentence rather than a flag alone.
+  validityNote   String?
+  validityAt     DateTime?
 }
 ```
 
-Expand-only, matching how every migration in this repo has been done.
+Nothing is deleted when validity changes. A line item whose
+`documentId` points at a non-`CURRENT` document is **stale**, which is a
+derived read, not a stored one: it is in the estimate, it still costs
+money, and it is a candidate for a question. That is the entire
+mechanism.
+
+**The re-cost itself**, so a review survives being left and returned to,
+and so the mode is recorded rather than re-guessed each time.
+
+```prisma
+model RecostReview {
+  id                String       @id @default(cuid())
+  estimateVersionId String       // the OPEN version
+  proposalId        String?      // the REVISIONS_REQUESTED proposal
+  mode              RecostMode   // VALUE_ENGINEERING | REDESIGN
+  targetAmount      Decimal?     // the client's number, when stated
+  createdById       String?
+  proposals         RecostProposal[]
+}
+
+enum RecostMode { VALUE_ENGINEERING  REDESIGN }
+```
+
+**The proposals**, as already specced, with `RE_SOURCE` added and a
+vendor field, because "who is supplying this" is the thing that changed
+on the AV and it is not expressible as a price or a quantity.
+
+```prisma
+model RecostProposal {
+  // ... as before ...
+  action         RecostAction  // REMOVE | REDUCE_QTY | REPRICE
+                               // | RE_SOURCE | ADD | NEEDS_QUOTE
+  newVendorName  String?       // RE_SOURCE only
+  newCostBasis   String?       // RE_SOURCE only -- "purchase" vs "rental"
+}
+```
+
+All expand-only: new enums, new nullable columns, one new table.
 
 ## Deliberately out of scope
 
@@ -528,67 +630,60 @@ Expand-only, matching how every migration in this repo has been done.
 
 ## Build order
 
-1. Wire `computeScopeDiff` into the import preview. Standalone value —
-   it shows what the client dropped before anything is committed — and it
-   is stage 1's spreadsheet half.
-2. Drawing-vs-drawing comparison as a paired-image vision call. This is
-   the step that reads a revised design with no dimensions on it, so it
-   carries most of the feature's value on a rendering package -- and it
-   is the step most likely to need iterating on page pairing.
-3. `RecostProposal` model + the AI proposal stage, behind a button, with
-   output validated against the database.
-4. The review screen.
-5. Apply + audit.
+Reordered by what the real documents turned out to contain. Reading the
+estimator's own status column is now step one, because it is the primary
+source and it needs no AI at all.
 
-Each step is useful alone, which matters: if the AI stage proves
-unreliable on real jobs, steps 1 and 2 still stand on their own and the
-estimator does the mapping by eye.
+1. **Document validity.** The enum, the column, and the UI to mark a
+   document superseded or withdrawn. Line items read as stale from it.
+   Standalone value: "these 16 line items come from a quote by a vendor
+   who is off the job" is worth knowing on its own.
+2. **Read the status column.** Parse `Updated` / `Eliminated` /
+   `No change` out of a revised schedule and turn it into proposals
+   directly. Deterministic, exactly citable, and on this job it is
+   $61,028 of the answer.
+3. **The re-cost review screen**, gap-led, over those two sources alone.
+   At this point the feature is useful with no AI in it.
+4. **Drawing comparison into the review** — corroboration, plus the
+   changes no spreadsheet covers, like the sign.
+5. **The AI proposal stage** for what is left: mapping an observation
+   onto line items, and the Recommend-and-Confirm questions.
+6. **Apply + audit.**
 
-## Provisional answers
+Steps 1-3 carry most of the value and none of the risk. If the AI stage
+never proves reliable on a second job, the feature still works.
 
-These are working assumptions, not decisions. Taze has been asked; each
-one below is what the feature does until he answers, and each is written
-so that a different answer changes one place rather than the whole
-design.
+## Answered by the estimator
 
-**Cut scope is soft-deleted from the open version, and the
-`RecostProposal` row is the record.** §14's separability rule is about
-estimating a job with optional features in it, not about revising one:
-the client did not ask for the reception counter as an alternate, they
-removed it. The proposal row already holds what went, why, and on whose
-evidence, so the removal is auditable and reversible without a second
-copy of the scope existing.
+These were working assumptions. The estimator has since answered them
+directly, and the answers reshaped the feature rather than just filling
+blanks.
 
-*But* "move to an Option instead" is offered per finding, as an explicit
-choice the estimator can make when they want the cut scope to stay
-sellable — which is the case §14 is actually about, and the case where
-"here is what your budget bought and what it cost you" is worth showing a
-client. Default off.
+**Cut scope is not cut.** *"The line items do not disappear unless the
+client has requested a full redesign which changes all elements within
+the exhibit. If the client loves the design but they want it value
+engineered to save costs, all line items need to be flagged as
+potentially changing but not necessarily being removed."* Hence
+`RecostMode`, and hence `REMOVE` never leading a value-engineering
+review. The Option question is moot: nothing is being moved out of the
+base scope, it is being re-quoted in place.
 
-**Vendor crew and travel are always Need Your Decision, never Recommend
-and Confirm.** No rule covers a vendor's labour scaling with the
-equipment it exists for, and the estimating rules are explicit that
-installation and engineering are not assumed without supporting scope
-(§15). So the LED Lead Engineer and the Media Server Programmer are
-proposed, grouped under the wall they follow from, and never pre-checked.
-Only the estimator knows whether that engineer is also running something
-else on the same show.
+**A withdrawn vendor takes its quote with it.** *"Fuse will not be the
+vendor on this job now so the quote will be removed from the estimate
+and replaced by the purchase price for the monitor along with our
+estimate of labor to install the 5 100" monitors."* That is `RE_SOURCE`,
+and it answers the dependent-cost question far more cleanly than
+inference would: the LED engineer and the hotel nights leave because the
+vendor leaves.
 
-**A finding is raised when it moves the booth by $500 or more, and
-always when it removes a whole section or booth regardless of amount.**
-§1 gates questions on material effect and never defines it. $500 is a
-starting threshold, not a derived one — it is low enough to catch
-anything worth an estimator's attention on a job of this size and high
-enough to keep the review from listing every bracket. Configurable, and
-expected to move once a real review has been run.
+**When the documentation does not state the change, suggest and ask.**
+*"The system should flag the sign as a change and ask the question if the
+documentation does not specifically state what the change is. It should
+give a suggestion."* Which is Recommend and Confirm, applied to a case
+where the evidence is visual and the number is missing.
 
-**The newest document in a supersedes chain controls.** §2 requires
-recording which revision was used and §1 requires identifying conflicts,
-but neither says the later drawing wins. It nearly always does. Stating
-it lets the system act rather than raising a conflict every time a
-document is superseded — and a genuine conflict (the schedule still
-carrying scope the newest drawing dropped) is still surfaced, because
-that is a disagreement between sources, not between revisions.
+Still open: the $500 materiality threshold, and whether the newest
+document in a chain simply controls. Neither blocks the build.
 
 ## Open questions
 
