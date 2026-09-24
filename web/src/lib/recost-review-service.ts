@@ -341,6 +341,25 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
   // The batch's own scope, computed the same way the batch selects:
   // recommended, and never a removal. The money is what those rows would
   // actually move, from the numbers already stored on them.
+  // What is STILL to come, as opposed to what the workbook described.
+  //
+  // Once proposals have been applied the estimate has already moved, and
+  // the workbook's own delta has become history. Adding it to the new
+  // total projects a number the job will never reach: after applying 56
+  // of 96 rows this card read "projected $465,003" against a real
+  // $564,645, because the -$61,028 was counted twice. So once proposals
+  // exist, the projection is built from the undecided ones alone.
+  const outstandingDelta = stored.reduce((total, p) => {
+    const lineItem = p.lineItemId ? proposalLineItems.get(p.lineItemId) : undefined;
+    if (!lineItem) return total;
+    const before = lineItem.totalCost.toNumber();
+    if (p.action === "REMOVE") return total - before;
+    const qty = p.newQty?.toNumber() ?? lineItem.qty.toNumber();
+    const unitCost = p.newUnitCost?.toNumber() ?? lineItem.unitCost.toNumber();
+    return total + (qty * unitCost - before);
+  }, 0);
+  const decidedCount = allProposals.length - stored.length;
+
   const recommendedRows = stored.filter(
     (p) => p.confidence === "RECOMMEND_AND_CONFIRM" && p.action !== "REMOVE" && p.lineItemId !== null,
   );
@@ -363,7 +382,29 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     notes.push("No budget figure could be read from the client's request, so no gap is shown. Set one to see it.");
   }
 
-  const rollup = buildRecostRollup({ lines, currentCost, currentSell, target });
+  // Proposals supersede the workbook's own arithmetic the moment any of
+  // them is decided, because the estimate underneath has moved.
+  const linesForRollup =
+    allProposals.length === 0
+      ? lines
+      : lines.map((line) =>
+          line.status === "RECOSTED"
+            ? {
+                ...line,
+                costDelta: outstandingDelta,
+                costBefore: currentCost,
+                costAfter: currentCost + outstandingDelta,
+                // Counted across the whole review rather than this
+                // document alone, because that is what the projection
+                // beside it is built from.
+                detail:
+                  `${stored.length} change${stored.length === 1 ? "" : "s"} still to decide` +
+                  (decidedCount > 0 ? `, ${decidedCount} already decided and in the total below` : ""),
+              }
+            : line,
+        );
+
+  const rollup = buildRecostRollup({ lines: linesForRollup, currentCost, currentSell, target });
 
   // Only ever a prompt to look, never a proposal: these are untouched
   // because an estimator decided not to touch them.
