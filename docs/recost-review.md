@@ -1,7 +1,8 @@
 # Re-cost review
 
-Status: steps 1-5 built as of 2026-09-24, steps 1-4 verified on
-production; step 6 (apply + audit) not started. Written
+Status: all six steps built as of 2026-09-24. Steps 1-5 verified on
+production against the job below; step 6 (apply + audit) built and
+tested, not yet exercised on a real proposal. Written
 2026-09-23 against Full Swing American Baseball Chicago, which is the
 worked example throughout and is still the job every number below comes
 from.
@@ -671,7 +672,13 @@ source and it needs no AI at all.
    cites, every number must appear in that quote, and a removal on a
    value-engineering job is never pre-confirmed. What fails is logged
    with a reason rather than silently dropped.*
-6. **Apply + audit.**
+6. **Apply + audit.** *Built — `recost-apply.ts` decides what accepting
+   a proposal actually does, and `recost-apply-service.ts` does it.
+   Accepting is a decision and always means something; applying is money
+   moving and only happens when there is a definite change to make. Most
+   accepted proposals on this job have nothing to apply, and say so.
+   Removals go through `deleteLineItem`, so each one is audited and
+   restorable from its own snapshot. No bulk accept, deliberately.*
 
 Steps 1-3 carry most of the value and none of the risk. If the AI stage
 never proves reliable on a second job, the feature still works.

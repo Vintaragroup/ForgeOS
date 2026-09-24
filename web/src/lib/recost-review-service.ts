@@ -20,6 +20,7 @@ import { pairSummaryRows, summariseChanges, type ElementChange } from "@/lib/rec
 import { groupStaleLineItems, type ValiditySource } from "@/lib/document-validity";
 import { buildRecostRollup, parseTargetAmount, untouchedCandidates, type RecostLine } from "@/lib/recost-rollup";
 import { corroborateDrawingAgainstSchedule, corroborationHeadline } from "@/lib/recost-corroboration";
+import { describeEffect, effectOf, movesMoney } from "@/lib/recost-apply";
 import { readStoredComparison } from "@/lib/drawing-comparison";
 import type { RecostReview } from "@/lib/recost-review";
 
@@ -207,9 +208,28 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     ).map((d) => [d.id, d]),
   );
 
+  // A section removal's real size, so the screen can say "all 25 line
+  // items, $7,917" instead of "this section".
+  const sectionTotals = new Map<string, { count: number; amount: number }>();
+  for (const sectionId of new Set(stored.map((p) => p.sectionId).filter((id): id is string => id !== null))) {
+    const items = await db.lineItem.findMany({ where: { sectionId }, select: { totalCost: true } });
+    sectionTotals.set(sectionId, {
+      count: items.length,
+      amount: items.reduce((n, li) => n + li.totalCost.toNumber(), 0),
+    });
+  }
+
   const proposals = stored.map((p) => {
     const lineItem = p.lineItemId ? proposalLineItems.get(p.lineItemId) : undefined;
     const section = p.sectionId ? proposalSections.get(p.sectionId) : undefined;
+    const effect = effectOf({
+      action: p.action,
+      lineItemId: p.lineItemId,
+      sectionId: p.sectionId,
+      newUnitCost: p.newUnitCost?.toNumber() ?? null,
+      newQty: p.newQty?.toNumber() ?? null,
+    });
+    const sectionSize = p.sectionId ? sectionTotals.get(p.sectionId) : undefined;
     return {
       id: p.id,
       action: p.action,
@@ -221,6 +241,11 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
       amount: lineItem?.totalCost.toNumber() ?? p.newUnitCost?.toNumber() ?? null,
       sourceQuote: p.sourceQuote,
       sourceFilename: proposalDocuments.get(p.sourceDocumentId)?.filename ?? "(source removed)",
+      effect: describeEffect(effect, {
+        itemCount: sectionSize?.count,
+        amount: sectionSize?.amount ?? lineItem?.totalCost.toNumber(),
+      }),
+      movesMoney: movesMoney(effect),
     };
   });
 

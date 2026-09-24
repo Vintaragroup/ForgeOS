@@ -2,6 +2,7 @@ import type { RecostReview } from "@/lib/recost-review";
 import type { CorroborationKind } from "@/lib/recost-corroboration";
 import { rollupHeadline } from "@/lib/recost-rollup";
 import { RunRecostProposalsButton } from "@/components/run-recost-proposals-button";
+import { RecostProposalDecision } from "@/components/recost-proposal-decision";
 
 // Where the re-cost stands against the client's number.
 //
@@ -226,6 +227,12 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
                   <p className="mt-1 text-xs font-medium text-amber-800">
                     {p.confidence === "NEED_YOUR_DECISION" ? "Needs your decision" : "Recommended — confirm"}
                   </p>
+                  <RecostProposalDecision
+                    estimateId={estimateId}
+                    proposalId={p.id}
+                    effect={p.effect}
+                    movesMoney={p.movesMoney}
+                  />
                 </li>
               ))}
             </ul>

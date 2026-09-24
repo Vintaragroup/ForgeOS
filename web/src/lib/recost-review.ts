@@ -44,6 +44,10 @@ export interface RecostReview {
     amount: number | null;
     sourceQuote: string;
     sourceFilename: string;
+    // What accepting it would do, said before the click rather than
+    // explained after it. See recost-apply.ts.
+    effect: string;
+    movesMoney: boolean;
   }[];
   // Said out loud rather than left to be noticed: a review assembled
   // from a schedule alone has not seen the quotes.

@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { db } from "@/lib/db";
 import { requireEstimateAccess } from "@/lib/opportunity-access";
+import { decideRecostProposal } from "@/lib/recost-apply-service";
 import { proposeRecostChanges } from "@/lib/ai/recost-proposal-service";
 import { catchUserError } from "@/lib/user-error";
 import type { ActionResult } from "@/lib/user-error";
@@ -27,5 +29,30 @@ export async function proposeRecostChangesAction(
     const run = await proposeRecostChanges(estimateId, user.id);
     revalidatePath(`/estimates/${estimateId}`);
     return run;
+  });
+}
+
+// Records an estimator's answer to one proposal, and applies it when
+// there is something to apply.
+//
+// One proposal per call, never a bulk accept. Every row came from a
+// model reading a drawing, and "accept all" is the affordance that turns
+// a reviewed list into an unreviewed one.
+export async function decideRecostProposalAction(
+  estimateId: string,
+  proposalId: string,
+  decision: "ACCEPT" | "REJECT",
+  _prev: ActionResult,
+  _formData: FormData,
+): Promise<ActionResult> {
+  const user = await requireEstimateAccess(estimateId);
+  const estimate = await db.estimate.findUniqueOrThrow({
+    where: { id: estimateId },
+    select: { opportunityId: true },
+  });
+
+  return catchUserError(async () => {
+    await decideRecostProposal(proposalId, estimate.opportunityId, user.id, decision);
+    revalidatePath(`/estimates/${estimateId}`);
   });
 }
