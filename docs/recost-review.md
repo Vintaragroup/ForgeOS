@@ -285,6 +285,84 @@ Rules for this screen:
   weeks.
 - The whole apply is one transaction, then one `recomputeVersionTotals`.
 
+## Two worked cases
+
+### The clean one: the reception counter
+
+Every source agrees, and none of them needed a label.
+
+The superseded drawing described it from the picture alone — no tag, no
+callout naming it:
+
+```
+p7: L shape reception counter dimensions: 8' x 6' x 40".
+p7: Counter thickness: 20".
+p7: Include 3" white LED toe kick, 5 lockable doors, 1 shelf ...
+p7: 4'6" x 1' pierce logo with white LED glow.
+```
+
+The revised drawing: absent from all 33 extracted items. The revised
+schedule: absent from all 150 rows — no `reception`, no `counter`. The
+estimate: `FS - Reception Counter`, 25 line items, **$7,917**.
+
+Two independently scoped sources agree, so this is `stated`, checked by
+default, and applies as one booth-level removal. No judgement call.
+
+### The hard one: AV with no revised quote
+
+This is the case that shapes the feature, and the naive answer is wrong.
+
+**A removal is not one line.** The video wall's own line is $16,460. The
+AV quote produced sixteen line items totalling $46,830:
+
+| | |
+| --- | --- |
+| LED Screen 8'h x 11.39'w | $16,460 |
+| LED Lead Engineer (4 entries) | $8,550 |
+| Media Server Programmer (2 entries) | $6,750 |
+| Video Utility (3 entries) | $3,400 |
+| Power Package, Data Package | $1,600 |
+| Truck, airfare, hotel, per diem | $10,070 |
+
+A Media Server Programmer for four days exists **because there is an LED
+wall to drive**. Two 100" televisions on brackets do not need one, and do
+not need him flown in and housed for fifteen nights. A line-by-line diff
+cuts $16,460 and leaves $30,370 of crew and travel for equipment that is
+no longer in the booth.
+
+So removals carry **dependent costs**, and the review has to propose the
+dependents alongside the thing itself — grouped, so the estimator sees
+"remove the video wall and its crew, −$46,830" as one decision with its
+parts visible, not sixteen unrelated rows. Getting this wrong is not a
+rounding error; on this job it is most of the gap to the client's number.
+
+Dependents are proposed at `inferred` and never auto-applied. The link
+between an LED engineer and an LED wall is real but it is a judgement,
+and the estimator is the one who knows whether that engineer is also
+running something else.
+
+**The replacement cannot be priced, and must not be guessed.** The
+catalog has `43"`, `55"` and `65" Flat Screen Monitor & Mount Bracket` —
+no 100" entry, and every one of those carries a null unit cost. There is
+no honest number available for two 100" screens.
+
+What the review does instead:
+
+1. Proposes the removals, with their dependents, at `inferred`.
+2. Raises a **gap**: this booth now has scope with no price.
+3. Proposes a **bid package** for the AV trade, with the scope read off
+   the drawing — *"two 100" LED screens, mounted"* — which is the artifact
+   you send the vendor to get the number. `BidPackage.tradeCode` already
+   exists for exactly this.
+
+The estimate is then honestly incomplete rather than dishonestly
+complete, and the next action is obvious and belongs to a person.
+
+**A removal whose replacement is unpriced is never silently a saving.**
+The running total must show the booth as unpriced, not as $46,830
+cheaper — otherwise the review reports hitting the client's budget by
+deleting scope that is coming straight back at an unknown price.
+
 ## Data model
 
 One new table. Proposals are durable because the review is not a single
@@ -297,7 +375,11 @@ model RecostProposal {
   proposalId        String?           // the REVISIONS_REQUESTED proposal
   lineItemId        String?
   sectionId         String?
-  action            RecostAction      // REMOVE | REDUCE_QTY | REPRICE | ADD
+  action            RecostAction      // REMOVE | REDUCE_QTY | REPRICE | ADD | NEEDS_QUOTE
+  dependsOnId       String?           // the removal this one follows from --
+                                      // an LED engineer removed because the
+                                      // LED wall was. Grouped in the review,
+                                      // decided together, always INFERRED.
   newQty            Decimal?
   newUnitCost       Decimal?
   reason            String
@@ -359,3 +441,11 @@ estimator does the mapping by eye.
 3. **What happens to a client-owned or `excludedFromTotals` line?** They
    do not move the total, so a removal proposal for one is noise.
    Suggest: exclude from the review entirely.
+
+4. **How far do dependent costs reach?** Crew and travel clearly follow
+   the equipment. Freight and power probably do. Show Services
+   Management, which is a percentage of the job, follows the total
+   rather than any one booth -- so it should recompute, not be proposed
+   for removal. Worth walking one real job with an estimator before
+   encoding a rule, because this is exactly the knowledge that does not
+   survive being guessed at.
