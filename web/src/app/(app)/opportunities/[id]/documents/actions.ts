@@ -7,6 +7,7 @@ import {
   deleteDocument,
   finalizeUploadedDocument,
   setDocumentSupersedes,
+  setDocumentValidity,
   updateDocumentType,
 } from "@/lib/document-service";
 import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
@@ -151,6 +152,30 @@ export async function compareDrawingRevisionAction(
       }
       throw err;
     }
+    revalidatePath(`/opportunities/${opportunityId}`);
+  });
+}
+
+// "This source is no longer valid" -- a vendor off the job, a quote that
+// expired. Removes nothing; the line items stay and are flagged for the
+// re-cost review. Returns its refusal rather than throwing, because the
+// one way this declines (no reason given) is something the person can
+// fix on the form.
+export async function setDocumentValidityAction(
+  opportunityId: string,
+  documentId: string,
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  return catchUserError(async () => {
+    await requireOpportunityAccess(opportunityId);
+    const withdraw = String(formData.get("validity") ?? "") === "WITHDRAWN";
+    await setDocumentValidity(
+      opportunityId,
+      documentId,
+      withdraw ? "WITHDRAWN" : "CURRENT",
+      String(formData.get("validityNote") ?? ""),
+    );
     revalidatePath(`/opportunities/${opportunityId}`);
   });
 }

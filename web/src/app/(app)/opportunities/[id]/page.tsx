@@ -7,6 +7,7 @@ import { diffDocumentAgainstPredecessor } from "@/lib/document-service";
 import { DocumentDiffSummary } from "@/components/document-diff-summary";
 import { isScheduleDocumentType } from "@/lib/recosting";
 import { DrawingComparisonSummary } from "@/components/drawing-comparison-summary";
+import { DocumentValidityControl } from "@/components/document-validity-control";
 import type { DrawingComparison } from "@/lib/drawing-comparison";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
@@ -1453,6 +1454,21 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                       </span>
                     );
                   })()}
+                  {/* Removes nothing -- see document-validity.ts. Sits
+                      beside the revision picker because "replaced by a
+                      newer version" and "no longer a valid source" are
+                      the two ways a document stops being current, and
+                      they are different situations. */}
+                  <DocumentValidityControl
+                    opportunityId={opportunity.id}
+                    documentId={doc.id}
+                    filename={doc.filename}
+                    validity={doc.validity}
+                    validityNote={doc.validityNote}
+                    supersededByFilename={
+                      documents.find((d) => d.supersedesId === doc.id)?.filename ?? null
+                    }
+                  />
                   <DocumentRevisionPicker
                     opportunityId={opportunity.id}
                     documentId={doc.id}

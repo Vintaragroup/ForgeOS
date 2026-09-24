@@ -853,6 +853,34 @@ model Document {
   supersedes   Document?  @relation("DocumentRevision", fields: [supersedesId], references: [id])
   supersededBy Document[] @relation("DocumentRevision")
 
+  // Whether this document is still the authority for what it produced.
+  //
+  // Losing currency removes NOTHING from the estimate. The line items a
+  // document created keep sitting there costing money; they just stop
+  // having a current source behind them. That distinction is the whole
+  // point -- per the estimating lead: "the line items do not disappear
+  // unless the client has requested a full redesign which changes all
+  // elements within the exhibit. If the client loves the design but they
+  // want it value engineered to save costs, all line items need to be
+  // flagged as potentially changing but not necessarily being removed."
+  //
+  // SUPERSEDED and WITHDRAWN were one thing before, and they are not:
+  // a superseded document has a newer version to compare against, while
+  // a withdrawn one is simply dead. Full Swing's AV quote is withdrawn
+  // because Fuse is no longer the vendor, which takes all sixteen of its
+  // line items with it -- including their crew and travel, because those
+  // leave with the vendor rather than by anyone inferring it.
+  //
+  // Derived where it can be: a document with a supersededBy is
+  // SUPERSEDED without anyone setting it. WITHDRAWN is always a human
+  // act, because only a person knows a vendor is off the job.
+  validity     DocumentValidity @default(CURRENT)
+  // Why, in the estimator's words -- "Fuse is no longer supplying AV on
+  // this job". Shown wherever the stale line items surface, so it is
+  // worth a sentence rather than a bare flag.
+  validityNote String?
+  validityAt   DateTime?
+
   createdAt DateTime  @default(now())
   deletedAt DateTime?
 
@@ -4337,4 +4365,15 @@ enum RecostStatus {
   ACCEPTED
   REJECTED
   APPLIED
+}
+
+
+// See Document.validity for why these three are distinct.
+enum DocumentValidity {
+  CURRENT
+  // A newer version of this same document exists.
+  SUPERSEDED
+  // No longer a valid source, and nothing replaces it. A vendor off the
+  // job, a quote that expired, a spreadsheet built on a dead assumption.
+  WITHDRAWN
 }

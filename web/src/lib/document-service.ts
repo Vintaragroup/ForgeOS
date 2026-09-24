@@ -257,6 +257,45 @@ function extractPricedRows(vendorQuoteLineItems: unknown, proposedLineItems: unk
   return fromQuote.length > 0 ? fromQuote : read(proposedLineItems, "unitCost");
 }
 
+// Marks a document as no longer a valid source, or restores it.
+//
+// This removes NOTHING. The line items the document produced stay in the
+// estimate and keep costing money -- they just stop having a current
+// source behind them, which is what the re-cost review reads. See
+// docs/recost-review.md and document-validity.ts.
+//
+// Only WITHDRAWN and CURRENT are settable. SUPERSEDED is derived from
+// the revision chain and would drift from it the moment a link changed,
+// so it is never stored by hand.
+export async function setDocumentValidity(
+  opportunityId: string,
+  documentId: string,
+  validity: "CURRENT" | "WITHDRAWN",
+  note: string | null,
+) {
+  const existing = await db.document.findFirst({
+    where: { id: documentId, opportunityId, deletedAt: null },
+    select: { id: true },
+  });
+  if (!existing) throw new UserError("That document isn't on this opportunity.");
+
+  if (validity === "WITHDRAWN" && !note?.trim()) {
+    // The reason is the whole value of the flag. "This source is dead"
+    // with no why is a question for whoever reads it next, and they will
+    // not be able to answer it either.
+    throw new UserError("Say why this document is no longer valid -- whoever reads it next will need to know.");
+  }
+
+  return db.document.update({
+    where: { id: existing.id },
+    data: {
+      validity,
+      validityNote: validity === "WITHDRAWN" ? note!.trim() : null,
+      validityAt: validity === "WITHDRAWN" ? new Date() : null,
+    },
+  });
+}
+
 // Whether analysis has actually produced anything with a price on it.
 //
 // Distinct from extractionStatus === "COMPLETE": a document can finish
