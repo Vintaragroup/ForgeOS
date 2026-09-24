@@ -70,11 +70,33 @@ async function main() {
   await add("internal costs", db.internalCost.count({ where: { estimateVersionId: bad.id } }));
   await add("proposal events", db.proposalEvent.count({ where: { estimateVersionId: bad.id } }));
 
-  // An edit means someone has started working in here.
-  const edited = bad.sections
+  // Whether someone has actually WORKED in here.
+  //
+  // This used to be "any line item whose updatedAt is later than its
+  // createdAt", which conflates a person editing with a repair script
+  // touching every row. Full Swing PGA's v2 tripped it on all 360 items
+  // -- every one of them updated in two clusters, 356 at 15:26 and 4 at
+  // 15:38, which is repair-copied-version-fields.ts running, not an
+  // estimator working. A guard that refuses on its own maintenance is a
+  // guard that gets bypassed, which is worse than one that is accurate.
+  //
+  // LineItemAuditLog is ForgeOS's own record of the thing being asked
+  // about: recordLineItemAudit is shared by every LineItem CRUD function
+  // in estimate-service.ts, so anything done through the app is in here,
+  // and a script writing rows directly is not. That is exactly the
+  // distinction that matters.
+  const auditRows = await db.lineItemAuditLog.count({ where: { estimateVersionId: bad.id } });
+  if (auditRows > 0) blockers.push(`line item changes recorded on this version: ${auditRows}`);
+
+  // Reported, never blocking -- it tells the operator the rows have been
+  // touched, without claiming to know by whom.
+  const touched = bad.sections
     .flatMap((s) => s.lineItems)
     .filter((li) => li.updatedAt.getTime() - li.createdAt.getTime() > 2000).length;
-  if (edited > 0) blockers.push(`line items edited since the copy: ${edited}`);
+
+  if (touched > 0) {
+    console.log(`  ${touched} line item(s) have been written to since the copy (a repair script also counts)`);
+  }
 
   if (blockers.length > 0) {
     console.log("\nRefusing -- this version is not untouched:");
