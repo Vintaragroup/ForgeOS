@@ -47,33 +47,34 @@ Font.registerHyphenationCallback((word) => [word]);
 // telling adjacent categories apart at a glance.
 const SECTION_ACCENTS = [BRAND.navy, BRAND.teal, BRAND.tangerine, BRAND.tan];
 
-// How much of a heading's own content has to fit under it before the
-// heading is allowed to sit on a page at all.
+// Keeping a heading with its content, measured rather than reasoned
+// about. scripts/pdf-break-harness.tsx renders blocks of known height
+// into known remaining space and reads which page each lands on; these
+// are its results, against a 62pt block:
 //
-// react-pdf gives two tools and they solve different halves. wrap={false}
-// holds a block together, which stops a heading being split from its
-// summary -- but a block that is held together and still fits at the foot
-// of a page will happily sit there with all of its children overleaf.
-// minPresenceAhead is the other half: it refuses the position unless the
-// named amount of space follows.
+//   remaining                        120pt   80pt   62pt   48pt   40pt
+//   minPresenceAhead on wrap={false}   ok     ok     ok   SPLIT  SPLIT
+//   minPresenceAhead on container    MOVED  MOVED  MOVED  SPLIT  SPLIT
+//   wrap={false} on the whole block    ok     ok     ok   MOVED  MOVED
+//   heading + first two rows atomic    ok     ok     ok   split  MOVED
 //
-// A body row is about 12pt with its padding, so these are roughly "three
-// rows", "four rows", and for the two outer tiers enough for the heading's
-// own first child heading to come with it. Deliberately not larger: every
-// point here is a point of page that can end up blank, which is the
-// failure this is correcting in the first place.
+// Two things that cost two wrong attempts. minPresenceAhead on a
+// wrap={false} node is ignored entirely -- the column is identical to
+// having no hint at all. And on a container it does not mean "keep the
+// heading with its content": it requires the space to exist AFTER the
+// whole element, so a booth that would have fitted in 120pt of remaining
+// page was moved anyway. That is where the blank half-pages came back.
 //
-// Applied to the WRAPPABLE container, never to the atomic wrap={false}
-// header inside it. react-pdf ignores minPresenceAhead on a node that
-// cannot break -- confirmed on production, where putting it on the
-// header block left "Mobile Hitting Bay with Mesh Netting" alone at the
-// foot of page 2 with its own content on page 3, exactly the fault it
-// was added to prevent. The one pre-existing use of this prop in this
-// file (the subsection header) had it on a wrappable node all along.
-const MIN_AHEAD_SUBGROUP = 36;
-const MIN_AHEAD_ELEMENT = 48;
-const MIN_AHEAD_BOOTH = 72;
-const MIN_AHEAD_CATEGORY = 90;
+// wrap={false} on a whole block never splits, but the gap it leaves is
+// the height of the block -- which for a booth is most of a page. Making
+// only the heading and its first rows atomic bounds that gap at the size
+// of that small unit, and the split at 48pt is the correct outcome: the
+// heading kept two rows, the third went over.
+//
+// So: no minPresenceAhead anywhere, and the atomic unit is the heading
+// plus enough of its own content that it can never be the last thing on
+// a page.
+const LEAD_ROWS = 2;
 
 const styles = StyleSheet.create({
   // paddingTop/paddingBottom reserve room for the fixed running header
@@ -708,100 +709,111 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // resolved into "Audio/Visual - Rental") rendered correctly in the Line
   // Items tab but as a flat, unlabeled item dump on the actual Proposal
   // PDF specifically.
-  const renderBoothGroups = (boothGroups: BoothGroup[], categoryName: string, hidePrice: boolean, isSummary: boolean, isServiceStyle: boolean) => (
-    <>
-      {boothGroups.map((booth) => (
-        <View key={booth.boothLabel} style={styles.boothSection} minPresenceAhead={MIN_AHEAD_BOOTH}>
-          {/* Both, not either. wrap={false} measures the header and its
-              summary as one atomic block so the summary can never be
-              orphaned from its heading -- but on its own that still let a
-              heading land as the last thing on a page with every one of
-              its element groups overleaf, which is exactly what ABC
-              Chicago's proposal was doing. minPresenceAhead additionally
-              refuses to place the block unless roughly three rows of its
-              own content can follow it on the same page. */}
-          <View wrap={false}>
-            <View style={styles.boothHeaderRow}>
-              <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
-              <Text style={styles.boothHeaderTotal}>
-                {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
-              </Text>
-            </View>
-            {/* Middle tier -- see EstimateSection.boothSummary's own schema
-                comment. Always shown when written, independent of
-                summarizeOnProposal: booth.subtotal already includes every
-                item regardless, so the total stays correct whichever way
-                that flag is set, and this copy is additive context, not a
-                replacement for anything. */}
-            {booth.boothSummary && (
-              <Text style={styles.proposalSummaryText}>{truncateProposalSummary(booth.boothSummary)}</Text>
-            )}
-          </View>
-          {booth.elementGroups.map((group) => (
-            <View key={group.elementType} style={styles.elementTypeSection} minPresenceAhead={MIN_AHEAD_ELEMENT}>
+  const renderBoothGroups = (boothGroups: BoothGroup[], categoryName: string, hidePrice: boolean, isSummary: boolean, isServiceStyle: boolean) => {
+    // Chooses the row renderer once, so the three call sites below read
+    // as "rows" rather than repeating the same ternary.
+    const rows = (items: BoothGroup["elementGroups"][number]["items"]) =>
+      isSummary
+        ? renderSummaryBody(items)
+        : isServiceStyle
+          ? renderServiceBody(items, categoryName, hidePrice)
+          : renderBody(items, categoryName, hidePrice);
+
+    const elementHeading = (group: BoothGroup["elementGroups"][number]) => (
+      <>
+        <View style={styles.elementTypeHeaderRow}>
+          <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
+          <Text style={styles.elementTypeHeaderTotal}>
+            {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
+          </Text>
+        </View>
+        {/* Bottom tier -- always shown when written, same reasoning as
+            boothSummary. */}
+        {group.elementSummary && (
+          <Text style={styles.proposalSummaryText}>{truncateProposalSummary(group.elementSummary)}</Text>
+        )}
+      </>
+    );
+
+    return (
+      <>
+        {boothGroups.map((booth) => {
+          const [firstGroup, ...laterGroups] = booth.elementGroups;
+          const showFirstRows = firstGroup && !booth.summarizeOnProposal && !firstGroup.summarizeOnProposal;
+          return (
+            <View key={booth.boothLabel} style={styles.boothSection}>
+              {/* The booth heading, its summary, the first element
+                  heading and that element's first rows, as one atomic
+                  block. A heading with nothing after it can then never be
+                  the last thing on a page -- which is what stranded
+                  "Mobile Hitting Bay with Mesh Netting" at the foot of
+                  page 2 with its only content overleaf. Bounded on
+                  purpose: whatever cannot fit moves, and the blank it
+                  leaves is the height of this small block rather than the
+                  height of a whole booth. */}
               <View wrap={false}>
-                <View style={styles.elementTypeHeaderRow}>
-                  <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
-                  <Text style={styles.elementTypeHeaderTotal}>
-                    {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
+                <View style={styles.boothHeaderRow}>
+                  <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
+                  <Text style={styles.boothHeaderTotal}>
+                    {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
                   </Text>
                 </View>
-                {/* Bottom tier -- same "always shown" reasoning as
-                    boothSummary above. */}
-                {group.elementSummary && (
-                  <Text style={styles.proposalSummaryText}>{truncateProposalSummary(group.elementSummary)}</Text>
+                {booth.boothSummary && (
+                  <Text style={styles.proposalSummaryText}>{truncateProposalSummary(booth.boothSummary)}</Text>
                 )}
+                {firstGroup && elementHeading(firstGroup)}
+                {showFirstRows && rows(firstGroup.items.slice(0, LEAD_ROWS))}
               </View>
-              {/* summarizeOnProposal's only remaining job: skip just the
-                  itemized rows below -- at either level, the whole booth
-                  (booth.summarizeOnProposal) or just this one element
-                  group (group.summarizeOnProposal). See
-                  EstimateSection.summarizeOnProposal's own schema
-                  comment. */}
-              {!booth.summarizeOnProposal &&
-                !group.summarizeOnProposal &&
-                (isSummary
-                  ? renderSummaryBody(group.items)
-                  : isServiceStyle
-                    ? renderServiceBody(group.items, categoryName, hidePrice)
-                    : renderBody(group.items, categoryName, hidePrice))}
-              {/* H3 -- see ElementTypeGroup.subgroups' own comment. Empty
-                  for a group that's never used H3, so this renders nothing
-                  extra for every existing booth/component. Governed by the
-                  same summarizeOnProposal skip as the ungrouped items
-                  above -- an H3 subgroup has no summarize/hide of its own
-                  (v1 scope), it's fully governed by its H1/H2 ancestors. */}
-              {!booth.summarizeOnProposal &&
-                !group.summarizeOnProposal &&
-                // The whole subgroup used to carry wrap={false}, which is
-                // where the blank half-pages came from: a subgroup taller
-                // than the space left moved WHOLE to the next page and
-                // left the rest of the current one empty. A long list of
-                // rows is allowed to flow across a page break -- that is
-                // how a page gets filled. Only the header is held, with
-                // enough presence ahead that it never arrives alone at the
-                // foot of a page.
-                group.subgroups.map((subgroup) => (
-                  <View key={subgroup.subgroupLabel} style={styles.subgroupSection} minPresenceAhead={MIN_AHEAD_SUBGROUP}>
+
+              {/* The rest of the first element group flows from here --
+                  a long list is allowed to cross a page break, which is
+                  how a page gets filled. */}
+              {showFirstRows && rows(firstGroup.items.slice(LEAD_ROWS))}
+              {firstGroup && !booth.summarizeOnProposal && !firstGroup.summarizeOnProposal &&
+                firstGroup.subgroups.map((subgroup) => (
+                  <View key={subgroup.subgroupLabel} style={styles.subgroupSection}>
                     <View style={styles.subgroupHeaderRow} wrap={false}>
                       <Text style={styles.subgroupHeaderText}>{subgroup.subgroupLabel}</Text>
                       <Text style={styles.subgroupHeaderTotal}>
                         {hidePrice ? "" : amountContent(subgroup.subtotal, sellForCategory(subgroup.subtotal, categoryName), data.showCost)}
                       </Text>
                     </View>
-                    {isSummary
-                      ? renderSummaryBody(subgroup.items)
-                      : isServiceStyle
-                        ? renderServiceBody(subgroup.items, categoryName, hidePrice)
-                        : renderBody(subgroup.items, categoryName, hidePrice)}
+                    {rows(subgroup.items)}
                   </View>
                 ))}
+
+              {laterGroups.map((group) => {
+                const itemised = !booth.summarizeOnProposal && !group.summarizeOnProposal;
+                return (
+                  <View key={group.elementType} style={styles.elementTypeSection}>
+                    {/* Same shape one tier down: the heading carries its
+                        first rows and the remainder flows. */}
+                    <View wrap={false}>
+                      {elementHeading(group)}
+                      {itemised && rows(group.items.slice(0, LEAD_ROWS))}
+                    </View>
+                    {itemised && rows(group.items.slice(LEAD_ROWS))}
+                    {itemised &&
+                      group.subgroups.map((subgroup) => (
+                        <View key={subgroup.subgroupLabel} style={styles.subgroupSection}>
+                          <View style={styles.subgroupHeaderRow} wrap={false}>
+                            <Text style={styles.subgroupHeaderText}>{subgroup.subgroupLabel}</Text>
+                            <Text style={styles.subgroupHeaderTotal}>
+                              {hidePrice ? "" : amountContent(subgroup.subtotal, sellForCategory(subgroup.subtotal, categoryName), data.showCost)}
+                            </Text>
+                          </View>
+                          {rows(subgroup.items)}
+                        </View>
+                      ))}
+                  </View>
+                );
+              })}
             </View>
-          ))}
-        </View>
-      ))}
-    </>
-  );
+          );
+        })}
+      </>
+    );
+  };
 
   // hasServiceSplit is deliberately left based on VISIBLE buckets only,
   // never folded with omittedFromProposal sections below -- if a buried
@@ -1021,7 +1033,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
             }, 0);
 
           return (
-            <View key={categoryName} style={styles.section} minPresenceAhead={MIN_AHEAD_CATEGORY}>
+            <View key={categoryName} style={styles.section}>
               {/* Same pairing as the booth header -- see renderBoothGroups'
                   own comment. A category heading at the foot of a page with
                   its first booth overleaf reads as a section that opens
