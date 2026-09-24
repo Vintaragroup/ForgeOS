@@ -19,13 +19,7 @@ import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { getDocumentProxy, renderPageAsImage } from "unpdf";
-import {
-  dataUrlBytes,
-  fitPagesToBudget,
-  shrinkFactorForBudget,
-  visionPageScale,
-  VISION_TOTAL_IMAGE_BUDGET_BYTES,
-} from "@/lib/ai/vision-page-scale";
+import { chunkPagesByBudget, dataUrlBytes, visionPageScale } from "@/lib/ai/vision-page-scale";
 import {
   getDrawingAiClient,
   DRAWING_REASONING_BUDGET,
@@ -299,46 +293,15 @@ export async function pageImages(
       return { images, pageTexts, pageNumbers, totalBytes };
     }
 
-    let rendered = await renderAllPages(1);
-
-    // Every sheet of a design drawing says something the others don't, so
-    // when the set is too big for one request the whole thing is
-    // re-rendered smaller rather than having pages cut out of it.
-    if (rendered.totalBytes > VISION_TOTAL_IMAGE_BUDGET_BYTES) {
-      const shrink = shrinkFactorForBudget(rendered.totalBytes, VISION_TOTAL_IMAGE_BUDGET_BYTES);
-      console.warn(
-        `[pageImages] ${(rendered.totalBytes / 1024 / 1024).toFixed(1)}MB of page images exceeds the ` +
-          `${(VISION_TOTAL_IMAGE_BUDGET_BYTES / 1024 / 1024).toFixed(0)}MB budget -- re-rendering every page at ` +
-          `${shrink.toFixed(2)}x to keep all ${pageCount} of them`,
-      );
-      rendered = await renderAllPages(shrink);
-      console.log(`[pageImages] after re-render: ${(rendered.totalBytes / 1024 / 1024).toFixed(1)}MB`);
-    }
+    // Rendered once, at the scale each page needs to stay legible. Too
+    // big for one request is a batching problem, not a resolution one --
+    // see chunkPagesByBudget.
+    const rendered = await renderAllPages(1);
+    console.log(`[pageImages] ${(rendered.totalBytes / 1024 / 1024).toFixed(1)}MB of page images`);
 
     const { images, pageTexts, pageNumbers } = rendered;
 
-    // Last guard. Per-page fitting handles the common case, but a long
-    // drawing of many fitted pages can still total past the ceiling, and
-    // that rejection costs the entire analysis rather than one page.
-    // Analysing most of a drawing beats analysing none of it -- and the
-    // pages left out are named rather than quietly missing.
-    const budgeted = fitPagesToBudget(
-      images.map((dataUrl, i) => ({ dataUrl, pageNumber: pageNumbers[i], pageText: pageTexts[i] })),
-    );
-    if (budgeted.dropped.length > 0) {
-      console.warn(
-        `[pageImages] ${budgeted.dropped.length} page(s) exceeded the vision image budget and were excluded: ` +
-          budgeted.dropped.map((p) => p.pageNumber).join(", "),
-      );
-    }
-
-    return {
-      images: budgeted.kept.map((p) => p.dataUrl),
-      totalPages: pdf.numPages,
-      pageTexts: budgeted.kept.map((p) => p.pageText),
-      pageNumbers: budgeted.kept.map((p) => p.pageNumber),
-      blankPageNumbers,
-    };
+    return { images, totalPages: pdf.numPages, pageTexts, pageNumbers, blankPageNumbers };
   }
   throw new Error(`Unsupported file type for drawing analysis: ${mimeType}`);
 }
@@ -402,59 +365,110 @@ export async function summarizeDrawing(documentId: string, userId: string | null
       });
     }
 
-    const completion = await client.chat.completions.create({
-      model,
-      // Low, not zero -- exhaustive extraction, not creative writing, so
-      // there's no upside to the API default's high randomness. This was
-      // the one AI call in the app that never got this pinned when the
-      // other three (document-summary-service.ts, scope-coverage-
-      // service.ts, clarification-questions-service.ts) did earlier --
-      // confirmed the gap was real, not just theoretical, by a live
-      // re-run against the exact same page images going from 9 real
-      // extracted facts to 0.
-      temperature: 0.2,
-      // See drawing-ai-client.ts's own comment -- only relevant for an
-      // OpenRouter-routed reasoning model, inert otherwise.
-      ...(viaOpenRouter ? (DRAWING_REASONING_BUDGET as unknown as Record<string, unknown>) : {}),
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `Drawing: ${document.filename} (${images.length} page image${images.length === 1 ? "" : "s"})`,
-            },
-            ...buildPageContentParts(images, pageTexts, pageNumbers),
-          ],
-        },
-      ],
-      response_format: { type: "json_schema", json_schema: DRAWING_SCHEMA },
-    }, { timeout: DRAWING_REQUEST_TIMEOUT_MS });
+    // One request per batch of pages, not one per drawing.
+    //
+    // The provider's 30MB ceiling is per request, so a long drawing is a
+    // batching problem. Shrinking the pages to fit a single request was
+    // tried and is worse than failing: Full Swing's 14 sheets fitted in
+    // 18.6MB at 0.71x and the model then read nothing off them, because
+    // the dimension labels it exists to read were no longer legible.
+    // Pages stay at the scale they need; the request count varies.
+    const batches = chunkPagesByBudget(
+      images.map((dataUrl, i) => ({ dataUrl, pageNumber: pageNumbers[i], pageText: pageTexts[i] })),
+    );
+    console.log(
+      `[summarizeDrawing] ${images.length} page(s) across ${batches.length} request(s) for ${document.filename}`,
+    );
 
-    await recordAiUsage({
-      userId,
-      feature: "DRAWING_SUMMARY",
-      model,
-      usage: completion.usage,
-      documentId,
-      opportunityId: document.opportunityId,
-    });
+    const merged: DrawingSummaryFromAI = {
+      eventOrProjectName: null,
+      venue: null,
+      submissionDeadline: null,
+      keyDates: [],
+      scopeSummary: [],
+      riskFlags: [],
+    };
 
-    const content = completion.choices[0]?.message?.content;
-    if (!content) {
-      // A reasoning model can burn its whole token budget on internal
-      // reasoning and never reach the actual JSON -- a real failure mode
-      // confirmed live via OpenRouter (see DRAWING_REASONING_BUDGET), not
-      // hypothetical. Distinct message so this doesn't read as a plain API
-      // hiccup when it's actually a budget-tuning problem.
-      throw new Error(
-        viaOpenRouter
-          ? `${model} returned an empty response (possibly exhausted its reasoning token budget) -- see DRAWING_REASONING_BUDGET in drawing-ai-client.ts.`
-          : "OpenAI returned an empty response.",
-      );
+    for (const [index, batch] of batches.entries()) {
+      const completion = await client.chat.completions.create({
+        model,
+        // Low, not zero -- exhaustive extraction, not creative writing, so
+        // there's no upside to the API default's high randomness. This was
+        // the one AI call in the app that never got this pinned when the
+        // other three (document-summary-service.ts, scope-coverage-
+        // service.ts, clarification-questions-service.ts) did earlier --
+        // confirmed the gap was real, not just theoretical, by a live
+        // re-run against the exact same page images going from 9 real
+        // extracted facts to 0.
+        temperature: 0.2,
+        // See drawing-ai-client.ts's own comment -- only relevant for an
+        // OpenRouter-routed reasoning model, inert otherwise.
+        ...(viaOpenRouter ? (DRAWING_REASONING_BUDGET as unknown as Record<string, unknown>) : {}),
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                // Says which sheets these are and that there are others.
+                // Without it a batch reads as the whole drawing, and the
+                // model has been seen inventing a "missing pages" risk
+                // flag for sheets it simply was not given.
+                text:
+                  batches.length === 1
+                    ? `Drawing: ${document.filename} (${batch.length} page image${batch.length === 1 ? "" : "s"})`
+                    : `Drawing: ${document.filename} -- part ${index + 1} of ${batches.length}, covering page(s) ` +
+                      `${batch.map((p) => p.pageNumber).join(", ")} of ${totalPages}. Other pages are being read ` +
+                      `separately; describe only what is on these sheets and do not flag the others as missing.`,
+              },
+              ...buildPageContentParts(
+                batch.map((p) => p.dataUrl),
+                batch.map((p) => p.pageText),
+                batch.map((p) => p.pageNumber),
+              ),
+            ],
+          },
+        ],
+        response_format: { type: "json_schema", json_schema: DRAWING_SCHEMA },
+      }, { timeout: DRAWING_REQUEST_TIMEOUT_MS });
+
+      await recordAiUsage({
+        userId,
+        feature: "DRAWING_SUMMARY",
+        model,
+        usage: completion.usage,
+        documentId,
+        opportunityId: document.opportunityId,
+      });
+
+      const content = completion.choices[0]?.message?.content;
+      if (!content) {
+        // A reasoning model can burn its whole token budget on internal
+        // reasoning and never reach the actual JSON -- a real failure mode
+        // confirmed live via OpenRouter (see DRAWING_REASONING_BUDGET), not
+        // hypothetical. Distinct message so this doesn't read as a plain API
+        // hiccup when it's actually a budget-tuning problem.
+        throw new Error(
+          viaOpenRouter
+            ? `${model} returned an empty response (possibly exhausted its reasoning token budget) -- see DRAWING_REASONING_BUDGET in drawing-ai-client.ts.`
+            : "OpenAI returned an empty response.",
+        );
+      }
+
+      const part = JSON.parse(content) as DrawingSummaryFromAI;
+      // Header facts come from whichever sheet actually carried them --
+      // a title block sits on one page, not all of them, so first
+      // non-null wins rather than the last batch overwriting with null.
+      merged.eventOrProjectName ??= part.eventOrProjectName;
+      merged.venue ??= part.venue;
+      merged.submissionDeadline ??= part.submissionDeadline;
+      merged.keyDates.push(...part.keyDates);
+      merged.scopeSummary.push(...part.scopeSummary);
+      merged.riskFlags.push(...part.riskFlags);
     }
-    const parsed = JSON.parse(content) as DrawingSummaryFromAI;
+
+    const parsed = merged;
 
     const riskFlags = withEmptyQuote(parsed.riskFlags, document.estimateId);
     // Surfaced through the same riskFlags list ProjectBriefCard already

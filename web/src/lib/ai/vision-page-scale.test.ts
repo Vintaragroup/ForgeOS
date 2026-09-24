@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  chunkPagesByBudget,
   dataUrlBytes,
-  fitPagesToBudget,
-  shrinkFactorForBudget,
   visionPageScale,
   VISION_MAX_SCALE,
   VISION_MIN_SCALE,
@@ -70,49 +69,33 @@ describe("dataUrlBytes", () => {
   });
 });
 
-describe("shrinkFactorForBudget", () => {
-  it("leaves a set that already fits alone", () => {
-    expect(shrinkFactorForBudget(10, 20)).toBe(1);
-    expect(shrinkFactorForBudget(0, 20)).toBe(1);
-  });
-
-  // Encoded size tracks pixel area, which is the square of the linear
-  // scale -- so halving the bytes means scaling by roughly 1/sqrt(2).
-  it("shrinks by roughly the square root of the overshoot", () => {
-    const f = shrinkFactorForBudget(40, 20);
-    expect(f).toBeGreaterThan(0.55);
-    expect(f).toBeLessThan(0.72);
-    // Applying it lands under budget, with headroom.
-    expect(40 * f * f).toBeLessThan(20);
-  });
-
-  it("refuses to shrink a page into illegibility however far over budget", () => {
-    expect(shrinkFactorForBudget(10_000, 1)).toBe(0.3);
-  });
-});
-
-describe("fitPagesToBudget", () => {
-  it("keeps everything when it all fits", () => {
+describe("chunkPagesByBudget", () => {
+  it("keeps one request when everything fits", () => {
     const pages = [1, 2, 3].map((n) => ({ n, dataUrl: dataUrlOfBytes(1000) }));
-    const { kept, dropped } = fitPagesToBudget(pages, 10_000);
-    expect(kept).toHaveLength(3);
-    expect(dropped).toHaveLength(0);
+    expect(chunkPagesByBudget(pages, 10_000)).toHaveLength(1);
   });
 
-  // A 413 returns nothing at all, so a partial drawing beats none -- and
-  // the caller is told which pages went missing rather than silently
-  // analysing an incomplete set.
-  it("drops the tail rather than blowing the budget", () => {
-    const pages = [1, 2, 3, 4].map((n) => ({ n, dataUrl: dataUrlOfBytes(4000) }));
-    const { kept, dropped } = fitPagesToBudget(pages, 10_000);
-    expect(kept.map((p) => p.n)).toEqual([1, 2]);
-    expect(dropped.map((p) => p.n)).toEqual([3, 4]);
+  // The whole point: 14 legible sheets across a few requests beats 14
+  // illegible ones in a single request, and beats a 413.
+  it("splits into consecutive runs rather than dropping or shrinking", () => {
+    const pages = [1, 2, 3, 4, 5].map((n) => ({ n, dataUrl: dataUrlOfBytes(4000) }));
+    const chunks = chunkPagesByBudget(pages, 10_000);
+    expect(chunks.map((c) => c.map((p) => p.n))).toEqual([[1, 2], [3, 4], [5]]);
+    // Nothing is lost.
+    expect(chunks.flat()).toHaveLength(5);
   });
 
-  it("always keeps the first page even when it alone exceeds the budget", () => {
-    const pages = [{ n: 1, dataUrl: dataUrlOfBytes(50_000) }, { n: 2, dataUrl: dataUrlOfBytes(50_000) }];
-    const { kept, dropped } = fitPagesToBudget(pages, 10_000);
-    expect(kept.map((p) => p.n)).toEqual([1]);
-    expect(dropped.map((p) => p.n)).toEqual([2]);
+  it("gives an oversized page a request of its own rather than dropping it", () => {
+    const pages = [
+      { n: 1, dataUrl: dataUrlOfBytes(2000) },
+      { n: 2, dataUrl: dataUrlOfBytes(50_000) },
+      { n: 3, dataUrl: dataUrlOfBytes(2000) },
+    ];
+    const chunks = chunkPagesByBudget(pages, 10_000);
+    expect(chunks.map((c) => c.map((p) => p.n))).toEqual([[1], [2], [3]]);
+  });
+
+  it("returns nothing for no pages", () => {
+    expect(chunkPagesByBudget([], 10_000)).toEqual([]);
   });
 });

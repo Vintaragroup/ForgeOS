@@ -68,40 +68,39 @@ export function dataUrlBytes(dataUrl: string): number {
 // ceiling is an estimate that eventually lands just over it.
 export const VISION_TOTAL_IMAGE_BUDGET_BYTES = 20 * 1024 * 1024;
 
-// How much to shrink every page when the set as a whole is too big.
+// Splitting the pages across requests, rather than shrinking them to fit
+// one.
 //
-// Preferred over dropping pages: each sheet of a design drawing says
-// something the others don't, and a drawing analysed at slightly lower
-// resolution is far more useful than one analysed with five sheets
-// missing. Encoded size tracks pixel area, which is the square of the
-// linear scale, so this is one corrective pass rather than a search.
-// The 0.9 is headroom for that relationship being approximate.
-export function shrinkFactorForBudget(totalBytes: number, budgetBytes: number): number {
-  if (totalBytes <= budgetBytes || totalBytes <= 0) return 1;
-  return Math.max(0.3, Math.sqrt(budgetBytes / totalBytes) * 0.9);
-}
-
-// Which pages fit inside the budget, in order, and which had to be left
-// out. Dropping the tail is better than a 413 that returns nothing at
-// all -- and the caller reports what it dropped rather than quietly
-// analysing a partial drawing.
-export function fitPagesToBudget<T extends { dataUrl: string }>(
+// The 30MB ceiling is per request, so a 14-sheet drawing does not have to
+// choose between being rejected and being unreadable. Shrinking was tried
+// first and is a false economy: re-rendered at 0.71x, Full Swing's 14
+// sheets fitted in 18.6MB and the model then extracted nothing at all,
+// because the dimension labels it is asked to read had stopped being
+// legible. The same drawing's predecessor, analysed at full scale,
+// yielded fourteen exact dimensions. Legibility is the whole product
+// here; the request count is just billing.
+//
+// Greedy, and in page order, so each request still sees a run of
+// consecutive sheets rather than a scatter. A single page larger than the
+// budget gets a request to itself rather than being dropped.
+export function chunkPagesByBudget<T extends { dataUrl: string }>(
   pages: T[],
   budgetBytes: number = VISION_TOTAL_IMAGE_BUDGET_BYTES,
-): { kept: T[]; dropped: T[] } {
-  const kept: T[] = [];
-  const dropped: T[] = [];
+): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
   let used = 0;
+
   for (const page of pages) {
     const size = dataUrlBytes(page.dataUrl);
-    // Always keep the first page even if it alone blows the budget:
-    // returning nothing is strictly worse than trying one page.
-    if (kept.length > 0 && used + size > budgetBytes) {
-      dropped.push(page);
-      continue;
+    if (current.length > 0 && used + size > budgetBytes) {
+      chunks.push(current);
+      current = [];
+      used = 0;
     }
-    kept.push(page);
+    current.push(page);
     used += size;
   }
-  return { kept, dropped };
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }
