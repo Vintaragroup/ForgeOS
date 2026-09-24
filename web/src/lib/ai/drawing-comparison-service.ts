@@ -24,6 +24,24 @@ import { getDrawingAiClient, DRAWING_REQUEST_TIMEOUT_MS } from "@/lib/ai/drawing
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { UserError } from "@/lib/user-error";
 import { comparisonPageImages } from "@/lib/ai/drawing-summary-service";
+import {
+  assessDrawingCharacter,
+  characterMismatchGuidance,
+  charactersDiffer,
+  describeCharacter,
+  type DrawingCharacter,
+} from "@/lib/ai/drawing-character";
+
+// The scope lines an extraction produced, which is what character is
+// read from. Returns [] for a document that was never analysed, which
+// assessDrawingCharacter reports as UNKNOWN rather than guessing.
+function scopeTextsOf(extractedSummary: unknown): string[] {
+  const s = extractedSummary as { scopeSummary?: { text?: unknown }[] } | null;
+  if (!s || !Array.isArray(s.scopeSummary)) return [];
+  return s.scopeSummary.map((i) => (typeof i?.text === "string" ? i.text : "")).filter(Boolean);
+}
+
+export { describeCharacter };
 
 // The estimating rules (data/Estimate-Guidelines, Taze Ankerstein,
 // 2026-09-21) forbid inferring cost from a picture, three separate
@@ -48,6 +66,7 @@ HARD RULES. These override any instinct to be helpful:
 - Never infer freight, installation, engineering, repairs or refurbishment.
 - If you cannot tell whether something changed, do not report it. A missing finding is recoverable; an invented one is not.
 - Different camera angles between the two sets are not a change. Only report a difference in the thing itself.
+- A different way of DRAWING something is not a change either. A dimensioned elevation and a photorealistic view of the same counter are the same counter. Report a difference only when the thing itself is genuinely absent from, or new to, the booth.
 
 If nothing differs, return an empty array.`;
 
@@ -112,6 +131,9 @@ export interface DrawingComparison {
   // rather than "little changed".
   previousPagesCompared: number;
   revisedPagesCompared: number;
+  charactersMismatched: boolean;
+  previousCharacter: DrawingCharacter;
+  revisedCharacter: DrawingCharacter;
   comparedAt: string;
 }
 
@@ -129,7 +151,17 @@ export async function compareDrawingToPredecessor(
       filename: true,
       mimeType: true,
       documentType: true,
-      supersedes: { select: { id: true, filename: true, mimeType: true, documentType: true, deletedAt: true } },
+      extractedSummary: true,
+      supersedes: {
+        select: {
+          id: true,
+          filename: true,
+          mimeType: true,
+          documentType: true,
+          deletedAt: true,
+          extractedSummary: true,
+        },
+      },
     },
   });
   if (!revised) throw new UserError("That document isn't on this opportunity.");
@@ -161,6 +193,15 @@ export async function compareDrawingToPredecessor(
     );
   }
 
+  // Whether these two are the same KIND of drawing. A component sheet
+  // compared against a rendering reports representation as change -- the
+  // first real run of this called Full Swing's batting cage ADDED when
+  // it is in both sets, because a dimension label on an elevation and a
+  // photorealistic chain-link enclosure do not look alike.
+  const previousCharacter = assessDrawingCharacter(scopeTextsOf(previous.extractedSummary));
+  const revisedCharacter = assessDrawingCharacter(scopeTextsOf(revised.extractedSummary));
+  const mismatched = charactersDiffer(previousCharacter.character, revisedCharacter.character);
+
   const { client, model, viaOpenRouter } = getDrawingAiClient();
   void viaOpenRouter;
 
@@ -170,7 +211,10 @@ export async function compareDrawingToPredecessor(
       text:
         `PREVIOUS drawing: ${previous.filename} (${previousPages.length} pages). ` +
         `REVISED drawing: ${revised.filename} (${revisedPages.length} pages). ` +
-        `The previous drawing's pages come first, then the revised drawing's.`,
+        `The previous drawing's pages come first, then the revised drawing's.` +
+        (mismatched
+          ? `\n\n${characterMismatchGuidance(previousCharacter.character, revisedCharacter.character)}`
+          : ""),
     },
   ];
   for (const page of previousPages) {
@@ -231,6 +275,12 @@ export async function compareDrawingToPredecessor(
     })),
     previousPagesCompared: previousPages.length,
     revisedPagesCompared: revisedPages.length,
+    // Carried so the reader sees the caveat the prompt was given. A
+    // finding from a mismatched pair is likelier to be representation
+    // than change, and that is worth knowing at the point of reading it.
+    charactersMismatched: mismatched,
+    previousCharacter: previousCharacter.character,
+    revisedCharacter: revisedCharacter.character,
     comparedAt: new Date().toISOString(),
   };
 

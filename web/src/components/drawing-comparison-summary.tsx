@@ -2,7 +2,7 @@
 
 import { ActionForm } from "@/components/action-form";
 import { compareDrawingRevisionAction } from "@/app/(app)/opportunities/[id]/documents/actions";
-import type { DrawingComparison } from "@/lib/ai/drawing-comparison-service";
+import { describeCharacter, type DrawingComparison } from "@/lib/ai/drawing-comparison-service";
 
 // What the revised design changed, on the document row where the two
 // drawings are already linked.
@@ -91,6 +91,20 @@ export function DrawingComparisonSummary({
           </li>
         ))}
       </ul>
+
+      {/* The caveat that outranks the findings when it applies: a
+          component sheet compared against a rendering reports
+          representation as change. Full Swing's batting cage is in both
+          sets and came back ADDED. */}
+      {comparison.charactersMismatched && (
+        <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-snug text-amber-900">
+          These two are different kinds of drawing — the previous set is{" "}
+          {describeCharacter(comparison.previousCharacter)} and this one is{" "}
+          {describeCharacter(comparison.revisedCharacter)}. The same object looks completely different between them,
+          so treat <strong>removed</strong> and <strong>added</strong> here as questions rather than facts: something
+          drawn a new way can read as new.
+        </p>
+      )}
 
       {/* Two things this cannot do, said rather than left to be
           discovered -- both are rules from the estimating guidelines
