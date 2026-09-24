@@ -47,6 +47,26 @@ Font.registerHyphenationCallback((word) => [word]);
 // telling adjacent categories apart at a glance.
 const SECTION_ACCENTS = [BRAND.navy, BRAND.teal, BRAND.tangerine, BRAND.tan];
 
+// How much of a heading's own content has to fit under it before the
+// heading is allowed to sit on a page at all.
+//
+// react-pdf gives two tools and they solve different halves. wrap={false}
+// holds a block together, which stops a heading being split from its
+// summary -- but a block that is held together and still fits at the foot
+// of a page will happily sit there with all of its children overleaf.
+// minPresenceAhead is the other half: it refuses the position unless the
+// named amount of space follows.
+//
+// A body row is about 12pt with its padding, so these are roughly "three
+// rows", "four rows", and for the two outer tiers enough for the heading's
+// own first child heading to come with it. Deliberately not larger: every
+// point here is a point of page that can end up blank, which is the
+// failure this is correcting in the first place.
+const MIN_AHEAD_SUBGROUP = 36;
+const MIN_AHEAD_ELEMENT = 48;
+const MIN_AHEAD_BOOTH = 72;
+const MIN_AHEAD_CATEGORY = 90;
+
 const styles = StyleSheet.create({
   // paddingTop/paddingBottom reserve room for the fixed running header
   // (pages 2+ only, see runningHeader) and fixed footer (every page) so
@@ -684,15 +704,15 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     <>
       {boothGroups.map((booth) => (
         <View key={booth.boothLabel} style={styles.boothSection}>
-          {/* wrap={false}, not minPresenceAhead, on this outer pair --
-              minPresenceAhead only checks whether the HEADER ROW itself has
-              room; boothSummary is a separate sibling Text, so a header that
-              clears the threshold could still leave its own summary
-              orphaned onto the next page. wrap={false} measures the header
-              + summary together as one atomic block and moves the whole
-              thing if it doesn't fit, same mechanism this file already uses
-              for a line-item row/the signature block. */}
-          <View wrap={false}>
+          {/* Both, not either. wrap={false} measures the header and its
+              summary as one atomic block so the summary can never be
+              orphaned from its heading -- but on its own that still let a
+              heading land as the last thing on a page with every one of
+              its element groups overleaf, which is exactly what ABC
+              Chicago's proposal was doing. minPresenceAhead additionally
+              refuses to place the block unless roughly three rows of its
+              own content can follow it on the same page. */}
+          <View wrap={false} minPresenceAhead={MIN_AHEAD_BOOTH}>
             <View style={styles.boothHeaderRow}>
               <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
               <Text style={styles.boothHeaderTotal}>
@@ -711,7 +731,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           </View>
           {booth.elementGroups.map((group) => (
             <View key={group.elementType} style={styles.elementTypeSection}>
-              <View wrap={false}>
+              <View wrap={false} minPresenceAhead={MIN_AHEAD_ELEMENT}>
                 <View style={styles.elementTypeHeaderRow}>
                   <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
                   <Text style={styles.elementTypeHeaderTotal}>
@@ -745,9 +765,17 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   (v1 scope), it's fully governed by its H1/H2 ancestors. */}
               {!booth.summarizeOnProposal &&
                 !group.summarizeOnProposal &&
+                // The whole subgroup used to carry wrap={false}, which is
+                // where the blank half-pages came from: a subgroup taller
+                // than the space left moved WHOLE to the next page and
+                // left the rest of the current one empty. A long list of
+                // rows is allowed to flow across a page break -- that is
+                // how a page gets filled. Only the header is held, with
+                // enough presence ahead that it never arrives alone at the
+                // foot of a page.
                 group.subgroups.map((subgroup) => (
-                  <View key={subgroup.subgroupLabel} style={styles.subgroupSection} wrap={false}>
-                    <View style={styles.subgroupHeaderRow}>
+                  <View key={subgroup.subgroupLabel} style={styles.subgroupSection}>
+                    <View style={styles.subgroupHeaderRow} wrap={false} minPresenceAhead={MIN_AHEAD_SUBGROUP}>
                       <Text style={styles.subgroupHeaderText}>{subgroup.subgroupLabel}</Text>
                       <Text style={styles.subgroupHeaderTotal}>
                         {hidePrice ? "" : amountContent(subgroup.subtotal, sellForCategory(subgroup.subtotal, categoryName), data.showCost)}
@@ -986,10 +1014,11 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
 
           return (
             <View key={categoryName} style={styles.section}>
-              {/* wrap={false} on the header + its summary together, not
-                  minPresenceAhead on the header alone -- see renderBoothGroups'
-                  own comment on this same fix above. */}
-              <View wrap={false}>
+              {/* Same pairing as the booth header -- see renderBoothGroups'
+                  own comment. A category heading at the foot of a page with
+                  its first booth overleaf reads as a section that opens
+                  with nothing in it. */}
+              <View wrap={false} minPresenceAhead={MIN_AHEAD_CATEGORY}>
                 <View style={styles.sectionHeaderRow}>
                   <View style={styles.sectionHeaderLeft}>
                     <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
