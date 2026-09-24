@@ -178,15 +178,16 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
   // relation -- a proposal outlives the row it is about, and a proposal
   // that vanished when somebody deleted a line item would take the
   // reason it was raised with it.
-  const stored = await db.recostProposal.findMany({
-    where: { estimateVersionId: version.id, status: "PROPOSED" },
+  const allProposals = await db.recostProposal.findMany({
+    where: { estimateVersionId: version.id },
     orderBy: { createdAt: "desc" },
   });
+  const stored = allProposals.filter((p) => p.status === "PROPOSED");
 
   const proposalLineItems = new Map(
     (
       await db.lineItem.findMany({
-        where: { id: { in: stored.map((p) => p.lineItemId).filter((id): id is string => id !== null) } },
+        where: { id: { in: allProposals.map((p) => p.lineItemId).filter((id): id is string => id !== null) } },
         select: { id: true, description: true, totalCost: true },
       })
     ).map((li) => [li.id, li]),
@@ -194,7 +195,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
   const proposalSections = new Map(
     (
       await db.estimateSection.findMany({
-        where: { id: { in: stored.map((p) => p.sectionId).filter((id): id is string => id !== null) } },
+        where: { id: { in: allProposals.map((p) => p.sectionId).filter((id): id is string => id !== null) } },
         select: { id: true, name: true, groupLabel: true },
       })
     ).map((sec) => [sec.id, sec]),
@@ -249,6 +250,37 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     };
   });
 
+  // A decided proposal's line item is usually gone -- that is what
+  // applying a removal means -- so the name is kept from the proposal's
+  // own record rather than looked up and found missing.
+  const decidedBy = new Map(
+    (
+      await db.user.findMany({
+        where: { id: { in: [...new Set(allProposals.map((p) => p.decidedById).filter((id): id is string => id !== null))] } },
+        select: { id: true, name: true },
+      })
+    ).map((u) => [u.id, u.name]),
+  );
+
+  const decided = allProposals
+    .filter((p) => p.status !== "PROPOSED")
+    .map((p) => {
+      const section = p.sectionId ? proposalSections.get(p.sectionId) : undefined;
+      return {
+        id: p.id,
+        status: p.status,
+        action: p.action,
+        target:
+          (p.lineItemId ? proposalLineItems.get(p.lineItemId)?.description : undefined) ??
+          (section ? [section.groupLabel, section.name].filter(Boolean).join(" / ") : undefined) ??
+          "(removed from the estimate)",
+        reason: p.reason,
+        sourceQuote: p.sourceQuote,
+        decidedBy: (p.decidedById ? decidedBy.get(p.decidedById) : null) ?? "someone",
+        decidedAt: p.decidedAt,
+      };
+    });
+
   const currentCost = version.totalCost.toNumber();
   const currentSell = version.grandTotal.toNumber();
   const target = parseTargetAmount(revisionEvent?.note ?? null);
@@ -283,6 +315,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     suggestions,
     drawing,
     proposals,
+    decided,
     notes,
   };
 }

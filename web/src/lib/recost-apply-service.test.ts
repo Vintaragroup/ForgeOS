@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { decideRecostProposal } from "@/lib/recost-apply-service";
+import { recomputeVersionTotals, restoreLineItem } from "@/lib/estimate-service";
 
 let opportunityId = "";
 let versionId = "";
@@ -45,7 +46,14 @@ beforeEach(async () => {
   });
   versionId = version.id;
   const section = await db.estimateSection.create({
-    data: { estimateVersionId: version.id, name: "Reception Counter", sectionType: "COMPONENT" },
+    data: {
+      estimateVersionId: version.id,
+      name: "Reception Counter",
+      groupLabel: "FS - Reception Counter",
+      boothDescription: "Reception counter, client-facing",
+      sortOrder: 3,
+      sectionType: "COMPONENT",
+    },
   });
   sectionId = section.id;
   const lineItem = await db.lineItem.create({
@@ -56,6 +64,7 @@ beforeEach(async () => {
       qty: 1,
       unitCost: 5000,
       totalCost: 5000,
+      sortOrder: 1,
     },
   });
   lineItemId = lineItem.id;
@@ -183,6 +192,130 @@ describe("decideRecostProposal", () => {
       decideRecostProposal(proposal.id, otherOpportunity.id, userId, "ACCEPT"),
     ).rejects.toThrow(/no longer on this estimate/i);
     expect(await db.lineItem.count({ where: { id: lineItemId } })).toBe(1);
+  });
+
+  // The audit the estimator asked for before letting this touch a live
+  // job: applying a proposal must not disturb the structure around it.
+  // The fear is well earned -- createNewVersionFromLocked once blew out
+  // every booth grouping and description on this exact estimate.
+  describe("blast radius", () => {
+    it("leaves the section and its groupings completely untouched", async () => {
+      const before = await db.estimateSection.findUniqueOrThrow({ where: { id: sectionId } });
+      const proposal = await makeProposal();
+
+      await decideRecostProposal(proposal.id, opportunityId, userId, "ACCEPT");
+
+      const after = await db.estimateSection.findUniqueOrThrow({ where: { id: sectionId } });
+      // Every field, not a hand-picked few: a future field added to
+      // EstimateSection is covered by this without anyone remembering to
+      // add it here.
+      expect(after).toEqual(before);
+    });
+
+    it("keeps an emptied section alive so its heading does not vanish", async () => {
+      const proposal = await makeProposal({ lineItemId: null, sectionId });
+      await decideRecostProposal(proposal.id, opportunityId, userId, "ACCEPT");
+
+      const section = await db.estimateSection.findUnique({ where: { id: sectionId } });
+      expect(section).not.toBeNull();
+      expect(section!.groupLabel).toBe("FS - Reception Counter");
+      expect(section!.boothDescription).toBe("Reception counter, client-facing");
+      expect(section!.sortOrder).toBe(3);
+    });
+
+    it("touches no other line item in the version", async () => {
+      const sibling = await db.lineItem.create({
+        data: {
+          sectionId,
+          lineType: "LABOR",
+          description: "Counter install",
+          qty: 4,
+          unitCost: 100,
+          totalCost: 400,
+          sortOrder: 2,
+        },
+      });
+      const otherSection = await db.estimateSection.create({
+        data: { estimateVersionId: versionId, name: "Hitting Bay", groupLabel: "FS - Hitting Bay", sectionType: "COMPONENT" },
+      });
+      const elsewhere = await db.lineItem.create({
+        data: { sectionId: otherSection.id, lineType: "MATERIAL", description: "Wall panel", qty: 1, unitCost: 900, totalCost: 900 },
+      });
+
+      const proposal = await makeProposal();
+      await decideRecostProposal(proposal.id, opportunityId, userId, "ACCEPT");
+
+      expect(await db.lineItem.findUnique({ where: { id: sibling.id } })).toEqual(sibling);
+      expect(await db.lineItem.findUnique({ where: { id: elsewhere.id } })).toEqual(elsewhere);
+      expect(await db.estimateSection.findUnique({ where: { id: otherSection.id } })).not.toBeNull();
+    });
+
+    it("changes only the money when repricing, never where the item sits", async () => {
+      const before = await db.lineItem.findUniqueOrThrow({ where: { id: lineItemId } });
+      const proposal = await makeProposal({ action: "REPRICE", newUnitCost: 1300 });
+
+      await decideRecostProposal(proposal.id, opportunityId, userId, "ACCEPT");
+
+      const after = await db.lineItem.findUniqueOrThrow({ where: { id: lineItemId } });
+      expect(after.unitCost.toNumber()).toBe(1300);
+      expect(after.totalCost.toNumber()).toBe(1300);
+      // Everything that decides where it appears and what it is called.
+      expect(after.sectionId).toBe(before.sectionId);
+      expect(after.sortOrder).toBe(before.sortOrder);
+      expect(after.description).toBe(before.description);
+      expect(after.subgroupLabel).toBe(before.subgroupLabel);
+      expect(after.category).toBe(before.category);
+      expect(after.lineType).toBe(before.lineType);
+      expect(after.qty.toNumber()).toBe(before.qty.toNumber());
+    });
+
+    it("records a reprice as before-and-after so the change is readable", async () => {
+      const proposal = await makeProposal({ action: "REPRICE", newUnitCost: 1300 });
+      await decideRecostProposal(proposal.id, opportunityId, userId, "ACCEPT");
+
+      const audit = await db.lineItemAuditLog.findFirstOrThrow({ where: { action: "UPDATE" } });
+      const detail = audit.detail as Record<string, { before: unknown; after: unknown }>;
+      expect(detail.unitCost).toEqual({ before: "5000", after: "1300" });
+      expect(detail.totalCost).toEqual({ before: "5000", after: "1300" });
+      // Nothing else claimed to have changed.
+      expect(Object.keys(detail).sort()).toEqual(["totalCost", "unitCost"]);
+    });
+
+    // The whole point of the snapshot: a removal is undoable, and it
+    // comes back where it was rather than into a recovery bucket.
+    it("restores a removed item to its original section and position", async () => {
+      const before = await db.lineItem.findUniqueOrThrow({ where: { id: lineItemId } });
+      const proposal = await makeProposal();
+      await decideRecostProposal(proposal.id, opportunityId, userId, "ACCEPT");
+
+      const audit = await db.lineItemAuditLog.findFirstOrThrow({ where: { action: "DELETE" } });
+      await restoreLineItem(opportunityId, audit.id, userId);
+
+      const restored = await db.lineItem.findUniqueOrThrow({ where: { id: lineItemId } });
+      expect(restored.sectionId).toBe(before.sectionId);
+      expect(restored.sortOrder).toBe(before.sortOrder);
+      expect(restored.description).toBe(before.description);
+      expect(restored.unitCost.toNumber()).toBe(before.unitCost.toNumber());
+      expect(restored.totalCost.toNumber()).toBe(before.totalCost.toNumber());
+    });
+
+    it("keeps the version total honest on the way out and back", async () => {
+      const proposal = await makeProposal();
+      await decideRecostProposal(proposal.id, opportunityId, userId, "ACCEPT");
+      const afterRemoval = await db.estimateVersion.findUniqueOrThrow({ where: { id: versionId } });
+      expect(afterRemoval.totalCost.toNumber()).toBe(0);
+
+      const audit = await db.lineItemAuditLog.findFirstOrThrow({ where: { action: "DELETE" } });
+      await restoreLineItem(opportunityId, audit.id, userId);
+      // restoreLineItem does not recompute -- the convention in
+      // estimate-service is that mutators mutate and the caller totals
+      // up, so bulk paths pay for one recompute instead of N.
+      // restoreLineItemAction does exactly this, and this line is the
+      // caller standing in for it.
+      await recomputeVersionTotals(versionId);
+      const afterRestore = await db.estimateVersion.findUniqueOrThrow({ where: { id: versionId } });
+      expect(afterRestore.totalCost.toNumber()).toBe(5000);
+    });
   });
 
   // How an estimator thinks about "the reception counter" -- one thing.

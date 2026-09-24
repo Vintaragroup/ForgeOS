@@ -240,6 +240,42 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
         </div>
       )}
 
+      {/* Why, with the citation it was decided against. The line-item
+          history below records what changed and offers Restore; this
+          records the decision behind it. Neither is complete alone. */}
+      {review.decided.length > 0 && (
+        <div className="mt-5 border-t border-neutral-200 pt-4">
+          <h3 className="text-sm font-semibold text-neutral-900">Already decided</h3>
+          <ul className="mt-2 flex flex-col gap-2">
+            {review.decided.map((d) => (
+              <li key={d.id} className="text-sm">
+                <span
+                  className={`mr-2 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                    d.status === "REJECTED"
+                      ? "bg-neutral-200 text-neutral-700"
+                      : d.status === "APPLIED"
+                        ? "bg-red-100 text-red-800"
+                        : "bg-green-100 text-green-800"
+                  }`}
+                >
+                  {d.status.toLowerCase()}
+                </span>
+                <span className="font-medium text-neutral-900">{d.action.replace("_", " ")}</span>
+                <span className="text-neutral-700"> — {d.target}</span>
+                <span className="block text-xs text-neutral-500">
+                  {d.reason} · “{d.sourceQuote}”
+                </span>
+                <span className="block text-xs text-neutral-400">
+                  {d.decidedBy}
+                  {d.decidedAt ? ` · ${d.decidedAt.toLocaleDateString()}` : ""}
+                  {d.status === "APPLIED" ? " · restore it from the line-item history below" : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {review.notes.length > 0 && (
         <ul className="mt-4 flex flex-col gap-1 text-xs text-neutral-500">
           {review.notes.map((n) => (

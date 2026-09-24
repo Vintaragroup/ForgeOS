@@ -49,6 +49,19 @@ export interface RecostReview {
     effect: string;
     movesMoney: boolean;
   }[];
+  // Decisions already made, newest first. The line-item history records
+  // WHAT changed and offers Restore; this records WHY, with the citation
+  // the decision was made against. Neither is complete alone.
+  decided: {
+    id: string;
+    status: string;
+    action: string;
+    target: string;
+    reason: string;
+    sourceQuote: string;
+    decidedBy: string;
+    decidedAt: Date | null;
+  }[];
   // Said out loud rather than left to be noticed: a review assembled
   // from a schedule alone has not seen the quotes.
   notes: string[];
