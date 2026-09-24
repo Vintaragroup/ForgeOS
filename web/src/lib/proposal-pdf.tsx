@@ -62,6 +62,14 @@ const SECTION_ACCENTS = [BRAND.navy, BRAND.teal, BRAND.tangerine, BRAND.tan];
 // own first child heading to come with it. Deliberately not larger: every
 // point here is a point of page that can end up blank, which is the
 // failure this is correcting in the first place.
+//
+// Applied to the WRAPPABLE container, never to the atomic wrap={false}
+// header inside it. react-pdf ignores minPresenceAhead on a node that
+// cannot break -- confirmed on production, where putting it on the
+// header block left "Mobile Hitting Bay with Mesh Netting" alone at the
+// foot of page 2 with its own content on page 3, exactly the fault it
+// was added to prevent. The one pre-existing use of this prop in this
+// file (the subsection header) had it on a wrappable node all along.
 const MIN_AHEAD_SUBGROUP = 36;
 const MIN_AHEAD_ELEMENT = 48;
 const MIN_AHEAD_BOOTH = 72;
@@ -703,7 +711,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   const renderBoothGroups = (boothGroups: BoothGroup[], categoryName: string, hidePrice: boolean, isSummary: boolean, isServiceStyle: boolean) => (
     <>
       {boothGroups.map((booth) => (
-        <View key={booth.boothLabel} style={styles.boothSection}>
+        <View key={booth.boothLabel} style={styles.boothSection} minPresenceAhead={MIN_AHEAD_BOOTH}>
           {/* Both, not either. wrap={false} measures the header and its
               summary as one atomic block so the summary can never be
               orphaned from its heading -- but on its own that still let a
@@ -712,7 +720,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               Chicago's proposal was doing. minPresenceAhead additionally
               refuses to place the block unless roughly three rows of its
               own content can follow it on the same page. */}
-          <View wrap={false} minPresenceAhead={MIN_AHEAD_BOOTH}>
+          <View wrap={false}>
             <View style={styles.boothHeaderRow}>
               <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
               <Text style={styles.boothHeaderTotal}>
@@ -730,8 +738,8 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
             )}
           </View>
           {booth.elementGroups.map((group) => (
-            <View key={group.elementType} style={styles.elementTypeSection}>
-              <View wrap={false} minPresenceAhead={MIN_AHEAD_ELEMENT}>
+            <View key={group.elementType} style={styles.elementTypeSection} minPresenceAhead={MIN_AHEAD_ELEMENT}>
+              <View wrap={false}>
                 <View style={styles.elementTypeHeaderRow}>
                   <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
                   <Text style={styles.elementTypeHeaderTotal}>
@@ -774,8 +782,8 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 // enough presence ahead that it never arrives alone at the
                 // foot of a page.
                 group.subgroups.map((subgroup) => (
-                  <View key={subgroup.subgroupLabel} style={styles.subgroupSection}>
-                    <View style={styles.subgroupHeaderRow} wrap={false} minPresenceAhead={MIN_AHEAD_SUBGROUP}>
+                  <View key={subgroup.subgroupLabel} style={styles.subgroupSection} minPresenceAhead={MIN_AHEAD_SUBGROUP}>
+                    <View style={styles.subgroupHeaderRow} wrap={false}>
                       <Text style={styles.subgroupHeaderText}>{subgroup.subgroupLabel}</Text>
                       <Text style={styles.subgroupHeaderTotal}>
                         {hidePrice ? "" : amountContent(subgroup.subtotal, sellForCategory(subgroup.subtotal, categoryName), data.showCost)}
@@ -1013,12 +1021,12 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
             }, 0);
 
           return (
-            <View key={categoryName} style={styles.section}>
+            <View key={categoryName} style={styles.section} minPresenceAhead={MIN_AHEAD_CATEGORY}>
               {/* Same pairing as the booth header -- see renderBoothGroups'
                   own comment. A category heading at the foot of a page with
                   its first booth overleaf reads as a section that opens
                   with nothing in it. */}
-              <View wrap={false} minPresenceAhead={MIN_AHEAD_CATEGORY}>
+              <View wrap={false}>
                 <View style={styles.sectionHeaderRow}>
                   <View style={styles.sectionHeaderLeft}>
                     <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
