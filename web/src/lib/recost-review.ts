@@ -49,6 +49,39 @@ export interface RecostReview {
     effect: string;
     movesMoney: boolean;
   }[];
+  // The line-item comparison of the two workbooks: which rows of the
+  // open version need updating, and by how much. Deterministic -- rows
+  // join on the description the import itself composed, so nothing here
+  // resembles or infers. Null when no pair of cost breakouts was found.
+  lineItemDiff: {
+    costDelta: number;
+    changedRows: number;
+    removedRows: number;
+    addedRows: number;
+    // Disagreement between this and the estimator's own Summary column,
+    // when there is any. Two reads of one workbook that differ is a fact
+    // worth showing rather than a number to pick between.
+    disagreesWithSummaryBy: number | null;
+    elements: {
+      tab: string;
+      titleChanged: boolean;
+      previousTitle: string;
+      currentTitle: string;
+      elementRemoved: boolean;
+      previousTotal: number;
+      currentTotal: number;
+      changes: {
+        kind: string;
+        description: string;
+        variant: string | null;
+        previousQty: number | null;
+        currentQty: number | null;
+        previousUnitCost: number | null;
+        currentUnitCost: number | null;
+        costDelta: number | null;
+      }[];
+    }[];
+  } | null;
   // Decisions already made, newest first. The line-item history records
   // WHAT changed and offers Restore; this records WHY, with the citation
   // the decision was made against. Neither is complete alone.

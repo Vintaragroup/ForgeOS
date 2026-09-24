@@ -16,6 +16,8 @@
 import { db } from "@/lib/db";
 import { getDocumentBytes } from "@/lib/document-service";
 import { readSummaryFromBytes } from "@/lib/recost-summary-reader";
+import { readCostBreakout } from "@/lib/cost-breakout-reader";
+import { diffCostBreakouts, type CostBreakoutDiff } from "@/lib/cost-breakout-diff";
 import { pairSummaryRows, summariseChanges, type ElementChange } from "@/lib/recost-status";
 import { groupStaleLineItems, type ValiditySource } from "@/lib/document-validity";
 import { buildRecostRollup, parseTargetAmount, untouchedCandidates, type RecostLine } from "@/lib/recost-rollup";
@@ -92,6 +94,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
   const lines: RecostLine[] = [];
   const notes: string[] = [];
   let elementChanges: ElementChange[] = [];
+  let breakoutDiff: CostBreakoutDiff | null = null;
 
   for (const group of staleGroups) {
     if (group.validity === "WITHDRAWN") {
@@ -125,6 +128,11 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     }
 
     elementChanges = [...elementChanges, ...changes];
+    // The same two workbooks read at row resolution rather than element
+    // resolution. Where the Summary says an element moved $24,647, this
+    // says which fifteen rows moved and by how much -- which is what
+    // actually has to be changed in the open version.
+    breakoutDiff = await readBreakoutDiff(group.documentId, replacement!.id);
     const summary = summariseChanges(changes);
     lines.push({
       label: group.filename,
@@ -281,6 +289,45 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
       };
     });
 
+  // Two independent reads of one pair of workbooks. They agree on Full
+  // Swing to within half a dollar, which is the point of computing both
+  // -- a disagreement means one of them is reading something wrong, and
+  // that is worth a person's attention rather than a silent pick.
+  const summaryDelta = elementChanges.length > 0 ? summariseChanges(elementChanges).delta : null;
+  const lineItemDiff = breakoutDiff
+    ? {
+        costDelta: breakoutDiff.costDelta,
+        changedRows: breakoutDiff.changedRows,
+        removedRows: breakoutDiff.removedRows,
+        addedRows: breakoutDiff.addedRows,
+        disagreesWithSummaryBy:
+          summaryDelta !== null && Math.abs(summaryDelta - breakoutDiff.costDelta) >= 1
+            ? breakoutDiff.costDelta - summaryDelta
+            : null,
+        elements: breakoutDiff.elements
+          .filter((e) => e.changes.length > 0 || e.titleChanged)
+          .map((e) => ({
+            tab: e.tab,
+            titleChanged: e.titleChanged,
+            previousTitle: e.previousTitle,
+            currentTitle: e.currentTitle,
+            elementRemoved: e.elementRemoved,
+            previousTotal: e.previousTotal,
+            currentTotal: e.currentTotal,
+            changes: e.changes.map((c) => ({
+              kind: c.kind,
+              description: c.description,
+              variant: c.variant,
+              previousQty: c.previousQty,
+              currentQty: c.currentQty,
+              previousUnitCost: c.previousUnitCost,
+              currentUnitCost: c.currentUnitCost,
+              costDelta: c.costDelta,
+            })),
+          })),
+      }
+    : null;
+
   const currentCost = version.totalCost.toNumber();
   const currentSell = version.grandTotal.toNumber();
   const target = parseTargetAmount(revisionEvent?.note ?? null);
@@ -314,10 +361,36 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     elementChanges,
     suggestions,
     drawing,
+    lineItemDiff,
     proposals,
     decided,
     notes,
   };
+}
+
+// The row-level read of the same pair. Kept separate from the summary
+// read because either can be absent: a workbook may carry a Summary tab
+// and no element tabs, or the reverse.
+async function readBreakoutDiff(previousId: string, revisedId: string): Promise<CostBreakoutDiff | null> {
+  try {
+    const [previous, revised] = await Promise.all([
+      getDocumentBytes(previousId).then(async (r) => {
+        const wb = new (await import("exceljs")).default.Workbook();
+        await wb.xlsx.load(r.bytes as unknown as ArrayBuffer);
+        return readCostBreakout(wb);
+      }),
+      getDocumentBytes(revisedId).then(async (r) => {
+        const wb = new (await import("exceljs")).default.Workbook();
+        await wb.xlsx.load(r.bytes as unknown as ArrayBuffer);
+        return readCostBreakout(wb);
+      }),
+    ]);
+    if (previous.length === 0 || revised.length === 0) return null;
+    return diffCostBreakouts(previous, revised);
+  } catch (err) {
+    console.warn(`[recost] could not read cost breakout rows for ${previousId} -> ${revisedId}`, err);
+    return null;
+  }
 }
 
 // Reads both workbooks' element summaries and pairs them. Returns null

@@ -138,6 +138,82 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
         </div>
       )}
 
+      {/* The deterministic half, at the resolution an estimator works
+          at. The rollup above says an element moved; this says which
+          rows moved and by how much, which is what actually has to
+          change in the open version. */}
+      {review.lineItemDiff && review.lineItemDiff.elements.length > 0 && (
+        <div className="mt-5 border-t border-neutral-200 pt-4">
+          <h3 className="text-sm font-semibold text-neutral-900">What needs updating in this version</h3>
+          <p className="mt-1 text-sm text-neutral-600">
+            {review.lineItemDiff.changedRows} rows re-costed, {review.lineItemDiff.removedRows} removed
+            {review.lineItemDiff.addedRows > 0 ? `, ${review.lineItemDiff.addedRows} added` : ""} — read from the
+            two workbooks, not inferred.
+          </p>
+
+          {/* Two reads of one pair of files that disagree is a fact, not
+              a number to pick between. */}
+          {review.lineItemDiff.disagreesWithSummaryBy !== null && (
+            <p className="mt-1 text-xs text-amber-800">
+              This differs from the estimator&apos;s own Summary column by{" "}
+              {money(Math.abs(review.lineItemDiff.disagreesWithSummaryBy))}. Worth checking which is current.
+            </p>
+          )}
+
+          <div className="mt-3 flex flex-col gap-4">
+            {review.lineItemDiff.elements.map((element) => (
+              <div key={element.tab}>
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="text-sm font-medium text-neutral-900">
+                    {element.tab}
+                    {element.elementRemoved && (
+                      <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                        element removed
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-xs tabular-nums text-neutral-600">
+                    {money(element.previousTotal)} → {money(element.currentTotal)}
+                  </span>
+                </div>
+
+                {/* The estimator renamed the element, which is where a
+                    spec decision like "NON LIT" lives and the only place
+                    it is recorded. */}
+                {element.titleChanged && (
+                  <p className="mt-0.5 text-xs text-neutral-500">
+                    renamed: “{element.previousTitle}” → “{element.currentTitle}”
+                  </p>
+                )}
+
+                <ul className="mt-1 flex flex-col gap-0.5">
+                  {element.changes.slice(0, 8).map((c, i) => (
+                    <li key={`${c.description}-${i}`} className="flex gap-2 text-xs text-neutral-600">
+                      <span className="w-16 shrink-0 text-neutral-400">{c.kind.toLowerCase()}</span>
+                      <span className="min-w-0 flex-1">
+                        {c.description}
+                        {c.variant && <span className="text-neutral-400"> ({c.variant})</span>}
+                        <span className="text-neutral-400">
+                          {" · "}qty {c.previousQty ?? "—"} → {c.currentQty ?? "—"}
+                          {c.previousUnitCost !== c.currentUnitCost &&
+                            ` · unit ${money(c.previousUnitCost ?? 0)} → ${money(c.currentUnitCost ?? 0)}`}
+                        </span>
+                      </span>
+                      {c.costDelta !== null && (
+                        <span className="shrink-0 tabular-nums text-neutral-700">{signedMoney(c.costDelta)}</span>
+                      )}
+                    </li>
+                  ))}
+                  {element.changes.length > 8 && (
+                    <li className="text-xs text-neutral-400">… {element.changes.length - 8} more</li>
+                  )}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* The second witness. Kept below the money because it does not
           change any of it -- nothing here has been priced, which is
           exactly the point of showing it. */}
