@@ -142,6 +142,8 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
         (summary.needsReviewCount > 0 ? `, ${summary.needsReviewCount} needing review` : ""),
       status: "RECOSTED",
       costDelta: summary.delta,
+      costBefore: summary.previousTotal,
+      costAfter: summary.currentTotal,
       costAtRisk: null,
     });
   }
@@ -248,6 +250,14 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
         lineItem?.description ??
         (section ? [section.groupLabel, section.name].filter(Boolean).join(" / ") : "(no longer in this estimate)"),
       amount: lineItem?.totalCost.toNumber() ?? p.newUnitCost?.toNumber() ?? null,
+      // Computed from the numbers already stored on the proposal, so the
+      // screen shows the same arithmetic the apply will do.
+      amountAfter: lineItem
+        ? p.action === "REMOVE"
+          ? 0
+          : (p.newQty?.toNumber() ?? lineItem.qty.toNumber()) *
+            (p.newUnitCost?.toNumber() ?? lineItem.unitCost.toNumber())
+        : null,
       sourceQuote: p.sourceQuote,
       sourceFilename: proposalDocuments.get(p.sourceDocumentId)?.filename ?? "(source removed)",
       effect: describeEffect(effect, {

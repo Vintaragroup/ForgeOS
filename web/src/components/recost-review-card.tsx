@@ -1,6 +1,7 @@
 import type { RecostReview } from "@/lib/recost-review";
 import type { CorroborationKind } from "@/lib/recost-corroboration";
 import { rollupHeadline } from "@/lib/recost-rollup";
+import { money, moneyChange, moneyChangeOrNull, signedMoney } from "@/lib/money-format";
 import { RunRecostProposalsButton } from "@/components/run-recost-proposals-button";
 import { RecostProposalDecision } from "@/components/recost-proposal-decision";
 import { ProposeFromBreakoutButton } from "@/components/propose-from-breakout-button";
@@ -19,13 +20,6 @@ import { AcceptRecommendedButton } from "@/components/accept-recommended-button"
 // goal it has not approached. So the headline is the shortfall, and the
 // saving is the arithmetic underneath it. See recost-rollup.ts.
 
-function money(n: number): string {
-  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-}
-
-function signedMoney(n: number): string {
-  return `${n > 0 ? "+" : n < 0 ? "−" : ""}${money(Math.abs(n))}`;
-}
 
 // Named for what the reader has to do about it, not for what the model
 // reported. "Removed" says nothing about whether anyone has acted on it;
@@ -73,7 +67,9 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
               <td className="py-2 text-right whitespace-nowrap tabular-nums">
                 {line.costDelta !== null ? (
                   <span className={line.costDelta < 0 ? "text-green-800" : "text-neutral-900"}>
-                    {signedMoney(line.costDelta)}
+                    {line.costBefore != null && line.costAfter != null
+                      ? moneyChange(line.costBefore, line.costAfter)
+                      : signedMoney(line.costDelta)}
                   </span>
                 ) : line.costAtRisk !== null ? (
                   // Said as a question rather than as a number in the
@@ -178,7 +174,7 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
                     )}
                   </span>
                   <span className="text-xs tabular-nums text-neutral-600">
-                    {money(element.previousTotal)} → {money(element.currentTotal)}
+                    {moneyChange(element.previousTotal, element.currentTotal)}
                   </span>
                 </div>
 
@@ -204,9 +200,14 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
                             ` · unit ${money(c.previousUnitCost ?? 0)} → ${money(c.currentUnitCost ?? 0)}`}
                         </span>
                       </span>
-                      {c.costDelta !== null && (
-                        <span className="shrink-0 tabular-nums text-neutral-700">{signedMoney(c.costDelta)}</span>
-                      )}
+                      <span className="shrink-0 tabular-nums text-neutral-700">
+                        {moneyChangeOrNull(
+                          c.previousQty !== null && c.previousUnitCost !== null
+                            ? c.previousQty * c.previousUnitCost
+                            : null,
+                          c.currentQty !== null && c.currentUnitCost !== null ? c.currentQty * c.currentUnitCost : null,
+                        )}
+                      </span>
                     </li>
                   ))}
                   {element.changes.length > 8 && (
@@ -313,7 +314,7 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
                     <span className="font-medium text-neutral-900">{p.target}</span>
                     {p.amount !== null && (
                       <span className="ml-auto whitespace-nowrap tabular-nums text-neutral-700">
-                        {money(p.amount)}
+                        {p.amountAfter !== null ? moneyChange(p.amount, p.amountAfter) : money(p.amount)}
                       </span>
                     )}
                   </div>

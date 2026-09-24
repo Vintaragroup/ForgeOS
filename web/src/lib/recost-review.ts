@@ -44,6 +44,9 @@ export interface RecostReview {
     amount: number | null;
     sourceQuote: string;
     sourceFilename: string;
+    // What the line item costs now, and what it would cost if this were
+    // applied. Null when the proposal names no priced row.
+    amountAfter: number | null;
     // What accepting it would do, said before the click rather than
     // explained after it. See recost-apply.ts.
     effect: string;

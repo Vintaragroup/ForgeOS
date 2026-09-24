@@ -28,6 +28,10 @@ export interface RecostLine {
   status: RecostLineStatus;
   // Negative means cheaper. Null when nobody has priced the change.
   costDelta: number | null;
+  // What that delta is a movement BETWEEN, when both sides are known. A
+  // lone "-$61,028" does not say what it came off.
+  costBefore?: number | null;
+  costAfter?: number | null;
   // Cost sitting on a source that no longer holds. Never a saving.
   costAtRisk: number | null;
 }
