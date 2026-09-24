@@ -1491,6 +1491,32 @@ function VersionSummaryBar({
             Approval means this version's number is signed off, not that
             the estimate is finished. Making a NEW version never alters
             the approved one. */}
+        {/* The thing somebody is looking for the moment they lock a
+            version, put where they are already looking.
+
+            It was not here. The only action on a locked version was
+            "Create new version", so an estimator who had just locked
+            version 2 and wanted to send it clicked the only button
+            there was -- and got version 3, which is unlocked, which put
+            proposal generation behind "lock this version first" again.
+            Generating one lived on the Proposal & Approval tab, below
+            the fold, behind a template dropdown, and only ever operated
+            on the CURRENT version -- so version 2 could no longer reach
+            it at all. */}
+        {version.isLocked && !version.proposals.some((p) => !p.deletedAt) && proposalTemplates.length > 0 && (
+          <form action={generateProposalAction.bind(null, estimateId, version.id)}>
+            <input type="hidden" name="templateId" value={proposalTemplates[0].id} />
+            <SubmitButton pendingText="Creating…">Create the proposal</SubmitButton>
+          </form>
+        )}
+        {version.isLocked && version.proposals.find((p) => !p.deletedAt) && (
+          <LinkButton
+            href={`/proposals/${version.proposals.find((p) => !p.deletedAt)!.id}`}
+            variant="secondary"
+          >
+            Open the proposal
+          </LinkButton>
+        )}
         {version.isLocked && (
           <form action={createNewVersionWithIds}>
             <Button variant="secondary">Create new version</Button>
