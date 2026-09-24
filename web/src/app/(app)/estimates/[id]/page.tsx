@@ -141,6 +141,8 @@ import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, LinkButton, Notice, PageHeader, ReadOnlyField, SelectField } from "@/components/ui";
 import { RecostingCard } from "@/components/recosting-card";
+import { ScopeDiffSummary } from "@/components/scope-diff-summary";
+import { computeScopeDiff, type ScopeDiff } from "@/lib/scope-diff";
 import { resolveRecostingState, type ExtractionStatusLike } from "@/lib/recosting";
 import { diffDocumentAgainstPredecessor, documentHasPricedRows } from "@/lib/document-service";
 import { SubmitButton } from "@/components/submit-button";
@@ -748,6 +750,44 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         )
       : null;
 
+  // What the revised sheet DROPS, which import itself can never report:
+  // it only ever adds, so a row the client removed is simply not
+  // re-proposed and nothing notices it is gone. See scope-diff.ts.
+  //
+  // Compared against the line items the superseded document produced ON
+  // THE VERSION BEING IMPORTED INTO -- this answers "what changes if I
+  // commit this", so the right baseline is what is actually here now.
+  // The re-cost review's baseline is deliberately different (the locked
+  // version the client received); see docs/recost-review.md.
+  const importedDocument =
+    canImport && importDocumentId
+      ? await db.document.findFirst({
+          where: { id: importDocumentId, opportunityId: estimate.opportunityId, deletedAt: null },
+          select: { supersedes: { select: { id: true, filename: true } } },
+        })
+      : null;
+
+  const importPredecessor = importedDocument?.supersedes ?? null;
+  const importScopeDiff =
+    importPredecessor && currentVersion && importPreview && !(importPreview instanceof Error) && "rows" in importPreview
+      ? computeScopeDiff(
+          (
+            await db.lineItem.findMany({
+              where: {
+                documentId: importPredecessor.id,
+                section: { estimateVersionId: currentVersion.id },
+              },
+              select: { description: true, qty: true, unit: true },
+            })
+          ).map((r) => ({ description: r.description, qty: r.qty.toNumber(), unit: r.unit })),
+          importPreview.rows.map((r) => ({
+            description: r.description,
+            qty: typeof r.qty === "number" ? r.qty : 0,
+            unit: "unit" in r && typeof r.unit === "string" ? r.unit : null,
+          })),
+        )
+      : null;
+
   const reconciliation =
     currentVersion && reconcileDocumentId
       ? await reconcileAgainstClientTemplate(currentVersion.id, reconcileDocumentId).catch((err: Error) => err)
@@ -1143,6 +1183,8 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     }))}
                     previewImportAction={previewImportWithId}
                     importDocumentId={importDocumentId}
+                    importScopeDiff={importScopeDiff}
+                    importPredecessorFilename={importPredecessor?.filename ?? null}
                     importPreview={importPreview}
                     importDuplicateStatus={importDuplicateStatus}
                     importDuplicateExcludedCount={importDuplicateExcludedCount}
@@ -4754,6 +4796,8 @@ function DocumentsTab({
   previewImportAction,
   importDocumentId,
   importPreview,
+  importScopeDiff,
+  importPredecessorFilename,
   importDuplicateStatus,
   importDuplicateExcludedCount,
   commitImportError,
@@ -4794,6 +4838,10 @@ function DocumentsTab({
   pricingScheduleDocuments: { id: string; filename: string; alreadyImported: boolean }[];
   previewImportAction: (formData: FormData) => void | Promise<void>;
   importDocumentId: string | undefined;
+  // Only set when the document being imported replaces another -- see
+  // scope-diff.ts for why this is the half import can never report.
+  importScopeDiff: ScopeDiff | null;
+  importPredecessorFilename: string | null;
   importPreview: Awaited<ReturnType<typeof previewPricingImport>> | Error | null;
   importDuplicateStatus: Awaited<ReturnType<typeof resolveDuplicateStatusForReview>> | null;
   importDuplicateExcludedCount: number;
@@ -5010,6 +5058,12 @@ function DocumentsTab({
                   </>
                 )}
               </p>
+
+              {/* Above the row table and the commit button, because it
+                  is the half of the answer those two cannot give. */}
+              {importScopeDiff && importPredecessorFilename && (
+                <ScopeDiffSummary predecessorFilename={importPredecessorFilename} diff={importScopeDiff} />
+              )}
 
               {importPreview.kind === "vendor-quote" && (
                 <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
