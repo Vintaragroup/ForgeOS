@@ -102,10 +102,51 @@ set of observations scoped to that predecessor's line items:
 | `PRICING_SCHEDULE` | `computeScopeDiff` — exists, unwired | dropped / added / qty moved, no money |
 | `DRAWING` | old extraction vs new extraction | qualitative presence/absence |
 
-The drawing comparison is new and is the loosest of the three. It
-compares two `extractedSummary` scope lists and reports what the old one
-described that the new one does not — *"reception counter appears in the
-superseded drawing and not in this one"*.
+The drawing comparison is new and is the loosest of the three.
+
+**It compares the images, not two descriptions of them.** The obvious
+build is to diff the two `extractedSummary` scope lists, and that is too
+weak to rely on: each summary was written independently, answering "what
+is on this sheet", with no knowledge that another sheet exists. Neither
+was ever asked to notice a change. On the hanging sign that yields
+
+```
+old:  Hanging sign dimensions: 90' x 20' x 8' (8' at thickest point,
+      4' at thinnest point) double sided stretch fabric
+new:  Overhead signage structures displaying 'FULL SWING KIT' ...
+      - no dimensions provided
+```
+
+which is enough to flag "described differently" and not much more. The
+difference that matters — a thick tapered fabric volume becoming a flat
+band — is visible in the renderings and absent from both texts.
+
+So the comparison pairs the two documents' page images in a single vision
+request and asks what changed between them. That needs no dimension
+label, no callout, and no tag naming the object: the model is looking at
+two pictures. This is the one comparison in the feature that works on a
+rendering package, which is what a revised design usually arrives as.
+
+Notes on doing it well:
+
+- **Page pairing is the hard part.** Two renderings rarely share a page
+  order, and sheet 3 of the old set is not necessarily sheet 3 of the
+  new. Pair by what the sheet shows, not by index — and where pairing is
+  ambiguous, send the full sets and let the request handle it rather than
+  guessing a pairing and comparing the wrong two.
+- **Batch it the same way.** Two drawings' images together will exceed
+  one request more often than one drawing's did; `chunkPagesByBudget`
+  already handles this, and pages must stay legible — shrinking them to
+  fit produced an empty extraction once already.
+- **This is not `artwork-image-diff.ts`.** That is a pixelmatch diff for
+  a vendor proof against approved artwork: same artwork, same size,
+  looking for small deviations. Two booth renderings from different
+  viewpoints would diff as near-totally different and mean nothing. The
+  technique does not transfer; only the vision call does.
+- **It still cannot invent a number.** It can report the sign is now a
+  flat band rather than a tapered volume. It cannot report that the band
+  is 3 feet tall unless a sheet says so. The estimator supplies the
+  dimension; the system supplies the observation that it changed.
 
 ### 2. Proposal (AI, ADVANCED_MODEL)
 
@@ -227,7 +268,10 @@ Expand-only, matching how every migration in this repo has been done.
 1. Wire `computeScopeDiff` into the import preview. Standalone value —
    it shows what the client dropped before anything is committed — and it
    is stage 1's spreadsheet half.
-2. Drawing-vs-drawing comparison over the two extractions.
+2. Drawing-vs-drawing comparison as a paired-image vision call. This is
+   the step that reads a revised design with no dimensions on it, so it
+   carries most of the feature's value on a rendering package -- and it
+   is the step most likely to need iterating on page pairing.
 3. `RecostProposal` model + the AI proposal stage, behind a button, with
    output validated against the database.
 4. The review screen.
