@@ -41,6 +41,7 @@ export function CollapsibleGroup({
   headerClassName,
   bodyClassName,
   chevronClassName,
+  defaultOpen = false,
   children,
 }: {
   title: ReactNode;
@@ -48,9 +49,14 @@ export function CollapsibleGroup({
   headerClassName: string;
   bodyClassName?: string;
   chevronClassName?: string;
+  // Collapsed by default, because that is what every booth header here
+  // wants. The re-cost review opens itself while decisions are still
+  // outstanding and closes once they are not, so the panel gets out of
+  // the way on its own rather than needing to be managed.
+  defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <>
       <div className={headerClassName}>

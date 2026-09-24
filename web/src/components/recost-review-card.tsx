@@ -7,6 +7,7 @@ import { RecostProposalDecision } from "@/components/recost-proposal-decision";
 import { ProposeFromBreakoutButton } from "@/components/propose-from-breakout-button";
 import { AcceptRecommendedButton } from "@/components/accept-recommended-button";
 import { RemoveElementButton } from "@/components/remove-element-button";
+import { CollapsibleGroup } from "@/components/collapsible-group";
 
 // Where the re-cost stands against the client's number.
 //
@@ -41,6 +42,10 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
   if (rollup.lines.length === 0 && !review.drawing?.findings.length) return null;
 
   const over = rollup.gap !== null && rollup.gap > 0;
+  // Two decisions on Full Swing once the workbook re-costs are applied:
+  // the reception counter and the 5'4" sign. The panel opens itself while
+  // any are outstanding and closes once none are, so nobody manages it.
+  const outstanding = review.removalGroups.length + review.proposals.filter((p) => p.action !== "REMOVE").length;
 
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-6">
@@ -53,9 +58,27 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
         )}
       </div>
 
+      {/* Never collapses. This estimate is $297,000 over the client's
+          number, and a panel that can hide that is a panel that will.
+          Everything below it is detail and folds away. */}
       <p className={`mt-3 text-lg font-semibold ${over ? "text-red-700" : "text-green-800"}`}>
         {rollupHeadline(rollup)}
       </p>
+
+      <CollapsibleGroup
+        defaultOpen={outstanding > 0}
+        headerClassName="mt-3 flex items-center justify-between gap-2 border-t border-neutral-200 pt-3"
+        chevronClassName="text-neutral-400 hover:text-neutral-700"
+        bodyClassName=""
+        title={
+          <span className="text-sm text-neutral-600">
+            {outstanding > 0
+              ? `${outstanding} decision${outstanding === 1 ? "" : "s"} waiting`
+              : "Everything decided"}
+            <span className="text-neutral-400"> · the workbook comparison, the drawing, and the history</span>
+          </span>
+        }
+      >
 
       <table className="mt-4 w-full text-sm">
         <tbody>
@@ -163,21 +186,30 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
           )}
 
           <div className="mt-3 flex flex-col gap-4">
+            {/* One row per element, opening on demand. Eight elements
+                and ninety-nine rows is a wall; eight lines with their
+                money on them is a list somebody can read. */}
             {review.lineItemDiff.elements.map((element) => (
               <div key={element.tab}>
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="text-sm font-medium text-neutral-900">
-                    {element.tab}
-                    {element.elementRemoved && (
-                      <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
-                        element removed
-                      </span>
-                    )}
-                  </span>
-                  <span className="text-xs tabular-nums text-neutral-600">
-                    {moneyChange(element.previousTotal, element.currentTotal)}
-                  </span>
-                </div>
+                <CollapsibleGroup
+                  headerClassName="flex flex-wrap items-baseline justify-between gap-2"
+                  chevronClassName="text-neutral-400 hover:text-neutral-700"
+                  title={
+                    <span className="text-sm font-medium text-neutral-900">
+                      {element.tab}
+                      {element.elementRemoved && (
+                        <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                          element removed
+                        </span>
+                      )}
+                    </span>
+                  }
+                  actions={
+                    <span className="text-xs tabular-nums text-neutral-600">
+                      {moneyChange(element.previousTotal, element.currentTotal)}
+                    </span>
+                  }
+                >
 
                 {/* The estimator renamed the element, which is where a
                     spec decision like "NON LIT" lives and the only place
@@ -215,6 +247,7 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
                     <li className="text-xs text-neutral-400">… {element.changes.length - 8} more</li>
                   )}
                 </ul>
+                </CollapsibleGroup>
               </div>
             ))}
           </div>
@@ -387,12 +420,27 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
         </div>
       )}
 
+      </CollapsibleGroup>
+
       {/* Why, with the citation it was decided against. The line-item
           history below records what changed and offers Restore; this
-          records the decision behind it. Neither is complete alone. */}
+          records the decision behind it. Neither is complete alone.
+
+          Always collapsed, even while work is outstanding: sixty entries
+          and growing is reference material, looked up occasionally and
+          scrolled past daily. */}
       {review.decided.length > 0 && (
         <div className="mt-5 border-t border-neutral-200 pt-4">
-          <h3 className="text-sm font-semibold text-neutral-900">Already decided</h3>
+          <CollapsibleGroup
+            headerClassName="flex items-center justify-between gap-2"
+            chevronClassName="text-neutral-400 hover:text-neutral-700"
+            title={
+              <span className="text-sm font-semibold text-neutral-900">
+                Already decided
+                <span className="ml-2 font-normal text-neutral-500">{review.decided.length}</span>
+              </span>
+            }
+          >
           <ul className="mt-2 flex flex-col gap-2">
             {review.decided.map((d) => (
               <li key={d.id} className="text-sm">
@@ -420,6 +468,7 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
               </li>
             ))}
           </ul>
+          </CollapsibleGroup>
         </div>
       )}
 
