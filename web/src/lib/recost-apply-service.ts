@@ -124,6 +124,15 @@ async function applyEffect(effect: ApplyEffect, opportunityId: string, userId: s
       await updateLineItem(opportunityId, effect.lineItemId, { qty: effect.qty }, userId);
       return 1;
 
+    case "SET_QTY_AND_COST":
+      await updateLineItem(
+        opportunityId,
+        effect.lineItemId,
+        { qty: effect.qty, unitCost: effect.unitCost },
+        userId,
+      );
+      return 1;
+
     case "NOTHING_TO_APPLY":
       return 0;
   }

@@ -23,11 +23,26 @@
 //
 // A leaf module: pure functions over plain rows, no db import.
 
-export type RecostActionValue = "REMOVE" | "REDUCE_QTY" | "REPRICE" | "ADD" | "NEEDS_QUOTE" | "RE_SOURCE";
+export type RecostActionValue =
+  | "REMOVE"
+  | "REDUCE_QTY"
+  | "ADJUST_QTY"
+  | "REPRICE"
+  | "ADD"
+  | "NEEDS_QUOTE"
+  | "RE_SOURCE";
 export type RecostConfidenceValue = "RECOMMEND_AND_CONFIRM" | "NEED_YOUR_DECISION";
 export type RecostMode = "VALUE_ENGINEERING" | "REDESIGN";
 
-const ACTIONS: RecostActionValue[] = ["REMOVE", "REDUCE_QTY", "REPRICE", "ADD", "NEEDS_QUOTE", "RE_SOURCE"];
+const ACTIONS: RecostActionValue[] = [
+  "REMOVE",
+  "REDUCE_QTY",
+  "ADJUST_QTY",
+  "REPRICE",
+  "ADD",
+  "NEEDS_QUOTE",
+  "RE_SOURCE",
+];
 
 // A finding the model was asked about, and the text it is allowed to
 // quote from. Nothing outside sourceText is citable.

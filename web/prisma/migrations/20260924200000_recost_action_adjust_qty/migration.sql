@@ -1,0 +1,13 @@
+-- A quantity change is not always a reduction.
+--
+-- Full Swing's revised workbook cuts most quantities and raises some --
+-- shop supplies went from 200 to 600 on the hitting bay while the side
+-- wall SEG went from 1280 to 0. Proposing an increase as REDUCE_QTY puts
+-- a word on the screen that contradicts the numbers beside it.
+--
+-- One value rather than a REDUCE/INCREASE pair: the direction is already
+-- visible in "qty 200 -> 600", and two enum values that apply the same
+-- effect are two ways to say one thing.
+--
+-- Expand-only: adding a value to an enum invalidates no existing row.
+ALTER TYPE "RecostAction" ADD VALUE 'ADJUST_QTY';

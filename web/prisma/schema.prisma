@@ -4357,6 +4357,10 @@ enum RecostAction {
   // reprice, and the estimating rules keep rental and purchased as
   // distinct cost bases (Estimate-Guidelines s13, s14).
   RE_SOURCE
+  // A quantity the revised workbook states outright, in either
+  // direction. REDUCE_QTY would contradict the numbers next to it on the
+  // rows that went up.
+  ADJUST_QTY
 }
 
 // The estimating rules' own two question types (Estimate-Guidelines s1),

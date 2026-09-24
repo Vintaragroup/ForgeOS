@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireEstimateAccess } from "@/lib/opportunity-access";
 import { decideRecostProposal } from "@/lib/recost-apply-service";
+import { proposeFromCostBreakout } from "@/lib/recost-row-proposal-service";
 import { proposeRecostChanges } from "@/lib/ai/recost-proposal-service";
 import { catchUserError } from "@/lib/user-error";
 import type { ActionResult } from "@/lib/user-error";
@@ -53,6 +54,24 @@ export async function decideRecostProposalAction(
 
   return catchUserError(async () => {
     await decideRecostProposal(proposalId, estimate.opportunityId, user.id, decision);
+    revalidatePath(`/estimates/${estimateId}`);
+  });
+}
+
+// Generates proposals from the row-by-row workbook comparison.
+//
+// Separate action from the AI one because it is a separate kind of
+// evidence: no model, an exact join, and the estimating lead's own
+// numbers. Costs nothing to run, so it can be re-run freely.
+export async function proposeFromCostBreakoutAction(
+  estimateId: string,
+  _prev: ActionResult,
+  _formData: FormData,
+): Promise<ActionResult> {
+  const user = await requireEstimateAccess(estimateId);
+
+  return catchUserError(async () => {
+    await proposeFromCostBreakout(estimateId, user.id);
     revalidatePath(`/estimates/${estimateId}`);
   });
 }

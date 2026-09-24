@@ -26,6 +26,9 @@ export type ApplyEffect =
   | { kind: "DELETE_SECTION_ITEMS"; sectionId: string }
   | { kind: "SET_UNIT_COST"; lineItemId: string; unitCost: number }
   | { kind: "SET_QTY"; lineItemId: string; qty: number }
+  // Both moved. One effect rather than two, so the line item is written
+  // once and its audit row reads as the single change it was.
+  | { kind: "SET_QTY_AND_COST"; lineItemId: string; qty: number; unitCost: number }
   // Accepted, agreed, and there is no number to write. The reason is
   // shown rather than swallowed.
   | { kind: "NOTHING_TO_APPLY"; why: string };
@@ -48,6 +51,10 @@ export function effectOf(proposal: ApplicableProposal): ApplyEffect {
       return { kind: "NOTHING_TO_APPLY", why: "it does not name anything to remove" };
 
     case "REDUCE_QTY":
+    case "ADJUST_QTY":
+      if (lineItemId && newQty !== null && newUnitCost !== null) {
+        return { kind: "SET_QTY_AND_COST", lineItemId, qty: newQty, unitCost: newUnitCost };
+      }
       if (lineItemId && newQty !== null) return { kind: "SET_QTY", lineItemId, qty: newQty };
       return {
         kind: "NOTHING_TO_APPLY",
@@ -56,6 +63,9 @@ export function effectOf(proposal: ApplicableProposal): ApplyEffect {
 
     case "REPRICE":
     case "RE_SOURCE":
+      if (lineItemId && newUnitCost !== null && newQty !== null) {
+        return { kind: "SET_QTY_AND_COST", lineItemId, qty: newQty, unitCost: newUnitCost };
+      }
       if (lineItemId && newUnitCost !== null) return { kind: "SET_UNIT_COST", lineItemId, unitCost: newUnitCost };
       return {
         kind: "NOTHING_TO_APPLY",
@@ -103,6 +113,8 @@ export function describeEffect(effect: ApplyEffect, context: { itemCount?: numbe
       return `Sets this line item's unit cost to ${money(effect.unitCost)}.`;
     case "SET_QTY":
       return `Sets this line item's quantity to ${effect.qty}.`;
+    case "SET_QTY_AND_COST":
+      return `Sets this line item to ${effect.qty} at ${money(effect.unitCost)}.`;
     case "NOTHING_TO_APPLY":
       return `Records the decision — ${effect.why}.`;
   }

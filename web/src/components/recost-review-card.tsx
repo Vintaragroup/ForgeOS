@@ -3,6 +3,7 @@ import type { CorroborationKind } from "@/lib/recost-corroboration";
 import { rollupHeadline } from "@/lib/recost-rollup";
 import { RunRecostProposalsButton } from "@/components/run-recost-proposals-button";
 import { RecostProposalDecision } from "@/components/recost-proposal-decision";
+import { ProposeFromBreakoutButton } from "@/components/propose-from-breakout-button";
 
 // Where the re-cost stands against the client's number.
 //
@@ -144,7 +145,10 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
           change in the open version. */}
       {review.lineItemDiff && review.lineItemDiff.elements.length > 0 && (
         <div className="mt-5 border-t border-neutral-200 pt-4">
-          <h3 className="text-sm font-semibold text-neutral-900">What needs updating in this version</h3>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold text-neutral-900">What needs updating in this version</h3>
+            <ProposeFromBreakoutButton estimateId={estimateId} />
+          </div>
           <p className="mt-1 text-sm text-neutral-600">
             {review.lineItemDiff.changedRows} rows re-costed, {review.lineItemDiff.removedRows} removed
             {review.lineItemDiff.addedRows > 0 ? `, ${review.lineItemDiff.addedRows} added` : ""} — read from the
@@ -261,16 +265,21 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
           model call, and nothing on this screen changes until a person
           decides. Every row below already survived validation against
           real ids and a verbatim quote — see recost-proposal.ts. */}
-      {review.drawing && review.drawing.findings.some((f) => f.kind !== "CORROBORATED") && (
+      {(review.proposals.length > 0 ||
+        (review.drawing && review.drawing.findings.some((f) => f.kind !== "CORROBORATED"))) && (
         <div className="mt-5 border-t border-neutral-200 pt-4">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h3 className="text-sm font-semibold text-neutral-900">
-              What these findings are about in this estimate
+              Waiting on your decision
             </h3>
-            <RunRecostProposalsButton
-              estimateId={estimateId}
-              hasProposals={review.proposals.length > 0}
-            />
+            {/* Only offered when there is something for a model to map.
+                The workbook proposals above need no model at all. */}
+            {review.drawing && review.drawing.findings.some((f) => f.kind !== "CORROBORATED") && (
+              <RunRecostProposalsButton
+                estimateId={estimateId}
+                hasProposals={review.proposals.length > 0}
+              />
+            )}
           </div>
 
           {review.proposals.length === 0 ? (
