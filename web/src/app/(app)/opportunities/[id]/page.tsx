@@ -7,7 +7,7 @@ import { diffDocumentAgainstPredecessor } from "@/lib/document-service";
 import { DocumentDiffSummary } from "@/components/document-diff-summary";
 import { isScheduleDocumentType } from "@/lib/recosting";
 import { DrawingComparisonSummary } from "@/components/drawing-comparison-summary";
-import type { DrawingComparison } from "@/lib/ai/drawing-comparison-service";
+import type { DrawingComparison } from "@/lib/drawing-comparison";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";

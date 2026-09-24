@@ -28,9 +28,8 @@ import {
   assessDrawingCharacter,
   characterMismatchGuidance,
   charactersDiffer,
-  describeCharacter,
-  type DrawingCharacter,
 } from "@/lib/ai/drawing-character";
+import type { DrawingChangeFinding, DrawingComparison } from "@/lib/drawing-comparison";
 
 // The scope lines an extraction produced, which is what character is
 // read from. Returns [] for a document that was never analysed, which
@@ -40,8 +39,6 @@ function scopeTextsOf(extractedSummary: unknown): string[] {
   if (!s || !Array.isArray(s.scopeSummary)) return [];
   return s.scopeSummary.map((i) => (typeof i?.text === "string" ? i.text : "")).filter(Boolean);
 }
-
-export { describeCharacter };
 
 // The estimating rules (data/Estimate-Guidelines, Taze Ankerstein,
 // 2026-09-21) forbid inferring cost from a picture, three separate
@@ -110,32 +107,6 @@ export const COMPARISON_SCHEMA = {
     required: ["findings"],
   },
 } as const;
-
-export type DrawingChangeKind = "REMOVED" | "ADDED" | "CHANGED";
-
-export interface DrawingChangeFinding {
-  kind: DrawingChangeKind;
-  subject: string;
-  detail: string;
-  previousPage: number | null;
-  revisedPage: number | null;
-}
-
-export interface DrawingComparison {
-  previousDocumentId: string;
-  previousFilename: string;
-  revisedDocumentId: string;
-  revisedFilename: string;
-  findings: DrawingChangeFinding[];
-  // Recorded so a thin result can be read as "few pages were compared"
-  // rather than "little changed".
-  previousPagesCompared: number;
-  revisedPagesCompared: number;
-  charactersMismatched: boolean;
-  previousCharacter: DrawingCharacter;
-  revisedCharacter: DrawingCharacter;
-  comparedAt: string;
-}
 
 // Compares a drawing against the one it supersedes, and stores the
 // result on the revised document.

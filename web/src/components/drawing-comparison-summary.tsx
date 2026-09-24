@@ -2,7 +2,8 @@
 
 import { ActionForm } from "@/components/action-form";
 import { compareDrawingRevisionAction } from "@/app/(app)/opportunities/[id]/documents/actions";
-import { describeCharacter, type DrawingComparison } from "@/lib/ai/drawing-comparison-service";
+import { describeCharacter } from "@/lib/ai/drawing-character";
+import type { DrawingComparison } from "@/lib/drawing-comparison";
 
 // What the revised design changed, on the document row where the two
 // drawings are already linked.
