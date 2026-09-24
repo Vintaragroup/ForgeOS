@@ -40,6 +40,11 @@ export interface ProposalViewLineItem {
   // test fixture that predates this field keeps rendering exactly as
   // before -- see groupBoothLineItems' own UNGROUPED sentinel.
   subgroupLabel?: string | null;
+  // A buried section's cost, re-homed onto a visible section by
+  // foldBuriedSections. Counts in every subtotal it lands in and is
+  // never printed as a row of its own -- which is what "bury the cost"
+  // means, as opposed to "remove it".
+  buried?: boolean;
 }
 
 export interface ProposalViewSection {
@@ -269,6 +274,83 @@ export interface CategoryBucket {
 // sortOrder) -- both which names are valid (falling back to "Other" for
 // anything else, e.g. a category since renamed/deleted out from under an
 // old LineItem) and the bucket ordering come from it, not a hardcoded list.
+// Moves each "buried" section's money into a visible section of the same
+// booth, and drops the buried section.
+//
+// "Buried -- cost still counted" used to mean the money appeared in the
+// document's Grand Total and in no other number on the page. On ABC
+// Chicago that left $25,266 of cost with no visible home: every printed
+// figure reconciled with its neighbours, and then the Grand Total was
+// larger than all of them added together, with nothing to explain the
+// difference.
+//
+// Burying should mean hidden INSIDE a bigger number, not absent from
+// every number but the last. So the cost lands on the largest visible
+// section of its own booth -- the same thing an estimator does by hand
+// when they pad a visible line -- and from there it flows through every
+// subtotal, booth total, category total and the Grand Total on its own,
+// because they are all built by summing the same items.
+//
+// The rows themselves never print: renderBody and its siblings skip a
+// buried item. Where a booth is summarized on the proposal (this job's
+// case for all three affected booths) nothing is itemized anyway and the
+// burial is invisible. Where rows ARE printed, the group's own rows will
+// not sum to its header by exactly the buried amount -- which is
+// unavoidable, and is the point: the money has to be somewhere.
+//
+// A section with no visible sibling in its booth falls back to the
+// largest visible section anywhere in the document, and if there is no
+// visible section at all it is left alone rather than invented a home.
+export function foldBuriedSections(sections: ProposalViewSection[]): ProposalViewSection[] {
+  const visibleCost = (section: ProposalViewSection) =>
+    section.lineItems
+      .filter((li) => li.includeInProposal !== false)
+      .reduce((sum, li) => sum + Number(li.totalCost), 0);
+
+  const isBuried = (s: ProposalViewSection) =>
+    !!s.omittedFromProposal && s.includeInProposal !== false && !s.excludedFromTotals;
+  const isVisible = (s: ProposalViewSection) =>
+    !s.omittedFromProposal && s.includeInProposal !== false && !s.excludedFromTotals;
+
+  const buried = sections.filter(isBuried);
+  if (buried.length === 0) return sections;
+
+  const visible = sections.filter(isVisible);
+  if (visible.length === 0) return sections;
+
+  const largestIn = (candidates: ProposalViewSection[]) =>
+    candidates.reduce<ProposalViewSection | null>(
+      (best, s) => (best === null || visibleCost(s) > visibleCost(best) ? s : best),
+      null,
+    );
+
+  // Which visible section absorbs each buried one, decided before
+  // anything is moved so a freshly-fattened target cannot change the
+  // choice for the next burial.
+  const absorbedBy = new Map<ProposalViewSection, ProposalViewLineItem[]>();
+  // Tracked per section, not as a single flag: a burial with no visible
+  // sibling anywhere keeps its old behaviour rather than vanishing
+  // because some OTHER burial found a home.
+  const rehomed = new Set<ProposalViewSection>();
+  for (const section of buried) {
+    const sameBooth = visible.filter((v) => v.groupLabel === section.groupLabel);
+    const target = largestIn(sameBooth.length > 0 ? sameBooth : visible);
+    if (!target) continue;
+    const items = section.lineItems
+      .filter((li) => li.includeInProposal !== false)
+      .map((li) => ({ ...li, buried: true }));
+    absorbedBy.set(target, [...(absorbedBy.get(target) ?? []), ...items]);
+    rehomed.add(section);
+  }
+
+  return sections
+    .filter((s) => !rehomed.has(s))
+    .map((s) => {
+      const absorbed = absorbedBy.get(s);
+      return absorbed ? { ...s, lineItems: [...s.lineItems, ...absorbed] } : s;
+    });
+}
+
 export function aggregateByCategory(
   sections: ProposalViewSection[],
   categories: Category[],
