@@ -54,6 +54,9 @@ Report a difference when something is:
 - present in the previous drawing and absent from the revised one (REMOVED)
 - absent from the previous drawing and present in the revised one (ADDED)
 - present in both but visibly different in form, size, count, or construction (CHANGED)
+- present in both but in a different place, or attached to something else (MOVED)
+
+Before you report anything as REMOVED, look through EVERY page of the revised drawing for it. Things get relocated between revisions: banners that hung from a ceiling grid in one set can hang from a cage structure in the next. If you find it anywhere in the revised set, it is MOVED, not REMOVED, and you must say where it went. Reporting a relocation as a removal is the most costly mistake you can make here, because it reads as scope leaving the job when it has not.
 
 Name the subject the way an exhibit estimator would -- "reception counter", "hanging sign", "batting cage structure", "video wall" -- because these findings are matched against booths with names like that.
 
@@ -80,7 +83,7 @@ export const COMPARISON_SCHEMA = {
           type: "object",
           additionalProperties: false,
           properties: {
-            kind: { type: "string", enum: ["REMOVED", "ADDED", "CHANGED"] },
+            kind: { type: "string", enum: ["REMOVED", "ADDED", "CHANGED", "MOVED"] },
             subject: {
               type: "string",
               description:

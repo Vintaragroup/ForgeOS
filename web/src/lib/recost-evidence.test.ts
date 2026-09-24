@@ -149,6 +149,28 @@ describe("evidenceFromDrawingComparison", () => {
     expect(ev[0].scopedToBooth).toBeNull();
   });
 
+  // The hanging banners lesson: they moved from a ceiling grid to the
+  // batting cage and one run reported only the removal half, which reads
+  // as scope leaving the job when it has not.
+  it("keeps MOVED as its own kind rather than collapsing it into a removal", () => {
+    const ev = evidenceFromDrawingComparison(
+      comparison({
+        findings: [
+          {
+            kind: "MOVED",
+            subject: "hanging banners",
+            detail: "Now suspended from the batting cage structure rather than the ceiling grid.",
+            previousPage: 3,
+            revisedPage: 5,
+          },
+        ],
+      }),
+      (s) => resolveBoothLabel(s, BOOTHS),
+    );
+    expect(ev[0].kind).toBe("MOVED");
+    expect(ev[0].kind).not.toBe("DROPPED");
+  });
+
   // The batting cage lesson: a component sheet against a rendering
   // reports drawing style as design change.
   it("carries the mismatched-kinds caveat into the evidence itself", () => {
@@ -214,9 +236,17 @@ describe("collectEvidence", () => {
       ev({ kind: "REPRICED", subject: "repriced", amount: 5000 }),
       ev({ kind: "DROPPED", subject: "small drop", amount: 600 }),
       ev({ kind: "DROPPED", subject: "big drop", amount: 16460 }),
+      ev({ kind: "MOVED", subject: "moved thing" }),
       ev({ kind: "DESIGN_CHANGED", subject: "design" }),
     ]);
-    expect(out.map((e) => e.subject)).toEqual(["big drop", "small drop", "design", "repriced", "new thing"]);
+    expect(out.map((e) => e.subject)).toEqual([
+      "big drop",
+      "small drop",
+      "design",
+      "moved thing",
+      "repriced",
+      "new thing",
+    ]);
   });
 
   it("drops immaterial movements", () => {

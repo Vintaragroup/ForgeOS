@@ -17,12 +17,16 @@ const KIND_LABEL: Record<DrawingComparison["findings"][number]["kind"], string> 
   REMOVED: "removed",
   ADDED: "added",
   CHANGED: "changed",
+  MOVED: "moved",
 };
 
 const KIND_TONE: Record<DrawingComparison["findings"][number]["kind"], string> = {
   REMOVED: "bg-red-100 text-red-800",
   ADDED: "bg-blue-100 text-blue-800",
   CHANGED: "bg-amber-100 text-amber-900",
+  // Not red: moved scope has not left the job, and colouring it like a
+  // removal is how it gets read as a saving.
+  MOVED: "bg-neutral-200 text-neutral-700",
 };
 
 export function DrawingComparisonSummary({
@@ -62,6 +66,7 @@ export function DrawingComparisonSummary({
   const removed = comparison.findings.filter((f) => f.kind === "REMOVED").length;
   const changed = comparison.findings.filter((f) => f.kind === "CHANGED").length;
   const added = comparison.findings.filter((f) => f.kind === "ADDED").length;
+  const moved = comparison.findings.filter((f) => f.kind === "MOVED").length;
 
   return (
     <details className="mt-1 text-xs">
@@ -69,6 +74,7 @@ export function DrawingComparisonSummary({
         Against {predecessorFilename}:{" "}
         <span className="font-semibold text-neutral-900">
           {removed} removed · {changed} changed · {added} added
+          {moved > 0 && ` · ${moved} moved`}
         </span>
       </summary>
 

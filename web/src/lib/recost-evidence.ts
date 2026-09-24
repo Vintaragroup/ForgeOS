@@ -22,7 +22,7 @@ import type { ScopeDiff } from "@/lib/scope-diff";
 import type { DocumentDiff } from "@/lib/document-diff";
 import type { DrawingComparison } from "@/lib/drawing-comparison";
 
-export type EvidenceKind = "DROPPED" | "ADDED" | "QTY_CHANGED" | "REPRICED" | "DESIGN_CHANGED";
+export type EvidenceKind = "DROPPED" | "ADDED" | "QTY_CHANGED" | "REPRICED" | "DESIGN_CHANGED" | "MOVED";
 
 export interface RecostEvidence {
   kind: EvidenceKind;
@@ -135,8 +135,17 @@ export function evidenceFromDrawingComparison(
     : "";
 
   return comparison.findings.map((f) => ({
+    // MOVED stays its own kind rather than collapsing into DROPPED.
+    // Relocated scope has not left the job, and anything downstream that
+    // treats it as a removal would cut cost that is still real.
     kind:
-      f.kind === "REMOVED" ? ("DROPPED" as const) : f.kind === "ADDED" ? ("ADDED" as const) : ("DESIGN_CHANGED" as const),
+      f.kind === "REMOVED"
+        ? ("DROPPED" as const)
+        : f.kind === "ADDED"
+          ? ("ADDED" as const)
+          : f.kind === "MOVED"
+            ? ("MOVED" as const)
+            : ("DESIGN_CHANGED" as const),
     subject: f.subject,
     detail: `${f.detail}${caveat}`,
     sourceQuote: f.detail,
@@ -236,9 +245,10 @@ export function collectEvidence(all: RecostEvidence[]): RecostEvidence[] {
   const order: Record<EvidenceKind, number> = {
     DROPPED: 0,
     DESIGN_CHANGED: 1,
-    QTY_CHANGED: 2,
-    REPRICED: 3,
-    ADDED: 4,
+    MOVED: 2,
+    QTY_CHANGED: 3,
+    REPRICED: 4,
+    ADDED: 5,
   };
   return all
     .filter((e) => isMaterial(e.amount, false))

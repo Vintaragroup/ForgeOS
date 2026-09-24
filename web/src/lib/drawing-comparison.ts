@@ -11,7 +11,13 @@
 
 import type { DrawingCharacter } from "@/lib/ai/drawing-character";
 
-export type DrawingChangeKind = "REMOVED" | "ADDED" | "CHANGED";
+// MOVED matters as much as the other three. A relocated item still
+// costs money -- possibly a different amount, if it now hangs off a
+// cage rather than a grid -- so reporting it as REMOVED reads as scope
+// leaving the job when it has not. Full Swing's hanging banners moved
+// from a ceiling grid to the batting cage structure and one comparison
+// run reported only the removal half.
+export type DrawingChangeKind = "REMOVED" | "ADDED" | "CHANGED" | "MOVED";
 
 export interface DrawingChangeFinding {
   kind: DrawingChangeKind;
