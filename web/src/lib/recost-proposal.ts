@@ -14,6 +14,7 @@
 //   every id it names must exist in this estimate
 //   every quote it cites must appear verbatim in the source it cites
 //   every number it proposes must appear in that quote
+//   a removal must name something the finding is recognisably about
 //   a removal on a value-engineering job is never pre-confirmed
 //
 // A proposal failing any of these is dropped with a reason rather than
@@ -34,13 +35,18 @@ export interface ProposalFinding {
   id: string;
   sourceDocumentId: string;
   sourceText: string;
+  // What the source called the thing, on its own. Matched against the
+  // target's name for actions that take money out -- see below.
+  subject: string;
 }
 
 export interface ProposalContext {
   mode: RecostMode;
   findings: ProposalFinding[];
-  lineItemIds: Set<string>;
-  sectionIds: Set<string>;
+  // Id to name. Names are needed, not just ids: a removal has to be
+  // checked against WHAT it is removing, not only that the row exists.
+  lineItems: Map<string, string>;
+  sections: Map<string, string>;
 }
 
 // Exactly as the model returned it: every field optional and every type
@@ -120,6 +126,53 @@ function asNumber(value: unknown): number | null {
   return value;
 }
 
+// Whether a target is recognisably the thing the finding is about.
+//
+// Only applied to actions that take money OUT of a row that already
+// exists. Its whole purpose is the second production run on ABC Chicago,
+// where removing the empty sections from the candidate list moved both
+// structure findings onto real ones -- and the real ones were wrong:
+//
+//   "front structure ... no longer present"      -> FS - Reception Counter
+//   "rear structure with closet ... no longer"   -> FS - Lit Spines Lounge
+//
+// Neither is what the drawing was talking about. That is a worse failure
+// than the empty section it replaced, because a removal against a real
+// section is a removal somebody might accept. The honest answer for both
+// is that this estimate has no section for a "front structure", and the
+// prompt does say omitting a finding is legitimate -- but a soft
+// instruction is not a guarantee, and this is the guarantee.
+//
+// Deliberately NOT applied to ADD or NEEDS_QUOTE: new scope has to live
+// somewhere, and "a seating area with tables and chairs" belongs in
+// SS - Lounge Structure / Custom Build precisely because that is the
+// lounge, not because the words match.
+function namesTheSameThing(subject: string, target: string): boolean {
+  const STOPWORDS = new Set(["a", "an", "and", "of", "the", "with", "w", "for", "qty", "s", "d", "custom", "build"]);
+  const tokens = (text: string) =>
+    new Set(
+      text
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .split(" ")
+        .map((word) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word))
+        .filter((word) => word && !STOPWORDS.has(word)),
+    );
+
+  // The client prefix is dropped the same way recost-corroboration does
+  // it: "FS" and "SS" are Full Swing and Second Swing, two companies
+  // sharing a stand, and no drawing says either.
+  const separator = target.indexOf(" - ");
+  const a = tokens(subject);
+  const b = tokens(separator === -1 ? target : target.slice(separator + 3));
+  if (a.size === 0 || b.size === 0) return false;
+
+  // One shared identifying word is enough here, unlike the corroboration
+  // pairing: a line item description is far longer and less regular than
+  // a schedule element name, and this is a veto rather than a match.
+  return [...a].some((word) => b.has(word));
+}
+
 export function validateProposals(raw: RawProposal[], context: ProposalContext): ValidationResult {
   const byFindingId = new Map(context.findings.map((f) => [f.id, f]));
   const proposals: ValidatedProposal[] = [];
@@ -158,10 +211,10 @@ export function validateProposals(raw: RawProposal[], context: ProposalContext):
     }
 
     const lineItemIds = Array.isArray(item.lineItemIds)
-      ? [...new Set(item.lineItemIds.filter((id): id is string => typeof id === "string" && context.lineItemIds.has(id)))]
+      ? [...new Set(item.lineItemIds.filter((id): id is string => typeof id === "string" && context.lineItems.has(id)))]
       : [];
     const sectionIdRaw = asString(item.sectionId);
-    const sectionId = context.sectionIds.has(sectionIdRaw) ? sectionIdRaw : null;
+    const sectionId = context.sections.has(sectionIdRaw) ? sectionIdRaw : null;
 
     if (lineItemIds.length === 0 && !sectionId) {
       // Either it named nothing real, or it named nothing at all. Both
@@ -172,6 +225,21 @@ export function validateProposals(raw: RawProposal[], context: ProposalContext):
     // The schema stores one or the other. Line items win: they are the
     // more precise claim, and a model that gave both has not decided.
     const targetSectionId = lineItemIds.length > 0 ? null : sectionId;
+
+    // Taking money out of a row means naming the right row.
+    if (action === "REMOVE" || action === "REDUCE_QTY") {
+      const targets =
+        lineItemIds.length > 0
+          ? lineItemIds.map((id) => context.lineItems.get(id) ?? "")
+          : [context.sections.get(targetSectionId!) ?? ""];
+      if (!targets.some((name) => namesTheSameThing(finding.subject, name))) {
+        rejected.push({
+          findingId,
+          why: `proposes ${action} against "${targets[0]}", which is not what "${finding.subject}" is about`,
+        });
+        continue;
+      }
+    }
 
     let confidence: RecostConfidenceValue =
       asString(item.confidence).toUpperCase() === "RECOMMEND_AND_CONFIRM"

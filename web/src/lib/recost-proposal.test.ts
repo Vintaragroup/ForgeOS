@@ -13,12 +13,15 @@ function context(over: Partial<ProposalContext> = {}): ProposalContext {
   return {
     mode: "VALUE_ENGINEERING",
     findings: [
-      { id: "F1", sourceDocumentId: "doc-drawing", sourceText: FRONT_STRUCTURE },
-      { id: "F2", sourceDocumentId: "doc-drawing", sourceText: SIGN },
-      { id: "F3", sourceDocumentId: "doc-fuse", sourceText: FUSE },
+      { id: "F1", subject: "front structure", sourceDocumentId: "doc-drawing", sourceText: FRONT_STRUCTURE },
+      { id: "F2", subject: "hanging sign", sourceDocumentId: "doc-drawing", sourceText: SIGN },
+      { id: "F3", subject: "AV monitors", sourceDocumentId: "doc-fuse", sourceText: FUSE },
     ],
-    lineItemIds: new Set(["li-1", "li-2"]),
-    sectionIds: new Set(["sec-1"]),
+    lineItems: new Map([
+      ["li-1", "Front structure monitor mounts"],
+      ["li-2", "Hanging Sign"],
+    ]),
+    sections: new Map([["sec-1", "FS - Front Structure / Custom Build"]]),
     ...over,
   };
 }
@@ -149,6 +152,61 @@ describe("validateProposals", () => {
     expect(proposals.every((p) => p.confidence === "NEED_YOUR_DECISION")).toBe(true);
   });
 
+  // The second production run on ABC Chicago. Removing the empty sections
+  // from the candidate list moved both structure findings onto REAL
+  // sections -- and the real ones were wrong. A removal against a real
+  // section is worse than one against an empty section, because somebody
+  // might accept it.
+  describe("a removal has to name what the finding is about", () => {
+    it("rejects a removal against a row the finding is not about", () => {
+      const { proposals, rejected } = validateProposals(
+        [proposal({ lineItemIds: [], sectionId: "sec-counter" })],
+        context({ sections: new Map([["sec-counter", "FS - Reception Counter / Custom Build"]]) }),
+      );
+      expect(proposals).toEqual([]);
+      expect(rejected[0].why).toMatch(/is not what "front structure" is about/);
+    });
+
+    it("keeps a removal against a row that is recognisably the thing", () => {
+      const { proposals } = validateProposals([proposal({ lineItemIds: ["li-1"] })], context());
+      expect(proposals).toHaveLength(1);
+    });
+
+    it("ignores the client prefix, which no drawing ever says", () => {
+      const { proposals } = validateProposals(
+        [proposal({ lineItemIds: [], sectionId: "sec-1" })],
+        context(),
+      );
+      expect(proposals).toHaveLength(1);
+    });
+
+    // New scope has to live somewhere, and where it lives is a booth
+    // decision rather than a word match -- "a seating area with tables
+    // and chairs" belongs in the lounge whatever the section is called.
+    it("does not hold an addition to the same rule", () => {
+      const { proposals } = validateProposals(
+        [
+          proposal({
+            action: "ADD",
+            lineItemIds: [],
+            sectionId: "sec-lounge",
+            sourceQuote: FRONT_STRUCTURE,
+          }),
+        ],
+        context({ sections: new Map([["sec-lounge", "SS - Lounge Structure / Custom Build"]]) }),
+      );
+      expect(proposals).toHaveLength(1);
+    });
+
+    it("holds a quantity reduction to it too", () => {
+      const { rejected } = validateProposals(
+        [proposal({ action: "REDUCE_QTY", lineItemIds: [], sectionId: "sec-spines" })],
+        context({ sections: new Map([["sec-spines", "FS - Lit Spines Lounge / Custom Build"]]) }),
+      );
+      expect(rejected[0].why).toMatch(/is not what "front structure" is about/);
+    });
+  });
+
   describe("money the model proposes", () => {
     // The user's own case: Fuse is off the job and the five monitors
     // are being purchased at $2,800 each. That number IS in the source.
@@ -188,7 +246,7 @@ describe("validateProposals", () => {
       const { proposals } = validateProposals(
         [proposal({ findingId: "F4", action: "REPRICE", sourceQuote: quote, newUnitCost: 13000 })],
         context({
-          findings: [{ id: "F4", sourceDocumentId: "doc-quote", sourceText: quote }],
+          findings: [{ id: "F4", subject: "revised sign", sourceDocumentId: "doc-quote", sourceText: quote }],
         }),
       );
       expect(proposals[0].newUnitCost).toBe(13000);

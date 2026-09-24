@@ -179,6 +179,7 @@ export async function proposeRecostChanges(
   const findings: ProposalFinding[] = open.map((f, i) => ({
     id: `F${i + 1}`,
     sourceDocumentId: drawingDocument.id,
+    subject: f.subject,
     // Both halves are citable: the model may quote the subject or the
     // detail, and refusing the subject would reject honest citations.
     sourceText: `${f.subject}. ${f.detail}`,
@@ -234,8 +235,10 @@ export async function proposeRecostChanges(
   const result = validateProposals(parsed.proposals ?? [], {
     mode,
     findings,
-    lineItemIds: new Set(sections.flatMap((s) => s.lineItems.map((li) => li.id))),
-    sectionIds: new Set(sections.map((s) => s.id)),
+    lineItems: new Map(sections.flatMap((s) => s.lineItems.map((li) => [li.id, li.description] as const))),
+    sections: new Map(
+      sections.map((s) => [s.id, s.groupLabel ? `${s.groupLabel} / ${s.name}` : s.name] as const),
+    ),
   });
 
   // Said out loud. A run where most proposals fail validation is a
