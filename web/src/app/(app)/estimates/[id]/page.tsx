@@ -7095,14 +7095,43 @@ function ProposalApprovalTab({
             Earlier versions
           </h2>
           <ul className="flex flex-col gap-2 text-sm">
-            {olderVersions.map((v) => (
-              <li key={v.id} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2">
-                <span>
-                  Version {v.versionNumber} {v.isLocked ? "· locked" : "· unlocked"}
-                </span>
-                <span className="font-medium">{money(v.grandTotal)}</span>
-              </li>
-            ))}
+            {/* Every locked version can reach its own proposal from
+                here, not just whichever one happens to be current.
+
+                It could not before, and that is a dead end somebody hit
+                for real: lock version 2, go looking for how to send it,
+                find only "Create new version", click it, and version 2 is
+                suddenly an EARLIER version -- with proposal generation
+                living on a tab that only ever operates on the current
+                one. There was then no path to a version 2 proposal at
+                all, from anywhere in the app. */}
+            {olderVersions.map((v) => {
+              const existing = estimateProposals.find(
+                (p) => p.estimateVersion.versionNumber === v.versionNumber,
+              );
+              return (
+                <li key={v.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-neutral-50 px-3 py-2">
+                  <span>
+                    Version {v.versionNumber} {v.isLocked ? "· locked" : "· unlocked"}
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <span className="font-medium">{money(v.grandTotal)}</span>
+                    {existing ? (
+                      <Link href={`/proposals/${existing.id}`} className="text-xs font-medium text-brand-navy hover:underline">
+                        Open the proposal →
+                      </Link>
+                    ) : v.isLocked && proposalTemplates.length > 0 ? (
+                      <form action={generateProposalAction.bind(null, estimateId, v.id)}>
+                        <input type="hidden" name="templateId" value={proposalTemplates[0].id} />
+                        <SubmitButton pendingText="Creating…" variant="secondary">
+                          Create the proposal
+                        </SubmitButton>
+                      </form>
+                    ) : null}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </Card>
       )}
