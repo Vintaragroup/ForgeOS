@@ -3,6 +3,7 @@ import {
   effectiveValidity,
   groupStaleLineItems,
   isStaleSource,
+  staleSourceDetail,
   staleSourceExplanation,
   type ValiditySource,
 } from "@/lib/document-validity";
@@ -78,6 +79,39 @@ describe("staleSourceExplanation", () => {
   });
 });
 
+// Said where the filename is already on screen right above it, which is
+// how a re-cost review row reads.
+describe("staleSourceDetail", () => {
+  it("says nothing about a current source", () => {
+    expect(staleSourceDetail(doc())).toBeNull();
+  });
+
+  it("never repeats the filename", () => {
+    const withdrawn = staleSourceDetail(
+      doc({ filename: "369711-Version-2-Expo-CCI--Full-Swing-Baseball--ABCA--Chicago--No-LX-or-Rig--V2.pdf",
+            validity: "WITHDRAWN", validityNote: "Fuse is no longer supplying AV on this job" }),
+    );
+    expect(withdrawn).not.toContain("369711");
+    expect(withdrawn).toMatch(/^No longer a valid source/);
+    expect(withdrawn).toMatch(/Fuse is no longer supplying AV/);
+
+    const superseded = staleSourceDetail(doc({ supersededByFilename: "estimates updated 091826.xlsx" }));
+    expect(superseded).toBe("Replaced by estimates updated 091826.xlsx.");
+  });
+
+  // Same promise the long form makes: it says what is known and stops.
+  it("never implies anything is being removed", () => {
+    for (const d of [
+      doc({ validity: "WITHDRAWN" }),
+      doc({ validity: "WITHDRAWN", validityNote: "vendor off the job" }),
+      doc({ supersededByFilename: "newer.xlsx" }),
+      doc({ validity: "SUPERSEDED" }),
+    ]) {
+      expect(staleSourceDetail(d)).not.toMatch(/remov|delet|drop/i);
+    }
+  });
+});
+
 describe("groupStaleLineItems", () => {
   // ABC Chicago's real shape: a withdrawn AV quote carrying 16 line
   // items, and a superseded schedule carrying far more.
@@ -105,6 +139,10 @@ describe("groupStaleLineItems", () => {
     // A current source produces no group at all, and neither does a line
     // item with no provenance.
     expect(groups.find((g) => g.documentId === "iac")).toBeUndefined();
+    // Both forms travel with the group: one for a caller that has not
+    // named the document, one for a caller that has.
+    expect(groups[0].explanation).toContain("369711-V2.pdf");
+    expect(groups[0].detail).not.toContain("369711-V2.pdf");
   });
 
   // A withdrawn source leaves a hole; a superseded one at least has a

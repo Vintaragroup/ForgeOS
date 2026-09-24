@@ -59,11 +59,33 @@ export function staleSourceExplanation(doc: ValiditySource): string | null {
     : `${doc.filename} has been replaced.`;
 }
 
+// The same thing said where the filename is already on the screen right
+// above it.
+//
+// Not derived from staleSourceExplanation by chopping the filename off
+// the front: "<file> is no longer a valid source" and "No longer a valid
+// source" are different sentences, and the seam shows if you cut one to
+// make the other. A re-cost review row is the caller -- it names the
+// document as its heading and then has to say something about it, and
+// printing a 62-character filename twice in two lines is what this
+// avoids.
+export function staleSourceDetail(doc: ValiditySource): string | null {
+  const validity = effectiveValidity(doc);
+  if (validity === "CURRENT") return null;
+
+  if (validity === "WITHDRAWN") {
+    return doc.validityNote ? `No longer a valid source — ${doc.validityNote}` : "No longer a valid source.";
+  }
+  return doc.supersededByFilename ? `Replaced by ${doc.supersededByFilename}.` : "Replaced.";
+}
+
 export interface StaleGroup {
   documentId: string;
   filename: string;
   validity: DocumentValidityValue;
   explanation: string;
+  // The same thing for a caller that has already named the document.
+  detail: string;
   lineItemCount: number;
   totalCost: number;
 }
@@ -97,6 +119,7 @@ export function groupStaleLineItems(
       filename: doc.filename,
       validity: effectiveValidity(doc),
       explanation: staleSourceExplanation(doc) ?? "",
+      detail: staleSourceDetail(doc) ?? "",
       lineItemCount: 1,
       totalCost: item.totalCost,
     });

@@ -227,7 +227,7 @@ describe("buildRecostReview", () => {
     });
 
     const review = await buildRecostReview(estimateId);
-    expect(review!.rollup.lines[0].detail).toContain("on this job. 1 line items");
+    expect(review!.rollup.lines[0].detail).toContain("on this job. 1 line item still carries");
   });
 
   // Unreadable is not the same as unchanged. A superseded source whose

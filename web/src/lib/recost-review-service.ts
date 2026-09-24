@@ -82,6 +82,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
   // it. "Fuse is no longer supplying AV on this job 16 line items still
   // carry its pricing" is what that reads like otherwise.
   const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+  const stillCarry = (n: number) => (n === 1 ? "1 line item still carries" : `${n} line items still carry`);
 
   const staleGroups = groupStaleLineItems(lineItems, sources);
   const lines: RecostLine[] = [];
@@ -94,7 +95,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
       // saving -- whatever replaces it has not been priced.
       lines.push({
         label: group.filename,
-        detail: `${sentence(group.explanation)} ${group.lineItemCount} line items still carry its pricing.`,
+        detail: `${sentence(group.detail)} ${stillCarry(group.lineItemCount)} its pricing.`,
         status: "NEEDS_RESOURCING",
         costDelta: null,
         costAtRisk: group.totalCost,
@@ -110,7 +111,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
       lines.push({
         label: group.filename,
         detail:
-          `${sentence(group.explanation)} ${group.lineItemCount} line items still carry its pricing, ` +
+          `${sentence(group.detail)} ${stillCarry(group.lineItemCount)} its pricing, ` +
           "and the replacement has no readable element summary.",
         status: "NEEDS_REVIEW",
         costDelta: null,
