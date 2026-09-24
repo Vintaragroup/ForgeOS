@@ -73,6 +73,41 @@ export function SummaryEditor({
     );
   }
 
+  // BEFORE the approved-summary branch below, not after it.
+  //
+  // It used to come after, and that branch returns -- so a suggestion was
+  // only ever displayed on a booth that had NO approved text. Regenerate
+  // on a booth that already had a summary wrote a suggestion nobody could
+  // see and nobody could approve, which is why it was reported as "the AI
+  // regenerate does nothing": it had run, every time, and the answer was
+  // unreachable.
+  //
+  // Both are shown now. A suggestion is a replacement for something, and
+  // deciding on it means reading what it would replace.
+  if (pendingSummary) {
+    return (
+      <div className="mb-4 flex flex-col gap-1.5 rounded border border-amber-200 bg-amber-50 p-2">
+        {summary && (
+          <p className="text-xs italic text-neutral-400 line-through decoration-neutral-300">{summary}</p>
+        )}
+        <div className="flex items-start gap-1.5">
+          <p className="flex-1 text-xs italic text-neutral-700">{pendingSummary}</p>
+          <form action={updateAction} className="shrink-0">
+            <input type="hidden" name="summary" value={pendingSummary} />
+            <button className="text-sm text-green-600 hover:text-green-800" title="Approve" aria-label="Approve suggested summary">
+              ✓
+            </button>
+          </form>
+          <form action={rejectAction} className="shrink-0">
+            <button className="text-sm text-red-500 hover:text-red-700" title="Reject" aria-label="Reject suggested summary">
+              ✕
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   if (summary) {
     return (
       <div className="mb-4 flex items-start gap-1.5">
@@ -95,25 +130,6 @@ export function SummaryEditor({
           >
             ↻
           </SubmitButton>
-        </form>
-      </div>
-    );
-  }
-
-  if (pendingSummary) {
-    return (
-      <div className="mb-4 flex items-start gap-1.5 rounded border border-amber-200 bg-amber-50 p-2">
-        <p className="text-xs italic text-neutral-600">{pendingSummary}</p>
-        <form action={updateAction} className="shrink-0">
-          <input type="hidden" name="summary" value={pendingSummary} />
-          <button className="text-sm text-green-600 hover:text-green-800" title="Approve" aria-label="Approve suggested summary">
-            ✓
-          </button>
-        </form>
-        <form action={rejectAction} className="shrink-0">
-          <button className="text-sm text-red-500 hover:text-red-700" title="Reject" aria-label="Reject suggested summary">
-            ✕
-          </button>
         </form>
       </div>
     );

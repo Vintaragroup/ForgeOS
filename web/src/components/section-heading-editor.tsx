@@ -18,7 +18,8 @@ import { SubmitButton } from "@/components/submit-button";
 // this Empty -> Pending -> Approved state machine instead:
 //   Empty (no description, no pendingDescription): raw fallback text +
 //     a "suggest" icon.
-//   Pending (pendingDescription set, no description yet): the suggested
+//   Pending (pendingDescription set, with or without an approved one):
+//   the suggested
 //     text + green check (approve) / red X (reject, back to Empty).
 //   Approved (description set): the text + a pencil (manual edit) and a
 //     regenerate icon (asks AI again, back to Pending).
@@ -97,6 +98,50 @@ export function SectionHeadingEditor({
     );
   }
 
+  // BEFORE the approved-description branch below, not after it.
+  //
+  // That branch returns, so a suggestion was only ever shown on a heading
+  // that had none yet -- which is what the comment at the top of this
+  // file assumed ("pendingDescription set, no description yet"). Once a
+  // heading existed, regenerating wrote a suggestion nobody could see or
+  // approve. Reported as "the AI regenerate does nothing to update the
+  // copy for either the header or the paragraph"; it was doing the work
+  // and putting the answer somewhere unreachable, in both editors.
+  //
+  // The current heading is shown struck through beside it, because
+  // approving a replacement means knowing what is being replaced.
+  if (pendingDescription) {
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 font-normal italic ${dark ? "text-neutral-300" : "text-neutral-500"}`}
+      >
+        {description && (
+          <span className={`line-through ${dark ? "text-neutral-500" : "text-neutral-400"}`}>{description}</span>
+        )}
+        {pendingDescription}
+        <form action={updateAction} className="inline">
+          <input type="hidden" name="description" value={pendingDescription} />
+          <button
+            className={`text-sm not-italic ${dark ? "text-green-400 hover:text-green-300" : "text-green-600 hover:text-green-800"}`}
+            title="Approve"
+            aria-label="Approve suggested description"
+          >
+            ✓
+          </button>
+        </form>
+        <form action={rejectAction} className="inline">
+          <button
+            className={`text-sm not-italic ${dark ? "text-red-400 hover:text-red-300" : "text-red-500 hover:text-red-700"}`}
+            title="Reject"
+            aria-label="Reject suggested description"
+          >
+            ✕
+          </button>
+        </form>
+      </span>
+    );
+  }
+
   if (description) {
     return (
       <span className="inline-flex items-center gap-1.5">
@@ -119,35 +164,6 @@ export function SectionHeadingEditor({
           >
             ↻
           </SubmitButton>
-        </form>
-      </span>
-    );
-  }
-
-  if (pendingDescription) {
-    return (
-      <span
-        className={`inline-flex items-center gap-1.5 font-normal italic ${dark ? "text-neutral-300" : "text-neutral-500"}`}
-      >
-        {pendingDescription}
-        <form action={updateAction} className="inline">
-          <input type="hidden" name="description" value={pendingDescription} />
-          <button
-            className={`text-sm not-italic ${dark ? "text-green-400 hover:text-green-300" : "text-green-600 hover:text-green-800"}`}
-            title="Approve"
-            aria-label="Approve suggested description"
-          >
-            ✓
-          </button>
-        </form>
-        <form action={rejectAction} className="inline">
-          <button
-            className={`text-sm not-italic ${dark ? "text-red-400 hover:text-red-300" : "text-red-500 hover:text-red-700"}`}
-            title="Reject"
-            aria-label="Reject suggested description"
-          >
-            ✕
-          </button>
         </form>
       </span>
     );
