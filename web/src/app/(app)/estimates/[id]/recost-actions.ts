@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireEstimateAccess } from "@/lib/opportunity-access";
-import { decideRecostProposal } from "@/lib/recost-apply-service";
+import { acceptRecommendedRecosts, decideRecostProposal } from "@/lib/recost-apply-service";
 import { proposeFromCostBreakout } from "@/lib/recost-row-proposal-service";
 import { proposeRecostChanges } from "@/lib/ai/recost-proposal-service";
 import { catchUserError } from "@/lib/user-error";
@@ -72,6 +72,27 @@ export async function proposeFromCostBreakoutAction(
 
   return catchUserError(async () => {
     await proposeFromCostBreakout(estimateId, user.id);
+    revalidatePath(`/estimates/${estimateId}`);
+  });
+}
+
+// Accepts every proposal that was recommended rather than questioned.
+//
+// Narrow by construction: no removal, and nothing a model proposed. See
+// acceptRecommendedRecosts for why that boundary is the safety.
+export async function acceptRecommendedRecostsAction(
+  estimateId: string,
+  _prev: ActionResult,
+  _formData: FormData,
+): Promise<ActionResult> {
+  const user = await requireEstimateAccess(estimateId);
+  const estimate = await db.estimate.findUniqueOrThrow({
+    where: { id: estimateId },
+    select: { opportunityId: true },
+  });
+
+  return catchUserError(async () => {
+    await acceptRecommendedRecosts(estimateId, estimate.opportunityId, user.id);
     revalidatePath(`/estimates/${estimateId}`);
   });
 }

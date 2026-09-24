@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { decideRecostProposal } from "@/lib/recost-apply-service";
+import { acceptRecommendedRecosts, decideRecostProposal } from "@/lib/recost-apply-service";
 import { recomputeVersionTotals, restoreLineItem } from "@/lib/estimate-service";
 
 let opportunityId = "";
@@ -10,6 +10,7 @@ let sectionId = "";
 let lineItemId = "";
 let documentId = "";
 let userId = "";
+let estimateId = "";
 
 async function makeProposal(over: Record<string, unknown> = {}) {
   return db.recostProposal.create({
@@ -37,6 +38,7 @@ beforeEach(async () => {
   });
   opportunityId = opportunity.id;
   const estimate = await db.estimate.create({ data: { opportunityId } });
+  estimateId = estimate.id;
   const locked = await db.estimateVersion.create({
     data: { estimateId: estimate.id, versionNumber: 1, isLocked: true },
   });
@@ -337,5 +339,70 @@ describe("decideRecostProposal", () => {
     expect(out.changedLineItems).toBe(2);
     expect(await db.lineItem.count({ where: { sectionId } })).toBe(0);
     expect(await db.lineItemAuditLog.count({ where: { action: "DELETE" } })).toBe(2);
+  });
+});
+
+describe("acceptRecommendedRecosts", () => {
+  async function recommended(over: Record<string, unknown> = {}) {
+    return makeProposal({ action: "ADJUST_QTY", confidence: "RECOMMEND_AND_CONFIRM", newQty: 2, newUnitCost: 5000, ...over });
+  }
+
+  it("applies every recommended re-cost in one go", async () => {
+    const second = await db.lineItem.create({
+      data: { sectionId, lineType: "MATERIAL", description: "Counter top", qty: 1, unitCost: 2000, totalCost: 2000 },
+    });
+    await recommended();
+    await recommended({ lineItemId: second.id, newQty: 1, newUnitCost: 500 });
+
+    const out = await acceptRecommendedRecosts(estimateId, opportunityId, userId);
+    expect(out.applied).toBe(2);
+    expect(out.changedLineItems).toBe(2);
+    expect(out.failed).toEqual([]);
+
+    const version = await db.estimateVersion.findUniqueOrThrow({ where: { id: versionId } });
+    // 2 x 5000 + 1 x 500, totalled once at the end rather than twice.
+    expect(version.totalCost.toNumber()).toBe(10500);
+  });
+
+  // The boundary that makes a bulk button safe to offer at all.
+  it("never touches a removal or anything a model questioned", async () => {
+    await recommended();
+    const removal = await makeProposal({ action: "REMOVE", confidence: "RECOMMEND_AND_CONFIRM" });
+    const questioned = await makeProposal({ action: "ADJUST_QTY", confidence: "NEED_YOUR_DECISION", newQty: 9 });
+
+    const out = await acceptRecommendedRecosts(estimateId, opportunityId, userId);
+    expect(out.applied).toBe(1);
+
+    expect((await db.recostProposal.findUniqueOrThrow({ where: { id: removal.id } })).status).toBe("PROPOSED");
+    expect((await db.recostProposal.findUniqueOrThrow({ where: { id: questioned.id } })).status).toBe("PROPOSED");
+    // The line item is still here, and still costs what it did.
+    expect(await db.lineItem.count({ where: { id: lineItemId } })).toBe(1);
+  });
+
+  // One proposal pointing at a line item somebody deleted in another tab
+  // must not abandon the other fifty-five.
+  it("carries on past a proposal that cannot be applied, and names it", async () => {
+    const broken = await recommended({ lineItemId: null, sectionId: null });
+    await recommended();
+
+    const out = await acceptRecommendedRecosts(estimateId, opportunityId, userId);
+    expect(out.applied).toBe(2);
+    // The broken one records a decision with nothing to apply rather
+    // than throwing -- which is the ACCEPTED-with-no-effect path.
+    expect((await db.recostProposal.findUniqueOrThrow({ where: { id: broken.id } })).status).toBe("ACCEPTED");
+  });
+
+  it("writes one audit row per line item it changed", async () => {
+    await recommended();
+    await acceptRecommendedRecosts(estimateId, opportunityId, userId);
+    const audit = await db.lineItemAuditLog.findMany({ where: { estimateVersionId: versionId } });
+    expect(audit).toHaveLength(1);
+    expect(audit[0].action).toBe("UPDATE");
+    expect(audit[0].actorId).toBe(userId);
+  });
+
+  it("says so when nothing is recommended", async () => {
+    await makeProposal({ action: "REMOVE", confidence: "NEED_YOUR_DECISION" });
+    await expect(acceptRecommendedRecosts(estimateId, opportunityId, userId)).rejects.toThrow(/needs a decision of its own/i);
   });
 });

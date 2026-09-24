@@ -196,7 +196,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     (
       await db.lineItem.findMany({
         where: { id: { in: allProposals.map((p) => p.lineItemId).filter((id): id is string => id !== null) } },
-        select: { id: true, description: true, totalCost: true },
+        select: { id: true, description: true, totalCost: true, qty: true, unitCost: true },
       })
     ).map((li) => [li.id, li]),
   );
@@ -328,6 +328,24 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
       }
     : null;
 
+  // The batch's own scope, computed the same way the batch selects:
+  // recommended, and never a removal. The money is what those rows would
+  // actually move, from the numbers already stored on them.
+  const recommendedRows = stored.filter(
+    (p) => p.confidence === "RECOMMEND_AND_CONFIRM" && p.action !== "REMOVE" && p.lineItemId !== null,
+  );
+  const recommended = {
+    count: recommendedRows.length,
+    costDelta: recommendedRows.reduce((total, p) => {
+      const lineItem = p.lineItemId ? proposalLineItems.get(p.lineItemId) : undefined;
+      if (!lineItem) return total;
+      const before = lineItem.totalCost.toNumber();
+      const qty = p.newQty?.toNumber() ?? lineItem.qty.toNumber();
+      const unitCost = p.newUnitCost?.toNumber() ?? lineItem.unitCost.toNumber();
+      return total + (qty * unitCost - before);
+    }, 0),
+  };
+
   const currentCost = version.totalCost.toNumber();
   const currentSell = version.grandTotal.toNumber();
   const target = parseTargetAmount(revisionEvent?.note ?? null);
@@ -363,6 +381,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     drawing,
     lineItemDiff,
     proposals,
+    recommended,
     decided,
     notes,
   };

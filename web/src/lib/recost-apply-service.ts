@@ -11,9 +11,13 @@
 //   a locked version is never touched
 //   a removal is restorable, because deleteLineItem snapshots first
 //
-// There is no bulk apply, deliberately. Every row here came from a model
-// reading a drawing, and "accept all" is the affordance that turns a
-// reviewed list into an unreviewed one.
+// There is one bulk path, and it is narrow on purpose. "Accept all" is
+// the affordance that turns a reviewed list into an unreviewed one, so
+// it reaches only proposals that carry RECOMMEND_AND_CONFIRM -- which on
+// a real job means the ones read row by row out of the estimating lead's
+// own workbook, with no model between the file and the screen. A removal
+// is never in it, whatever its source, and neither is anything a model
+// proposed: those stay one decision at a time.
 
 import { db } from "@/lib/db";
 import { UserError } from "@/lib/user-error";
@@ -34,6 +38,9 @@ export async function decideRecostProposal(
   opportunityId: string,
   userId: string,
   decision: "ACCEPT" | "REJECT",
+  // The batch path totals up once at the end rather than 56 times. Only
+  // it passes this; a single decision always recomputes.
+  options: { skipRecompute?: boolean } = {},
 ): Promise<DecisionOutcome> {
   const proposal = await db.recostProposal.findFirst({
     where: { id: proposalId, estimateVersion: { estimate: { opportunityId } } },
@@ -88,7 +95,9 @@ export async function decideRecostProposal(
     data: { status, decidedById: userId, decidedAt: new Date() },
   });
 
-  if (changedLineItems > 0) await recomputeVersionTotals(proposal.estimateVersionId);
+  if (changedLineItems > 0 && !options.skipRecompute) {
+    await recomputeVersionTotals(proposal.estimateVersionId);
+  }
 
   return { status, effect, changedLineItems };
 }
@@ -136,4 +145,74 @@ async function applyEffect(effect: ApplyEffect, opportunityId: string, userId: s
     case "NOTHING_TO_APPLY":
       return 0;
   }
+}
+
+
+export interface BatchOutcome {
+  applied: number;
+  changedLineItems: number;
+  // Each failure named rather than counted. One proposal pointing at a
+  // line item somebody deleted in another tab must not abandon the other
+  // fifty-five.
+  failed: { proposalId: string; why: string }[];
+}
+
+// Accepts every proposal on this version that was recommended rather
+// than questioned.
+//
+// What that excludes is the whole safety of it: no removal, and nothing
+// a model proposed. On Full Swing this reaches the 56 quantity and price
+// changes read out of the revised workbook and leaves the 40 removals
+// and the 4 drawing findings exactly where they are.
+//
+// Each one still goes through decideRecostProposal, so each still writes
+// its own audit row and each removal -- if one ever qualified -- would
+// still be restorable on its own. The only thing batched is the clicking.
+export async function acceptRecommendedRecosts(
+  estimateId: string,
+  opportunityId: string,
+  userId: string,
+): Promise<BatchOutcome> {
+  const version = await db.estimateVersion.findFirst({
+    where: { estimate: { id: estimateId, opportunityId }, isLocked: false },
+    orderBy: { versionNumber: "desc" },
+    select: { id: true },
+  });
+  if (!version) throw new UserError("This estimate has no open version to re-cost.");
+
+  const eligible = await db.recostProposal.findMany({
+    where: {
+      estimateVersionId: version.id,
+      status: "PROPOSED",
+      confidence: "RECOMMEND_AND_CONFIRM",
+      // Belt and braces. Nothing sets a removal to
+      // RECOMMEND_AND_CONFIRM on a value-engineering job, and this makes
+      // that impossible to change by accident somewhere else.
+      action: { notIn: ["REMOVE"] },
+    },
+    select: { id: true },
+    orderBy: { createdAt: "asc" },
+  });
+  if (eligible.length === 0) {
+    throw new UserError("Nothing here is recommended — every open proposal needs a decision of its own.");
+  }
+
+  let applied = 0;
+  let changedLineItems = 0;
+  const failed: { proposalId: string; why: string }[] = [];
+
+  for (const { id } of eligible) {
+    try {
+      const outcome = await decideRecostProposal(id, opportunityId, userId, "ACCEPT", { skipRecompute: true });
+      applied += 1;
+      changedLineItems += outcome.changedLineItems;
+    } catch (err) {
+      failed.push({ proposalId: id, why: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  if (changedLineItems > 0) await recomputeVersionTotals(version.id);
+  if (failed.length > 0) console.warn(`[recost] ${failed.length} of ${eligible.length} batch accepts failed:`, failed);
+
+  return { applied, changedLineItems, failed };
 }

@@ -4,6 +4,7 @@ import { rollupHeadline } from "@/lib/recost-rollup";
 import { RunRecostProposalsButton } from "@/components/run-recost-proposals-button";
 import { RecostProposalDecision } from "@/components/recost-proposal-decision";
 import { ProposeFromBreakoutButton } from "@/components/propose-from-breakout-button";
+import { AcceptRecommendedButton } from "@/components/accept-recommended-button";
 
 // Where the re-cost stands against the client's number.
 //
@@ -269,9 +270,14 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
         (review.drawing && review.drawing.findings.some((f) => f.kind !== "CORROBORATED"))) && (
         <div className="mt-5 border-t border-neutral-200 pt-4">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="text-sm font-semibold text-neutral-900">
-              Waiting on your decision
-            </h3>
+            <h3 className="text-sm font-semibold text-neutral-900">Waiting on your decision</h3>
+            {review.recommended.count > 0 && (
+              <AcceptRecommendedButton
+                estimateId={estimateId}
+                count={review.recommended.count}
+                costDelta={review.recommended.costDelta}
+              />
+            )}
             {/* Only offered when there is something for a model to map.
                 The workbook proposals above need no model at all. */}
             {review.drawing && review.drawing.findings.some((f) => f.kind !== "CORROBORATED") && (
@@ -281,6 +287,15 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
               />
             )}
           </div>
+
+          {/* Said next to the button rather than discovered after it. */}
+          {review.recommended.count > 0 && review.recommended.count < review.proposals.length && (
+            <p className="mt-1 text-xs text-neutral-500">
+              That applies the {review.recommended.count} re-costs read from the revised workbook. The other{" "}
+              {review.proposals.length - review.recommended.count} — removals, and anything read off a drawing —
+              stay one decision at a time.
+            </p>
+          )}
 
           {review.proposals.length === 0 ? (
             <p className="mt-1 text-sm text-neutral-500">

@@ -82,6 +82,10 @@ export interface RecostReview {
       }[];
     }[];
   } | null;
+  // What the one bulk affordance would touch, so the button can say it
+  // before the click. Recommended proposals only -- never a removal,
+  // never anything a model proposed.
+  recommended: { count: number; costDelta: number };
   // Decisions already made, newest first. The line-item history records
   // WHAT changed and offers Restore; this records WHY, with the citation
   // the decision was made against. Neither is complete alone.

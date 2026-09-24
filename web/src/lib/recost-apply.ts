@@ -97,6 +97,10 @@ export function movesMoney(effect: ApplyEffect): boolean {
 export function describeEffect(effect: ApplyEffect, context: { itemCount?: number; amount?: number }): string {
   const money = (n: number) =>
     n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  // A unit price keeps its cents. Rounding $6.75 to "$7" beside a
+  // quantity reads as a different number than the one being written.
+  const unitPrice = (n: number) =>
+    n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
 
   switch (effect.kind) {
     case "DELETE_LINE_ITEM":
@@ -110,11 +114,11 @@ export function describeEffect(effect: ApplyEffect, context: { itemCount?: numbe
         : `Removes all ${count} line items in this section.`;
     }
     case "SET_UNIT_COST":
-      return `Sets this line item's unit cost to ${money(effect.unitCost)}.`;
+      return `Sets this line item's unit cost to ${unitPrice(effect.unitCost)}.`;
     case "SET_QTY":
       return `Sets this line item's quantity to ${effect.qty}.`;
     case "SET_QTY_AND_COST":
-      return `Sets this line item to ${effect.qty} at ${money(effect.unitCost)}.`;
+      return `Sets this line item to ${effect.qty} at ${unitPrice(effect.unitCost)}.`;
     case "NOTHING_TO_APPLY":
       return `Records the decision — ${effect.why}.`;
   }
