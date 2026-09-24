@@ -544,6 +544,52 @@ Each step is useful alone, which matters: if the AI stage proves
 unreliable on real jobs, steps 1 and 2 still stand on their own and the
 estimator does the mapping by eye.
 
+## Provisional answers
+
+These are working assumptions, not decisions. Taze has been asked; each
+one below is what the feature does until he answers, and each is written
+so that a different answer changes one place rather than the whole
+design.
+
+**Cut scope is soft-deleted from the open version, and the
+`RecostProposal` row is the record.** §14's separability rule is about
+estimating a job with optional features in it, not about revising one:
+the client did not ask for the reception counter as an alternate, they
+removed it. The proposal row already holds what went, why, and on whose
+evidence, so the removal is auditable and reversible without a second
+copy of the scope existing.
+
+*But* "move to an Option instead" is offered per finding, as an explicit
+choice the estimator can make when they want the cut scope to stay
+sellable — which is the case §14 is actually about, and the case where
+"here is what your budget bought and what it cost you" is worth showing a
+client. Default off.
+
+**Vendor crew and travel are always Need Your Decision, never Recommend
+and Confirm.** No rule covers a vendor's labour scaling with the
+equipment it exists for, and the estimating rules are explicit that
+installation and engineering are not assumed without supporting scope
+(§15). So the LED Lead Engineer and the Media Server Programmer are
+proposed, grouped under the wall they follow from, and never pre-checked.
+Only the estimator knows whether that engineer is also running something
+else on the same show.
+
+**A finding is raised when it moves the booth by $500 or more, and
+always when it removes a whole section or booth regardless of amount.**
+§1 gates questions on material effect and never defines it. $500 is a
+starting threshold, not a derived one — it is low enough to catch
+anything worth an estimator's attention on a job of this size and high
+enough to keep the review from listing every bracket. Configurable, and
+expected to move once a real review has been run.
+
+**The newest document in a supersedes chain controls.** §2 requires
+recording which revision was used and §1 requires identifying conflicts,
+but neither says the later drawing wins. It nearly always does. Stating
+it lets the system act rather than raising a conflict every time a
+document is superseded — and a genuine conflict (the schedule still
+carrying scope the newest drawing dropped) is still surfaced, because
+that is a disagreement between sources, not between revisions.
+
 ## Open questions
 
 1. **Does the AV change need a new document?** The revised AV quote does
