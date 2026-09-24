@@ -4,7 +4,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
-import { sendProposalAction, signProposalAction } from "../actions";
+import { sendProposalAction, signProposalAction, unwindProposalSignatureAction } from "../actions";
 import { extractBranding, extractPaymentMethodNote } from "@/lib/proposal-branding";
 import { taxRateLabel, TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
 import { truncateProposalSummary } from "@/lib/proposal-summary-limits";
@@ -18,6 +18,8 @@ import {
   type AggregatedLineItem,
 } from "@/lib/proposal-view-model";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
+import { ConfirmForm } from "@/components/confirm-form";
+import { ActionForm } from "@/components/action-form";
 
 const SECTION_ACCENTS = [BRAND.navy, BRAND.teal, BRAND.tangerine, BRAND.tan];
 
@@ -140,6 +142,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   const opportunity = version.estimate.opportunity;
   const sendWithId = sendProposalAction.bind(null, proposal.id);
   const signWithId = signProposalAction.bind(null, proposal.id);
+  const unwindSignatureWithId = unwindProposalSignatureAction.bind(null, proposal.id);
 
   // signProposal (proposal-service.ts) auto-creates the Project the
   // moment a proposal is signed -- this is only ever null for a proposal
@@ -234,15 +237,35 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
           </form>
         )}
         {proposal.sentAt && !proposal.signedAt && (
-          <form action={signWithId} className="flex flex-col gap-2 rounded-md border border-green-200 bg-green-50 p-3">
+          <ConfirmForm
+            action={signWithId}
+            confirmMessage={
+              "This records that THE CLIENT has signed — it is not an internal approval.\n\n" +
+              "It marks the deal Won and creates a Project.\n\n" +
+              "Only continue if you are holding a signed copy."
+            }
+            className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3"
+          >
             {/* This form replaces the send form in the same slot the
                 moment a proposal goes out, so the click that sends and
                 the click that closes the deal land in nearly the same
                 place. autoComplete="off" is doing real work here: with
                 the browser filling in a name, "signed" was one stray
-                click from "sent". */}
-            <p className="text-xs text-green-900">
-              Records the client&apos;s acceptance, advances the deal to Won, and starts production.
+                click from "sent".
+
+                It used to be green and say "Confirm client approval",
+                which reads just as easily as "confirm this is ready FOR
+                client approval" -- and was twice filled in by an
+                estimator who had just locked a version and was looking
+                for the next step. Green says proceed; this step is not a
+                proceed, it is a commitment somebody else already made on
+                paper. Hence amber, a heading that names whose signature
+                it is, and a confirm that spells out what happens. */}
+            <p className="text-sm font-semibold text-amber-900">The client has signed a paper copy</p>
+            <p className="text-xs text-amber-900">
+              Recording it here marks the deal Won and creates a Project. This is not the internal
+              &ldquo;ready to send&rdquo; step — to get this in front of the client, send it to the sales rep
+              instead.
             </p>
             <div className="flex flex-wrap items-end gap-3">
               <Field label="Signed by" name="signedByName" required autoComplete="off" />
@@ -253,9 +276,26 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                 type="date"
                 max={new Date().toISOString().slice(0, 10)}
               />
-              <Button variant="secondary">Confirm client approval</Button>
+              <Button variant="secondary">Record the client&apos;s signature</Button>
             </div>
-          </form>
+          </ConfirmForm>
+        )}
+
+        {/* Twice now a signature has been recorded by mistake, and twice
+            the fix was a hand-written database script. It is a button. */}
+        {proposal.signedAt && (
+          <ActionForm action={unwindSignatureWithId}>
+            <p className="text-xs text-neutral-500">
+              Recorded this by mistake? Undoing it clears the signature, returns the deal to Estimating and
+              removes the Project this created.
+            </p>
+            <button
+              type="submit"
+              className="mt-1 text-xs font-medium text-red-700 underline hover:text-red-900"
+            >
+              Undo — the client has not signed
+            </button>
+          </ActionForm>
         )}
       </Card>
 

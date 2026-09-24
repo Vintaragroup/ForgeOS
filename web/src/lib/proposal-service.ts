@@ -239,6 +239,79 @@ async function applySignatureEffects(proposalId: string) {
   await convertOpportunityToProject(opportunityId);
 }
 
+// Undoes a signature that was recorded by mistake.
+//
+// SIGNED is terminal in PROPOSAL_TRANSITIONS, deliberately -- a client
+// accepting is not a state you drift out of. But "recorded by mistake" is
+// not a transition, it is a correction, and it has happened twice on one
+// estimate: the internal page's sign form sat where the send button had
+// been, labelled "Confirm client approval", which reads just as easily as
+// "confirm this is ready FOR client approval". Both times the fix was a
+// hand-written database script, which is not a thing a business should
+// need in order to undo a click.
+//
+// Reverses exactly what applySignatureEffects did and nothing else: the
+// status goes back to where it was before, the signature is cleared, the
+// opportunity returns to the stage it came from, and the project the
+// signature created is soft-deleted. A project that has since been worked
+// on is left alone and reported, because deleting it would destroy
+// something a signature never created.
+export async function unwindProposalSignature(
+  proposalId: string,
+  opts: { byUserId?: string | null; note: string },
+): Promise<{ revertedTo: ProposalStatus; projectRemoved: boolean }> {
+  const proposal = await db.proposal.findUniqueOrThrow({
+    where: { id: proposalId },
+    select: {
+      status: true,
+      signedAt: true,
+      estimateVersion: { select: { estimate: { select: { opportunityId: true } } } },
+      events: { orderBy: { createdAt: "desc" }, select: { toStatus: true, createdAt: true } },
+    },
+  });
+  if (proposal.status !== "SIGNED") {
+    throw new UserError("This proposal is not signed, so there is no signature to undo.");
+  }
+
+  // Where it stood before the signature -- the last status that was not
+  // this one. Falls back to SENT, which is the only state a signature can
+  // legitimately have followed.
+  const previous = proposal.events.find((e) => e.toStatus !== "SIGNED")?.toStatus ?? "SENT";
+  const opportunityId = proposal.estimateVersion.estimate.opportunityId;
+
+  // Only a project the signature itself created, and only one nothing has
+  // been done to since.
+  const project = await db.project.findFirst({
+    where: {
+      opportunityId,
+      deletedAt: null,
+      ...(proposal.signedAt ? { createdAt: { gte: new Date(proposal.signedAt.getTime() - 60_000) } } : {}),
+    },
+    select: { id: true, workOrders: { select: { id: true }, take: 1 } },
+  });
+  const removable = project !== null && project.workOrders.length === 0;
+
+  await db.$transaction(async (tx) => {
+    await tx.proposal.update({
+      where: { id: proposalId },
+      data: { status: previous, signedAt: null, signedByName: null, signedByTitle: null },
+    });
+    await tx.proposalEvent.create({
+      data: { proposalId, fromStatus: "SIGNED", toStatus: previous, note: opts.note, byUserId: opts.byUserId ?? null },
+    });
+    const opportunity = await tx.opportunity.findUniqueOrThrow({ where: { id: opportunityId }, select: { stage: true } });
+    if (opportunity.stage === "WON") {
+      await tx.opportunity.update({ where: { id: opportunityId }, data: { stage: "ESTIMATING" } });
+      await tx.stageChangeEvent.create({
+        data: { opportunityId, fromStage: "WON", toStage: "ESTIMATING", note: opts.note },
+      });
+    }
+    if (removable) await tx.project.update({ where: { id: project!.id }, data: { deletedAt: new Date() } });
+  });
+
+  return { revertedTo: previous, projectRemoved: removable };
+}
+
 // --- lifecycle ---------------------------------------------------------
 //
 // sentAt/signedAt answer "when", and are still the source of truth for

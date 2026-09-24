@@ -9,6 +9,7 @@ import {
   revokeApproval,
   sendProposal,
   signProposal,
+  unwindProposalSignature,
 } from "@/lib/proposal-service";
 
 afterEach(async () => {
@@ -493,5 +494,66 @@ describe("generating a proposal more than once", () => {
     const fresh = await generateProposal(version.id, template.id);
     expect(fresh.id).not.toBe(sentOne.id);
     expect(await db.proposal.count({ where: { estimateVersionId: version.id, deletedAt: null } })).toBe(2);
+  });
+});
+
+// Recorded by mistake twice on one estimate, and twice fixed by a
+// hand-written database script. The whole point of these is that it is a
+// button now.
+describe("unwindProposalSignature", () => {
+  async function makeSignedProposal(label: string) {
+    const { version, user } = await makeLockedVersion(label);
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: `Standard-${label}` } });
+    const proposal = await generateProposal(version.id, template.id);
+    await sendProposal(proposal.id);
+    await recordProposalStatus(proposal.id, "REVISIONS_REQUESTED", { note: "client wants a lower number" });
+    await signProposal(proposal.id, "Ryan Morrow", "Director");
+    const opportunity = await db.opportunity.findFirstOrThrow({
+      where: { estimates: { some: { versions: { some: { id: version.id } } } } },
+    });
+    return { proposal, opportunity };
+  }
+
+  it("puts everything the signature touched back", async () => {
+    const { proposal, opportunity } = await makeSignedProposal("Unwind");
+    expect((await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } })).stage).toBe("WON");
+    expect(await db.project.count({ where: { opportunityId: opportunity.id, deletedAt: null } })).toBe(1);
+
+    const out = await unwindProposalSignature(proposal.id, { note: "mis-click" });
+
+    // Back to where it stood BEFORE the signature, not to a guess.
+    expect(out.revertedTo).toBe("REVISIONS_REQUESTED");
+    expect(out.projectRemoved).toBe(true);
+    const after = await db.proposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(after.status).toBe("REVISIONS_REQUESTED");
+    expect(after.signedAt).toBeNull();
+    expect(after.signedByName).toBeNull();
+    expect((await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } })).stage).toBe("ESTIMATING");
+    expect(await db.project.count({ where: { opportunityId: opportunity.id, deletedAt: null } })).toBe(0);
+  });
+
+  // The history has to read as a correction, not as though the signature
+  // never happened.
+  it("records why, rather than quietly rewriting the past", async () => {
+    const { proposal } = await makeSignedProposal("UnwindNote");
+    await unwindProposalSignature(proposal.id, { note: "recorded by mistake" });
+
+    const events = await db.proposalEvent.findMany({ where: { proposalId: proposal.id }, orderBy: { createdAt: "asc" } });
+    const last = events[events.length - 1];
+    expect(last.fromStatus).toBe("SIGNED");
+    expect(last.note).toBe("recorded by mistake");
+    // The signature event itself is still in the history.
+    expect(events.some((e) => e.toStatus === "SIGNED")).toBe(true);
+  });
+
+  it("refuses when there is no signature to undo", async () => {
+    const { version, user } = await makeLockedVersion("UnwindUnsigned");
+    await approveEstimateVersion(version.id, user.id);
+    const template = await db.proposalTemplate.create({ data: { name: "Standard-UnwindUnsigned" } });
+    const proposal = await generateProposal(version.id, template.id);
+    await sendProposal(proposal.id);
+
+    await expect(unwindProposalSignature(proposal.id, { note: "x" })).rejects.toThrow(/not signed/i);
   });
 });

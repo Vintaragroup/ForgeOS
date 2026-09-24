@@ -1,6 +1,12 @@
 "use server";
 
-import { recordProposalStatus, requestProposalRevisions, sendProposal, signProposal } from "@/lib/proposal-service";
+import {
+  recordProposalStatus,
+  requestProposalRevisions,
+  sendProposal,
+  signProposal,
+  unwindProposalSignature,
+} from "@/lib/proposal-service";
 import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
 import type { ProposalStatus } from "@/generated/prisma/enums";
 import { requireProposalAccess } from "@/lib/opportunity-access";
@@ -31,6 +37,24 @@ export async function signProposalAction(proposalId: string, formData: FormData)
   const signedByTitle = String(formData.get("signedByTitle") ?? "");
   await signProposal(proposalId, signedByName, signedByTitle || null, parseWhen(formData, "signedAt"));
   revalidatePath(`/proposals/${proposalId}`);
+}
+
+// Undoes a signature recorded by mistake.
+//
+// Returned rather than thrown so the person reads a sentence: this has
+// twice needed a hand-written database script to fix, and the whole point
+// is that it should not need one again.
+export async function unwindProposalSignatureAction(proposalId: string): Promise<ActionResult> {
+  const user = await requireProposalAccess(proposalId);
+
+  return catchUserError(async () => {
+    await unwindProposalSignature(proposalId, {
+      byUserId: user.id,
+      note: "Signature recorded by mistake — undone. The client has not accepted this proposal.",
+    });
+    revalidatePath(`/proposals/${proposalId}`);
+    revalidatePath("/estimates", "layout");
+  });
 }
 
 // --- lifecycle ---------------------------------------------------------
