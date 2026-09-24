@@ -86,6 +86,67 @@ Two rules follow, and they are the spine of this feature:
    supported only by absence is a *question*, not a proposal. It is shown
    unchecked, labelled as inferred, and requires a human tick.
 
+### Drawings need a second scoping rule
+
+Provenance does not work for a drawing, because **a drawing usually
+produces no line items at all** — both of ABC Chicago's carry `0`. There
+is a path that proposes line items from a drawing, so `documentId` may be
+set; in practice on a real job it is not, and a rule that only works when
+somebody happened to use that path is not a rule.
+
+So a drawing observation is scoped by **booth** instead. Sections carry
+`groupLabel` — `FS - Reception Counter`, `SS - Lit Spines Hit Bay` — and
+that is the vocabulary a rendering actually speaks: the model describes a
+reception counter, not a line item. A drawing observation resolves to a
+booth, and may propose changes only to that booth's sections.
+
+An observation that resolves to no booth is reported to the estimator as
+an unmatched finding rather than dropped. "The drawing shows something
+changed and I could not tell you where" is useful; silently discarding it
+is not.
+
+### Corroboration is the confidence signal
+
+The three sources overlap, and where they agree the evidence is strong:
+
+| finding | drawing | schedule | AV quote | confidence |
+| --- | --- | --- | --- | --- |
+| reception counter gone | absent | absent | — | **stated** — two independent sources |
+| video wall gone | absent | never present | needs the revised quote | inferred without it |
+| hanging sign simplified | changed shape | — | — | inferred |
+
+Agreement between two sources that were scoped independently promotes a
+finding to `stated`. A single source, especially a single absence, stays
+`inferred`.
+
+**Conflict is surfaced, never resolved silently.** If the schedule still
+carries a reception counter row and the drawing no longer shows one, that
+is a real question for a human — the drawing may be older, or the sheet
+may not have been updated. The review shows both and proposes neither.
+
+## What is being compared against what
+
+Two different baselines, and conflating them would be a bug.
+
+**Documents compare against the documents they supersede.** The revised
+schedule against the original schedule, the new drawing against the
+drawing it replaces, a revised AV quote against the AV quote it replaces.
+The `supersedesId` chain already models this and is set by hand, so the
+system never has to guess which document answers which.
+
+**Findings apply against the version the client actually received** —
+the locked one the sent proposal was built from, v1 here. That is the
+thing the client looked at and asked to change. The open version (v2) is
+where the changes land, and on ABC Chicago it is currently an exact copy
+of v1, so the two coincide today. They will not always: if an estimator
+has already started re-costing by hand, proposing against v2 would
+propose removing things they have already removed.
+
+So: **baseline is the locked version, target is the open version.** The
+review reads the locked one and writes the open one, and a finding whose
+line item no longer exists in the open version is reported as "already
+handled" rather than proposed again.
+
 ## Shape
 
 Four stages. The first is deterministic and the second is the only one
@@ -93,14 +154,15 @@ that uses AI.
 
 ### 1. Evidence (deterministic, no AI)
 
-For each revised document linked as superseding another, produce a typed
-set of observations scoped to that predecessor's line items:
+Every revised document linked as superseding another is compared, and all
+three kinds run — a re-cost reads the design, the scope and the pricing
+together, because no one of them carries the whole change:
 
-| document type | comparison | yields |
-| --- | --- | --- |
-| `VENDOR_QUOTE` (priced) | `computeDocumentDiff` — exists | REMOVED / ADDED / repriced, with amounts |
-| `PRICING_SCHEDULE` | `computeScopeDiff` — exists, unwired | dropped / added / qty moved, no money |
-| `DRAWING` | old extraction vs new extraction | qualitative presence/absence |
+| document type | comparison | scoped by | yields |
+| --- | --- | --- | --- |
+| `VENDOR_QUOTE` (priced) | `computeDocumentDiff` — exists | provenance | REMOVED / ADDED / repriced, with amounts |
+| `PRICING_SCHEDULE` | `computeScopeDiff` — exists, unwired | provenance | dropped / added / qty moved, no money |
+| `DRAWING` / CAD / rendering | paired-image vision call — new | booth | qualitative presence, absence, changed form |
 
 The drawing comparison is new and is the loosest of the three.
 
@@ -285,7 +347,11 @@ estimator does the mapping by eye.
 
 1. **Does the AV change need a new document?** The revised AV quote does
    not appear to be uploaded. Without it the two 100" screens have no
-   priced source, and the review can only say the old video wall is gone.
+   priced source, and the review can only say the old video wall is gone
+   -- an unpriced removal, with nothing to put in its place. This is the
+   clearest case of the three-source rule: the drawing shows the screens
+   changed, the schedule is silent because AV was never its business, and
+   only a revised quote can say what the new ones cost.
 2. **How is a whole-booth removal expressed?** Proposing 25 individual
    removals for the reception counter is noisy. A booth-level action that
    expands to its line items reads better — worth confirming that matches
