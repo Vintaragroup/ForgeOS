@@ -363,6 +363,115 @@ The running total must show the booth as unpriced, not as $46,830
 cheaper — otherwise the review reports hitting the client's budget by
 deleting scope that is coming straight back at an unknown price.
 
+## What the estimating rules already settle
+
+`data/Estimate-Guidelines/Custom and standard assemblies Estimating
+rules.pdf` — Taze Ankerstein, 2026-09-21 — is the estimating playbook for
+EXPO Orlando. It is written for estimating from scratch and says nothing
+about revisions, but several of its rules govern this feature directly
+and should be followed rather than re-invented.
+
+**Use its question vocabulary, not ours.** §1 already defines the two
+kinds of question an estimator is allowed to raise:
+
+- **Need Your Decision** — the documentation does not support a reliable
+  determination.
+- **Recommend and Confirm** — a method can be recommended, but the
+  selection materially affects the estimate.
+
+That is a better split than `stated` / `inferred`, because it says what
+the reader must *do* rather than how sure the machine is. A reception
+counter absent from two independent sources is Recommend and Confirm. A
+removal resting on one absence is Need Your Decision. The confidence
+field should carry these names.
+
+§1 also sets the precedence this feature must respect: project-specific
+instructions override general rules, and **when governing sources
+conflict, identify the conflict and confirm which source controls** —
+which is the conflict rule above, already house policy.
+
+**Citation is already required.** §2: *"Record the drawing, page, and
+revision used."* The `sourceQuote` + `sourceDocumentId` requirement is
+not a new discipline, it is the existing one.
+
+**Flagging beats guessing, in their words.** §2: *"Flag unknown
+dimensions instead of guessing"* and *"Do not apply arbitrary percentage
+inflation."* This is exactly why the review may say the sign changed
+shape and may not say it is three feet tall.
+
+**Three rules constrain what a drawing may conclude.** These are the
+sharpest constraints in the document for a vision-based comparison, and
+all three forbid inferring cost from a picture:
+
+- §11: *"Do not infer LED strips, drivers, power supplies, dimmers, or
+  power strips solely because a rendering shows illumination."*
+- §10: *"Do not automatically assume every monitor requires a mount"*,
+  and confirm responsibility for monitors, mounts, brackets, screens,
+  cabling, power strips, AV hardware.
+- §15: *"Do not assume the following without supporting scope or
+  direction: Hardware, Mounts, Power accessories, Freight, Installation,
+  Engineering, Repairs, Refurbishment."*
+
+So a rendering showing two screens may **not** generate mounts, brackets,
+cabling or power. It generates an observation and a question. This is the
+single rule most likely to be violated by a naive implementation of the
+paired-image comparison, and it is worth encoding as a refusal in the
+prompt and a filter on the output.
+
+**Shared labour does not scale with quantity.** §9: *"Distinguish shared
+labor from unit-based labor"* and *"Do not multiply shared labor blindly
+by unit quantity."* A `REDUCE_QTY` proposal that halves the hitting bays
+must not halve planning, drafting or programming. Shared-labour lines are
+excluded from proportional reduction and raised separately.
+
+**Some costs recompute rather than being removed.** §13 sets the
+rental-booth I&D consumables allowance at $1.00/sq ft for 100–1,600 sq ft
+and $0.50/sq ft above that. It is derived from booth size, so shrinking
+scope changes it by recalculation, not by a removal proposal. The same
+shape applies to any per-project or percentage-based line — which
+answers the open question about Show Services Management: **recompute,
+never propose for removal.**
+
+**And one rule that may reshape the whole feature.** §14: *"Optional,
+removable, alternate, or value-engineering features must remain separable
+from the base scope."*
+
+What the client has asked for here is value engineering. Read strictly,
+that rule says the cut scope should stay separable rather than be deleted
+— which points at ForgeOS's existing `Option` model rather than at
+soft-deleting line items. Worth settling before building the apply stage,
+because it changes what apply does. See the open questions.
+
+## Gaps the rules do not cover
+
+None of these are failures of the document; it was written to govern
+estimating a job, not revising one.
+
+1. **Revisions are out of its scope entirely.** There is no rule for what
+   happens when a design changes: whether removed scope is deleted or
+   retained as an alternate, whether a superseded drawing still governs
+   anything, or how to record why something left the estimate.
+2. **It says what to include, never what to release.** §15's "do not
+   assume" list disciplines *adding* hardware, freight, installation and
+   engineering. Nothing states the converse — that when the equipment
+   those costs existed for is removed, they are candidates to come out
+   too. The symmetry is obvious to an estimator and absent from the text,
+   which is exactly the kind of thing that should not be inferred by a
+   machine without being written down.
+3. **Vendor crew is not modelled.** §10 covers AV hardware and
+   responsibility. It says nothing about a vendor's labour scaling with
+   the equipment — an LED Lead Engineer and a Media Server Programmer
+   exist because there is an LED wall, and that relationship has no rule.
+4. **"Materially affects" is undefined.** §1 gates questions on material
+   effect on cost, scope, fabrication method, labour, finish, schedule,
+   installation or responsibility. With no threshold, the review has no
+   principled way to decide which findings are worth a person's
+   attention and which are noise.
+5. **Revision precedence is unstated.** §2 says to record the revision
+   used; §1 says to identify conflicts. Neither says the newer drawing
+   controls — which is nearly always true and should be stated, so the
+   system can act on it rather than asking every time.
+
 ## Data model
 
 One new table. Proposals are durable because the review is not a single
@@ -379,13 +488,20 @@ model RecostProposal {
   dependsOnId       String?           // the removal this one follows from --
                                       // an LED engineer removed because the
                                       // LED wall was. Grouped in the review,
-                                      // decided together, always INFERRED.
+                                      // decided together, never automatic --
+                                      // the rules forbid assuming freight,
+                                      // installation or engineering without
+                                      // supporting scope (§15), and the
+                                      // converse is not written down at all.
   newQty            Decimal?
   newUnitCost       Decimal?
   reason            String
   sourceDocumentId  String
   sourceQuote       String
-  confidence        RecostConfidence  // STATED | INFERRED
+  confidence        RecostConfidence  // RECOMMEND_AND_CONFIRM | NEED_YOUR_DECISION
+                                      // -- the estimating rules' own two
+                                      // question types (§1), not a
+                                      // second vocabulary for the same idea
   status            RecostStatus      // PROPOSED | ACCEPTED | REJECTED | APPLIED
   decidedById       String?
   decidedAt         DateTime?
@@ -442,10 +558,28 @@ estimator does the mapping by eye.
    do not move the total, so a removal proposal for one is noise.
    Suggest: exclude from the review entirely.
 
-4. **How far do dependent costs reach?** Crew and travel clearly follow
-   the equipment. Freight and power probably do. Show Services
-   Management, which is a percentage of the job, follows the total
-   rather than any one booth -- so it should recompute, not be proposed
-   for removal. Worth walking one real job with an estimator before
-   encoding a rule, because this is exactly the knowledge that does not
-   survive being guessed at.
+4. **How far do dependent costs reach?** Partly answered: §13 makes
+   size-derived allowances recompute rather than be removed, and the same
+   applies to any per-project or percentage line, so Show Services
+   Management recomputes. Unanswered for vendor crew -- an LED Lead
+   Engineer and a Media Server Programmer exist because there is an LED
+   wall, and no rule covers that. Needs Taze.
+
+5. **Should cut scope be deleted, or kept as an alternate?** §14 says
+   optional, removable, alternate and value-engineering features must
+   remain separable from the base scope. What the client has asked for
+   IS value engineering. Read strictly, the reception counter should move
+   to an `Option` rather than be soft-deleted -- which preserves the
+   ability to show the client what their budget bought and what it cost
+   them, and is a different apply stage from the one specced. This is the
+   biggest open decision in the document.
+
+6. **What counts as "materially affects"?** §1 gates every question on
+   it and never defines it. Without a threshold the review cannot tell a
+   finding worth raising from noise. A dollar figure, a percentage of
+   booth cost, or both.
+
+7. **Does the newer drawing simply control?** §2 requires recording the
+   revision used and §1 requires identifying conflicts, but nothing says
+   the later drawing wins. It nearly always does; stating it lets the
+   system act instead of asking every time.
