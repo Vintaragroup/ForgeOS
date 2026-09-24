@@ -7,6 +7,7 @@
 // guarding against a markup-formula substitution."
 
 import { db } from "@/lib/db";
+import { summarySourceKey } from "@/lib/proposal-copy-staleness";
 import { Prisma, type Category } from "@/generated/prisma/client";
 import type {
   AiFeature,
@@ -817,9 +818,18 @@ export async function updateElementSummary(sectionId: string, summary: string) {
     select: { estimateVersionId: true },
   });
   await assertUnlocked(section.estimateVersionId);
+  // Same recording as updateBoothSummary, scoped to this one section.
+  const descriptions = await db.lineItem.findMany({
+    where: { sectionId },
+    select: { description: true },
+  });
   await db.estimateSection.update({
     where: { id: sectionId },
-    data: { elementSummary: summary, elementPendingSummary: null },
+    data: {
+      elementSummary: summary,
+      elementPendingSummary: null,
+      elementSummaryKey: summarySourceKey(descriptions.map((d) => d.description)),
+    },
   });
 }
 
@@ -862,9 +872,20 @@ export async function clearBoothPendingDescription(estimateVersionId: string, gr
 export async function updateBoothSummary(estimateVersionId: string, groupLabel: string, summary: string) {
   assertProposalSummaryLength(summary);
   await assertUnlocked(estimateVersionId);
+  // Recorded at approval rather than generation: the approved text is
+  // what prints, so the approved text is what has to be checkable later.
+  // See proposal-copy-staleness.ts.
+  const descriptions = await db.lineItem.findMany({
+    where: { section: { estimateVersionId, groupLabel } },
+    select: { description: true },
+  });
   await db.estimateSection.updateMany({
     where: { estimateVersionId, groupLabel },
-    data: { boothSummary: summary, boothPendingSummary: null },
+    data: {
+      boothSummary: summary,
+      boothPendingSummary: null,
+      boothSummaryKey: summarySourceKey(descriptions.map((d) => d.description)),
+    },
   });
 }
 

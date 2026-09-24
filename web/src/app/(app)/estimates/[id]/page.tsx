@@ -142,6 +142,7 @@ import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, LinkButton, Notice, PageHeader, ReadOnlyField, SelectField } from "@/components/ui";
 import { RecostingCard } from "@/components/recosting-card";
 import { RecostReviewCard } from "@/components/recost-review-card";
+import { copyState } from "@/lib/proposal-copy-staleness";
 import { buildRecostReview } from "@/lib/recost-review-service";
 import { ScopeDiffSummary } from "@/components/scope-diff-summary";
 import { computeScopeDiff, type ScopeDiff } from "@/lib/scope-diff";
@@ -1408,6 +1409,41 @@ function VersionSummaryBar({
   const lockVersionWithIds = lockVersionAction.bind(null, estimateId, version.id);
   const createNewVersionWithIds = createNewVersionAction.bind(null, estimateId, version.id);
 
+  // Generating AI copy writes a SUGGESTION; the PDF prints the APPROVED
+  // text. Nothing said so, so regenerating a booth summary and seeing the
+  // old words still on the proposal read as the generator being broken
+  // when it had worked and was waiting to be accepted.
+  const pendingCopy = version.sections.filter(
+    (s) => s.boothPendingSummary || s.elementPendingSummary || s.boothPendingDescription || s.pendingDescription,
+  ).length;
+
+  // And approved copy goes stale on its own, because it is generated from
+  // line-item descriptions that keep changing underneath it. See
+  // proposal-copy-staleness.ts.
+  const staleBooths = new Set(
+    version.sections
+      .filter(
+        (s) =>
+          s.groupLabel &&
+          copyState({
+            summary: s.boothSummary,
+            recordedKey: s.boothSummaryKey,
+            currentDescriptions: version.sections
+              .filter((peer) => peer.groupLabel === s.groupLabel)
+              .flatMap((peer) => peer.lineItems.map((li) => li.description)),
+          }) === "STALE",
+      )
+      .map((s) => s.groupLabel as string),
+  ).size;
+  const staleElements = version.sections.filter(
+    (s) =>
+      copyState({
+        summary: s.elementSummary,
+        recordedKey: s.elementSummaryKey,
+        currentDescriptions: s.lineItems.map((li) => li.description),
+      }) === "STALE",
+  ).length;
+
   return (
     <Card className="p-6">
       <div className="mb-4 flex items-center justify-between">
@@ -1476,6 +1512,40 @@ function VersionSummaryBar({
           Check the branded PDF format anytime, even while this version is still unlocked and
           changing — this doesn&apos;t create a real Proposal record, just renders current numbers.
         </p>
+
+        {/* Said here, next to the button that renders the document, because
+            this is the moment somebody is about to look at a PDF and
+            believe it. */}
+        {(pendingCopy > 0 || staleBooths > 0 || staleElements > 0) && (
+          <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {pendingCopy > 0 && (
+              <p>
+                <strong>
+                  {pendingCopy} AI {pendingCopy === 1 ? "suggestion is" : "suggestions are"} waiting to be
+                  approved.
+                </strong>{" "}
+                This PDF prints the approved wording, so a suggestion you have not accepted does not appear on
+                it.
+              </p>
+            )}
+            {(staleBooths > 0 || staleElements > 0) && (
+              <p className={pendingCopy > 0 ? "mt-1" : undefined}>
+                <strong>
+                  {[
+                    staleBooths > 0 && `${staleBooths} booth ${staleBooths === 1 ? "summary" : "summaries"}`,
+                    staleElements > 0 &&
+                      `${staleElements} element ${staleElements === 1 ? "summary" : "summaries"}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" and ")}{" "}
+                  no longer {staleBooths + staleElements === 1 ? "describes" : "describe"} the line items
+                  underneath.
+                </strong>{" "}
+                The rows changed after the text was written — regenerate before sending this to a client.
+              </p>
+            )}
+          </div>
+        )}
         {proposalTemplates.length === 0 ? (
           <Notice
             message="Previewing a PDF needs a branded template, and there are no templates yet."

@@ -2060,6 +2060,11 @@ model EstimateSection {
   // Proposal PDF category, spanning every booth in it).
   boothSummary        String?
   boothPendingSummary String?
+  // What boothSummary was written about -- see
+  // proposal-copy-staleness.ts. Recorded at approval, compared against
+  // the booth's current line-item descriptions to tell whether the
+  // approved text still describes the thing it was written for.
+  boothSummaryKey     String?
 
   // Same idea as boothSummary above, one level down -- a few client-
   // readable sentences for THIS element group alone (Structure, Graphics,
@@ -2071,6 +2076,8 @@ model EstimateSection {
   // regardless of summarizeOnProposal -- see boothSummary's own comment.
   elementSummary        String?
   elementPendingSummary String?
+  // Same as boothSummaryKey, one tier down.
+  elementSummaryKey     String?
 
   // Whole-group PDF visibility -- hides this section and every one of its
   // line items from the Proposal PDF regardless of each item's own
