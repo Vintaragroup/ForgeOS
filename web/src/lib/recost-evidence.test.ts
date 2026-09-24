@@ -5,6 +5,7 @@ import {
   evidenceFromScopeDiff,
   isMaterial,
   resolveBoothLabel,
+  resolveLineItemMatch,
   MATERIAL_AMOUNT,
   type RecostEvidence,
 } from "@/lib/recost-evidence";
@@ -117,6 +118,28 @@ describe("evidenceFromDrawingComparison", () => {
 
   // Reported rather than dropped: "something changed and I could not
   // tell you where" is worth an estimator's attention.
+  // Booth is the coarser, safer scope: a finding naming a whole booth
+  // acts on the booth, not on one line inside it.
+  it("prefers a booth over a line item when both would match", () => {
+    const ev = evidenceFromDrawingComparison(
+      comparison(),
+      (s) => resolveBoothLabel(s, BOOTHS),
+      () => "li-should-not-win",
+    );
+    expect(ev[0].scopedToBooth).toBe("FS - Reception Counter");
+    expect(ev[0].scopedToLineItemId).toBeNull();
+  });
+
+  it("falls back to a line item when no booth matches", () => {
+    const ev = evidenceFromDrawingComparison(
+      comparison({ findings: [{ kind: "CHANGED", subject: "hanging sign", detail: "simpler now", previousPage: 2, revisedPage: 1 }] }),
+      (s) => resolveBoothLabel(s, BOOTHS),
+      () => "li-sign",
+    );
+    expect(ev[0].scopedToBooth).toBeNull();
+    expect(ev[0].scopedToLineItemId).toBe("li-sign");
+  });
+
   it("keeps a finding that resolves to no booth", () => {
     const ev = evidenceFromDrawingComparison(
       comparison({ findings: [{ kind: "REMOVED", subject: "video wall", detail: "gone", previousPage: 5, revisedPage: null }] }),
@@ -137,6 +160,34 @@ describe("evidenceFromDrawingComparison", () => {
   });
 });
 
+describe("resolveLineItemMatch", () => {
+  const ITEMS = [
+    { id: "li-sign", description: "Hanging Sign" },
+    { id: "li-screen", description: "LED Screen 8'h x 11.39'w (BeMatrix Compatible) - and monitor" },
+    { id: "li-a", description: "SEG BACKLIT — ceiling" },
+    { id: "li-b", description: "SEG — side wall" },
+  ];
+
+  // The finding this widening exists for: the hanging sign is not a
+  // booth, it is the single biggest line the client asked to change.
+  it("matches a drawing's word to the line item it names", () => {
+    expect(resolveLineItemMatch("hanging sign", ITEMS)).toBe("li-sign");
+  });
+
+  // "sign" alone would hit every signage line there is.
+  it("refuses a phrase too short to be specific", () => {
+    expect(resolveLineItemMatch("sign", ITEMS)).toBeNull();
+  });
+
+  it("refuses when several lines match, since each is a different amount", () => {
+    expect(resolveLineItemMatch("seg", ITEMS)).toBeNull();
+  });
+
+  it("returns null when nothing matches", () => {
+    expect(resolveLineItemMatch("reception counter", ITEMS)).toBeNull();
+  });
+});
+
 describe("collectEvidence", () => {
   function ev(over: Partial<RecostEvidence>): RecostEvidence {
     return {
@@ -149,6 +200,7 @@ describe("collectEvidence", () => {
       sourceLocation: null,
       scopedToDocumentId: null,
       scopedToBooth: null,
+      scopedToLineItemId: null,
       amount: null,
       ...over,
     };

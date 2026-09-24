@@ -37,6 +37,9 @@ export interface RecostEvidence {
   // Exactly one of these constrains what may be proposed from it.
   scopedToDocumentId: string | null;
   scopedToBooth: string | null;
+  // A specific line item the finding names, when it names one
+  // unambiguously. A drawing finding may carry this OR a booth.
+  scopedToLineItemId: string | null;
   // Money, when the source carries any. A schedule never does.
   amount: number | null;
 }
@@ -79,6 +82,7 @@ export function evidenceFromDocumentDiff(
     sourceLocation: null,
     scopedToDocumentId: predecessorId,
     scopedToBooth: null,
+    scopedToLineItemId: null,
     amount: row.delta,
   }));
 }
@@ -108,6 +112,7 @@ export function evidenceFromScopeDiff(
     sourceLocation: null,
     scopedToDocumentId: predecessorId,
     scopedToBooth: null,
+    scopedToLineItemId: null,
     amount: null,
   }));
 }
@@ -123,6 +128,7 @@ export function evidenceFromScopeDiff(
 export function evidenceFromDrawingComparison(
   comparison: DrawingComparison,
   resolveBooth: (subject: string) => string | null,
+  resolveLineItem: (subject: string) => string | null = () => null,
 ): RecostEvidence[] {
   const caveat = comparison.charactersMismatched
     ? " These two drawings are different kinds, so this may be a change of drawing style rather than of design."
@@ -145,7 +151,11 @@ export function evidenceFromDrawingComparison(
             ? `p${f.revisedPage}`
             : null,
     scopedToDocumentId: null,
+    // Booth first: it is the coarser, safer scope, and a finding that
+    // names a whole booth should act on the booth rather than on one
+    // line inside it.
     scopedToBooth: resolveBooth(f.subject),
+    scopedToLineItemId: resolveBooth(f.subject) ? null : resolveLineItem(f.subject),
     amount: null,
   }));
 }
@@ -182,6 +192,41 @@ export function resolveBoothLabel(subject: string, boothLabels: string[]): strin
   // finding means the drawing did not say which, and guessing would
   // silently pick one.
   return scored.length === 1 ? scored[0].label : null;
+}
+
+// The same conservative match against LINE ITEM descriptions.
+//
+// Booth matching alone is too narrow: on ABC Chicago only one of seven
+// drawing findings resolved, because a rendering names things an
+// estimator would call items, not booths. "hanging sign" is not a booth
+// -- it is a $55,943 line item inside one, and it is the single biggest
+// thing the client asked to change. Leaving it unscoped throws away the
+// finding that matters most.
+//
+// Same discipline as resolveBoothLabel, for the same reason: a wrong
+// match points a removal at the wrong line, so ambiguity resolves to
+// nothing. The widening is safe because what it grants is still only the
+// right to PROPOSE, with a citation, at NEED_YOUR_DECISION.
+export function resolveLineItemMatch(
+  subject: string,
+  lineItems: { id: string; description: string }[],
+): string | null {
+  const normalize = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+
+  const want = normalize(subject);
+  // Too short to match on: "sign" would hit every signage line there is.
+  if (want.length < 5) return null;
+
+  const hits = lineItems
+    .map((li) => ({ id: li.id, key: normalize(li.description) }))
+    .filter((c) => c.key.length > 0 && (c.key === want || c.key.includes(want)));
+
+  if (hits.length === 0) return null;
+  // Several lines matching one phrase means the drawing did not say
+  // which, and every one of them is a different amount of money.
+  const distinct = new Set(hits.map((h) => h.id));
+  return distinct.size === 1 ? hits[0].id : null;
 }
 
 // Everything worth putting in front of the AI stage, filtered and in one
