@@ -72,6 +72,26 @@ export function DrawingComparisonSummary({
         </span>
       </summary>
 
+      {/* Re-run, for the same reason Re-analyze exists on the row above:
+          a stored comparison was produced by whatever the prompt and the
+          rules were that day, and both improve. Without this the only
+          way to pick up an improvement was to clear the column by hand. */}
+      <ActionForm
+        action={compareDrawingRevisionAction.bind(null, opportunityId, documentId)}
+        className="mt-2"
+      >
+        <button
+          type="submit"
+          title="Re-run the comparison -- picks up any improvements since these two were last compared"
+          className="text-[11px] font-medium text-brand-navy hover:underline"
+        >
+          Re-compare
+        </button>
+        <span className="ml-2 text-[11px] text-neutral-400">
+          last run {new Date(comparison.comparedAt).toLocaleString()}
+        </span>
+      </ActionForm>
+
       <ul className="mt-2 flex flex-col gap-1.5 border-l-2 border-neutral-200 pl-3">
         {comparison.findings.map((f, i) => (
           <li key={`${f.subject}-${i}`}>
