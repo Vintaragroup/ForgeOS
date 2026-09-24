@@ -1,6 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { acceptRecommendedRecosts, decideRecostProposal } from "@/lib/recost-apply-service";
+import {
+  acceptRecommendedRecosts,
+  acceptRemovalsForElement,
+  decideRecostProposal,
+} from "@/lib/recost-apply-service";
 import { recomputeVersionTotals, restoreLineItem } from "@/lib/estimate-service";
 
 let opportunityId = "";
@@ -404,5 +408,51 @@ describe("acceptRecommendedRecosts", () => {
   it("says so when nothing is recommended", async () => {
     await makeProposal({ action: "REMOVE", confidence: "NEED_YOUR_DECISION" });
     await expect(acceptRecommendedRecosts(estimateId, opportunityId, userId)).rejects.toThrow(/needs a decision of its own/i);
+  });
+});
+
+describe("acceptRemovalsForElement", () => {
+  it("takes out every row of one element in a single decision", async () => {
+    const second = await db.lineItem.create({
+      data: { sectionId, lineType: "LABOR", description: "Counter install", qty: 4, unitCost: 100, totalCost: 400 },
+    });
+    await makeProposal({ action: "REMOVE", sourceLocation: "FS - Reception Counter" });
+    await makeProposal({ action: "REMOVE", sourceLocation: "FS - Reception Counter", lineItemId: second.id });
+
+    const out = await acceptRemovalsForElement(estimateId, opportunityId, userId, "FS - Reception Counter");
+    expect(out.applied).toBe(2);
+    expect(out.changedLineItems).toBe(2);
+    expect(await db.lineItem.count({ where: { sectionId } })).toBe(0);
+    // Each row keeps its own audit entry and its own way back.
+    expect(await db.lineItemAuditLog.count({ where: { action: "DELETE" } })).toBe(2);
+  });
+
+  // Taking out a counter and taking out a sign are two different calls.
+  it("leaves another element's removals alone", async () => {
+    await makeProposal({ action: "REMOVE", sourceLocation: "FS - Reception Counter" });
+    const otherElement = await makeProposal({ action: "REMOVE", sourceLocation: "FS - Sign 5ft4" });
+
+    await acceptRemovalsForElement(estimateId, opportunityId, userId, "FS - Reception Counter");
+    expect((await db.recostProposal.findUniqueOrThrow({ where: { id: otherElement.id } })).status).toBe("PROPOSED");
+  });
+
+  it("never touches a re-cost, only removals", async () => {
+    const recost = await makeProposal({
+      action: "ADJUST_QTY",
+      confidence: "RECOMMEND_AND_CONFIRM",
+      newQty: 2,
+      sourceLocation: "FS - Reception Counter",
+    });
+    await makeProposal({ action: "REMOVE", sourceLocation: "FS - Reception Counter" });
+
+    const out = await acceptRemovalsForElement(estimateId, opportunityId, userId, "FS - Reception Counter");
+    expect(out.applied).toBe(1);
+    expect((await db.recostProposal.findUniqueOrThrow({ where: { id: recost.id } })).status).toBe("PROPOSED");
+  });
+
+  it("says so when that element has no removals waiting", async () => {
+    await expect(
+      acceptRemovalsForElement(estimateId, opportunityId, userId, "FS - Nothing Here"),
+    ).rejects.toThrow(/No removals are waiting/i);
   });
 });

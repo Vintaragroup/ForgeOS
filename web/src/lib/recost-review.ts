@@ -44,6 +44,8 @@ export interface RecostReview {
     amount: number | null;
     sourceQuote: string;
     sourceFilename: string;
+    // The element tab the row came off, when it came from a workbook.
+    sourceElement: string | null;
     // What the line item costs now, and what it would cost if this were
     // applied. Null when the proposal names no priced row.
     amountAfter: number | null;
@@ -89,6 +91,9 @@ export interface RecostReview {
   // before the click. Recommended proposals only -- never a removal,
   // never anything a model proposed.
   recommended: { count: number; costDelta: number };
+  // Outstanding removals gathered by the element they belong to, because
+  // an element leaving is one decision rather than twenty-three.
+  removalGroups: { element: string; count: number; cost: number }[];
   // Decisions already made, newest first. The line-item history records
   // WHAT changed and offers Restore; this records WHY, with the citation
   // the decision was made against. Neither is complete alone.

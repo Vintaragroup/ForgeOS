@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireEstimateAccess } from "@/lib/opportunity-access";
-import { acceptRecommendedRecosts, decideRecostProposal } from "@/lib/recost-apply-service";
+import {
+  acceptRecommendedRecosts,
+  acceptRemovalsForElement,
+  decideRecostProposal,
+} from "@/lib/recost-apply-service";
 import { proposeFromCostBreakout } from "@/lib/recost-row-proposal-service";
 import { proposeRecostChanges } from "@/lib/ai/recost-proposal-service";
 import { catchUserError } from "@/lib/user-error";
@@ -93,6 +97,28 @@ export async function acceptRecommendedRecostsAction(
 
   return catchUserError(async () => {
     await acceptRecommendedRecosts(estimateId, estimate.opportunityId, user.id);
+    revalidatePath(`/estimates/${estimateId}`);
+  });
+}
+
+// Accepts every outstanding removal for one element.
+//
+// Scoped to one element rather than "accept all removals": taking out a
+// counter and taking out a sign are two different calls.
+export async function acceptRemovalsForElementAction(
+  estimateId: string,
+  element: string,
+  _prev: ActionResult,
+  _formData: FormData,
+): Promise<ActionResult> {
+  const user = await requireEstimateAccess(estimateId);
+  const estimate = await db.estimate.findUniqueOrThrow({
+    where: { id: estimateId },
+    select: { opportunityId: true },
+  });
+
+  return catchUserError(async () => {
+    await acceptRemovalsForElement(estimateId, estimate.opportunityId, user.id, element);
     revalidatePath(`/estimates/${estimateId}`);
   });
 }

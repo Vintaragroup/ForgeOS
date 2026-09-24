@@ -216,3 +216,56 @@ export async function acceptRecommendedRecosts(
 
   return { applied, changedLineItems, failed };
 }
+
+
+// Accepts every outstanding removal for one element.
+//
+// The spec said this from the start and the screen did not do it: an
+// estimator thinks about "the reception counter" as one thing, not as 23
+// separate removals. On Full Swing the 40 remaining removals are exactly
+// two elements -- the reception counter and the 5'4" sign -- so this is
+// two decisions rather than forty, and each is the decision somebody
+// actually makes.
+//
+// Scoped to one element rather than offered as "accept all removals",
+// because taking out a counter and taking out a sign are two different
+// calls and collapsing them would hide that.
+export async function acceptRemovalsForElement(
+  estimateId: string,
+  opportunityId: string,
+  userId: string,
+  element: string,
+): Promise<BatchOutcome> {
+  const version = await db.estimateVersion.findFirst({
+    where: { estimate: { id: estimateId, opportunityId }, isLocked: false },
+    orderBy: { versionNumber: "desc" },
+    select: { id: true },
+  });
+  if (!version) throw new UserError("This estimate has no open version to re-cost.");
+
+  const eligible = await db.recostProposal.findMany({
+    where: { estimateVersionId: version.id, status: "PROPOSED", action: "REMOVE", sourceLocation: element },
+    select: { id: true },
+    orderBy: { createdAt: "asc" },
+  });
+  if (eligible.length === 0) throw new UserError(`No removals are waiting for ${element}.`);
+
+  let applied = 0;
+  let changedLineItems = 0;
+  const failed: { proposalId: string; why: string }[] = [];
+
+  for (const { id } of eligible) {
+    try {
+      const outcome = await decideRecostProposal(id, opportunityId, userId, "ACCEPT", { skipRecompute: true });
+      applied += 1;
+      changedLineItems += outcome.changedLineItems;
+    } catch (err) {
+      failed.push({ proposalId: id, why: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  if (changedLineItems > 0) await recomputeVersionTotals(version.id);
+  if (failed.length > 0) console.warn(`[recost] ${failed.length} of ${eligible.length} removals failed for ${element}:`, failed);
+
+  return { applied, changedLineItems, failed };
+}

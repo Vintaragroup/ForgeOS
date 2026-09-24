@@ -260,6 +260,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
         : null,
       sourceQuote: p.sourceQuote,
       sourceFilename: proposalDocuments.get(p.sourceDocumentId)?.filename ?? "(source removed)",
+      sourceElement: p.sourceLocation,
       effect: describeEffect(effect, {
         itemCount: sectionSize?.count,
         amount: sectionSize?.amount ?? lineItem?.totalCost.toNumber(),
@@ -375,6 +376,23 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     }, 0),
   };
 
+  // Removals gathered by element. Forty rows on this job are two
+  // decisions: the reception counter, and the 5'4" sign.
+  const removalGroups = [
+    ...stored
+      .filter((p) => p.action === "REMOVE" && p.sourceLocation)
+      .reduce((groups, p) => {
+        const element = p.sourceLocation!;
+        const lineItem = p.lineItemId ? proposalLineItems.get(p.lineItemId) : undefined;
+        const existing = groups.get(element) ?? { element, count: 0, cost: 0 };
+        existing.count += 1;
+        existing.cost += lineItem?.totalCost.toNumber() ?? 0;
+        groups.set(element, existing);
+        return groups;
+      }, new Map<string, { element: string; count: number; cost: number }>())
+      .values(),
+  ].sort((a, b) => b.cost - a.cost);
+
   const currentCost = version.totalCost.toNumber();
   const currentSell = version.grandTotal.toNumber();
   const target = parseTargetAmount(revisionEvent?.note ?? null);
@@ -433,6 +451,7 @@ export async function buildRecostReview(estimateId: string): Promise<RecostRevie
     lineItemDiff,
     proposals,
     recommended,
+    removalGroups,
     decided,
     notes,
   };

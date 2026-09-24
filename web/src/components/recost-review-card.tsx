@@ -6,6 +6,7 @@ import { RunRecostProposalsButton } from "@/components/run-recost-proposals-butt
 import { RecostProposalDecision } from "@/components/recost-proposal-decision";
 import { ProposeFromBreakoutButton } from "@/components/propose-from-breakout-button";
 import { AcceptRecommendedButton } from "@/components/accept-recommended-button";
+import { RemoveElementButton } from "@/components/remove-element-button";
 
 // Where the re-cost stands against the client's number.
 //
@@ -304,8 +305,52 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
               the estimate they are about, and proposes nothing you have not confirmed.
             </p>
           ) : (
+            <>
+            <div className="mt-3 flex flex-col gap-4">
+              {/* Removals gathered by the element they belong to. An
+                  element leaving is one decision, not twenty-three, and
+                  the rows stay visible underneath it. */}
+              {review.removalGroups.map((group) => {
+                const rows = review.proposals.filter(
+                  (p) => p.action === "REMOVE" && p.sourceElement === group.element,
+                );
+                return (
+                  <div key={group.element} className="rounded-md border border-red-200 bg-red-50/40 p-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <div>
+                        <span className="font-medium text-neutral-900">{group.element}</span>
+                        <span className="block text-xs text-neutral-600">
+                          The revised workbook no longer carries this element — {group.count} rows,{" "}
+                          {money(group.cost)}.
+                        </span>
+                      </div>
+                      <RemoveElementButton
+                        estimateId={estimateId}
+                        element={group.element}
+                        count={group.count}
+                        cost={group.cost}
+                      />
+                    </div>
+                    <ul className="mt-2 flex flex-col gap-0.5">
+                      {rows.slice(0, 6).map((p) => (
+                        <li key={p.id} className="flex justify-between gap-3 text-xs text-neutral-600">
+                          <span className="min-w-0 flex-1 truncate">{p.target}</span>
+                          <span className="shrink-0 tabular-nums">
+                            {p.amount !== null ? money(p.amount) : "—"}
+                          </span>
+                        </li>
+                      ))}
+                      {rows.length > 6 && (
+                        <li className="text-xs text-neutral-500">… {rows.length - 6} more, all going together</li>
+                      )}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
+
             <ul className="mt-3 flex flex-col gap-3">
-              {review.proposals.map((p) => (
+              {review.proposals.filter((p) => p.action !== "REMOVE").map((p) => (
                 <li key={p.id} className="rounded-md border border-neutral-200 p-3 text-sm">
                   <div className="flex flex-wrap items-baseline gap-2">
                     <span className="rounded bg-neutral-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
@@ -337,6 +382,7 @@ export function RecostReviewCard({ review, estimateId }: { review: RecostReview 
                 </li>
               ))}
             </ul>
+            </>
           )}
         </div>
       )}
