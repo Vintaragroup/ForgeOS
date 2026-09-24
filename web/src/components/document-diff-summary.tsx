@@ -21,17 +21,27 @@ export function DocumentDiffSummary({
   predecessorFilename,
   extracted,
   diff,
+  pricedViaImport = false,
 }: {
   predecessorFilename: string;
   // False when the document has not been analyzed yet. "No changes" would
   // be a confident lie about a document nobody has read.
   extracted: boolean;
   diff: DocumentDiff | null;
+  // A spreadsheet is never analyzed -- it is parsed on demand at import,
+  // and nothing is stored on the document. Telling its reader to
+  // "analyze it" names an action that does not exist for this row: the
+  // same row says "Priced via import" and offers only "Import on
+  // Estimate page". Which is exactly what it used to say.
+  pricedViaImport?: boolean;
 }) {
   if (!extracted || !diff) {
     return (
       <p className="mt-1 text-xs text-neutral-500">
-        Replaces {predecessorFilename}. Analyze it to see what changed.
+        Replaces {predecessorFilename}.{" "}
+        {pricedViaImport
+          ? "Import it on the estimate to see what changed."
+          : "Analyze it to see what changed."}
       </p>
     );
   }

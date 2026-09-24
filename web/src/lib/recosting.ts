@@ -106,15 +106,20 @@ export function resolveRecostingState(input: RecostingInput): RecostingState {
   const versionNumber = input.openVersion.versionNumber;
   const request = input.request;
 
-  // The revised document is one that (a) can carry prices, (b) says what
-  // it replaces, and (c) arrived after the client asked. The supersedes
-  // link is what makes it a revision rather than just another upload,
-  // and the date is what stops an older revision pair being mistaken for
-  // an answer to THIS request.
+  // The revised document is one that can carry a revision -- a priced
+  // type that says what it replaces. The supersedes link is what makes
+  // it a revision rather than just another upload.
+  //
+  // Deliberately NOT filtered to documents uploaded after the request.
+  // That was the obvious rule and it is backwards: in practice the
+  // revised file arrives first and the client's request gets logged when
+  // somebody gets to it. On ABC Chicago the spreadsheet landed at 17:46
+  // and the request was recorded at 22:01, four hours later, so filtering
+  // by date hid the very document the card exists to talk about and told
+  // the reader to upload a file that was already sitting there.
   const candidates = input.documents
     .filter((d) => isPricedDocumentType(d.documentType))
     .filter((d) => d.supersedesId)
-    .filter((d) => !request || d.createdAt.getTime() >= request.at.getTime())
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
   const document = candidates[0];

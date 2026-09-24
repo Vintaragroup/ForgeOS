@@ -5,6 +5,7 @@ import { DocumentRevisionPicker } from "@/components/document-revision-picker";
 import { buildRevisionChains, revisionNumber } from "@/lib/document-revisions";
 import { diffDocumentAgainstPredecessor } from "@/lib/document-service";
 import { DocumentDiffSummary } from "@/components/document-diff-summary";
+import { isScheduleDocumentType } from "@/lib/recosting";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
@@ -1407,6 +1408,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                         predecessorFilename={d.predecessor.filename}
                         extracted={d.extracted}
                         diff={d.diff}
+                        pricedViaImport={isScheduleDocumentType(doc.documentType)}
                       />
                     );
                   })()}

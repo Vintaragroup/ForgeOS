@@ -65,13 +65,15 @@ describe("resolveRecostingState", () => {
     expect(isPricedDocumentType("DRAWING")).toBe(false);
   });
 
-  // A revision pair from an earlier round is not an answer to the
-  // request made today.
-  it("ignores a revision that predates the client's request", () => {
+  // The revised file almost always arrives BEFORE the request is logged:
+  // someone uploads what the client sent, then records the ask when they
+  // get to it. On ABC Chicago that gap was four hours, and filtering by
+  // date hid the very document the card exists to talk about.
+  it("uses a revision uploaded before the request was logged", () => {
     const state = resolveRecostingState(
-      input({ documents: [doc({ createdAt: new Date("2026-09-04T00:00:00Z") })] }),
+      input({ documents: [doc({ createdAt: new Date("2026-09-23T17:46:00Z") })] }),
     );
-    expect(state.kind).toBe("AWAITING_DOCUMENT");
+    expect(state.kind).toBe("READY");
   });
 
   it("waits while a linked document still has nothing priced in it", () => {
@@ -150,9 +152,7 @@ describe("resolveRecostingState", () => {
     expect(state.document.id).toBe("second");
   });
 
-  // A request with no recorded time shouldn't hide a document that is
-  // plainly the answer to it.
-  it("does not filter by date when the request carries no timestamp", () => {
+  it("works with no recorded request time at all", () => {
     const state = resolveRecostingState(
       input({ request: null, documents: [doc({ createdAt: new Date("2020-01-01T00:00:00Z") })] }),
     );

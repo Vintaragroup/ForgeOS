@@ -19,6 +19,7 @@ import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { getDocumentProxy, renderPageAsImage } from "unpdf";
+import { fitPagesToBudget, visionPageScale } from "@/lib/ai/vision-page-scale";
 import {
   getDrawingAiClient,
   DRAWING_REASONING_BUDGET,
@@ -253,9 +254,17 @@ export async function pageImages(
     const pageNumbers: number[] = [];
     const blankPageNumbers: number[] = [];
     for (let page = 1; page <= pageCount; page++) {
+      // Sized to the page, not flat. A letter sheet still gets the 2x
+      // that small dimension labels need; a large-format booth drawing
+      // gets fitted to roughly what the model resamples to anyway,
+      // instead of rendering 26 megapixels per page and failing the
+      // whole analysis on the provider's 30MB ceiling. Full Swing's
+      // 90x20 drawing failed exactly that way -- see vision-page-scale.ts.
+      const { width, height } = (await pdf.getPage(page)).getViewport({ scale: 1 });
+      const scale = visionPageScale(width, height);
       const dataUrl = await renderPageAsImage(pdf, page, {
         toDataURL: true,
-        scale: 2, // native PDF DPI is often too low to read small dimension labels
+        scale,
         canvasImport: () => import("@napi-rs/canvas"),
       });
       await pdf.cleanup();
@@ -270,10 +279,33 @@ export async function pageImages(
         pageNumbers.push(page);
       }
       console.log(
-        `[pageImages] rendered page ${page}/${pageCount}, rss=${(process.memoryUsage().rss / 1024 / 1024).toFixed(0)}MB`,
+        `[pageImages] rendered page ${page}/${pageCount} at scale ${scale}, ` +
+          `rss=${(process.memoryUsage().rss / 1024 / 1024).toFixed(0)}MB`,
       );
     }
-    return { images, totalPages: pdf.numPages, pageTexts, pageNumbers, blankPageNumbers };
+
+    // Last guard. Per-page fitting handles the common case, but a long
+    // drawing of many fitted pages can still total past the ceiling, and
+    // that rejection costs the entire analysis rather than one page.
+    // Analysing most of a drawing beats analysing none of it -- and the
+    // pages left out are named rather than quietly missing.
+    const budgeted = fitPagesToBudget(
+      images.map((dataUrl, i) => ({ dataUrl, pageNumber: pageNumbers[i], pageText: pageTexts[i] })),
+    );
+    if (budgeted.dropped.length > 0) {
+      console.warn(
+        `[pageImages] ${budgeted.dropped.length} page(s) exceeded the vision image budget and were excluded: ` +
+          budgeted.dropped.map((p) => p.pageNumber).join(", "),
+      );
+    }
+
+    return {
+      images: budgeted.kept.map((p) => p.dataUrl),
+      totalPages: pdf.numPages,
+      pageTexts: budgeted.kept.map((p) => p.pageText),
+      pageNumbers: budgeted.kept.map((p) => p.pageNumber),
+      blankPageNumbers,
+    };
   }
   throw new Error(`Unsupported file type for drawing analysis: ${mimeType}`);
 }
