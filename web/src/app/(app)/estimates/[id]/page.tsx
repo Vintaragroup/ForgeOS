@@ -141,6 +141,8 @@ import { createChangeOrderAction } from "../../change-orders/actions";
 import { ConfirmForm } from "@/components/confirm-form";
 import { Button, Card, Field, LinkButton, Notice, PageHeader, ReadOnlyField, SelectField } from "@/components/ui";
 import { RecostingCard } from "@/components/recosting-card";
+import { RecostReviewCard } from "@/components/recost-review-card";
+import { buildRecostReview } from "@/lib/recost-review-service";
 import { ScopeDiffSummary } from "@/components/scope-diff-summary";
 import { computeScopeDiff, type ScopeDiff } from "@/lib/scope-diff";
 import { resolveRecostingState, type ExtractionStatusLike } from "@/lib/recosting";
@@ -539,6 +541,12 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
     recostingState.kind === "READY"
       ? (await diffDocumentAgainstPredecessor(estimate.opportunityId, recostingState.document.id))?.diff ?? null
       : null;
+
+  // Where the re-cost stands against the client's number. Gated on the
+  // same condition as the card above it, because assembling it reads
+  // workbooks out of storage -- work worth doing while a client is
+  // waiting on a lower number, and worth doing on no other page load.
+  const recostReview = recostingState.kind === "NONE" ? null : await buildRecostReview(estimate.id);
 
   const [
     users,
@@ -1051,6 +1059,10 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
         estimateId={estimate.id}
         opportunityId={estimate.opportunityId}
       />
+
+      {/* Directly under the steps: the steps stop mattering once they
+          are done, and "are we there yet" does not. */}
+      <RecostReviewCard review={recostReview} />
 
       <Card className="p-6">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-neutral-500">

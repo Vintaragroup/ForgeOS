@@ -643,7 +643,12 @@ source and it needs no AI at all.
    directly. Deterministic, exactly citable, and on this job it is
    $61,028 of the answer.
 3. **The re-cost review screen**, gap-led, over those two sources alone.
-   At this point the feature is useful with no AI in it.
+   At this point the feature is useful with no AI in it. *Built —
+   `recost-rollup.ts` does the arithmetic, `recost-review-service.ts`
+   assembles it, `RecostReviewCard` renders it under the steps card on
+   the estimate. On Full Swing it reads: projected $558,146, still over
+   by $308,146, with the Fuse quote's $46,830 held separately as
+   unpriced rather than counted as a saving.*
 4. **Drawing comparison into the review** — corroboration, plus the
    changes no spreadsheet covers, like the sign.
 5. **The AI proposal stage** for what is left: mapping an observation
