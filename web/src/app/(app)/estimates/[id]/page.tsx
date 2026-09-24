@@ -1152,6 +1152,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
             estimateId={estimate.id}
             version={currentVersion}
             proposalTemplates={proposalTemplates}
+            viewerIsProposalManager={viewerIsProposalManager}
           />
 
           <Suspense fallback={null}>
@@ -1427,10 +1428,17 @@ function VersionSummaryBar({
   estimateId,
   version,
   proposalTemplates,
+  viewerIsProposalManager,
 }: {
   estimateId: string;
   version: VersionWithSections;
   proposalTemplates: { id: string; name: string }[];
+  // Same standing proposal-authority.ts already defines: an admin, a
+  // sales manager or a department head acts on their own authority.
+  // Revising a version before the client has seen it is that kind of
+  // call -- "there should not be a create new version till the sales rep
+  // states it needed or his department head boss states it".
+  viewerIsProposalManager: boolean;
 }) {
   const lockVersionWithIds = lockVersionAction.bind(null, estimateId, version.id);
   const createNewVersionWithIds = createNewVersionAction.bind(null, estimateId, version.id);
@@ -1526,16 +1534,27 @@ function VersionSummaryBar({
                     {alreadySent ? "Open the proposal" : "Open the proposal — not sent yet"}
                   </LinkButton>
                 )}
-                {alreadySent ? (
+                {/* Once it has gone out, revising is the ordinary next
+                    move and anyone who can reach the estimate can make
+                    it -- a client asking for changes is not a decision
+                    that needs escalating.
+
+                    Before it has gone out, it is: the version is
+                    finished and waiting to be sent, and starting another
+                    one is a call for the sales rep or the department
+                    head, not for whoever happens to have the page open.
+                    So a manager sees the action and everybody else sees
+                    who to ask. Not hidden -- a dead end with no
+                    explanation is what this whole sequence of fixes has
+                    been unpicking. */}
+                {alreadySent || viewerIsProposalManager ? (
                   <form action={createNewVersionWithIds}>
                     <Button variant="secondary">Create new version</Button>
                   </form>
                 ) : (
-                  <form action={createNewVersionWithIds}>
-                    <button type="submit" className="text-xs text-neutral-400 underline hover:text-neutral-700">
-                      Need to change something? Start a new version
-                    </button>
-                  </form>
+                  <span className="text-xs text-neutral-400">
+                    A sales manager or department head starts a new version before this has been sent.
+                  </span>
                 )}
               </>
             );
