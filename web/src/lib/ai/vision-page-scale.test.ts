@@ -2,14 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   dataUrlBytes,
   fitPagesToBudget,
+  shrinkFactorForBudget,
   visionPageScale,
   VISION_MAX_SCALE,
   VISION_MIN_SCALE,
 } from "@/lib/ai/vision-page-scale";
 
+// dataUrlBytes measures what goes on the wire, so a URL of N transmitted
+// bytes is simply N characters long.
 function dataUrlOfBytes(bytes: number): string {
-  // 4 base64 chars per 3 bytes.
-  return `data:image/png;base64,${"A".repeat(Math.ceil((bytes * 4) / 3))}`;
+  return `data:image/png;base64,${"A".repeat(Math.max(0, bytes - 22))}`;
 }
 
 describe("visionPageScale", () => {
@@ -57,9 +59,35 @@ describe("visionPageScale", () => {
 });
 
 describe("dataUrlBytes", () => {
-  it("estimates the decoded size of a data URL", () => {
-    expect(dataUrlBytes(dataUrlOfBytes(9000))).toBeGreaterThan(8800);
-    expect(dataUrlBytes(dataUrlOfBytes(9000))).toBeLessThan(9200);
+  // The provider counts what it receives -- the base64 text -- not the
+  // image that decodes out of it. Measuring the decoded size instead was
+  // wrong by exactly the 4/3 base64 ratio, which is how 14 pages
+  // "within budget" were rejected at 32MB on the wire.
+  it("measures the transmitted size, not the decoded size", () => {
+    const url = dataUrlOfBytes(9000);
+    expect(dataUrlBytes(url)).toBe(url.length);
+    expect(dataUrlBytes(url)).toBe(9000);
+  });
+});
+
+describe("shrinkFactorForBudget", () => {
+  it("leaves a set that already fits alone", () => {
+    expect(shrinkFactorForBudget(10, 20)).toBe(1);
+    expect(shrinkFactorForBudget(0, 20)).toBe(1);
+  });
+
+  // Encoded size tracks pixel area, which is the square of the linear
+  // scale -- so halving the bytes means scaling by roughly 1/sqrt(2).
+  it("shrinks by roughly the square root of the overshoot", () => {
+    const f = shrinkFactorForBudget(40, 20);
+    expect(f).toBeGreaterThan(0.55);
+    expect(f).toBeLessThan(0.72);
+    // Applying it lands under budget, with headroom.
+    expect(40 * f * f).toBeLessThan(20);
+  });
+
+  it("refuses to shrink a page into illegibility however far over budget", () => {
+    expect(shrinkFactorForBudget(10_000, 1)).toBe(0.3);
   });
 });
 

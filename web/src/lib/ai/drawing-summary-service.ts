@@ -19,7 +19,13 @@ import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { getDocumentProxy, renderPageAsImage } from "unpdf";
-import { fitPagesToBudget, visionPageScale } from "@/lib/ai/vision-page-scale";
+import {
+  dataUrlBytes,
+  fitPagesToBudget,
+  shrinkFactorForBudget,
+  visionPageScale,
+  VISION_TOTAL_IMAGE_BUDGET_BYTES,
+} from "@/lib/ai/vision-page-scale";
 import {
   getDrawingAiClient,
   DRAWING_REASONING_BUDGET,
@@ -249,40 +255,67 @@ export async function pageImages(
     // page can be sent to the vision AI -- see its own header for the
     // full root-cause writeup and why pixel-uniformity (not byte-size
     // alone) is the reliable signal.
-    const images: string[] = [];
-    const pageTexts: string[] = [];
-    const pageNumbers: number[] = [];
     const blankPageNumbers: number[] = [];
-    for (let page = 1; page <= pageCount; page++) {
-      // Sized to the page, not flat. A letter sheet still gets the 2x
-      // that small dimension labels need; a large-format booth drawing
-      // gets fitted to roughly what the model resamples to anyway,
-      // instead of rendering 26 megapixels per page and failing the
-      // whole analysis on the provider's 30MB ceiling. Full Swing's
-      // 90x20 drawing failed exactly that way -- see vision-page-scale.ts.
-      const { width, height } = (await pdf.getPage(page)).getViewport({ scale: 1 });
-      const scale = visionPageScale(width, height);
-      const dataUrl = await renderPageAsImage(pdf, page, {
-        toDataURL: true,
-        scale,
-        canvasImport: () => import("@napi-rs/canvas"),
-      });
-      await pdf.cleanup();
-      if (await isBlankPageImage(dataUrl)) {
-        blankPageNumbers.push(page);
-        console.warn(
-          `[pageImages] page ${page}/${pageCount} rendered blank (likely an undecodable embedded image, e.g. JPEG2000) -- excluded from vision analysis`,
+
+    // shrink multiplies every page's own fitted scale. 1 on the first
+    // pass; reduced on a second pass when the set as a whole is too big
+    // for one request -- see shrinkFactorForBudget.
+    async function renderAllPages(shrink: number) {
+      const images: string[] = [];
+      const pageTexts: string[] = [];
+      const pageNumbers: number[] = [];
+      blankPageNumbers.length = 0;
+      for (let page = 1; page <= pageCount; page++) {
+        // Sized to the page, not flat. A letter sheet still gets the 2x
+        // that small dimension labels need; a large-format booth drawing
+        // gets fitted to roughly what the model resamples to anyway,
+        // instead of rendering 26 megapixels per page and failing the
+        // whole analysis on the provider's 30MB ceiling. Full Swing's
+        // 90x20 drawing failed exactly that way -- see vision-page-scale.ts.
+        const { width, height } = (await pdf.getPage(page)).getViewport({ scale: 1 });
+        const scale = Math.max(0.2, visionPageScale(width, height) * shrink);
+        const dataUrl = await renderPageAsImage(pdf, page, {
+          toDataURL: true,
+          scale,
+          canvasImport: () => import("@napi-rs/canvas"),
+        });
+        await pdf.cleanup();
+        if (await isBlankPageImage(dataUrl)) {
+          blankPageNumbers.push(page);
+          console.warn(
+            `[pageImages] page ${page}/${pageCount} rendered blank (likely an undecodable embedded image, e.g. JPEG2000) -- excluded from vision analysis`,
+          );
+        } else {
+          images.push(dataUrl);
+          pageTexts.push(allPageTexts[page - 1]);
+          pageNumbers.push(page);
+        }
+        console.log(
+          `[pageImages] rendered page ${page}/${pageCount} at scale ${scale.toFixed(2)}, ` +
+            `rss=${(process.memoryUsage().rss / 1024 / 1024).toFixed(0)}MB`,
         );
-      } else {
-        images.push(dataUrl);
-        pageTexts.push(allPageTexts[page - 1]);
-        pageNumbers.push(page);
       }
-      console.log(
-        `[pageImages] rendered page ${page}/${pageCount} at scale ${scale}, ` +
-          `rss=${(process.memoryUsage().rss / 1024 / 1024).toFixed(0)}MB`,
-      );
+      const totalBytes = images.reduce((n, img) => n + dataUrlBytes(img), 0);
+      return { images, pageTexts, pageNumbers, totalBytes };
     }
+
+    let rendered = await renderAllPages(1);
+
+    // Every sheet of a design drawing says something the others don't, so
+    // when the set is too big for one request the whole thing is
+    // re-rendered smaller rather than having pages cut out of it.
+    if (rendered.totalBytes > VISION_TOTAL_IMAGE_BUDGET_BYTES) {
+      const shrink = shrinkFactorForBudget(rendered.totalBytes, VISION_TOTAL_IMAGE_BUDGET_BYTES);
+      console.warn(
+        `[pageImages] ${(rendered.totalBytes / 1024 / 1024).toFixed(1)}MB of page images exceeds the ` +
+          `${(VISION_TOTAL_IMAGE_BUDGET_BYTES / 1024 / 1024).toFixed(0)}MB budget -- re-rendering every page at ` +
+          `${shrink.toFixed(2)}x to keep all ${pageCount} of them`,
+      );
+      rendered = await renderAllPages(shrink);
+      console.log(`[pageImages] after re-render: ${(rendered.totalBytes / 1024 / 1024).toFixed(1)}MB`);
+    }
+
+    const { images, pageTexts, pageNumbers } = rendered;
 
     // Last guard. Per-page fitting handles the common case, but a long
     // drawing of many fitted pages can still total past the ceiling, and

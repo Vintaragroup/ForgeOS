@@ -49,19 +49,37 @@ export function visionPageScale(widthPt: number, heightPt: number): number {
   return Math.round(fitted * 100) / 100;
 }
 
-// Rough size of a data URL's payload in bytes, without materialising it.
-// base64 is 4 bytes per 3, and a data: URL carries a short prefix.
+// What the provider actually counts: the bytes it receives, which for a
+// data URL is the base64 text itself, not the image it decodes to.
+//
+// Measured as decoded size first, and that was wrong by exactly the
+// base64 ratio (4 bytes sent per 3 decoded). Fourteen pages estimated at
+// 24MB decoded were 32MB on the wire, so nothing was dropped and the
+// request was rejected anyway -- the guard reported success while the
+// analysis failed.
 export function dataUrlBytes(dataUrl: string): number {
-  const comma = dataUrl.indexOf(",");
-  const b64 = comma >= 0 ? dataUrl.length - comma - 1 : dataUrl.length;
-  return Math.floor((b64 * 3) / 4);
+  return dataUrl.length;
 }
 
 // The provider rejects a request whose images total more than 30MB, and
 // that rejection costs the whole analysis rather than one page. Budgeted
-// below the limit so headroom exists for the prompt and the encoding
-// estimate being approximate.
-export const VISION_TOTAL_IMAGE_BUDGET_BYTES = 24 * 1024 * 1024;
+// well below the limit: the request also carries every page's extracted
+// text and the prompt, and an estimate that lands just under a hard
+// ceiling is an estimate that eventually lands just over it.
+export const VISION_TOTAL_IMAGE_BUDGET_BYTES = 20 * 1024 * 1024;
+
+// How much to shrink every page when the set as a whole is too big.
+//
+// Preferred over dropping pages: each sheet of a design drawing says
+// something the others don't, and a drawing analysed at slightly lower
+// resolution is far more useful than one analysed with five sheets
+// missing. Encoded size tracks pixel area, which is the square of the
+// linear scale, so this is one corrective pass rather than a search.
+// The 0.9 is headroom for that relationship being approximate.
+export function shrinkFactorForBudget(totalBytes: number, budgetBytes: number): number {
+  if (totalBytes <= budgetBytes || totalBytes <= 0) return 1;
+  return Math.max(0.3, Math.sqrt(budgetBytes / totalBytes) * 0.9);
+}
 
 // Which pages fit inside the budget, in order, and which had to be left
 // out. Dropping the tail is better than a 413 that returns nothing at
