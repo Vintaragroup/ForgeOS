@@ -103,8 +103,16 @@ export function computeScopeDiff(previous: ScopeRow[], current: ScopeRow[]): Sco
 
   // Removals first: on a job being cut to a budget, what came OUT is the
   // thing being looked for, and it is the half that was invisible.
+  //
+  // Within a kind, biggest movement first rather than alphabetical. A
+  // real revision produces long lists -- ABC Chicago's is 142 rows -- and
+  // alphabetical ordering buries "12 -> 8" under every "30% CNC op" that
+  // moved by one. Magnitude is what an estimator is scanning for.
   const order: Record<ScopeDiffKind, number> = { REMOVED: 0, QTY_CHANGED: 1, ADDED: 2 };
-  rows.sort((a, b) => order[a.kind] - order[b.kind] || a.description.localeCompare(b.description));
+  const movement = (r: ScopeDiffRow) => Math.abs((r.previousQty ?? 0) - (r.currentQty ?? 0));
+  rows.sort(
+    (a, b) => order[a.kind] - order[b.kind] || movement(b) - movement(a) || a.description.localeCompare(b.description),
+  );
 
   return {
     rows,

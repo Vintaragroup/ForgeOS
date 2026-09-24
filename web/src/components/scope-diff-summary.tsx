@@ -32,8 +32,16 @@ export function ScopeDiffSummary({
     );
   }
 
+  // 142 rows on a real revision, so the list is closed by default and
+  // capped. The counts in the summary are the finding; the rows are the
+  // evidence, and evidence does not need to be on screen until asked
+  // for.
+  const VISIBLE = 25;
+  const shown = diff.rows.slice(0, VISIBLE);
+  const hidden = diff.rows.length - shown.length;
+
   return (
-    <details className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2" open>
+    <details className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
       <summary className="cursor-pointer text-sm text-amber-900">
         Against {predecessorFilename}:{" "}
         <span className="font-semibold">{diff.removedCount} dropped</span> ·{" "}
@@ -44,7 +52,7 @@ export function ScopeDiffSummary({
       </summary>
 
       <ul className="mt-2 flex flex-col gap-1 border-l-2 border-amber-300 pl-3 text-sm">
-        {diff.rows.map((row, i) => (
+        {shown.map((row, i) => (
           <li key={`${row.description}-${i}`} className="flex flex-wrap items-baseline gap-2">
             <span
               className={`rounded px-1 py-0.5 text-[10px] font-semibold uppercase ${
@@ -73,6 +81,12 @@ export function ScopeDiffSummary({
           </li>
         ))}
       </ul>
+
+      {hidden > 0 && (
+        <p className="mt-2 text-xs text-neutral-500">
+          + {hidden} more, smallest movements last. Open the sheet for the full list.
+        </p>
+      )}
 
       {/* The distinction that keeps this from reading as an instruction.
           Import adds; it cannot remove. A dropped row is a question for
