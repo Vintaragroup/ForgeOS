@@ -84,7 +84,7 @@ Two rules follow, and they are the spine of this feature:
 
 2. **Rank by evidence, and never pre-select a weak one.** A removal
    supported only by absence is a *question*, not a proposal. It is shown
-   unchecked, labelled as inferred, and requires a human tick.
+   unchecked, raised as Need Your Decision, and requires a human tick.
 
 ### Drawings need a second scoping rule
 
@@ -109,15 +109,18 @@ is not.
 
 The three sources overlap, and where they agree the evidence is strong:
 
-| finding | drawing | schedule | AV quote | confidence |
+| finding | drawing | schedule | AV quote | raised as |
 | --- | --- | --- | --- | --- |
-| reception counter gone | absent | absent | — | **stated** — two independent sources |
-| video wall gone | absent | never present | needs the revised quote | inferred without it |
-| hanging sign simplified | changed shape | — | — | inferred |
+| reception counter gone | absent | absent | — | **Recommend and Confirm** — two independent sources |
+| video wall gone | absent | never present | needs the revised quote | Need Your Decision |
+| hanging sign simplified | changed shape | — | — | Need Your Decision |
 
-Agreement between two sources that were scoped independently promotes a
-finding to `stated`. A single source, especially a single absence, stays
-`inferred`.
+Agreement between two sources that were scoped independently makes a
+finding **Recommend and Confirm** — a method can be recommended, and the
+estimator confirms. A single source, especially a single absence, is
+**Need Your Decision**: the documentation does not support a reliable
+determination. Those are the estimating rules' own two question types
+(§1); see "What the estimating rules already settle" below.
 
 **Conflict is surfaced, never resolved silently.** If the schedule still
 carries a reception counter row and the drawing no longer shows one, that
