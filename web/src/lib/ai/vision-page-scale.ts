@@ -36,12 +36,18 @@ export const VISION_MAX_SCALE = 2;
 export const VISION_MIN_SCALE = 0.25;
 
 // widthPt/heightPt are the page's extent at scale 1, which for a PDF with
-// the default userUnit is its size in points.
-export function visionPageScale(widthPt: number, heightPt: number): number {
+// the default userUnit is its size in points. maxEdgePx defaults to the
+// analysis ceiling; pass VISION_COMPARE_MAX_EDGE_PX to render for a
+// two-drawing comparison instead.
+export function visionPageScale(
+  widthPt: number,
+  heightPt: number,
+  maxEdgePx: number = VISION_MAX_EDGE_PX,
+): number {
   const longestEdge = Math.max(widthPt, heightPt);
   if (!Number.isFinite(longestEdge) || longestEdge <= 0) return VISION_MAX_SCALE;
 
-  const fitted = VISION_MAX_EDGE_PX / longestEdge;
+  const fitted = maxEdgePx / longestEdge;
   if (fitted >= VISION_MAX_SCALE) return VISION_MAX_SCALE;
   if (fitted <= VISION_MIN_SCALE) return VISION_MIN_SCALE;
   // Two decimals: the exact ratio carries no useful precision and a
@@ -60,6 +66,25 @@ export function visionPageScale(widthPt: number, heightPt: number): number {
 export function dataUrlBytes(dataUrl: string): number {
   return dataUrl.length;
 }
+
+// A second, lower ceiling, for comparing two drawings rather than
+// reading one.
+//
+// The 2000px target exists so small dimension labels stay legible --
+// shrinking past it once produced an extraction of nothing at all. That
+// requirement does not apply here: comparing two revisions asks whether
+// the reception counter is still in the booth and whether the sign
+// changed shape, which is object presence and form, not label reading.
+// The prompt explicitly forbids reporting any dimension not printed on
+// the sheet, so the resolution that would let it read one buys nothing.
+//
+// It is also what makes the comparison possible at all. Encoded size
+// tracks pixel area, so half the linear scale is a quarter of the bytes:
+// Full Swing's 14 pages are 32MB at analysis resolution and about 8MB
+// here, which is what lets BOTH drawings travel in a single request.
+// Splitting them across requests would be worse than useless -- each
+// half would be comparing pages against nothing.
+export const VISION_COMPARE_MAX_EDGE_PX = 1000;
 
 // The provider rejects a request whose images total more than 30MB, and
 // that rejection costs the whole analysis rather than one page. Budgeted

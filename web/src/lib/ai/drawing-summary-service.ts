@@ -19,7 +19,13 @@ import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { getDocumentProxy, renderPageAsImage } from "unpdf";
-import { chunkPagesByBudget, dataUrlBytes, visionPageScale } from "@/lib/ai/vision-page-scale";
+import {
+  chunkPagesByBudget,
+  dataUrlBytes,
+  visionPageScale,
+  VISION_COMPARE_MAX_EDGE_PX,
+  VISION_MAX_EDGE_PX,
+} from "@/lib/ai/vision-page-scale";
 import {
   getDrawingAiClient,
   DRAWING_REASONING_BUDGET,
@@ -173,10 +179,28 @@ For every item, report pageNumber: the page number given in that page's "Page N"
 // this addresses) and were excluded from images/pageTexts/pageNumbers
 // entirely -- a caller derives "how many pages were attempted" as
 // images.length + blankPageNumbers.length rather than a separate field.
+// Page images sized for comparing two drawings rather than reading one.
+//
+// Same renderer, lower ceiling -- see VISION_COMPARE_MAX_EDGE_PX for why
+// that is sound for this task and why it is what makes both drawings fit
+// a single request. Returns only what the comparison needs: the image
+// and which page it is. No text layer, because the comparison prompt is
+// forbidden from reporting anything not visible in the picture anyway.
+export async function comparisonPageImages(
+  mimeType: string,
+  bytes: Buffer,
+): Promise<{ dataUrl: string; pageNumber: number }[]> {
+  const { images, pageNumbers } = await pageImages(mimeType, bytes, MAX_DRAWING_PAGES, VISION_COMPARE_MAX_EDGE_PX);
+  return images.map((dataUrl, i) => ({ dataUrl, pageNumber: pageNumbers[i] }));
+}
+
 export async function pageImages(
   mimeType: string,
   bytes: Buffer,
   maxPages: number = MAX_DRAWING_PAGES,
+  // The long-edge target each page is fitted to. Defaults to the
+  // analysis ceiling; comparisonPageImages passes the lower one.
+  maxEdgePx: number = VISION_MAX_EDGE_PX,
 ): Promise<{ images: string[]; totalPages: number; pageTexts: string[]; pageNumbers: number[]; blankPageNumbers: number[] }> {
   if (IMAGE_MIMES.includes(mimeType)) {
     // A raw image (not a PDF) has no text layer at all -- "" here is the
@@ -267,7 +291,7 @@ export async function pageImages(
         // whole analysis on the provider's 30MB ceiling. Full Swing's
         // 90x20 drawing failed exactly that way -- see vision-page-scale.ts.
         const { width, height } = (await pdf.getPage(page)).getViewport({ scale: 1 });
-        const scale = Math.max(0.2, visionPageScale(width, height) * shrink);
+        const scale = Math.max(0.2, visionPageScale(width, height, maxEdgePx) * shrink);
         const dataUrl = await renderPageAsImage(pdf, page, {
           toDataURL: true,
           scale,

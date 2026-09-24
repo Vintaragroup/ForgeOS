@@ -803,6 +803,17 @@ model Document {
   // comment for why a vendor quote's price never gets read through the
   // proposedLineItems/commitScopeLineItems path -- that schema has no
   // price field at all, by design, for ExpoCCI's own scope documents.
+  // What changed between this drawing and the one it supersedes -- a
+  // DrawingComparison (drawing-comparison-service.ts). Only ever set on
+  // a DRAWING that has a supersedesId, and written by an explicit
+  // comparison run rather than by ordinary analysis, because it costs a
+  // vision request over both documents' pages.
+  //
+  // Stored rather than recomputed for the same reason extractedSummary
+  // is: it is expensive, it is stable until one of the two documents
+  // changes, and a re-cost review may be opened many times across days.
+  revisionComparison Json?
+
   vendorQuoteLineItems Json?
 
   // Verbatim "Build Name:" field read from a Design Cost Estimate booth

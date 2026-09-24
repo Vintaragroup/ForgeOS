@@ -9,10 +9,11 @@ import {
   setDocumentSupersedes,
   updateDocumentType,
 } from "@/lib/document-service";
-import { catchUserError, type ActionResult } from "@/lib/user-error";
+import { catchUserError, UserError, type ActionResult } from "@/lib/user-error";
 import { db } from "@/lib/db";
 import { isPricedDocumentType } from "@/lib/recosting";
 import { analyzeDocument } from "@/lib/ai/analyze-document";
+import { compareDrawingToPredecessor } from "@/lib/ai/drawing-comparison-service";
 import { AiNotConfiguredError } from "@/lib/ai/openai-client";
 import type { DocumentType } from "@/generated/prisma/enums";
 
@@ -123,4 +124,33 @@ async function analyzeIfWorthIt(opportunityId: string, documentId: string, userI
     if (err instanceof AiNotConfiguredError) return;
     console.error(`[documents] auto-analysis failed for ${documentId}`, err);
   }
+}
+
+// Compares a drawing against the drawing it replaces -- the only
+// comparison that works on a rendering package, and the one that can
+// name a reception counter when a schedule diff cannot. Explicit rather
+// than automatic: it is a vision request over both documents' pages, so
+// it runs when somebody asks the question.
+//
+// Returns its refusal rather than throwing -- every way this declines
+// (not a drawing, replaces nothing, nothing readable) is something the
+// person can act on, and Next.js redacts thrown Server Action errors in
+// production.
+export async function compareDrawingRevisionAction(
+  opportunityId: string,
+  documentId: string,
+  _prev: ActionResult,
+): Promise<ActionResult> {
+  return catchUserError(async () => {
+    const user = await requireOpportunityAccess(opportunityId);
+    try {
+      await compareDrawingToPredecessor(opportunityId, documentId, user.id);
+    } catch (err) {
+      if (err instanceof AiNotConfiguredError) {
+        throw new UserError("AI features aren't configured yet -- add OPENAI_API_KEY to enable drawing comparison.");
+      }
+      throw err;
+    }
+    revalidatePath(`/opportunities/${opportunityId}`);
+  });
 }

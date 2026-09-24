@@ -6,6 +6,8 @@ import { buildRevisionChains, revisionNumber } from "@/lib/document-revisions";
 import { diffDocumentAgainstPredecessor } from "@/lib/document-service";
 import { DocumentDiffSummary } from "@/components/document-diff-summary";
 import { isScheduleDocumentType } from "@/lib/recosting";
+import { DrawingComparisonSummary } from "@/components/drawing-comparison-summary";
+import type { DrawingComparison } from "@/lib/ai/drawing-comparison-service";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessOpportunity } from "@/lib/opportunity-access";
@@ -1398,6 +1400,19 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                       {fmtBytes(doc.sizeBytes)} · {doc.uploadedBy?.name ?? "Unknown"}
                     </span>
                   </div>
+                  {/* A drawing is compared as a DESIGN, not as prices --
+                      diffDocumentAgainstPredecessor skips drawings for
+                      exactly that reason, so this is the only thing that
+                      ever reports on one. */}
+                  {doc.documentType === "DRAWING" && doc.supersedes && (
+                    <DrawingComparisonSummary
+                      opportunityId={opportunity.id}
+                      documentId={doc.id}
+                      predecessorFilename={doc.supersedes.filename}
+                      comparison={(doc.revisionComparison as unknown as DrawingComparison | null) ?? null}
+                    />
+                  )}
+
                   {/* Only on a document that replaces another -- the rest
                       have nothing to be compared against. */}
                   {(() => {

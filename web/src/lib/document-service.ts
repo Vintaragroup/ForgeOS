@@ -96,7 +96,13 @@ export async function listDocuments(opportunityId: string) {
   return db.document.findMany({
     where: { opportunityId, deletedAt: null },
     orderBy: { createdAt: "desc" },
-    include: { uploadedBy: { select: { name: true } } },
+    include: {
+      uploadedBy: { select: { name: true } },
+      // The document this one replaces, by name -- every revision row on
+      // the Opportunity shows "replaces X", and a drawing comparison
+      // needs it to label which design it was compared against.
+      supersedes: { select: { id: true, filename: true } },
+    },
   });
 }
 
