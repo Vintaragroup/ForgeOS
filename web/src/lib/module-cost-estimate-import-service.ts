@@ -139,17 +139,41 @@ function isBannerRow(row: ExcelJS.Row): boolean {
 // how a block parses is its header row, so that is what classifies it: a
 // header carrying HOURS is labor, anything else with a quantity and a
 // cost is materials.
+const HEADER_QTY_ALIASES = ["qty", "quantity", "hours", "units", "qty / area", "finished area", "size / qty"];
+const HEADER_COST_ALIASES = [
+  "cost",
+  "unit cost",
+  "cost / item",
+  "cost / sheet",
+  "cost / unit",
+  "cost / sf",
+  "rate / hour",
+  "hourly rate",
+  "rate / hr",
+];
+
+function headerCells(row: ExcelJS.Row): string[] {
+  const texts: string[] = [];
+  row.eachCell({ includeEmpty: false }, (cell) => texts.push(cellText(cell.value).trim().toLowerCase()));
+  return texts;
+}
+
+// A row that opens a priced table: enough columns to be a header, and
+// both a quantity and a cost among them. Without BOTH it is a bill of
+// materials, not something to import -- a real beMatrix sheet lists 86
+// frames with counts and areas but no prices, because they are priced
+// collectively further down.
+function looksLikePricedHeader(row: ExcelJS.Row): boolean {
+  const texts = headerCells(row);
+  if (texts.length < 3) return false;
+  return texts.some((t) => HEADER_QTY_ALIASES.includes(t)) && texts.some((t) => HEADER_COST_ALIASES.includes(t));
+}
+
 function classifyBannerByHeader(sheet: ExcelJS.Worksheet, bannerRowNumber: number): SubTable | null {
   for (let r = bannerRowNumber + 1; r <= Math.min(bannerRowNumber + 3, sheet.rowCount); r++) {
     const row = sheet.getRow(r);
-    const texts: string[] = [];
-    row.eachCell({ includeEmpty: false }, (cell) => texts.push(cellText(cell.value).trim().toLowerCase()));
-    if (texts.length < 3) continue;
-    const has = (aliases: string[]) => texts.some((t) => aliases.includes(t));
-    const hasQty = has(["qty", "quantity", "hours", "units"]);
-    const hasCost = has(["unit cost", "cost / item", "cost / sheet", "rate / hour", "hourly rate", "rate / hr"]);
-    if (!hasQty || !hasCost) continue;
-    return has(["hours"]) ? "labor" : "other-items";
+    if (!looksLikePricedHeader(row)) continue;
+    return headerCells(row).includes("hours") ? "labor" : "other-items";
   }
   return null;
 }
@@ -165,16 +189,24 @@ export function detectModuleCostEstimateSheet(sheet: ExcelJS.Worksheet): boolean
   // so that is the test: two recognized blocks, or one plus the module
   // rollup that only a real module sheet carries.
   let blocks = 0;
-  let hasModuleTotal = false;
+  let hasModuleRollup = false;
+  let pastRecap = false;
   for (let r = 1; r <= sheet.rowCount; r++) {
     const row = sheet.getRow(r);
     const c1 = cellText(row.getCell(1).value).trim().toLowerCase();
-    if (c1.startsWith("module total") || c1.startsWith("project total")) hasModuleTotal = true;
-    if (isRecapBanner(c1)) break;
-    if (!isBannerRow(row)) continue;
+    // The rollup is evidence, and on a real one-block logistics module it
+    // sits AFTER the recap -- so the scan reads to the end of the sheet
+    // and only stops COUNTING blocks at the recap. Breaking outright here
+    // lost the single strongest signal the sheet had.
+    if (c1.startsWith("module total") || c1.startsWith("project total") || isRecapBanner(c1)) {
+      hasModuleRollup = true;
+      if (isRecapBanner(c1)) pastRecap = true;
+      continue;
+    }
+    if (pastRecap || !isBannerRow(row)) continue;
     if (bannerKind(c1) ?? classifyBannerByHeader(sheet, r)) blocks += 1;
   }
-  return blocks >= 2 || (blocks >= 1 && hasModuleTotal);
+  return blocks >= 2 || (blocks >= 1 && hasModuleRollup);
 }
 
 // Scans EVERY sheet, not just the first match -- unlike
@@ -222,10 +254,12 @@ const SUBTABLE_ALIASES: Record<SubTable, { primary: string[]; qualifier?: string
   },
   "other-items": {
     primary: ["item"],
-    qualifier: ["description", "item description", "spec / notes"],
+    // "basis / notes" is the only descriptive column a SEG block has --
+    // its own rows are bare labels ("D1", "B2"), meaningless alone.
+    qualifier: ["description", "item description", "spec / notes", "basis / notes"],
     category: ["category", "category / type"],
-    qty: ["qty", "quantity"],
-    unitCost: ["unit cost", "cost / item"],
+    qty: ["qty", "quantity", "qty / area", "finished area", "size / qty"],
+    unitCost: ["unit cost", "cost / item", "cost / unit", "cost / sf", "cost"],
     totalCost: ["total cost", "ext cost"],
   },
   labor: {
@@ -300,15 +334,35 @@ function parseModuleSheet(sheet: ExcelJS.Worksheet): ParsedModuleCostRow[] {
     // header comment for the exact bogus-row bug this prevents.
     if (isRecapBanner(c1)) break;
 
-    const kind = isBannerRow(row) ? (bannerKind(c1) ?? classifyBannerByHeader(sheet, r)) : null;
-    if (kind) {
-      state = kind;
+    if (isBannerRow(row)) {
+      // A banner ALWAYS ends the block above it, even when this parser
+      // cannot classify the one it opens. Continuing with the previous
+      // table's column map is how "STANDARD + ADDED FRAME RENTAL" got
+      // read with the slatwall table's columns -- qty from one table,
+      // "unit cost" landing on the next table's EXT COST -- and produced
+      // a single $10,555,888 line item on a $20,677 module. Failing to
+      // parse a block costs rows; parsing it with the wrong columns costs
+      // trust in every row.
+      state = bannerKind(c1) ?? classifyBannerByHeader(sheet, r);
       columns = null;
       bannerLabel = cellText(row.getCell(1).value).trim();
       continue;
     }
+
+    // A priced table with no banner of its own. The SEG blocks on a real
+    // beMatrix sheet sit directly under the frame table's total row, with
+    // their own header and no banner -- $9,619 of graphics that nothing
+    // would otherwise open a block for.
+    if (!state && looksLikePricedHeader(row)) {
+      state = "other-items";
+      columns = resolveSubTableColumns(row, "other-items");
+      bannerLabel = cellText(row.getCell(1).value).trim();
+      continue;
+    }
     if (!state) continue;
-    if (c1.includes("subtotal")) {
+    // "Sheet Goods Subtotal" in one dialect, "SHEET GOODS TOTAL" and
+    // "LEFT-HAND ENCLOSURE / STORAGE — SEG TOTAL" in another.
+    if (c1.includes("subtotal") || /\btotal$/.test(c1)) {
       state = null;
       columns = null;
       continue;

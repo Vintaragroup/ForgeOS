@@ -8,6 +8,7 @@ import { createEstimateVersion } from "@/lib/estimate-service";
 import {
   commitModuleCostEstimateImport,
   detectModuleCostEstimateSheet,
+  findModuleCostEstimateSheets,
   parseModuleSheetForTest,
   previewModuleCostEstimateImport,
 } from "@/lib/module-cost-estimate-import-service";
@@ -399,5 +400,83 @@ describe("the Club Glove dialect", () => {
     ws.addRow([1, "Order-Writing Counter", 544.06, 75, 1499.025, 2118.09]);
     ws.addRow([2, "Drawer Counters — Qty 2", 1384.56, 550, 2770.35, 4704.91]);
     expect(detectModuleCostEstimateSheet(ws)).toBe(false);
+  });
+});
+
+// The third real file, whole. Every assertion below was measured off it
+// before it was written -- the per-module figures are the workbook's own
+// stated MODULE TOTAL on each sheet.
+const CLUB_GLOVE_PATH = path.resolve(
+  import.meta.dirname,
+  "../../../data/RFP/clubglove/Club Glove & Links & Kings @ PGA Show 2027 Orlando Estimate 092226TA.xlsx",
+);
+
+describe("the Club Glove workbook, end to end", () => {
+  async function parsedBySheet() {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(CLUB_GLOVE_PATH);
+    const sheets = findModuleCostEstimateSheets(wb);
+    return new Map(
+      sheets.map((ws) => [
+        ws.name,
+        parseModuleSheetForTest(ws).reduce((sum, r) => sum + r.qty * r.unitCost, 0),
+      ]),
+    );
+  }
+
+  // Every module sheet, and not the rollup.
+  it("finds all nine module sheets and leaves the Estimate Summary alone", async () => {
+    const bySheet = await parsedBySheet();
+    expect(bySheet.size).toBe(9);
+    expect([...bySheet.keys()].some((n) => /summary/i.test(n))).toBe(false);
+  });
+
+  it("reproduces every module's own stated total", async () => {
+    const bySheet = await parsedBySheet();
+    const stated: [string, number][] = [
+      ["01 Order Writing Counter", 2118.09],
+      ["02 Drawer Counter", 4704.91],
+      ["03 Illuminated Counters", 6909.53],
+      ["04 Two-Tier Display", 1941.42],
+      ["05 Wood Grain Feature", 9269.66],
+      ["06 Monitor Kiosk", 800.8],
+      ["07 beMatrix Structure", 20677.15],
+      ["08 Logistics and Packaging", 1500],
+      ["09 Client-Owned Furniture", 455.4],
+    ];
+    for (const [sheet, total] of stated) {
+      expect(bySheet.get(sheet), sheet).toBeCloseTo(total, 1);
+    }
+  });
+
+  // The one that matters most. "BEMATRIX RENTAL PRICING" was an
+  // unrecognized banner, so its rows were read with the PREVIOUS table's
+  // column map: qty from one table, unit cost landing on the next table's
+  // EXT COST column. 1228 x 8596 = $10,555,888 on a $20,677 module, and
+  // it reached a real preview screen.
+  it("does not read a rental row with the previous table's columns", async () => {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(CLUB_GLOVE_PATH);
+    const sheet = wb.worksheets.find((w) => /beMatrix/i.test(w.name))!;
+    const rental = parseModuleSheetForTest(sheet).find((r) => /STANDARD \+ ADDED FRAME RENTAL/i.test(r.description))!;
+    expect(rental.qty).toBe(1228);
+    expect(rental.unitCost).toBe(7);
+    expect(rental.qty * rental.unitCost).toBe(8596);
+  });
+
+  // SEG blocks have no banner at all -- their header follows the frame
+  // table's total row directly.
+  it("reads the bannerless SEG blocks, and not the unpriced frame lists", async () => {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(CLUB_GLOVE_PATH);
+    const sheet = wb.worksheets.find((w) => /beMatrix/i.test(w.name))!;
+    const rows = parseModuleSheetForTest(sheet);
+    const seg = rows.filter((r) => /SEG face/i.test(r.description));
+    expect(seg.length).toBeGreaterThan(0);
+    expect(seg.reduce((n, r) => n + r.qty * r.unitCost, 0)).toBeCloseTo(9619.34, 1);
+    // 86 frames are listed with counts and areas but no price -- they are
+    // priced collectively by area in the rental block, so importing them
+    // would be scope with no money and a second count of the same thing.
+    expect(rows.some((r) => /^beMATRIX FRAME/i.test(r.description))).toBe(false);
   });
 });
