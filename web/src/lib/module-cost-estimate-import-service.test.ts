@@ -176,22 +176,28 @@ describe("commitModuleCostEstimateImport", () => {
       ]),
     );
 
-    // Sheet Goods rows -> always Custom Build (raw fabrication input).
+    // An element is not taken apart by trade. Every row of a module the
+    // shop builds carries that module's own category, so the plywood, the
+    // beMatrix hardware and the hours to fit it all stay in one group --
+    // see moduleCategory. This assertion used to require Labor rows to
+    // become Labor and "beMatrix" rows to become Structure; the estimating
+    // lead's rule is the opposite, because splitting them scattered a
+    // single quoted element across five headings.
     const aluminumItem = lineItems.find((li) => li.description === "Aluminum sheet");
     expect(aluminumItem?.category).toBe("Custom Build");
 
-    // Labor rows -> always Labor.
     const laborItem = lineItems.find((li) => li.description.includes("frame fab"));
-    expect(laborItem?.category).toBe("Labor");
+    expect(laborItem?.category).toBe("Custom Build");
+    // lineType still records what the row IS, which is what keeps labor
+    // reportable as labor even while it is priced inside its element.
     expect(laborItem?.lineType).toBe("LABOR");
 
-    // Other Items rows -> resolved via the row's own Category cell --
-    // "beMatrix" maps to Structure. Description combines the Item +
-    // Description columns (two separate real cells -- see this file's
-    // own header comment) so three otherwise-identical "PURCHASE SQ FT
-    // (basic)" rows stay distinguishable.
+    // Description still combines the Item + Description columns (two
+    // separate real cells -- see this file's own header comment) so three
+    // otherwise-identical "PURCHASE SQ FT (basic)" rows stay
+    // distinguishable.
     const bematrixItem = lineItems.find((li) => li.description === "PURCHASE SQ FT (basic) — ceiling");
-    expect(bematrixItem?.category).toBe("Structure");
+    expect(bematrixItem?.category).toBe("Custom Build");
   });
 
   // Replaces this suite's old "refuses a second commit" guard test -- see
@@ -478,5 +484,61 @@ describe("the Club Glove workbook, end to end", () => {
     // priced collectively by area in the rental block, so importing them
     // would be scope with no money and a second count of the same thing.
     expect(rows.some((r) => /^beMATRIX FRAME/i.test(r.description))).toBe(false);
+  });
+});
+
+describe("an element is not taken apart by trade", () => {
+  async function categoriesBySheet() {
+    await db.category.createMany({
+      data: [
+        { name: "Custom Build", key: "custom_build" },
+        { name: "Labor", key: "labor" },
+        { name: "Shipping", key: "shipping" },
+        { name: "Graphics", key: "graphics" },
+        { name: "Structure", key: "structure" },
+        { name: "Furniture", key: "furniture" },
+        { name: "Audio/Visual", key: "audio_visual" },
+      ],
+    });
+    const opportunity = await db.opportunity.create({
+      data: { companyId: (await db.company.create({ data: { name: "T" } })).id, showName: "S" },
+    });
+    const bytes = await readFile(CLUB_GLOVE_PATH);
+    const file = new File([bytes], "clubglove.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const document = await uploadDocument(opportunity.id, { file, documentType: "PRICING_SCHEDULE" });
+    const preview = await previewModuleCostEstimateImport(document.id, opportunity.id);
+    const bySheet = new Map<string, Set<string>>();
+    for (const row of preview.rows) {
+      const set = bySheet.get(row.sheetName) ?? new Set<string>();
+      set.add(row.resolvedCategory ?? "(none)");
+      bySheet.set(row.sheetName, set);
+    }
+    return bySheet;
+  }
+
+  // The counter's plywood, its drawer slides, its LED strip, its front
+  // logo and the hours to build it are one thing a client is quoted for.
+  it("gives every row of a built module the one category", async () => {
+    const bySheet = await categoriesBySheet();
+    for (const sheet of ["01 Order Writing Counter", "03 Illuminated Counters", "05 Wood Grain Feature"]) {
+      expect([...(bySheet.get(sheet) ?? [])], sheet).toEqual(["Custom Build"]);
+    }
+  });
+
+  // Including the beMatrix module, whose SEG faces and rental frames were
+  // being split into Graphics and Structure away from the structure they
+  // belong to.
+  it("keeps SEG and rental frames with the structure they are attached to", async () => {
+    const bySheet = await categoriesBySheet();
+    expect([...(bySheet.get("07 beMatrix Structure") ?? [])]).toEqual(["Custom Build"]);
+  });
+
+  // The exception that proves the rule: nothing is built here, no labor
+  // and no sheet goods, so the module keeps its own category.
+  it("leaves a module the shop never touches under its own category", async () => {
+    const bySheet = await categoriesBySheet();
+    expect([...(bySheet.get("08 Logistics and Packaging") ?? [])]).toEqual(["Shipping"]);
   });
 });

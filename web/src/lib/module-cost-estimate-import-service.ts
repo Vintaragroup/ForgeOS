@@ -444,6 +444,42 @@ const OTHER_ITEM_CATEGORY_KEY_MAP: Record<string, string> = {
 //   inferCategoryFromDescription on its item text, falling back to
 //   Custom Build as the same "fabrication input, no better signal"
 //   default sheet-goods rows already get.
+// One module sheet is ONE element, and an element does not get taken
+// apart by trade.
+//
+// The estimating lead's rule, in their own words: "the system should not
+// break out labor and graphics out of the elements that are being built."
+// A counter's plywood, its drawer slides, its LED strip, its front logo
+// and the shop hours to build it are one thing a client is quoted for,
+// not five rows filed under five headings. Labor stands alone only when
+// it is not building something -- show site, install, dismantle -- and
+// graphics only when they are not attached to a build.
+//
+// Splitting by row category also went wrong in a way this makes
+// impossible: "DRAWER SLIDES + HANDLES ALLOWANCE -- Two counters x $200"
+// matched the furniture pattern on the word "counters" and left the
+// build it belongs to. Inside an element there is now nothing to
+// mis-file.
+//
+// A module counts as built when the shop touches it -- it has a labor
+// block, or sheet goods. A pure logistics or consumables sheet has
+// neither and keeps its own category.
+function moduleCategory(
+  rows: ParsedModuleCostRow[],
+  categories: Pick<Category, "key" | "name">[],
+): string | null {
+  const shopWorksOnIt = rows.some((r) => r.subTable === "labor" || r.subTable === "sheet-goods");
+  if (shopWorksOnIt) return resolveCategoryNameFromKey(categories, CUSTOM_BUILD_CATEGORY_KEY);
+  // Nothing is built here, so the rows speak for themselves; the biggest
+  // one names the module.
+  let best: { category: string | null; cost: number } | null = null;
+  for (const row of rows) {
+    const cost = row.qty * row.unitCost;
+    if (best === null || cost > best.cost) best = { category: resolveModuleRowCategory(row, categories), cost };
+  }
+  return best?.category ?? resolveCategoryNameFromKey(categories, CUSTOM_BUILD_CATEGORY_KEY);
+}
+
 function resolveModuleRowCategory(
   row: ParsedModuleCostRow,
   categories: Pick<Category, "key" | "name">[],
@@ -503,9 +539,14 @@ export async function previewModuleCostEstimateImport(
     throw new Error(`"${document.filename}" doesn't look like a per-module Sheet Goods/Other Items/Labor workbook.`);
   }
 
-  const parsed = sheets.flatMap((sheet) => parseModuleSheet(sheet));
   const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
-  const rows = parsed.map((row) => ({ ...row, resolvedCategory: resolveModuleRowCategory(row, liveCategories) }));
+  // Resolved per SHEET, not per row: every row of one module carries the
+  // module's own category, so the element stays whole. See moduleCategory.
+  const rows = sheets.flatMap((sheet) => {
+    const sheetRows = parseModuleSheet(sheet);
+    const category = moduleCategory(sheetRows, liveCategories);
+    return sheetRows.map((row) => ({ ...row, resolvedCategory: category }));
+  });
 
   return {
     kind: "module-cost-estimate",
