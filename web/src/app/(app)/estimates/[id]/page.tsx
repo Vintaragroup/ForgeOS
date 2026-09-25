@@ -3572,6 +3572,14 @@ function CategoryTabContent({
   // for full correctness.
   const bucketMarginPct = resolveLineItemMarginPct(bucket.category.name, categories, marginOverrideByCategoryId, version.marginTargetPct);
   const sell = (cost: number) => computeMarginGrossUp(cost, bucketMarginPct).toNumber();
+  // Every subtotal shown on this page is summed ROW BY ROW rather than
+  // grossed up once over its cost. Those are the same number until one
+  // line is priced at cost, and then they are not -- grossing up the sum
+  // marks up the very row that was excluded. Confirmed live: a $2,900
+  // signage section with a $1,250 at-cost frame in it went on reading
+  // $5,272.73 here while the client's PDF correctly said $4,250.00.
+  const sellItems = (items: { totalCost: Prisma.Decimal; atCost?: boolean }[]) =>
+    items.reduce((sum, li) => sum + (li.atCost ? li.totalCost.toNumber() : sell(li.totalCost.toNumber())), 0);
 
   if (flatSectionGroups.length === 0 && !hasBoothGroups) {
     const firstSection = version.sections[0];
@@ -3808,7 +3816,15 @@ function CategoryTabContent({
                   <div className="text-xs">
                     <span className="text-neutral-400">Cost {money(booth.subtotal)}</span>
                     <span className="mx-1.5 text-neutral-500">&rarr;</span>
-                    <span className="font-semibold">{money(sell(booth.subtotal))}</span>
+                    <span className="font-semibold">
+                      {money(
+                        booth.tradeGroups.reduce(
+                          (sum, g) =>
+                            sum + sellItems(g.items) + g.subgroups.reduce((n, sg) => n + sellItems(sg.items), 0),
+                          0,
+                        ),
+                      )}
+                    </span>
                   </div>
                   {!version.isLocked && (
                     <>
@@ -4062,7 +4078,12 @@ function CategoryTabContent({
                         <div className="text-xs text-neutral-600">
                           <span className="text-neutral-400">Cost {money(group.subtotal)}</span>
                           <span className="mx-1.5">&rarr;</span>
-                          <span className="font-medium">{money(sell(group.subtotal))}</span>
+                          <span className="font-medium">
+                            {money(
+                              sellItems(group.items) +
+                                group.subgroups.reduce((n, sg) => n + sellItems(sg.items), 0),
+                            )}
+                          </span>
                         </div>
                         {!version.isLocked && group.sectionIds[0] && (
                           <>
@@ -4200,7 +4221,7 @@ function CategoryTabContent({
                               <div className="text-xs text-neutral-500">
                                 <span className="text-neutral-400">Cost {money(subgroup.subtotal)}</span>
                                 <span className="mx-1.5">&rarr;</span>
-                                <span className="font-medium">{money(sell(subgroup.subtotal))}</span>
+                                <span className="font-medium">{money(sellItems(subgroup.items))}</span>
                               </div>
                               {!version.isLocked && group.sectionIds[0] && (
                                 <form
@@ -4357,7 +4378,7 @@ function CategoryTabContent({
                 <div className="text-xs">
                   <span className="text-neutral-400">Cost {money(flatSubtotal)}</span>
                   <span className="mx-1.5 text-neutral-500">&rarr;</span>
-                  <span className="font-semibold">{money(sell(flatSubtotal))}</span>
+                  <span className="font-semibold">{money(sellItems(group.lineItems))}</span>
                 </div>
                 {/* Reorder arrows stay standalone-only -- unlike Hide/
                     Summarize/Exclude below (plain per-sectionId scopes,
