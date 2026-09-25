@@ -116,6 +116,10 @@ export interface ProposalViewSection {
   // own schema comment. Optional, same reasoning as includeInProposal
   // above: undefined means "not buried, fully itemized as normal."
   omittedFromProposal?: boolean;
+  // This section's printed totals also carry the buried money -- see
+  // EstimateSection.absorbsBuriedCost's own schema comment, and
+  // buriedDisplayCategory below.
+  absorbsBuriedCost?: boolean;
   // User-approved short heading override for this booth's H1, shown in
   // place of the raw groupLabel -- see EstimateSection.boothDescription's
   // own schema comment. Optional/undefined (not just nullable) so an
@@ -576,6 +580,11 @@ export interface SubgroupGroup {
 
 export interface ElementTypeGroup {
   elementType: string;
+  // Buried money shown inside this group's printed total -- see
+  // attachBuriedDisplay. Display only: `subtotal` and `items` are
+  // untouched, so nothing that sums line items is affected by it.
+  buriedCost?: number;
+  buriedSell?: number;
   // Only this group's UNGROUPED items (no subgroupLabel) -- renders
   // exactly as before H3 existed. Every item with a subgroupLabel is in
   // `subgroups` below instead, never both.
@@ -602,6 +611,9 @@ export interface ElementTypeGroup {
 
 export interface BoothGroup {
   boothLabel: string;
+  // Same as ElementTypeGroup.buriedCost/buriedSell above, one tier up.
+  buriedCost?: number;
+  buriedSell?: number;
   // The booth's own approved H1 heading override, when it has one --
   // see EstimateSection.boothDescription's own schema comment. Null
   // until an estimator writes or approves one, in which case the raw,
@@ -1644,6 +1656,145 @@ export interface ProposalTotalsFold {
 // omittedSections caller passes in still goes through
 // aggregateByCategory's OWN includeInProposal check, so H1's existing
 // "subtracts from the total" behavior wins with no special-casing here.
+// Where each buried section's money is SHOWN, now that it is no longer
+// shown nowhere.
+//
+// "Bury the cost, but don't remove them." omittedFromProposal always kept
+// the money in the document's totals; what it never had was a visible
+// home, so the printed bars came up short of the Grand Total by exactly
+// the buried amount -- $37,303.65 of cost on ABC Chicago, with nothing on
+// the page to account for it.
+//
+// Most buried money already knows where it belongs. Every one of those
+// eleven sections is one booth's Labor or Shipping, buried so the booth
+// quotes as a single price, and each is categorised the same as the booth
+// it came from. So it goes back to its own booth, in its own category --
+// which means its own margin and its own side of the taxable basis, and
+// therefore no number on the page moves.
+//
+// Keyed by category AND booth for that reason. Showing a booth's buried
+// Shipping inside a Custom Build bar would gross it up at Custom Build's
+// margin and shift the taxable basis, which is the failure this whole
+// approach exists to avoid.
+//
+// What is left over is buried money with no booth of its own -- on this
+// job the three show-service sections. That has nowhere obvious to go, so
+// it goes where a person said: the section marked absorbsBuriedCost. With
+// nothing marked it stays in the Grand Total alone, exactly as before.
+export interface BuriedDisplayPlan {
+  // "<category>::<booth>" -> what to show inside that booth's bars.
+  byBooth: Map<string, { cost: number; sell: number }>;
+  // Buried sections with no booth of their own, split by which side of
+  // the "Rental components total / Show services total" line they belong
+  // to. Kept apart because showing rental money inside a show-service bar
+  // makes those two subtotals disagree with the bars above them on the
+  // same page -- measured on ABC Chicago, where it put $10,543 on the
+  // wrong side and the page visibly stopped adding up.
+  unhomedRental: { cost: number; sell: number };
+  unhomedService: { cost: number; sell: number };
+}
+
+export function buriedDisplayPlan(
+  sections: ProposalViewSection[],
+  categories: Category[],
+  sellForCategory: (cost: number, categoryName: string) => number,
+  showServiceCategoryNames: ReadonlySet<string>,
+): BuriedDisplayPlan {
+  const byBooth = new Map<string, { cost: number; sell: number }>();
+  const unhomedRental = { cost: 0, sell: 0 };
+  const unhomedService = { cost: 0, sell: 0 };
+
+  for (const section of sections) {
+    if (!section.omittedFromProposal || section.includeInProposal === false || section.excludedFromTotals) continue;
+    // One section at a time through the same aggregation the totals use,
+    // so the amount shown and the amount counted are the same number.
+    const buckets = aggregateByCategory([section], categories, { includeOmittedFromProposal: true });
+    for (const bucket of buckets) {
+      const cost = bucketSubtotal(bucket.items);
+      const sell = sellForCategory(cost, bucket.name);
+      if (cost === 0 && sell === 0) continue;
+      if (!section.groupLabel) {
+        const side = showServiceCategoryNames.has(bucket.name) ? unhomedService : unhomedRental;
+        side.cost += cost;
+        side.sell += sell;
+        continue;
+      }
+      const key = `${bucket.name}::${section.groupLabel}`;
+      const existing = byBooth.get(key);
+      if (existing) {
+        existing.cost += cost;
+        existing.sell += sell;
+      } else {
+        byBooth.set(key, { cost, sell });
+      }
+    }
+  }
+
+  return { byBooth, unhomedRental, unhomedService };
+}
+
+// Which category's bars carry the unhomed money: the one the section
+// marked absorbsBuriedCost mostly belongs to, by money rather than by row
+// count. Null when nothing is marked.
+export function buriedDisplayCategory(
+  sections: ProposalViewSection[],
+  categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
+): string | null {
+  // First in proposal order wins, so marking two sections can never show
+  // the same money twice.
+  const marked = sections
+    .filter((s) => s.absorbsBuriedCost && s.includeInProposal !== false && !s.omittedFromProposal)
+    .sort((a, b) => (a.proposalSortOrder ?? 0) - (b.proposalSortOrder ?? 0))[0];
+  if (!marked) return null;
+  let best: { category: string; cost: number } | null = null;
+  for (const li of marked.lineItems) {
+    if (li.includeInProposal === false) continue;
+    const cost = Number(li.totalCost);
+    const category = resolveEffectiveCategory(li, marked, categories);
+    if (best === null || cost > best.cost) best = { category, cost };
+  }
+  return best?.category ?? null;
+}
+
+// Hangs each booth's own buried money on that booth, and the unhomed
+// remainder on the biggest booth of the absorbing category. Within a
+// booth it lands on the biggest element group, so all three tiers of
+// heading agree with one another.
+export function attachBuriedDisplay(
+  boothGroups: BoothGroup[],
+  categoryName: string,
+  plan: BuriedDisplayPlan,
+  // What this category has been asked to carry beyond its own booths'
+  // money -- decided by the caller, which is the only place that can see
+  // every category at once. Zero for all but one category per side.
+  unhomed: { cost: number; sell: number },
+): BoothGroup[] {
+  let largestIndex = -1;
+  for (let i = 0; i < boothGroups.length; i += 1) {
+    if (largestIndex === -1 || boothGroups[i].subtotal > boothGroups[largestIndex].subtotal) largestIndex = i;
+  }
+
+  return boothGroups.map((booth, i) => {
+    const own = plan.byBooth.get(`${categoryName}::${booth.boothLabel}`) ?? { cost: 0, sell: 0 };
+    const extra =
+      i === largestIndex ? { cost: own.cost + unhomed.cost, sell: own.sell + unhomed.sell } : own;
+    if (extra.cost === 0 && extra.sell === 0) return booth;
+
+    let groupIndex = -1;
+    for (let g = 0; g < booth.elementGroups.length; g += 1) {
+      if (groupIndex === -1 || booth.elementGroups[g].subtotal > booth.elementGroups[groupIndex].subtotal) groupIndex = g;
+    }
+    return {
+      ...booth,
+      buriedCost: extra.cost,
+      buriedSell: extra.sell,
+      elementGroups: booth.elementGroups.map((group, g) =>
+        g === groupIndex ? { ...group, buriedCost: extra.cost, buriedSell: extra.sell } : group,
+      ),
+    };
+  });
+}
+
 export function foldOmittedIntoTotals(
   visible: ProposalTotalsFold,
   omittedSections: ProposalViewSection[],

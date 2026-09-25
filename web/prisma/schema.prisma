@@ -2142,6 +2142,21 @@ model EstimateSection {
   // the same SectionScope machinery later if it's ever needed.
   omittedFromProposal Boolean @default(false)
 
+  // This section's printed totals also carry every BURIED section's
+  // money -- see the 20260924220000_absorbs_buried_cost migration for
+  // why this is marked rather than inferred.
+  //
+  // Display only. The buried money stays in its own category at its own
+  // margin and in its own tax basis; this section's bars simply show a
+  // larger number, which is what "buried" is supposed to mean. Its own
+  // rows therefore will not sum to its own header, by exactly the buried
+  // amount. That is the point: the money has to be somewhere.
+  //
+  // At most one section per version should carry this. If more than one
+  // does, the first in proposal order wins rather than the amount being
+  // counted twice.
+  absorbsBuriedCost Boolean @default(false)
+
   // This section's position among the other booths visible within ONE
   // category, for Proposal PDF ordering -- deliberately NOT the same
   // field as sortOrder above (which orders sections generally / production

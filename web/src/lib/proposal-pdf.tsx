@@ -12,7 +12,10 @@ import { BRAND, BRAND_ADDRESS_LINES, BRAND_COMPANY_NAME, BRAND_TAGLINE } from "@
 import { TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
 import {
   aggregateByCategory,
+  attachBuriedDisplay,
   boothGroupsByCategory,
+  buriedDisplayPlan,
+  buriedDisplayCategory,
   dropZeroGroups,
   bucketSubtotal,
   buildTopLevelCategoryViews,
@@ -665,6 +668,36 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // boothGroupsByCategory. An untagged booth (buildType still null)
   // contributes no booth groups and keeps rendering flat under its own
   // raw category, unchanged.
+  // "Bury the cost, but don't remove them." The amount already reaches
+  // every document total through foldOmittedIntoTotals below; this is
+  // what gives it somewhere visible to be, so the printed bars add up to
+  // the Grand Total again. Nothing moves -- see buriedDisplayAmount.
+  const buriedDisplay = buriedDisplayPlan(data.sections, data.categories, sellForCategory, showServiceCategoryNames);
+  // Which single category carries the buried money that has no booth of
+  // its own, for each side of the rental/services line.
+  //
+  // A person's choice wins when it is on the right side -- "service money
+  // belongs inside the visible service line" is a judgement no rule
+  // reproduces, and it is recorded on the section (absorbsBuriedCost).
+  // Money on the OTHER side cannot go there without making the two
+  // subtotal lines disagree with the bars above them, so it falls to the
+  // biggest visible category on its own side, which always reconciles.
+  const markedCategoryName = buriedDisplayCategory(data.sections, data.categories);
+  const markedIsService = markedCategoryName !== null && showServiceCategoryNames.has(markedCategoryName);
+  const largestCategoryOnSide = (wantService: boolean): string | null => {
+    let best: { name: string; cost: number } | null = null;
+    for (const bucket of buckets) {
+      if (showServiceCategoryNames.has(bucket.name) !== wantService) continue;
+      const cost = bucketSubtotal(bucket.items);
+      if (best === null || cost > best.cost) best = { name: bucket.name, cost };
+    }
+    return best?.name ?? null;
+  };
+  const unhomedTarget = {
+    rental: markedCategoryName !== null && !markedIsService ? markedCategoryName : largestCategoryOnSide(false),
+    service: markedCategoryName !== null && markedIsService ? markedCategoryName : largestCategoryOnSide(true),
+  };
+
   const boothGroupsByCategoryName = boothGroupsByCategory(data.sections, data.categories);
   // A summarized standalone section (see its own comment) renders through
   // this exact same booth-shaped machinery -- merged in here rather than
@@ -683,7 +716,16 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
       ...(boothGroupsByCategoryName.get(categoryName) ?? []),
       ...(standaloneSummaryGroupsByCategoryName.get(categoryName) ?? []),
     ];
-    return data.hidePricingCategoryNames?.has(categoryName) ? groups : dropZeroGroups(groups);
+    const kept = data.hidePricingCategoryNames?.has(categoryName) ? groups : dropZeroGroups(groups);
+    const unhomed = {
+      cost:
+        (categoryName === unhomedTarget.rental ? buriedDisplay.unhomedRental.cost : 0) +
+        (categoryName === unhomedTarget.service ? buriedDisplay.unhomedService.cost : 0),
+      sell:
+        (categoryName === unhomedTarget.rental ? buriedDisplay.unhomedRental.sell : 0) +
+        (categoryName === unhomedTarget.service ? buriedDisplay.unhomedService.sell : 0),
+    };
+    return attachBuriedDisplay(kept, categoryName, buriedDisplay, unhomed);
   };
 
   // Every distinct aggregated item renders as its own row, always -- no
@@ -808,7 +850,13 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
         <View style={styles.elementTypeHeaderRow}>
           <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
           <Text style={styles.elementTypeHeaderTotal}>
-            {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
+            {hidePrice
+              ? ""
+              : amountContent(
+                  group.subtotal + (group.buriedCost ?? 0),
+                  sellForCategory(group.subtotal, categoryName) + (group.buriedSell ?? 0),
+                  data.showCost,
+                )}
           </Text>
         </View>
         {group.elementSummary && (
@@ -835,7 +883,13 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
         <View style={styles.boothHeaderRow}>
           <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
           <Text style={styles.boothHeaderTotal}>
-            {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
+            {hidePrice
+              ? ""
+              : amountContent(
+                  booth.subtotal + (booth.buriedCost ?? 0),
+                  sellForCategory(booth.subtotal, categoryName) + (booth.buriedSell ?? 0),
+                  data.showCost,
+                )}
           </Text>
         </View>
         {booth.boothSummary && (
@@ -1100,7 +1154,18 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
             0,
           );
           const flatTotal = bucketSubtotal(flatOwnItems) + childViews.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
-          const sectionTotal = boothTotal + childBoothTotal + flatTotal;
+          // Exactly what was hung on the booths printed under this bar --
+          // its own and its Method-split children's -- so the bar and the
+          // booths under it can never disagree about the buried money.
+          const sumBuried = (groups: BoothGroup[]) =>
+            groups.reduce(
+              (acc, b) => ({ cost: acc.cost + (b.buriedCost ?? 0), sell: acc.sell + (b.buriedSell ?? 0) }),
+              { cost: 0, sell: 0 },
+            );
+          const buriedHere = [boothGroups, ...childViews.map((c) => c.boothGroups)]
+            .map(sumBuried)
+            .reduce((acc, x) => ({ cost: acc.cost + x.cost, sell: acc.sell + x.sell }), { cost: 0, sell: 0 });
+          const sectionTotal = boothTotal + childBoothTotal + flatTotal + buriedHere.cost;
           // The header's own PRICE can't just gross up sectionTotal (the
           // combined raw COST) by this top-level category's own margin --
           // confirmed live as a real bug: a Method-split child category
@@ -1117,6 +1182,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           // own booths/flat items by that child's own name -- then
           // summed, the same way Cost already does above.
           const sellSectionTotal =
+            buriedHere.sell +
             sellForCategory(boothTotal + bucketSubtotal(flatOwnItems), categoryName) +
             childViews.reduce((sum, c) => {
               const childRawTotal = bucketSubtotal(c.items) + c.boothGroups.reduce((s, b) => s + b.subtotal, 0);

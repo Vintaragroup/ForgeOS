@@ -1,0 +1,25 @@
+-- Which visible section a buried section's money is shown inside.
+--
+-- "Bury the cost, but don't remove them." omittedFromProposal already
+-- kept the money in every document total; what it never had was a
+-- VISIBLE home, so the printed bars stopped adding up to the Grand
+-- Total. On ABC Chicago that was $25,266 with nowhere to be.
+--
+-- Why a marked section rather than a rule: the obvious rules all pick
+-- the wrong line. "Largest section" sends show-services money into a
+-- lounge structure; "same rental/service classification" does the same,
+-- because Professional Services is classified rental. The estimating
+-- lead's own answer was semantic -- service money belongs inside the
+-- visible service line -- and no heuristic reproduces that. So it is
+-- recorded rather than guessed.
+--
+-- The money is NOT moved. A buried section keeps its own category, its
+-- own margin and its own place in the taxable basis (foldOmittedIntoTotals
+-- already computes it that way). Only the DISPLAYED figure on the marked
+-- section's bars grows. Moving the rows instead was built, measured on
+-- ABC Chicago, and abandoned: crossing a margin boundary moved the Grand
+-- Total by $47.62 and the estimated tax by $1,080.67.
+--
+-- Expand-only, default false. A document with nothing marked behaves
+-- exactly as it does today.
+ALTER TABLE "estimate_sections" ADD COLUMN "absorbsBuriedCost" BOOLEAN NOT NULL DEFAULT false;
