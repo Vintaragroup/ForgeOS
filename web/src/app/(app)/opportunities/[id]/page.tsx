@@ -118,7 +118,13 @@ function isLowYieldDrawingResult(doc: {
   extractionStatus: string;
   extractedSummary: unknown;
 }): boolean {
-  if (doc.documentType !== "DRAWING" || doc.extractionStatus !== "COMPLETE" || !doc.extractedSummary) return false;
+  if (doc.documentType !== "DRAWING" || doc.extractionStatus !== "COMPLETE") return false;
+  // No summary at all is the WORST version of this, not an exemption from
+  // it. Treating it as "nothing to judge" is what let a real CAD drawing
+  // sit under a green "Analyzed" chip having produced zero text and zero
+  // summary, while the estimator waited for it to fill gaps on AV and
+  // flooring that it could never fill.
+  if (!doc.extractedSummary) return true;
   const summary = doc.extractedSummary as DocumentSummary;
   return summary.scopeSummary.length + summary.riskFlags.length < 3;
 }
@@ -1516,15 +1522,24 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                   )}
                   {/* One retag control per document, always present (except
                       Pricing Schedule, which has its own dedicated import
-                      flow) -- pre-selects a suggested type when one exists
-                      (getSuggestedDocumentType) instead of showing a second,
-                      separate one-click form next to it. A document stuck at
-                      UNSUPPORTED (e.g. a PNG uploaded as anything other than
-                      Drawing -- see text-extraction.ts) has no suggestion but
-                      still gets this control, which is what gives it any
-                      retag path at all. updateDocumentType resets
-                      extractionStatus back to PENDING on any retag, which is
-                      what makes the Analyze button reappear afterward. */}
+                      flow). A document stuck at UNSUPPORTED (e.g. a PNG
+                      uploaded as anything other than Drawing -- see
+                      text-extraction.ts) has no suggestion but still gets
+                      this control, which is what gives it any retag path at
+                      all. updateDocumentType resets extractionStatus back to
+                      PENDING on any retag, which is what makes the Analyze
+                      button reappear afterward.
+
+                      The select shows what is STORED, never a suggestion.
+                      It used to pre-select the suggested type -- one control
+                      doing both jobs, to avoid a second form -- and the cost
+                      of that was a spreadsheet whose dropdown read "Pricing
+                      schedule" for days while the database said OTHER. The
+                      estimator reasonably believed it was tagged, the real
+                      importer never offered the file, and the whole workbook
+                      went through the AI scope fallback instead. A control
+                      must not state something that is not true; applying a
+                      suggestion is its own button now. */}
                   {doc.documentType !== "PRICING_SCHEDULE" &&
                     (() => {
                       const suggestion = getSuggestedDocumentType(doc);
@@ -1532,31 +1547,45 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                         ? (DOCUMENT_TYPE_OPTIONS.find((o) => o.value === suggestion.type)?.label ?? suggestion.type)
                         : null;
                       return (
-                        <form
-                          action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)}
-                          className="flex items-center gap-1"
-                        >
-                          {suggestion && (
-                            <span className="text-xs text-amber-600" title={suggestion.reason}>
-                              Suggested: {suggestedLabel}
-                            </span>
+                        <div className="flex items-center gap-1">
+                          {suggestion && suggestion.type !== doc.documentType && (
+                            <form
+                              action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)}
+                              className="flex items-center"
+                            >
+                              <input type="hidden" name="documentType" value={suggestion.type} />
+                              <SubmitButton
+                                pendingText="Applying…"
+                                className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                              >
+                                <span title={suggestion.reason}>Retag as {suggestedLabel}</span>
+                              </SubmitButton>
+                            </form>
                           )}
-                          <select
-                            name="documentType"
-                            defaultValue={suggestion?.type ?? doc.documentType}
-                            aria-label={`Change document type for ${doc.filename}`}
-                            className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 outline-none focus:border-neutral-500"
+                          <form
+                            action={updateDocumentTypeAction.bind(null, opportunity.id, doc.id)}
+                            className="flex items-center gap-1"
                           >
-                            {DOCUMENT_TYPE_OPTIONS.map((o) => (
-                              <option key={o.value} value={o.value}>
-                                {o.label}
-                              </option>
-                            ))}
-                          </select>
-                          <button type="submit" className="text-xs text-neutral-500 hover:underline">
-                            Retag
-                          </button>
-                        </form>
+                            <select
+                              name="documentType"
+                              defaultValue={doc.documentType}
+                              aria-label={`Change document type for ${doc.filename}`}
+                              className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 outline-none focus:border-neutral-500"
+                            >
+                              {DOCUMENT_TYPE_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                            <SubmitButton
+                              pendingText="Retagging…"
+                              className="text-xs text-neutral-500 hover:underline"
+                            >
+                              Retag
+                            </SubmitButton>
+                          </form>
+                        </div>
                       );
                     })()}
                   {doc.documentType !== "PRICING_SCHEDULE" &&
