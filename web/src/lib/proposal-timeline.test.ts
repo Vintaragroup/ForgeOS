@@ -78,3 +78,84 @@ describe("getProposalCoverInfo", () => {
     expect(info.scopeSummary).toEqual(["20x20 island exhibit"]);
   });
 });
+
+// Full Swing's proposal opened with "Rental of LED screens and monitors
+// for the event", straight out of the Fuse AV quote -- which was
+// withdrawn when Fuse came off the job. A document that is no longer the
+// authority for anything must not be writing the client's Project
+// Description.
+describe("getProposalCoverInfo -- document validity", () => {
+  async function addDocument(
+    opportunityId: string,
+    filename: string,
+    scope: string,
+    over: { validity?: "CURRENT" | "WITHDRAWN"; supersedesId?: string; venue?: string } = {},
+  ) {
+    return db.document.create({
+      data: {
+        opportunityId,
+        filename,
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+        storageKey: `k-${filename}`,
+        documentType: "VENDOR_QUOTE",
+        extractionStatus: "COMPLETE",
+        validity: over.validity ?? "CURRENT",
+        supersedesId: over.supersedesId,
+        extractedSummary: {
+          eventOrProjectName: null,
+          venue: over.venue ?? null,
+          submissionDeadline: null,
+          keyDates: [],
+          scopeSummary: [{ text: scope, sourceQuote: scope, pageNumber: null }],
+          risks: [],
+          candidateGaps: [],
+        },
+      },
+    });
+  }
+
+  it("leaves a withdrawn document's scope off the proposal", async () => {
+    const { opportunity } = await makeOpportunity();
+    await addDocument(opportunity.id, "current.pdf", "Five 100-inch monitors, purchased");
+    await addDocument(opportunity.id, "fuse.pdf", "Rental of LED screens and monitors for the event", {
+      validity: "WITHDRAWN",
+    });
+
+    const { scopeSummary } = await getProposalCoverInfo(opportunity.id);
+    expect(scopeSummary).toEqual(["Five 100-inch monitors, purchased"]);
+  });
+
+  // Derived from the chain, the same way document-validity.ts derives it
+  // everywhere else -- a document something else supersedes is stale
+  // whatever its own column says.
+  it("leaves a superseded document's scope off too", async () => {
+    const { opportunity } = await makeOpportunity();
+    const old = await addDocument(opportunity.id, "v1.pdf", "Two hanging banners");
+    await addDocument(opportunity.id, "v2.pdf", "Three hanging banners", { supersedesId: old.id });
+
+    const { scopeSummary } = await getProposalCoverInfo(opportunity.id);
+    expect(scopeSummary).toEqual(["Three hanging banners"]);
+  });
+
+  it("still uses every document that is current", async () => {
+    const { opportunity } = await makeOpportunity();
+    await addDocument(opportunity.id, "a.pdf", "Hanging sign");
+    await addDocument(opportunity.id, "b.pdf", "Reception counter");
+
+    const { scopeSummary } = await getProposalCoverInfo(opportunity.id);
+    expect(scopeSummary.sort()).toEqual(["Hanging sign", "Reception counter"]);
+  });
+
+  // It used to be whatever order the database returned, which is no way
+  // to choose what a client reads.
+  it("takes the venue from the newest current document", async () => {
+    const { opportunity } = await makeOpportunity();
+    await addDocument(opportunity.id, "older.pdf", "scope a", { venue: "Old Hall" });
+    await new Promise((r) => setTimeout(r, 10));
+    await addDocument(opportunity.id, "newer.pdf", "scope b", { venue: "New Hall" });
+
+    const { venue } = await getProposalCoverInfo(opportunity.id);
+    expect(venue).toBe("New Hall");
+  });
+});

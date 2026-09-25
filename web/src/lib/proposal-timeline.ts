@@ -12,6 +12,7 @@
 
 import { db } from "@/lib/db";
 import type { DocumentSummary } from "@/lib/ai/document-summary-service";
+import { isStaleSource } from "@/lib/document-validity";
 import { getTimelineData } from "@/lib/timeline-service";
 import type { TimelineResponsibleParty } from "@/generated/prisma/enums";
 
@@ -37,9 +38,37 @@ export async function getProposalCoverInfo(opportunityId: string): Promise<Propo
     }),
     db.document.findMany({
       where: { deletedAt: null, extractionStatus: "COMPLETE", opportunityId },
-      select: { extractedSummary: true },
+      // Newest first, so when two documents both name a venue the more
+      // recent one wins. It used to be whatever order the database
+      // returned, which is no way to choose what a client reads.
+      orderBy: { createdAt: "desc" },
+      select: { id: true, validity: true, supersedesId: true, extractedSummary: true },
     }),
   ]);
+
+  // A document that is no longer the authority for anything must not be
+  // writing the client's Project Description.
+  //
+  // This read took every completed extraction on the opportunity and
+  // asked nothing about validity, so Full Swing's proposal opened with
+  // "Rental of LED screens and monitors for the event" -- straight out of
+  // the Fuse AV quote, which was withdrawn when Fuse came off the job.
+  // The estimating lead's review of the proposal listed it first, along
+  // with "I think we remove all references to LED".
+  //
+  // SUPERSEDED is derived from the revision chain here the same way
+  // document-validity.ts derives it everywhere else: a document something
+  // else supersedes is stale whatever its own column says.
+  const supersededIds = new Set(
+    documents.map((d) => d.supersedesId).filter((id): id is string => id !== null),
+  );
+  const currentDocuments = documents.filter(
+    (d) =>
+      !isStaleSource({
+        validity: d.validity,
+        supersededByFilename: supersededIds.has(d.id) ? "superseded" : null,
+      }),
+  );
 
   const timelineData = getTimelineData(opportunity.timelineMilestones);
   const timeline: ProposalTimelineEntry[] = (timelineData?.milestones ?? [])
@@ -51,7 +80,7 @@ export async function getProposalCoverInfo(opportunityId: string): Promise<Propo
   const scopeSeen = new Set<string>();
   const scopeSummary: string[] = [];
 
-  for (const doc of documents) {
+  for (const doc of currentDocuments) {
     if (!doc.extractedSummary) continue;
     const summary = doc.extractedSummary as unknown as DocumentSummary;
 
