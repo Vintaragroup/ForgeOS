@@ -641,6 +641,57 @@ export interface BoothGroup {
 // other bucket becomes one SubgroupGroup.
 const UNGROUPED_SUBGROUP = "__ungrouped__";
 
+// Drops every grouping whose printed total is $0.
+//
+// "Any section that shows $0" -- the estimating lead's rule, after
+// STRUCTURE $0.00 printed under SS - Lit Spines Hit Bay on a proposal
+// that was about to go to a client. A heading with no money under it
+// tells a client nothing except that something is missing.
+//
+// Applied at all three tiers, because a zero at one tier usually means a
+// zero at the one above: an element group whose rows all went to zero
+// empties its booth, and an empty booth would otherwise print as a bare
+// header bar. On ABC Chicago this removes nine sections -- eight of them
+// carrying no line items at all.
+//
+// This can never move a total. Every number in this document is a sum of
+// the same line items, and everything dropped here sums to zero, so the
+// booth totals, category totals and Grand Total are identical before and
+// after. That is the reason it is safe to apply without a review step.
+//
+// One exception: a group is kept when every item in it is client-owned.
+// Those rows print "Client Owned" rather than $0.00 -- they are scope the
+// client supplies, deliberately shown at no charge, and dropping them
+// would take real content out of the document rather than an empty
+// heading. There are none on ABC Chicago; the guard is here because the
+// rule is global and the next job may have them.
+//
+// The caller decides where this applies. proposal-pdf.tsx skips it for a
+// category whose prices are hidden: there every row prints a blank amount
+// anyway, so a $0 group is indistinguishable from a priced one and
+// dropping it would silently remove scope the client is meant to read.
+const allClientOwned = (items: AggregatedLineItem[]) => items.length > 0 && items.every((li) => li.isClientOwned);
+
+export function dropZeroGroups(boothGroups: BoothGroup[]): BoothGroup[] {
+  const keptGroups = (booth: BoothGroup) =>
+    booth.elementGroups
+      .map((group) => ({
+        ...group,
+        subgroups: group.subgroups.filter((sub) => sub.subtotal !== 0 || allClientOwned(sub.items)),
+      }))
+      .filter((group) => group.subtotal !== 0 || allClientOwned(group.items));
+
+  return boothGroups
+    .map((booth) => ({ ...booth, elementGroups: keptGroups(booth) }))
+    // Whether the booth survives is decided entirely by what survived
+    // inside it, not by its own subtotal: a group only survives if it is
+    // worth something or is client-owned, so a booth with one left is a
+    // booth with something to print. Testing booth.subtotal here instead
+    // would drop an all-client-owned booth, which sums to zero and is
+    // exactly the case the guard above exists to keep.
+    .filter((booth) => booth.elementGroups.length > 0);
+}
+
 export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup[] {
   // One level deeper than before H3 existed: boothLabel -> elementType ->
   // subgroupKey (UNGROUPED_SUBGROUP or a real subgroupLabel) -> merged

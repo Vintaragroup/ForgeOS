@@ -13,6 +13,7 @@ import { TAX_ESTIMATE_DISCLAIMER } from "@/lib/tax-rate";
 import {
   aggregateByCategory,
   boothGroupsByCategory,
+  dropZeroGroups,
   bucketSubtotal,
   buildTopLevelCategoryViews,
   computeRentalAndServicesTotals,
@@ -333,6 +334,14 @@ const styles = StyleSheet.create({
   },
   tableRow: {
     flexDirection: "row",
+    // Without this a row inherits the page's 10pt and prints LARGER than
+    // the heading introducing it (7.5pt) and the summary above it
+    // (8.5pt). Reported as "the font in the furniture section is larger
+    // than the rest"; furniture was just the only category on that job
+    // itemizing its rows rather than summarizing them. 8.5 is this
+    // document's body tier -- proposalSummaryText, summaryListItem,
+    // projectScopeItem and professionalServicesItem all sit there.
+    fontSize: 8.5,
     borderTopWidth: 1,
     borderTopColor: "#f5f5f5",
     paddingVertical: 4,
@@ -421,6 +430,8 @@ const styles = StyleSheet.create({
   timelineLabel: { width: "78%", fontSize: 9 },
   serviceRow: {
     flexDirection: "row",
+    // Same inheritance bug as tableRow above, same fix.
+    fontSize: 8.5,
     borderTopWidth: 1,
     borderTopColor: "#f5f5f5",
     paddingVertical: 5,
@@ -600,7 +611,7 @@ export interface ProposalPdfData {
 
 export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // buckets/topLevelCategories run against the FULL, unfiltered
-  // data.sections -- a tagged booth's items already resolve into Rental
+  // sections -- a tagged booth's items already resolve into Rental
   // Structures/Custom Components directly (resolveEffectiveCategory), so
   // there's nothing left to split out into a separate block; an untagged
   // booth's items stay under their own raw category exactly as before.
@@ -660,10 +671,20 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // handled as a separate lookup, so every call site below (top-level and
   // per-child alike) picks it up automatically, same as a real booth.
   const standaloneSummaryGroupsByCategoryName = standaloneSummaryGroupsByCategory(data.sections, data.categories);
-  const boothGroupsForCategory = (categoryName: string): BoothGroup[] => [
-    ...(boothGroupsByCategoryName.get(categoryName) ?? []),
-    ...(standaloneSummaryGroupsByCategoryName.get(categoryName) ?? []),
-  ];
+  // Every booth the document prints comes through here, which is why the
+  // $0 rule is applied at this one point rather than at each render site.
+  //
+  // Skipped for a category whose prices are hidden: there every amount
+  // prints blank, so a $0 group looks exactly like a priced one and
+  // dropping it would quietly remove scope the client is meant to read.
+  // See dropZeroGroups for why this can never move a total.
+  const boothGroupsForCategory = (categoryName: string): BoothGroup[] => {
+    const groups = [
+      ...(boothGroupsByCategoryName.get(categoryName) ?? []),
+      ...(standaloneSummaryGroupsByCategoryName.get(categoryName) ?? []),
+    ];
+    return data.hidePricingCategoryNames?.has(categoryName) ? groups : dropZeroGroups(groups);
+  };
 
   // Every distinct aggregated item renders as its own row, always -- no
   // detail-mode toggle, no "Includes: A, B, C" collapse. Cross-booth

@@ -14,6 +14,7 @@ import {
   bucketSubtotal,
   buildTopLevelCategoryViews,
   computeRentalAndServicesTotals,
+  dropZeroGroups,
   groupBoothLineItems,
   type AggregatedLineItem,
 } from "@/lib/proposal-view-model";
@@ -184,7 +185,10 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
     buckets,
     showServiceCategoryNames,
   );
-  const boothGroups = groupBoothLineItems(visibleSections);
+  // Same $0 rule the PDF applies (see dropZeroGroups). This page has no
+  // per-category price hiding, so it applies unconditionally. Dropping
+  // only zeros means customRentalTotal below is unchanged by it.
+  const boothGroups = dropZeroGroups(groupBoothLineItems(visibleSections));
   const customRentalTotal = boothGroups.reduce((sum, b) => sum + b.subtotal, 0);
   const visibleCategoryItems = (items: AggregatedLineItem[]) => items.filter((li) => !li.boothLabel);
 
