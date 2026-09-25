@@ -76,6 +76,59 @@ const SECTION_ACCENTS = [BRAND.navy, BRAND.teal, BRAND.tangerine, BRAND.tan];
 // a page.
 const LEAD_ROWS = 2;
 
+// Keep a short block whole; let a long one flow.
+//
+// The second half of professional page layout, after "a heading is never
+// alone". A three-row group cut across a page break reads as a mistake; a
+// twenty-row table continuing overleaf reads as a document. What always
+// reads as broken is a half-empty page, which is what keeping EVERYTHING
+// whole produced before -- 200pt of white at the foot of page 2.
+//
+// So blocks under a quarter of the page stay intact and anything longer
+// flows with its heading attached. On this job almost every booth is
+// summarized, so what prints is a heading, a short paragraph and three or
+// four element rows -- comfortably under the threshold, which means in
+// practice nothing splits and nothing leaves a gap.
+//
+// Heights are estimated, not measured: react-pdf offers no way to ask.
+// They are rounded up from the styles above, so the estimate errs toward
+// "too tall", which errs toward letting a block flow -- the safe
+// direction, since a split costs a page break and a wrong "keep whole"
+// costs blank space.
+//
+// Measured on the real ABC Chicago v2 (45 sections, client view), before
+// this rule and after: 6 pages either way, largest blank run 372pt ->
+// 125pt. The 125pt is the intended trade -- a ~120pt booth that would not
+// fit under the LABOR heading moved whole rather than splitting. Sweeping
+// the threshold from 100pt to 240pt changed nothing on that job, since
+// every summarized booth is short; 160pt sits in the middle of the flat
+// part of that curve rather than at an edge of it.
+const KEEP_TOGETHER_MAX_PT = 160;
+const PT_BOOTH_HEADER = 20;
+const PT_ELEMENT_HEADER = 18;
+const PT_SUBGROUP_HEADER = 16;
+const PT_ROW = 18;
+const PT_SUMMARY_LINE = 11;
+const SUMMARY_CHARS_PER_LINE = 95;
+
+function estimateSummaryHeight(text: string | null | undefined): number {
+  if (!text) return 0;
+  return Math.max(1, Math.ceil(text.length / SUMMARY_CHARS_PER_LINE)) * PT_SUMMARY_LINE;
+}
+
+function estimateBoothHeight(booth: BoothGroup): number {
+  let height = PT_BOOTH_HEADER + estimateSummaryHeight(booth.boothSummary);
+  for (const group of booth.elementGroups) {
+    height += PT_ELEMENT_HEADER + estimateSummaryHeight(group.elementSummary);
+    if (booth.summarizeOnProposal || group.summarizeOnProposal) continue;
+    height += group.items.length * PT_ROW;
+    for (const subgroup of group.subgroups) {
+      height += PT_SUBGROUP_HEADER + subgroup.items.length * PT_ROW;
+    }
+  }
+  return height;
+}
+
 const styles = StyleSheet.create({
   // paddingTop/paddingBottom reserve room for the fixed running header
   // (pages 2+ only, see runningHeader) and fixed footer (every page) so
@@ -719,12 +772,9 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     // has no content of its own, so on its own it lands wherever it fits
     // -- "LABOR" sat at the foot of page 4 with its first booth overleaf.
     // Handing it to the first booth makes the pair inseparable, which is
-    // the only mechanism react-pdf actually honours here (see the table
-    // above LEAD_ROWS).
+    // the only mechanism react-pdf actually honours here.
     lead?: React.ReactNode,
   ) => {
-    // Chooses the row renderer once, so the three call sites below read
-    // as "rows" rather than repeating the same ternary.
     const rows = (items: BoothGroup["elementGroups"][number]["items"]) =>
       isSummary
         ? renderSummaryBody(items)
@@ -740,85 +790,90 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
             {hidePrice ? "" : amountContent(group.subtotal, sellForCategory(group.subtotal, categoryName), data.showCost)}
           </Text>
         </View>
-        {/* Bottom tier -- always shown when written, same reasoning as
-            boothSummary. */}
         {group.elementSummary && (
           <Text style={styles.proposalSummaryText}>{truncateProposalSummary(group.elementSummary)}</Text>
         )}
       </>
     );
 
+    const subgroupsOf = (group: BoothGroup["elementGroups"][number]) =>
+      group.subgroups.map((subgroup) => (
+        <View key={subgroup.subgroupLabel} style={styles.subgroupSection}>
+          <View style={styles.subgroupHeaderRow} wrap={false}>
+            <Text style={styles.subgroupHeaderText}>{subgroup.subgroupLabel}</Text>
+            <Text style={styles.subgroupHeaderTotal}>
+              {hidePrice ? "" : amountContent(subgroup.subtotal, sellForCategory(subgroup.subtotal, categoryName), data.showCost)}
+            </Text>
+          </View>
+          {rows(subgroup.items)}
+        </View>
+      ));
+
+    const boothHeading = (booth: BoothGroup) => (
+      <>
+        <View style={styles.boothHeaderRow}>
+          <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
+          <Text style={styles.boothHeaderTotal}>
+            {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
+          </Text>
+        </View>
+        {booth.boothSummary && (
+          <Text style={styles.proposalSummaryText}>{truncateProposalSummary(booth.boothSummary)}</Text>
+        )}
+      </>
+    );
+
+    const fullGroup = (booth: BoothGroup, group: BoothGroup["elementGroups"][number]) => {
+      const itemised = !booth.summarizeOnProposal && !group.summarizeOnProposal;
+      return (
+        <View key={group.elementType} style={styles.elementTypeSection}>
+          {elementHeading(group)}
+          {itemised && rows(group.items)}
+          {itemised && subgroupsOf(group)}
+        </View>
+      );
+    };
+
     return (
       <>
         {boothGroups.map((booth, boothIndex) => {
+          const leadNode = boothIndex === 0 ? lead : null;
+          // Short enough to keep whole. Nearly everything on a summarized
+          // job is -- see KEEP_TOGETHER_MAX_PT.
+          if (estimateBoothHeight(booth) <= KEEP_TOGETHER_MAX_PT) {
+            return (
+              <View key={booth.boothLabel} style={styles.boothSection} wrap={false}>
+                {leadNode}
+                {boothHeading(booth)}
+                {booth.elementGroups.map((group) => fullGroup(booth, group))}
+              </View>
+            );
+          }
+
+          // Too long to hold: the heading keeps its first element heading
+          // and first rows, and the remainder flows so the page fills.
           const [firstGroup, ...laterGroups] = booth.elementGroups;
           const showFirstRows = firstGroup && !booth.summarizeOnProposal && !firstGroup.summarizeOnProposal;
           return (
             <View key={booth.boothLabel} style={styles.boothSection}>
-              {/* The booth heading, its summary, the first element
-                  heading and that element's first rows, as one atomic
-                  block. A heading with nothing after it can then never be
-                  the last thing on a page -- which is what stranded
-                  "Mobile Hitting Bay with Mesh Netting" at the foot of
-                  page 2 with its only content overleaf. Bounded on
-                  purpose: whatever cannot fit moves, and the blank it
-                  leaves is the height of this small block rather than the
-                  height of a whole booth. */}
               <View wrap={false}>
-                {boothIndex === 0 && lead}
-                <View style={styles.boothHeaderRow}>
-                  <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
-                  <Text style={styles.boothHeaderTotal}>
-                    {hidePrice ? "" : amountContent(booth.subtotal, sellForCategory(booth.subtotal, categoryName), data.showCost)}
-                  </Text>
-                </View>
-                {booth.boothSummary && (
-                  <Text style={styles.proposalSummaryText}>{truncateProposalSummary(booth.boothSummary)}</Text>
-                )}
+                {leadNode}
+                {boothHeading(booth)}
                 {firstGroup && elementHeading(firstGroup)}
                 {showFirstRows && rows(firstGroup.items.slice(0, LEAD_ROWS))}
               </View>
-
-              {/* The rest of the first element group flows from here --
-                  a long list is allowed to cross a page break, which is
-                  how a page gets filled. */}
               {showFirstRows && rows(firstGroup.items.slice(LEAD_ROWS))}
-              {firstGroup && !booth.summarizeOnProposal && !firstGroup.summarizeOnProposal &&
-                firstGroup.subgroups.map((subgroup) => (
-                  <View key={subgroup.subgroupLabel} style={styles.subgroupSection}>
-                    <View style={styles.subgroupHeaderRow} wrap={false}>
-                      <Text style={styles.subgroupHeaderText}>{subgroup.subgroupLabel}</Text>
-                      <Text style={styles.subgroupHeaderTotal}>
-                        {hidePrice ? "" : amountContent(subgroup.subtotal, sellForCategory(subgroup.subtotal, categoryName), data.showCost)}
-                      </Text>
-                    </View>
-                    {rows(subgroup.items)}
-                  </View>
-                ))}
-
+              {firstGroup && showFirstRows && subgroupsOf(firstGroup)}
               {laterGroups.map((group) => {
                 const itemised = !booth.summarizeOnProposal && !group.summarizeOnProposal;
                 return (
                   <View key={group.elementType} style={styles.elementTypeSection}>
-                    {/* Same shape one tier down: the heading carries its
-                        first rows and the remainder flows. */}
                     <View wrap={false}>
                       {elementHeading(group)}
                       {itemised && rows(group.items.slice(0, LEAD_ROWS))}
                     </View>
                     {itemised && rows(group.items.slice(LEAD_ROWS))}
-                    {itemised &&
-                      group.subgroups.map((subgroup) => (
-                        <View key={subgroup.subgroupLabel} style={styles.subgroupSection}>
-                          <View style={styles.subgroupHeaderRow} wrap={false}>
-                            <Text style={styles.subgroupHeaderText}>{subgroup.subgroupLabel}</Text>
-                            <Text style={styles.subgroupHeaderTotal}>
-                              {hidePrice ? "" : amountContent(subgroup.subtotal, sellForCategory(subgroup.subtotal, categoryName), data.showCost)}
-                            </Text>
-                          </View>
-                          {rows(subgroup.items)}
-                        </View>
-                      ))}
+                    {itemised && subgroupsOf(group)}
                   </View>
                 );
               })}
@@ -828,6 +883,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
       </>
     );
   };
+
 
   // hasServiceSplit is deliberately left based on VISIBLE buckets only,
   // never folded with omittedFromProposal sections below -- if a buried
