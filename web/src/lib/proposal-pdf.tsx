@@ -1048,9 +1048,23 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
 
           // Professional Services opens with its bullet list, so its
           // heading pairs with that instead and stays where it is.
-          const opensWithBooths =
-            hasBoothGroups &&
-            !(categoryName === "Professional Services" && (data.professionalServices?.items.length ?? 0) > 0);
+          const opensWithServices =
+            categoryName === "Professional Services" && (data.professionalServices?.items.length ?? 0) > 0;
+          const opensWithBooths = hasBoothGroups && !opensWithServices;
+          // Signage, Flooring, Shipping and Other carry no booth at all on
+          // this job -- one flat row each. Their headings were still being
+          // drawn alone, which is why "SIGNAGE" stranded at a page foot
+          // the same way "LABOR" did. A heading with only flat rows under
+          // it pairs with the first of them.
+          const opensWithFlatRows = !opensWithBooths && !opensWithServices && flatOwnItems.length > 0;
+          const leadFlatItems = opensWithFlatRows ? flatOwnItems.slice(0, LEAD_ROWS) : [];
+          const restFlatItems = opensWithFlatRows ? flatOwnItems.slice(LEAD_ROWS) : flatOwnItems;
+          const flatRows = (items: typeof flatOwnItems) =>
+            isSummary
+              ? renderSummaryBody(items)
+              : isServiceStyle
+                ? renderServiceBody(items, categoryName, hidePrice)
+                : renderBody(items, categoryName, hidePrice);
 
           const categoryHeading = (
             <>
@@ -1080,6 +1094,8 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   it is drawn here, paired with whatever else follows. */}
               {!opensWithBooths && (
               <View wrap={false}>
+                {/* Paired with the first rows when there is no booth to
+                    hand the heading to. */}
                 <View style={styles.sectionHeaderRow}>
                   <View style={styles.sectionHeaderLeft}>
                     <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
@@ -1099,6 +1115,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     {truncateProposalSummary(data.categorySummaries.get(categoryName)!)}
                   </Text>
                 )}
+                {opensWithFlatRows && flatRows(leadFlatItems)}
               </View>
               )}
               {categoryName === "Professional Services" &&
@@ -1123,11 +1140,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   isServiceStyle,
                   opensWithBooths ? categoryHeading : undefined,
                 )}
-              {isSummary
-                ? renderSummaryBody(flatOwnItems)
-                : isServiceStyle
-                  ? renderServiceBody(flatOwnItems, categoryName, hidePrice)
-                  : renderBody(flatOwnItems, categoryName, hidePrice)}
+              {flatRows(restFlatItems)}
               {childViews.map((child) => {
                 const childTotal = bucketSubtotal(child.items) + child.boothGroups.reduce((s, b) => s + b.subtotal, 0);
                 return (
