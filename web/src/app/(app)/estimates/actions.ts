@@ -756,6 +756,9 @@ export async function addLineItemAction(
   // The checkbox is an explicit override; unchecked, fall back to the same
   // description heuristic import paths use -- see line-item-category.ts.
   const isClientOwned = formData.get("isClientOwned") === "on" || inferIsClientOwned(description);
+  // Never inferred from wording -- pricing a line at cost is a commercial
+  // decision somebody makes. See LineItem.atCost.
+  const atCost = formData.get("atCost") === "on";
   // Manual disambiguation for a genuinely ambiguous material (PVC, for
   // one) -- never inferred, unlike category/isClientOwned above.
   const usageTag = emptyToNull(formData.get("usageTag")) as LineItemUsageTag | null;
@@ -778,6 +781,7 @@ export async function addLineItemAction(
       category,
       subgroupLabel,
       isClientOwned,
+      atCost,
       usageTag,
       qty,
       unit,

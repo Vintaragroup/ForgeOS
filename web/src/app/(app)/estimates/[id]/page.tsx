@@ -4927,6 +4927,13 @@ function AddLineItemForm({
           <input type="checkbox" name="isClientOwned" />
           Client owned (no charge)
         </label>
+        <label
+          className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-10 sm:col-span-1"
+          title="The client is charged what this line cost. Everything else in the group keeps its markup."
+        >
+          <input type="checkbox" name="atCost" />
+          At cost (no markup)
+        </label>
         {attachments.length > 0 && (
           <>
             <div className="col-span-2 sm:order-11 sm:w-40 sm:col-span-1">

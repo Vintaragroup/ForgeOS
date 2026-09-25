@@ -1788,6 +1788,8 @@ export async function addLineItem(
     // A real $0 by design (client already owns/supplies it) vs. simply not
     // yet priced -- see line-item-category.ts's inferIsClientOwned.
     isClientOwned?: boolean;
+    // See LineItem.atCost -- charged at cost, no markup.
+    atCost?: boolean;
     // Manual disambiguation for a genuinely ambiguous material (PVC, for
     // one) -- see LineItemUsageTag's own schema comment. Never inferred,
     // unlike category/isClientOwned above.
@@ -1816,6 +1818,7 @@ export async function addLineItem(
       category: data.category ?? null,
       subgroupLabel,
       isClientOwned: data.isClientOwned ?? false,
+      atCost: data.atCost ?? false,
       usageTag: data.usageTag ?? null,
       qty: new Prisma.Decimal(data.qty),
       unit: data.unit ?? null,
