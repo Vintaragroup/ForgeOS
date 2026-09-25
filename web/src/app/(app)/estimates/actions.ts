@@ -830,6 +830,10 @@ export async function updateLineItemAction(
   // Same "on" convention as isClientOwned above -- an unchecked checkbox
   // simply isn't present in FormData at all.
   const includeInProposal = formData.get("includeInProposal") === "on";
+  // Same "on" convention. Never inferred from the description the way
+  // isClientOwned is -- pricing one line at cost is a commercial decision
+  // somebody makes, not something to guess from wording.
+  const atCost = formData.get("atCost") === "on";
   // Only ever rendered on a row with an AI-proposed origin (see
   // line-item-row.tsx's own comment) -- flagAiProposalWrong on a row
   // with no aiProposalSnapshot is a silent no-op in updateLineItem, not
@@ -852,6 +856,7 @@ export async function updateLineItemAction(
       unit,
       unitCost,
       includeInProposal,
+      atCost,
       flagAccuracy: flagAiProposalWrong ? { reason: flagReason } : null,
     },
     user.id,

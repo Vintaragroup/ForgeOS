@@ -17,11 +17,13 @@ import {
   buriedDisplayPlan,
   buriedDisplayCategory,
   dropZeroGroups,
+  sellOfItems,
   bucketSubtotal,
   buildTopLevelCategoryViews,
   standaloneSummaryGroupsByCategory,
   type AggregatedLineItem,
   type ElementGroup,
+  type TradeGroup,
   type ProposalViewSection,
 } from "@/lib/proposal-view-model";
 import { computeMarginGrossUp, resolveLineItemMarginPct } from "@/lib/estimate-service";
@@ -733,6 +735,14 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // own isClientOwned value (a client-owned row already reads "Client
   // Owned" either way, so hidePrice only changes anything for a normally-
   // priced row).
+  // A trade's or element's own price, summed row by row so one at-cost
+  // line stays at cost however high up it is totalled. See sellOfItems.
+  const sellOfTrade = (group: TradeGroup, categoryName: string) =>
+    sellOfItems(group.items, categoryName, sellForCategory) +
+    group.subgroups.reduce((sum, sub) => sum + sellOfItems(sub.items, categoryName, sellForCategory), 0);
+  const sellOfElement = (element: ElementGroup, categoryName: string) =>
+    element.tradeGroups.reduce((sum, group) => sum + sellOfTrade(group, categoryName), 0);
+
   const renderBody = (items: AggregatedLineItem[], categoryName: string, hidePrice = false) => (
     <>
       {items.map((li) => (
@@ -754,7 +764,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}),
             }}
           >
-            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sellForCategory(li.totalCost, categoryName))}
+            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sellOfItems([li], categoryName, sellForCategory))}
           </Text>
         </View>
       ))}
@@ -795,7 +805,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               ...(li.isClientOwned || hidePrice ? styles.clientOwnedLabel : {}),
             }}
           >
-            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sellForCategory(li.totalCost, categoryName))}
+            {li.isClientOwned ? "Client Owned" : hidePrice ? "" : moneyFromNumber(sellOfItems([li], categoryName, sellForCategory))}
           </Text>
         </View>
       ))}
@@ -845,7 +855,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               ? ""
               : amountContent(
                   group.subtotal + (group.buriedCost ?? 0),
-                  sellForCategory(group.subtotal, categoryName) + (group.buriedSell ?? 0),
+                  sellOfTrade(group, categoryName) + (group.buriedSell ?? 0),
                   data.showCost,
                 )}
           </Text>
@@ -862,7 +872,13 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           <View style={styles.subgroupHeaderRow} wrap={false}>
             <Text style={styles.subgroupHeaderText}>{subgroup.subgroupLabel}</Text>
             <Text style={styles.subgroupHeaderTotal}>
-              {hidePrice ? "" : amountContent(subgroup.subtotal, sellForCategory(subgroup.subtotal, categoryName), data.showCost)}
+              {hidePrice
+                ? ""
+                : amountContent(
+                    subgroup.subtotal,
+                    sellOfItems(subgroup.items, categoryName, sellForCategory),
+                    data.showCost,
+                  )}
             </Text>
           </View>
           {rows(subgroup.items)}
@@ -878,7 +894,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               ? ""
               : amountContent(
                   booth.subtotal + (booth.buriedCost ?? 0),
-                  sellForCategory(booth.subtotal, categoryName) + (booth.buriedSell ?? 0),
+                  sellOfElement(booth, categoryName) + (booth.buriedSell ?? 0),
                   data.showCost,
                 )}
           </Text>
@@ -1123,10 +1139,14 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           // summed, the same way Cost already does above.
           const sellSectionTotal =
             buriedHere.sell +
-            sellForCategory(boothTotal + bucketSubtotal(flatOwnItems), categoryName) +
+            elementGroups.reduce((sum, b) => sum + sellOfElement(b, categoryName), 0) +
+            sellOfItems(flatOwnItems, categoryName, sellForCategory) +
             childViews.reduce((sum, c) => {
-              const childRawTotal = bucketSubtotal(c.items) + c.elementGroups.reduce((s, b) => s + b.subtotal, 0);
-              return sum + sellForCategory(childRawTotal, c.name);
+              return (
+                sum +
+                sellOfItems(c.items, c.name, sellForCategory) +
+                c.elementGroups.reduce((n, b) => n + sellOfElement(b, c.name), 0)
+              );
             }, 0);
 
           // Professional Services opens with its bullet list, so its
@@ -1231,7 +1251,14 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
                       <Text style={styles.subsectionHeaderText}>{child.name}</Text>
                       <Text style={styles.subsectionHeaderTotal}>
-                        {hidePrice ? "" : amountContent(childTotal, sellForCategory(childTotal, child.name), data.showCost)}
+                        {hidePrice
+                          ? ""
+                          : amountContent(
+                              childTotal,
+                              sellOfItems(child.items, child.name, sellForCategory) +
+                                child.elementGroups.reduce((n, b) => n + sellOfElement(b, child.name), 0),
+                              data.showCost,
+                            )}
                       </Text>
                     </View>
                     {child.elementGroups.length > 0 &&

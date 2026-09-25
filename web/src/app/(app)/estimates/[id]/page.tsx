@@ -1816,6 +1816,7 @@ function LineItemsTable({
               unitCost={li.unitCost.toString()}
               totalCostDisplay={money(li.totalCost)}
               isClientOwned={li.isClientOwned}
+              atCost={li.atCost}
               includeInProposal={li.includeInProposal}
               usageTag={li.usageTag ?? ""}
               isLocked={version.isLocked}

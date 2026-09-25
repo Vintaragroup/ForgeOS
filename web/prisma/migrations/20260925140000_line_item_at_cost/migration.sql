@@ -1,0 +1,15 @@
+-- One line item priced at cost, while everything around it keeps its
+-- markup.
+--
+-- Asked for from real estimating: "there are situations where the program
+-- needs to exclude a single line item from the overall margin and give it
+-- at cost but still have the rest of the items in that group have the
+-- markup applied." A pass-through charge, a client-negotiated item, a
+-- cost the client already agreed to pay direct.
+--
+-- Margin already resolves per line item, not per group -- see
+-- computeVersionTotals -- so this is one more input to that decision
+-- rather than a new pricing path.
+--
+-- Expand-only, default false. Every existing row keeps today's behaviour.
+ALTER TABLE "line_items" ADD COLUMN "atCost" BOOLEAN NOT NULL DEFAULT false;

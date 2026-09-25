@@ -19,6 +19,7 @@ import {
   bucketSubtotal,
   computeRentalAndServicesTotals,
   foldOmittedIntoTotals,
+  sellOfItems,
   type ProposalViewSection,
 } from "@/lib/proposal-view-model";
 
@@ -50,10 +51,12 @@ export function computeProposalTotals(
   const buckets = aggregateByCategory(sections, categories);
   const { rentalTotal: visibleRental, servicesTotal: visibleServices, hasServiceSplit } =
     computeRentalAndServicesTotals(buckets, showServiceCategoryNames);
+  // Row by row, not grossed up once over the bucket -- see sellOfItems.
+  // A single at-cost line in a bucket makes those two different numbers.
   const sellOf = (wantService: boolean) =>
     buckets
       .filter((b) => showServiceCategoryNames.has(b.name) === wantService)
-      .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
+      .reduce((sum, b) => sum + sellOfItems(b.items, b.name, sellForCategory), 0);
 
   // Buried sections are excluded from buckets above, exactly like fully
   // hidden ones; this is what puts their money back into the totals

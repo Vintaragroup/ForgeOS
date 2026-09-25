@@ -2287,6 +2287,14 @@ model LineItem {
   // "Existing", etc.) at import/add time -- see
   // line-item-category.ts's inferIsClientOwned.
   isClientOwned Boolean           @default(false)
+
+  // Priced at cost: this one line is excluded from the margin gross-up
+  // while its siblings in the same group keep theirs. See the
+  // 20260925140000_line_item_at_cost migration.
+  //
+  // Distinct from isClientOwned above, which zeroes the charge entirely.
+  // This still charges the client -- it just charges them what it cost.
+  atCost Boolean @default(false)
   // Explicit, estimator-set disambiguation for a material that's genuinely
   // ambiguous on its own (PVC, for one) -- see LineItemUsageTag's own
   // comment. Null (unset) for every item this doesn't apply to; never

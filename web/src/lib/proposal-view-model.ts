@@ -26,6 +26,8 @@ export interface ProposalViewLineItem {
   description: string;
   category: string | null;
   isClientOwned: boolean;
+  // See LineItem.atCost -- this row is charged at cost, no markup.
+  atCost?: boolean;
   qty: Prisma.Decimal;
   unit: string | null;
   totalCost: Prisma.Decimal;
@@ -232,6 +234,10 @@ export function resolveEffectiveCategory(
 export interface AggregatedLineItem {
   key: string;
   description: string;
+  // Priced at cost -- no margin gross-up on this row, while its siblings
+  // keep theirs. Part of the merge key below, so an at-cost row can never
+  // merge with a marked-up one and quietly take its price.
+  atCost: boolean;
   // The originating section's groupLabel, carried through only for a
   // compound assembly line (see isCompoundAssemblyDescription) -- a real,
   // one-off structure ("Complete Booth Build...") that a client needs to
@@ -355,6 +361,26 @@ export function foldBuriedSections(sections: ProposalViewSection[]): ProposalVie
     });
 }
 
+// What a set of rows SELLS for, summed row by row rather than grossed up
+// once over their total.
+//
+// Those are the same number until one row is priced at cost, and then
+// they are not: grossing up the sum would quietly mark up the row that
+// was meant to be excluded. Every aggregate price in the document goes
+// through here for that reason -- a category bar, an element total, a
+// trade subtotal -- so one at-cost line behaves identically wherever it
+// happens to be summed.
+export function sellOfItems(
+  items: AggregatedLineItem[],
+  categoryName: string,
+  sellForCategory: (cost: number, categoryName: string) => number,
+): number {
+  return items.reduce(
+    (sum, li) => sum + (li.atCost ? li.totalCost : sellForCategory(li.totalCost, categoryName)),
+    0,
+  );
+}
+
 export function aggregateByCategory(
   sections: ProposalViewSection[],
   categories: Category[],
@@ -426,7 +452,8 @@ export function aggregateByCategory(
       // separately.
       const isAssembly = isCompoundAssemblyDescription(li.description);
       const boothScope = section.groupLabel ? `${section.groupLabel} ` : standaloneSummaryScope ? `${standaloneSummaryScope} ` : "";
-      const key = isAssembly ? `assembly:${li.id}` : `${boothScope}${li.description} ${li.unit ?? ""}`;
+      const atCostKey = li.atCost ? " @cost" : "";
+      const key = isAssembly ? `assembly:${li.id}` : `${boothScope}${li.description} ${li.unit ?? ""}${atCostKey}`;
       const existing = bucket.get(key);
       if (existing) {
         existing.qty += li.qty.toNumber();
@@ -442,6 +469,7 @@ export function aggregateByCategory(
           unit: li.unit,
           totalCost: li.totalCost.toNumber(),
           isClientOwned: li.isClientOwned,
+          atCost: li.atCost === true,
           sortOrder: li.sortOrder,
         });
       }
@@ -842,7 +870,8 @@ export function groupElementLineItems(sections: ProposalViewSection[]): ElementG
       // assembly is a unique physical structure, keyed by its own id so
       // two assemblies with identical spec text never silently merge.
       const isAssembly = isCompoundAssemblyDescription(li.description);
-      const key = isAssembly ? `assembly:${li.id}` : `${li.description} ${li.unit ?? ""}`;
+      const atCostKey = li.atCost ? " @cost" : "";
+      const key = isAssembly ? `assembly:${li.id}` : `${li.description} ${li.unit ?? ""}${atCostKey}`;
       const existing = bucket.get(key);
       if (existing) {
         existing.qty += li.qty.toNumber();
@@ -858,6 +887,7 @@ export function groupElementLineItems(sections: ProposalViewSection[]): ElementG
           unit: li.unit,
           totalCost: li.totalCost.toNumber(),
           isClientOwned: li.isClientOwned,
+          atCost: li.atCost === true,
           sortOrder: li.sortOrder,
         });
       }
@@ -1826,10 +1856,10 @@ export function foldOmittedIntoTotals(
   );
   const omittedSellRentalTotal = omittedBuckets
     .filter((b) => !showServiceCategoryNames.has(b.name))
-    .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
+    .reduce((sum, b) => sum + sellOfItems(b.items, b.name, sellForCategory), 0);
   const omittedSellServicesTotal = omittedBuckets
     .filter((b) => showServiceCategoryNames.has(b.name))
-    .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
+    .reduce((sum, b) => sum + sellOfItems(b.items, b.name, sellForCategory), 0);
   const omittedTotalCost = omittedBuckets.reduce((sum, b) => sum + bucketSubtotal(b.items), 0);
   return {
     rentalTotal: visible.rentalTotal + omittedRentalCost,

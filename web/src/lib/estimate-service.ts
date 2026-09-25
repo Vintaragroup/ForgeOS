@@ -138,7 +138,7 @@ export function computeVersionTotals(
       groupLabel: string | null;
       buildType?: SectionBuildType | null;
       excludedFromTotals?: boolean;
-      lineItems: { totalCost: DecimalInput; isDraft?: boolean; category: string | null }[];
+      lineItems: { totalCost: DecimalInput; isDraft?: boolean; category: string | null; atCost?: boolean }[];
     }[];
   },
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[] = [],
@@ -161,7 +161,10 @@ export function computeVersionTotals(
       const categoryName = resolveEffectiveCategory(li, section, categories);
       const marginPct = resolveLineItemMarginPct(categoryName, categories, overridesByCategoryId, version.marginTargetPct);
       totalCost = totalCost.plus(cost);
-      grandTotal = grandTotal.plus(computeMarginGrossUp(cost, marginPct));
+      // At cost means exactly that: the client is charged what it cost,
+      // and the margin gross-up is skipped for this one line while every
+      // sibling in the same group keeps its own. See LineItem.atCost.
+      grandTotal = grandTotal.plus(li.atCost ? cost : computeMarginGrossUp(cost, marginPct));
     }
   }
 
@@ -1992,6 +1995,9 @@ export async function updateLineItem(
     // own schema comment. A hidden EstimateSection hides this regardless
     // of the value here.
     includeInProposal?: boolean;
+    // Price this one line at cost, leaving its siblings marked up -- see
+    // LineItem.atCost's own schema comment.
+    atCost?: boolean;
     // Set only when the estimator checked "the AI's original proposal
     // here was wrong" while saving this same edit -- see
     // LineItemAccuracyFlag's own schema comment. A no-op (not an error)
@@ -2032,6 +2038,7 @@ export async function updateLineItem(
     isDraft: data.isDraft ?? existing.isDraft,
     bidPackageId: data.bidPackageId !== undefined ? data.bidPackageId : existing.bidPackageId,
     includeInProposal: data.includeInProposal ?? existing.includeInProposal,
+    atCost: data.atCost ?? existing.atCost,
   };
 
   // Only the fields that actually changed -- a re-save with identical

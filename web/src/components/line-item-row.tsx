@@ -33,6 +33,7 @@ export function LineItemRow({
   unitCost,
   totalCostDisplay,
   isClientOwned,
+  atCost,
   includeInProposal,
   usageTag,
   isLocked,
@@ -75,6 +76,7 @@ export function LineItemRow({
   unitCost: string;
   totalCostDisplay: string;
   isClientOwned: boolean;
+  atCost: boolean;
   // Proposal PDF visibility -- see LineItem.includeInProposal's own
   // schema comment. A hidden EstimateSection hides this item regardless
   // of this value (not reflected here; that's a whole-group state shown
@@ -145,6 +147,7 @@ export function LineItemRow({
           <input type="hidden" name={`subgroupLabel__${id}`} value={subgroupLabel} />
           <input type="hidden" name={`usageTag__${id}`} value={usageTag} />
           <input type="hidden" name={`isClientOwned__${id}`} value={String(isClientOwned)} />
+          <input type="hidden" name={`atCost__${id}`} value={String(atCost)} />
           <input type="hidden" name={`includeInProposal__${id}`} value={String(includeInProposal)} />
           <input
             name={`description__${id}`}
@@ -250,6 +253,13 @@ export function LineItemRow({
             <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-10 sm:col-span-1">
               <input type="checkbox" name="isClientOwned" defaultChecked={isClientOwned} />
               Client owned (no charge)
+            </label>
+            <label
+              className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-10 sm:col-span-1"
+              title="The client is charged what this line cost. Everything else in the group keeps its markup."
+            >
+              <input type="checkbox" name="atCost" defaultChecked={atCost} />
+              At cost (no markup)
             </label>
             <label className="col-span-2 flex items-center gap-1.5 pb-2 text-sm text-neutral-700 sm:order-10 sm:col-span-1">
               <input type="checkbox" name="includeInProposal" defaultChecked={includeInProposal} />
