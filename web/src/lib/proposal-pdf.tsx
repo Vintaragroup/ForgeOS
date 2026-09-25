@@ -709,7 +709,20 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // resolved into "Audio/Visual - Rental") rendered correctly in the Line
   // Items tab but as a flat, unlabeled item dump on the actual Proposal
   // PDF specifically.
-  const renderBoothGroups = (boothGroups: BoothGroup[], categoryName: string, hidePrice: boolean, isSummary: boolean, isServiceStyle: boolean) => {
+  const renderBoothGroups = (
+    boothGroups: BoothGroup[],
+    categoryName: string,
+    hidePrice: boolean,
+    isSummary: boolean,
+    isServiceStyle: boolean,
+    // Rendered inside the FIRST booth's atomic block. A category heading
+    // has no content of its own, so on its own it lands wherever it fits
+    // -- "LABOR" sat at the foot of page 4 with its first booth overleaf.
+    // Handing it to the first booth makes the pair inseparable, which is
+    // the only mechanism react-pdf actually honours here (see the table
+    // above LEAD_ROWS).
+    lead?: React.ReactNode,
+  ) => {
     // Chooses the row renderer once, so the three call sites below read
     // as "rows" rather than repeating the same ternary.
     const rows = (items: BoothGroup["elementGroups"][number]["items"]) =>
@@ -737,7 +750,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
 
     return (
       <>
-        {boothGroups.map((booth) => {
+        {boothGroups.map((booth, boothIndex) => {
           const [firstGroup, ...laterGroups] = booth.elementGroups;
           const showFirstRows = firstGroup && !booth.summarizeOnProposal && !firstGroup.summarizeOnProposal;
           return (
@@ -752,6 +765,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   leaves is the height of this small block rather than the
                   height of a whole booth. */}
               <View wrap={false}>
+                {boothIndex === 0 && lead}
                 <View style={styles.boothHeaderRow}>
                   <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
                   <Text style={styles.boothHeaderTotal}>
@@ -1032,12 +1046,39 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               return sum + sellForCategory(childRawTotal, c.name);
             }, 0);
 
+          // Professional Services opens with its bullet list, so its
+          // heading pairs with that instead and stays where it is.
+          const opensWithBooths =
+            hasBoothGroups &&
+            !(categoryName === "Professional Services" && (data.professionalServices?.items.length ?? 0) > 0);
+
+          const categoryHeading = (
+            <>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionHeaderLeft}>
+                  <View style={[styles.sectionAccentSwatch, { backgroundColor: accent }]} />
+                  <Text style={styles.sectionHeaderText}>{categoryName}</Text>
+                </View>
+                <Text style={styles.sectionHeaderTotal}>
+                  {hidePrice ? "" : amountContent(sectionTotal, sellSectionTotal, data.showCost)}
+                </Text>
+              </View>
+              {data.categorySummaries?.get(categoryName) && (
+                <Text style={styles.proposalSummaryText}>
+                  {truncateProposalSummary(data.categorySummaries.get(categoryName)!)}
+                </Text>
+              )}
+            </>
+          );
+
           return (
             <View key={categoryName} style={styles.section}>
-              {/* Same pairing as the booth header -- see renderBoothGroups'
-                  own comment. A category heading at the foot of a page with
-                  its first booth overleaf reads as a section that opens
-                  with nothing in it. */}
+              {/* A category heading travels with the first thing under it.
+                  When that is a booth, the heading is handed to
+                  renderBoothGroups and rendered inside the first booth's
+                  own atomic block -- see its `lead` parameter. Otherwise
+                  it is drawn here, paired with whatever else follows. */}
+              {!opensWithBooths && (
               <View wrap={false}>
                 <View style={styles.sectionHeaderRow}>
                   <View style={styles.sectionHeaderLeft}>
@@ -1059,6 +1100,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                   </Text>
                 )}
               </View>
+              )}
               {categoryName === "Professional Services" &&
                 data.professionalServices &&
                 data.professionalServices.items.length > 0 && (
@@ -1072,7 +1114,15 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                     </View>
                   </View>
                 )}
-              {hasBoothGroups && renderBoothGroups(boothGroups, categoryName, hidePrice, isSummary, isServiceStyle)}
+              {hasBoothGroups &&
+                renderBoothGroups(
+                  boothGroups,
+                  categoryName,
+                  hidePrice,
+                  isSummary,
+                  isServiceStyle,
+                  opensWithBooths ? categoryHeading : undefined,
+                )}
               {isSummary
                 ? renderSummaryBody(flatOwnItems)
                 : isServiceStyle

@@ -21,7 +21,7 @@ const s = StyleSheet.create({
   row: { height: 14 },
 });
 
-type Config = "plain" | "atomicHeader" | "mpaOnAtomic" | "mpaOnContainer" | "wrapFalseWhole" | "headerPlusTwo";
+type Config = "plain" | "atomicHeader" | "mpaOnAtomic" | "mpaOnContainer" | "wrapFalseWhole" | "headerPlusTwo" | "mpaWrapperRoundAtomicHeader";
 
 const BODY_ROWS = 3;
 const HEADER_H = 20;
@@ -55,6 +55,20 @@ function Probe({ config, mpa }: { config: Config; mpa: number }) {
       </View>
     );
   }
+  // The candidate for a heading with no content of its own to carry: a
+  // WRAPPABLE wrapper holding only the atomic header, so minPresenceAhead
+  // applies (it is ignored on a wrap={false} node) and moves just the
+  // heading rather than the whole section.
+  if (config === "mpaWrapperRoundAtomicHeader") {
+    return (
+      <View>
+        <View minPresenceAhead={mpa}>
+          <View wrap={false}>{header}</View>
+        </View>
+        {body}
+      </View>
+    );
+  }
   return <View wrap={false}>{header}{body}</View>;
 }
 
@@ -80,7 +94,7 @@ async function main() {
   console.log(`minPresenceAhead tested at ${mpa}\n`);
   console.log("config            remaining  headerPage  lastBodyPage  verdict");
 
-  const configs: Config[] = ["mpaOnContainer", "wrapFalseWhole", "headerPlusTwo"];
+  const configs: Config[] = ["plain", "mpaWrapperRoundAtomicHeader"];
   for (const config of configs) {
     for (const remaining of [120, 80, 62, 48, 40, 24]) {
       const filler = CONTENT_HEIGHT - remaining;
