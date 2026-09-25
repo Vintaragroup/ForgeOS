@@ -13,11 +13,12 @@ import {
   aggregateByCategory,
   bucketSubtotal,
   buildTopLevelCategoryViews,
-  computeRentalAndServicesTotals,
   dropZeroGroups,
   groupBoothLineItems,
   type AggregatedLineItem,
 } from "@/lib/proposal-view-model";
+import { computeProposalTotals } from "@/lib/proposal-totals";
+import { computeMarginGrossUp, resolveLineItemMarginPct } from "@/lib/estimate-service";
 import { Button, Card, Field, PageHeader } from "@/components/ui";
 import { ConfirmForm } from "@/components/confirm-form";
 import { ActionForm } from "@/components/action-form";
@@ -29,10 +30,6 @@ const SECTION_ACCENTS = [BRAND.navy, BRAND.teal, BRAND.tangerine, BRAND.tan];
 // on totals over four digits otherwise).
 const CURRENCY_FORMATTER = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const QTY_FORMATTER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
-
-function money(d: { toNumber(): number }): string {
-  return CURRENCY_FORMATTER.format(d.toNumber());
-}
 
 function moneyFromNumber(n: number): string {
   return CURRENCY_FORMATTER.format(n);
@@ -118,6 +115,10 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
             // version.grandTotal instead of silently including unreviewed
             // drafts in the body while excluding them from the total.
             sections: { where: { optionId: null }, include: { lineItems: { where: { isDraft: false } } } },
+            // Needed to price this page the way the PDF prices it -- a
+            // bucket is grossed up at its OWN category's margin, not the
+            // whole sum at the version's target rate.
+            categoryMarginOverrides: true,
           },
         },
       },
@@ -173,7 +174,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   const paymentMethodNote = extractPaymentMethodNote(proposal.templateConfigSnapshot);
 
   const visibleSections = version.sections.filter((section) => section.lineItems.length > 0);
-  // buckets/topLevelCategories/rentalTotal/servicesTotal all still run
+  // buckets/topLevelCategories still run
   // against every visible section -- see proposal-pdf.tsx's identical
   // comment on why booth-linked items being shown separately below
   // doesn't change any of this math, only which block renders them.
@@ -181,10 +182,21 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   const topLevelCategories = buildTopLevelCategoryViews(buckets, categories);
   const showServiceCategoryNames = new Set(categories.filter((c) => c.isShowService).map((c) => c.name));
   const lumpSumCategoryNames = new Set(categories.filter((c) => c.isLumpSum).map((c) => c.name));
-  const { rentalTotal, servicesTotal, hasServiceSplit } = computeRentalAndServicesTotals(
-    buckets,
-    showServiceCategoryNames,
+  // This page used to compute its own subtotals, and they were wrong in
+  // two ways at once: raw COST printed under a PRICE grand total, and
+  // every buried section left out. Both now come from the one function
+  // the Proposal PDF uses, so the page a rep reads and the document the
+  // client receives cannot disagree again. See proposal-totals.ts.
+  const marginOverridesByCategoryId = new Map(
+    version.categoryMarginOverrides.map((o) => [o.categoryId, o.marginPct]),
   );
+  const sellForCategory = (cost: number, categoryName: string) =>
+    computeMarginGrossUp(
+      cost,
+      resolveLineItemMarginPct(categoryName, categories, marginOverridesByCategoryId, version.marginTargetPct),
+    ).toNumber();
+  const totals = computeProposalTotals(visibleSections, categories, sellForCategory, showServiceCategoryNames);
+  const { hasServiceSplit } = totals;
   // Same $0 rule the PDF applies (see dropZeroGroups). This page has no
   // per-category price hiding, so it applies unconditionally. Dropping
   // only zeros means customRentalTotal below is unchanged by it.
@@ -535,11 +547,15 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                 <>
                   <div className="flex gap-4">
                     <span>Rental components total</span>
-                    <span className="w-24 text-right font-medium text-neutral-700">{moneyFromNumber(rentalTotal)}</span>
+                    <span className="w-24 text-right font-medium text-neutral-700">
+                      {moneyFromNumber(totals.sellRentalTotal)}
+                    </span>
                   </div>
                   <div className="flex gap-4">
                     <span>Show services total</span>
-                    <span className="w-24 text-right font-medium text-neutral-700">{moneyFromNumber(servicesTotal)}</span>
+                    <span className="w-24 text-right font-medium text-neutral-700">
+                      {moneyFromNumber(totals.sellServicesTotal)}
+                    </span>
                   </div>
                 </>
               )}
@@ -548,7 +564,9 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                   components total, already computed above. */}
               <div className="flex gap-4">
                 <span>Total taxable</span>
-                <span className="w-24 text-right font-medium text-neutral-700">{moneyFromNumber(rentalTotal)}</span>
+                <span className="w-24 text-right font-medium text-neutral-700">
+                  {moneyFromNumber(totals.taxableBasis)}
+                </span>
               </div>
               {version.estimate.taxRate && (
                 <>
@@ -558,7 +576,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                       {(version.estimate.taxRate.rate.toNumber() * 100).toFixed(2)}%)
                     </span>
                     <span className="w-24 text-right font-medium text-neutral-700">
-                      {moneyFromNumber(rentalTotal * version.estimate.taxRate.rate.toNumber())}
+                      {moneyFromNumber(totals.taxableBasis * version.estimate.taxRate.rate.toNumber())}
                     </span>
                   </div>
                   <span className="max-w-xs text-right text-[11px] italic text-neutral-400">
@@ -579,7 +597,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
           <div className="flex justify-end border-t border-neutral-200 pt-4">
             <div className="text-right">
               <div className="text-sm text-neutral-500">Grand total</div>
-              <div className="text-2xl font-semibold text-brand-navy">{money(version.grandTotal)}</div>
+              <div className="text-2xl font-semibold text-brand-navy">{moneyFromNumber(totals.grandTotal)}</div>
             </div>
           </div>
         </div>

@@ -19,8 +19,6 @@ import {
   dropZeroGroups,
   bucketSubtotal,
   buildTopLevelCategoryViews,
-  computeRentalAndServicesTotals,
-  foldOmittedIntoTotals,
   standaloneSummaryGroupsByCategory,
   type AggregatedLineItem,
   type BoothGroup,
@@ -28,6 +26,7 @@ import {
 } from "@/lib/proposal-view-model";
 import { computeMarginGrossUp, resolveLineItemMarginPct } from "@/lib/estimate-service";
 import { truncateProposalSummary } from "@/lib/proposal-summary-limits";
+import { computeProposalTotals } from "@/lib/proposal-totals";
 
 // The extracted primary black logotype (see web/public/brand -- pulled from
 // the brand guide's own "3.1 Logotype" page since we don't have a separate
@@ -642,14 +641,6 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // total is intentionally NOT reproducible from its own itemized rows
   // alone.
   const marginOverridesByCategoryId = new Map(data.categoryMarginOverrides.map((o) => [o.categoryId, o.marginPct]));
-  // Total raw cost across every bucket -- only used for the "Total cost"
-  // figure on the internal (showCost) preview, unrelated to sellForCategory
-  // below since cost never varies by margin. "visible" -- folded with any
-  // omittedFromProposal sections' cost below into the real totalCostSum
-  // this file's other call site actually uses, so the internal estimator
-  // preview sees the true total including a buried group, not just what's
-  // printed.
-  const visibleTotalCostSum = buckets.reduce((sum, b) => sum + bucketSubtotal(b.items), 0);
   const sellForCategory = (cost: number, categoryName: string) => {
     const marginPct = resolveLineItemMarginPct(categoryName, data.categories, marginOverridesByCategoryId, data.marginTargetPct);
     return computeMarginGrossUp(cost, marginPct).toNumber();
@@ -960,61 +951,10 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   };
 
 
-  // hasServiceSplit is deliberately left based on VISIBLE buckets only,
-  // never folded with omittedFromProposal sections below -- if a buried
-  // group is the only service-category cost in the whole document, the
-  // "Rental components total" / "Show services total" split doesn't
-  // render at all, and its marked-up cost is folded silently into
-  // sellServicesTotal -> documentGrandTotal with zero visible trace. A
-  // deliberate consequence of "bury," not an oversight.
-  const { rentalTotal: visibleRentalTotal, servicesTotal: visibleServicesTotal, hasServiceSplit } =
-    computeRentalAndServicesTotals(buckets, showServiceCategoryNames);
-  // Sums each bucket's own grossed-up (per-that-category's-margin) amount,
-  // rather than grossing up the pre-summed raw-cost total once -- correct
-  // once buckets can carry different margins. rentalTotal/servicesTotal
-  // (raw cost, above) are kept for the Cost half of the Cost -> Price
-  // display when data.showCost is true.
-  const visibleSellRentalTotal = buckets
-    .filter((b) => !showServiceCategoryNames.has(b.name))
-    .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
-  const visibleSellServicesTotal = buckets
-    .filter((b) => showServiceCategoryNames.has(b.name))
-    .reduce((sum, b) => sum + sellForCategory(bucketSubtotal(b.items), b.name), 0);
-  // Folds every omittedFromProposal ("bury the cost") section's dollar
-  // amount back into these same totals -- see foldOmittedIntoTotals' own
-  // comment for why this re-runs the real aggregation pipeline rather
-  // than a parallel sum, and why EVERY total here gets folded (not just
-  // the headline Grand Total) so "Rental components total" + "Show
-  // services total" still sum to "Grand total" and "Total taxable" stays
-  // correct, even though the buried group itself never appears as a row
-  // anywhere on the page.
-  const omittedSections = data.sections.filter((s) => s.omittedFromProposal);
-  const { rentalTotal, servicesTotal, sellRentalTotal, sellServicesTotal, totalCostSum } = foldOmittedIntoTotals(
-    {
-      rentalTotal: visibleRentalTotal,
-      servicesTotal: visibleServicesTotal,
-      sellRentalTotal: visibleSellRentalTotal,
-      sellServicesTotal: visibleSellServicesTotal,
-      totalCostSum: visibleTotalCostSum,
-    },
-    omittedSections,
-    data.categories,
-    showServiceCategoryNames,
-    sellForCategory,
-  );
-  // NOT data.grandTotal (EstimateVersion.grandTotal, computed server-side
-  // over every real line item) -- that figure is deliberately never
-  // affected by a line item or booth being hidden from just this
-  // document (the estimate's own internal totals/margins have to stay
-  // exactly what they'd be if nothing were hidden, confirmed live as a
-  // real requirement, not an incidental side effect to accept). This
-  // document's OWN Grand Total has the opposite job: it has to equal
-  // whatever is actually itemized on the page above it PLUS whatever's
-  // deliberately buried (folded in above, never itemized by design) --
-  // a real bug the moment includeInProposal could actually remove
-  // something from buckets with no way back in, unlike
-  // hidePricingCategoryNames/summaryCategoryNames above, which only ever
-  // blank a display, never remove an item from these sums.
+  // One shared computation with the web proposal page -- see
+  // proposal-totals.ts for why neither surface owns this any more.
+  const { rentalTotal, servicesTotal, sellRentalTotal, sellServicesTotal, totalCostSum, hasServiceSplit } =
+    computeProposalTotals(data.sections, data.categories, sellForCategory, showServiceCategoryNames);
   const documentGrandTotal = sellRentalTotal + sellServicesTotal;
 
   return (
