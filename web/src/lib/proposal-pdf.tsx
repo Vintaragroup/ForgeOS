@@ -21,7 +21,7 @@ import {
   buildTopLevelCategoryViews,
   standaloneSummaryGroupsByCategory,
   type AggregatedLineItem,
-  type BoothGroup,
+  type ElementGroup,
   type ProposalViewSection,
 } from "@/lib/proposal-view-model";
 import { computeMarginGrossUp, resolveLineItemMarginPct } from "@/lib/estimate-service";
@@ -119,9 +119,9 @@ function estimateSummaryHeight(text: string | null | undefined): number {
   return Math.max(1, Math.ceil(text.length / SUMMARY_CHARS_PER_LINE)) * PT_SUMMARY_LINE;
 }
 
-function estimateBoothHeight(booth: BoothGroup): number {
+function estimateBoothHeight(booth: ElementGroup): number {
   let height = PT_BOOTH_HEADER + estimateSummaryHeight(booth.boothSummary);
-  for (const group of booth.elementGroups) {
+  for (const group of booth.tradeGroups) {
     height += PT_ELEMENT_HEADER + estimateSummaryHeight(group.elementSummary);
     if (booth.summarizeOnProposal || group.summarizeOnProposal) continue;
     height += group.items.length * PT_ROW;
@@ -239,7 +239,7 @@ const styles = StyleSheet.create({
   subsectionHeaderTotal: { flexShrink: 0, fontSize: 7.5, fontWeight: 700, color: BRAND.black },
   // "Custom Rental" umbrella -> booth (H2) -> element type (H3) -- a
   // third grouping axis alongside the category/subcategory one above,
-  // used only for line items with a known booth (groupBoothLineItems).
+  // used only for line items with a known booth (groupElementLineItems).
   // Booth is the PRIMARY axis here (unlike subsection, a category's minor
   // child), so it gets its own bolder treatment one step down from the
   // umbrella's black bar rather than reusing subsectionHeaderRow's
@@ -306,7 +306,7 @@ const styles = StyleSheet.create({
   // H3 -- one visual tier lighter than elementTypeSection/elementTypeHeaderText
   // above (smaller, unbolded, no background fill), matching the existing
   // H1 -> H2 step-down. Only rendered for a group that actually uses H3
-  // subgroups -- see ElementTypeGroup.subgroups' own comment.
+  // subgroups -- see TradeGroup.subgroups' own comment.
   subgroupSection: { marginLeft: 10, marginBottom: 6 },
   subgroupHeaderRow: {
     flexDirection: "row",
@@ -350,7 +350,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   colDescription: { width: "48%" },
-  // A compound assembly's booth number (see AggregatedLineItem.boothLabel)
+  // A compound assembly's booth number (see AggregatedLineItem.elementLabel)
   // reads as the item's actual name -- the raw spec text underneath it is
   // supporting detail, not the primary label a client scans for.
   itemBoothLabel: { fontSize: 8.5, fontWeight: 700, color: BRAND.navy, marginBottom: 1 },
@@ -702,7 +702,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // prints blank, so a $0 group looks exactly like a priced one and
   // dropping it would quietly remove scope the client is meant to read.
   // See dropZeroGroups for why this can never move a total.
-  const boothGroupsForCategory = (categoryName: string): BoothGroup[] => {
+  const boothGroupsForCategory = (categoryName: string): ElementGroup[] => {
     const groups = [
       ...(boothGroupsByCategoryName.get(categoryName) ?? []),
       ...(standaloneSummaryGroupsByCategoryName.get(categoryName) ?? []),
@@ -738,7 +738,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
       {items.map((li) => (
         <View key={li.key} style={styles.tableRow} wrap={false}>
           <View style={data.showCost ? styles.colDescriptionDual : styles.colDescription}>
-            {li.boothLabel && <Text style={styles.itemBoothLabel}>{li.boothLabel}</Text>}
+            {li.elementLabel && <Text style={styles.itemBoothLabel}>{li.elementLabel}</Text>}
             <Text>{li.description}</Text>
           </View>
           <Text style={data.showCost ? styles.colQtyDual : styles.colQty}>{formatQtyNumber(li.qty)}</Text>
@@ -771,7 +771,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     <>
       {items.map((li) => (
         <Text key={li.key} style={styles.summaryListItem}>
-          • {li.boothLabel ? `${li.boothLabel} — ${li.description}` : li.description}
+          • {li.elementLabel ? `${li.elementLabel} — ${li.description}` : li.description}
         </Text>
       ))}
     </>
@@ -817,7 +817,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
   // Items tab but as a flat, unlabeled item dump on the actual Proposal
   // PDF specifically.
   const renderBoothGroups = (
-    boothGroups: BoothGroup[],
+    elementGroups: ElementGroup[],
     categoryName: string,
     hidePrice: boolean,
     isSummary: boolean,
@@ -829,17 +829,17 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
     // the only mechanism react-pdf actually honours here.
     lead?: React.ReactNode,
   ) => {
-    const rows = (items: BoothGroup["elementGroups"][number]["items"]) =>
+    const rows = (items: ElementGroup["tradeGroups"][number]["items"]) =>
       isSummary
         ? renderSummaryBody(items)
         : isServiceStyle
           ? renderServiceBody(items, categoryName, hidePrice)
           : renderBody(items, categoryName, hidePrice);
 
-    const elementHeading = (group: BoothGroup["elementGroups"][number]) => (
+    const elementHeading = (group: ElementGroup["tradeGroups"][number]) => (
       <>
         <View style={styles.elementTypeHeaderRow}>
-          <Text style={styles.elementTypeHeaderText}>{group.elementType}</Text>
+          <Text style={styles.elementTypeHeaderText}>{group.tradeCategory}</Text>
           <Text style={styles.elementTypeHeaderTotal}>
             {hidePrice
               ? ""
@@ -856,7 +856,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
       </>
     );
 
-    const subgroupsOf = (group: BoothGroup["elementGroups"][number]) =>
+    const subgroupsOf = (group: ElementGroup["tradeGroups"][number]) =>
       group.subgroups.map((subgroup) => (
         <View key={subgroup.subgroupLabel} style={styles.subgroupSection}>
           <View style={styles.subgroupHeaderRow} wrap={false}>
@@ -869,10 +869,10 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
         </View>
       ));
 
-    const boothHeading = (booth: BoothGroup) => (
+    const boothHeading = (booth: ElementGroup) => (
       <>
         <View style={styles.boothHeaderRow}>
-          <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.boothLabel}</Text>
+          <Text style={styles.boothHeaderText}>{booth.boothDescription ?? booth.elementLabel}</Text>
           <Text style={styles.boothHeaderTotal}>
             {hidePrice
               ? ""
@@ -889,10 +889,10 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
       </>
     );
 
-    const fullGroup = (booth: BoothGroup, group: BoothGroup["elementGroups"][number]) => {
+    const fullGroup = (booth: ElementGroup, group: ElementGroup["tradeGroups"][number]) => {
       const itemised = !booth.summarizeOnProposal && !group.summarizeOnProposal;
       return (
-        <View key={group.elementType} style={styles.elementTypeSection}>
+        <View key={group.tradeCategory} style={styles.elementTypeSection}>
           {elementHeading(group)}
           {itemised && rows(group.items)}
           {itemised && subgroupsOf(group)}
@@ -902,26 +902,26 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
 
     return (
       <>
-        {boothGroups.map((booth, boothIndex) => {
+        {elementGroups.map((booth, boothIndex) => {
           const leadNode = boothIndex === 0 ? lead : null;
           // Short enough to keep whole. Nearly everything on a summarized
           // job is -- see KEEP_TOGETHER_MAX_PT.
           if (estimateBoothHeight(booth) <= KEEP_TOGETHER_MAX_PT) {
             return (
-              <View key={booth.boothLabel} style={styles.boothSection} wrap={false}>
+              <View key={booth.elementLabel} style={styles.boothSection} wrap={false}>
                 {leadNode}
                 {boothHeading(booth)}
-                {booth.elementGroups.map((group) => fullGroup(booth, group))}
+                {booth.tradeGroups.map((group) => fullGroup(booth, group))}
               </View>
             );
           }
 
           // Too long to hold: the heading keeps its first element heading
           // and first rows, and the remainder flows so the page fills.
-          const [firstGroup, ...laterGroups] = booth.elementGroups;
+          const [firstGroup, ...laterGroups] = booth.tradeGroups;
           const showFirstRows = firstGroup && !booth.summarizeOnProposal && !firstGroup.summarizeOnProposal;
           return (
-            <View key={booth.boothLabel} style={styles.boothSection}>
+            <View key={booth.elementLabel} style={styles.boothSection}>
               <View wrap={false}>
                 {leadNode}
                 {boothHeading(booth)}
@@ -933,7 +933,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
               {laterGroups.map((group) => {
                 const itemised = !booth.summarizeOnProposal && !group.summarizeOnProposal;
                 return (
-                  <View key={group.elementType} style={styles.elementTypeSection}>
+                  <View key={group.tradeCategory} style={styles.elementTypeSection}>
                     <View wrap={false}>
                       {elementHeading(group)}
                       {itemised && rows(group.items.slice(0, LEAD_ROWS))}
@@ -1060,16 +1060,16 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           const hidePrice = hidePricingCategoryNames.has(categoryName);
 
           // A tagged booth's items already resolved into this exact
-          // category's bucket (resolveEffectiveCategory) -- boothGroups
+          // category's bucket (resolveEffectiveCategory) -- elementGroups
           // renders them grouped by booth -> element type instead of flat,
           // reusing the exact hierarchy the (now-removed) standalone
           // Custom Rental block used to render on its own. Any of this
           // category's items that AREN'T booth-linked (added directly to
           // the category, or an untagged booth still on its raw category)
           // still render flat below/alongside, unchanged.
-          const boothGroups = boothGroupsForCategory(categoryName);
-          const hasBoothGroups = boothGroups.length > 0;
-          const flatOwnItems = hasBoothGroups ? ownItems.filter((li) => !li.boothLabel) : ownItems;
+          const elementGroups = boothGroupsForCategory(categoryName);
+          const hasBoothGroups = elementGroups.length > 0;
+          const flatOwnItems = hasBoothGroups ? ownItems.filter((li) => !li.elementLabel) : ownItems;
           // Each Method-split child (e.g. "Audio/Visual - Rental") is its
           // own effective category in boothGroupsByCategory's own terms --
           // resolveEffectiveCategory composes the Method suffix onto a
@@ -1082,27 +1082,27 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
           const childViews = children
             .map((child) => {
               const childBoothGroups = boothGroupsForCategory(child.name);
-              const items = childBoothGroups.length > 0 ? child.items.filter((li) => !li.boothLabel) : child.items;
-              return { name: child.name, items, boothGroups: childBoothGroups };
+              const items = childBoothGroups.length > 0 ? child.items.filter((li) => !li.elementLabel) : child.items;
+              return { name: child.name, items, elementGroups: childBoothGroups };
             })
-            .filter((child) => child.items.length > 0 || child.boothGroups.length > 0);
+            .filter((child) => child.items.length > 0 || child.elementGroups.length > 0);
           if (flatOwnItems.length === 0 && childViews.length === 0 && !hasBoothGroups) return null;
 
-          const boothTotal = boothGroups.reduce((sum, b) => sum + b.subtotal, 0);
+          const boothTotal = elementGroups.reduce((sum, b) => sum + b.subtotal, 0);
           const childBoothTotal = childViews.reduce(
-            (sum, c) => sum + c.boothGroups.reduce((s, b) => s + b.subtotal, 0),
+            (sum, c) => sum + c.elementGroups.reduce((s, b) => s + b.subtotal, 0),
             0,
           );
           const flatTotal = bucketSubtotal(flatOwnItems) + childViews.reduce((sum, c) => sum + bucketSubtotal(c.items), 0);
           // Exactly what was hung on the booths printed under this bar --
           // its own and its Method-split children's -- so the bar and the
           // booths under it can never disagree about the buried money.
-          const sumBuried = (groups: BoothGroup[]) =>
+          const sumBuried = (groups: ElementGroup[]) =>
             groups.reduce(
               (acc, b) => ({ cost: acc.cost + (b.buriedCost ?? 0), sell: acc.sell + (b.buriedSell ?? 0) }),
               { cost: 0, sell: 0 },
             );
-          const buriedHere = [boothGroups, ...childViews.map((c) => c.boothGroups)]
+          const buriedHere = [elementGroups, ...childViews.map((c) => c.elementGroups)]
             .map(sumBuried)
             .reduce((acc, x) => ({ cost: acc.cost + x.cost, sell: acc.sell + x.sell }), { cost: 0, sell: 0 });
           const sectionTotal = boothTotal + childBoothTotal + flatTotal + buriedHere.cost;
@@ -1125,7 +1125,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
             buriedHere.sell +
             sellForCategory(boothTotal + bucketSubtotal(flatOwnItems), categoryName) +
             childViews.reduce((sum, c) => {
-              const childRawTotal = bucketSubtotal(c.items) + c.boothGroups.reduce((s, b) => s + b.subtotal, 0);
+              const childRawTotal = bucketSubtotal(c.items) + c.elementGroups.reduce((s, b) => s + b.subtotal, 0);
               return sum + sellForCategory(childRawTotal, c.name);
             }, 0);
 
@@ -1216,7 +1216,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 )}
               {hasBoothGroups &&
                 renderBoothGroups(
-                  boothGroups,
+                  elementGroups,
                   categoryName,
                   hidePrice,
                   isSummary,
@@ -1225,7 +1225,7 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                 )}
               {flatRows(restFlatItems)}
               {childViews.map((child) => {
-                const childTotal = bucketSubtotal(child.items) + child.boothGroups.reduce((s, b) => s + b.subtotal, 0);
+                const childTotal = bucketSubtotal(child.items) + child.elementGroups.reduce((s, b) => s + b.subtotal, 0);
                 return (
                   <View key={child.name} style={styles.subsection}>
                     <View style={styles.subsectionHeaderRow} minPresenceAhead={24}>
@@ -1234,8 +1234,8 @@ export function ProposalPdfDocument({ data }: { data: ProposalPdfData }) {
                         {hidePrice ? "" : amountContent(childTotal, sellForCategory(childTotal, child.name), data.showCost)}
                       </Text>
                     </View>
-                    {child.boothGroups.length > 0 &&
-                      renderBoothGroups(child.boothGroups, child.name, hidePrice, isSummary, isServiceStyle)}
+                    {child.elementGroups.length > 0 &&
+                      renderBoothGroups(child.elementGroups, child.name, hidePrice, isSummary, isServiceStyle)}
                     {isSummary ? renderSummaryBody(child.items) : renderBody(child.items, child.name, hidePrice)}
                   </View>
                 );

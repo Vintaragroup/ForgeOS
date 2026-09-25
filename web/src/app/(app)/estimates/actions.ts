@@ -376,12 +376,12 @@ export async function moveElementGroupOrderAction(
   estimateId: string,
   versionId: string,
   groupLabel: string,
-  elementType: string,
+  tradeCategory: string,
   direction: "up" | "down",
 ) {
   await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
-  await moveElementGroupOrder(versionId, groupLabel, elementType, direction);
+  await moveElementGroupOrder(versionId, groupLabel, tradeCategory, direction);
   revalidatePath(`/estimates/${estimateId}`);
 }
 
@@ -389,11 +389,11 @@ export async function moveElementGroupOrderAction(
 // deleteElementGroup's own comment in estimate-service.ts for why every
 // item still gets its own restorable DELETE audit-log row, same as
 // deleting one at a time.
-export async function deleteElementGroupAction(estimateId: string, versionId: string, groupLabel: string, elementType: string) {
+export async function deleteElementGroupAction(estimateId: string, versionId: string, groupLabel: string, tradeCategory: string) {
   const user = await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   const opportunityId = await estimateOpportunityId(estimateId);
-  await deleteElementGroup(opportunityId, versionId, groupLabel, elementType, user.id);
+  await deleteElementGroup(opportunityId, versionId, groupLabel, tradeCategory, user.id);
   await recomputeVersionTotals(versionId);
   revalidatePath(`/estimates/${estimateId}`);
 }

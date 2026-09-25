@@ -4,7 +4,7 @@ import {
   attachBuriedDisplay,
   buriedDisplayCategory,
   buriedDisplayPlan,
-  type BoothGroup,
+  type ElementGroup,
   type ProposalViewSection,
 } from "@/lib/proposal-view-model";
 
@@ -43,7 +43,7 @@ const showServices = new Set(["Shipping"]);
 describe("buriedDisplayPlan", () => {
   // The eleven sections on ABC Chicago: each one booth's own Labor or
   // Shipping, buried so the booth quotes as a single price.
-  it("sends a booth's buried money back to that booth, keyed by its own category", () => {
+  it("sends an element's buried money back to that element, keyed by its own category", () => {
     const plan = buriedDisplayPlan(
       [
         section("Custom Build", "FS - Hitting Bay Wall", "Custom Build", 10351),
@@ -115,51 +115,51 @@ describe("buriedDisplayCategory", () => {
 });
 
 describe("attachBuriedDisplay", () => {
-  const booth = (boothLabel: string, subtotal: number): BoothGroup => ({
-    boothLabel,
+  const element = (elementLabel: string, subtotal: number): ElementGroup => ({
+    elementLabel,
     boothDescription: null,
     subtotal,
     summarizeOnProposal: true,
     boothSummary: null,
-    elementGroups: [
-      { elementType: "Custom Build", items: [], subgroups: [], subtotal, elementSummary: null, summarizeOnProposal: true },
+    tradeGroups: [
+      { tradeCategory: "Custom Build", items: [], subgroups: [], subtotal, elementSummary: null, summarizeOnProposal: true },
     ],
   });
 
   const emptyPlan = { byBooth: new Map(), unhomedRental: { cost: 0, sell: 0 }, unhomedService: { cost: 0, sell: 0 } };
 
-  it("hangs a booth's own buried money on that booth", () => {
+  it("hangs an element's own buried money on that element", () => {
     const plan = {
       ...emptyPlan,
       byBooth: new Map([["Custom Build::B", { cost: 100, sell: 133.33 }]]),
     };
-    const out = attachBuriedDisplay([booth("A", 900), booth("B", 200)], "Custom Build", plan, { cost: 0, sell: 0 });
-    expect(out.find((b) => b.boothLabel === "B")!.buriedSell).toBe(133.33);
-    expect(out.find((b) => b.boothLabel === "A")!.buriedSell).toBeUndefined();
+    const out = attachBuriedDisplay([element("A", 900), element("B", 200)], "Custom Build", plan, { cost: 0, sell: 0 });
+    expect(out.find((b) => b.elementLabel === "B")!.buriedSell).toBe(133.33);
+    expect(out.find((b) => b.elementLabel === "A")!.buriedSell).toBeUndefined();
   });
 
-  it("puts unhomed money on the biggest booth, and on its biggest group", () => {
-    const out = attachBuriedDisplay([booth("Small", 200), booth("Big", 900)], "Custom Build", emptyPlan, {
+  it("puts unhomed money on the biggest element, and on its biggest trade", () => {
+    const out = attachBuriedDisplay([element("Small", 200), element("Big", 900)], "Custom Build", emptyPlan, {
       cost: 500,
       sell: 666.67,
     });
-    const big = out.find((b) => b.boothLabel === "Big")!;
+    const big = out.find((b) => b.elementLabel === "Big")!;
     expect(big.buriedCost).toBe(500);
-    expect(big.elementGroups[0].buriedCost).toBe(500);
-    expect(out.find((b) => b.boothLabel === "Small")!.buriedCost).toBeUndefined();
+    expect(big.tradeGroups[0].buriedCost).toBe(500);
+    expect(out.find((b) => b.elementLabel === "Small")!.buriedCost).toBeUndefined();
   });
 
   // The subtotal is what every other number is summed from; only the
   // printed figure is meant to grow.
-  it("never changes a booth's own subtotal or items", () => {
-    const before = [booth("A", 900)];
+  it("never changes an element's own subtotal or items", () => {
+    const before = [element("A", 900)];
     const out = attachBuriedDisplay(before, "Custom Build", emptyPlan, { cost: 500, sell: 666.67 });
     expect(out[0].subtotal).toBe(900);
-    expect(out[0].elementGroups[0].subtotal).toBe(900);
+    expect(out[0].tradeGroups[0].subtotal).toBe(900);
   });
 
   it("leaves a category with nothing buried exactly as it was", () => {
-    const before = [booth("A", 900)];
+    const before = [element("A", 900)];
     expect(attachBuriedDisplay(before, "Custom Build", emptyPlan, { cost: 0, sell: 0 })).toEqual(before);
   });
 });

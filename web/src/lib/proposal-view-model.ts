@@ -38,7 +38,7 @@ export interface ProposalViewLineItem {
   // H3 -- see LineItem.subgroupLabel's own schema comment. Optional/
   // undefined-or-null both mean "ungrouped," so every existing caller/
   // test fixture that predates this field keeps rendering exactly as
-  // before -- see groupBoothLineItems' own UNGROUPED sentinel.
+  // before -- see groupElementLineItems' own UNGROUPED sentinel.
   subgroupLabel?: string | null;
   // A buried section's cost, re-homed onto a visible section by
   // foldBuriedSections. Counts in every subtotal it lands in and is
@@ -63,7 +63,7 @@ export interface ProposalViewSection {
   // comment. Optional/undefined so every existing caller/test fixture
   // without this concept in play is unaffected; standaloneSummaryGroupsByCategory
   // falls back to the raw `name` when absent, same as boothDescription's
-  // own fallback to boothLabel.
+  // own fallback to elementLabel.
   description?: string | null;
   // Per-(section, category) override of `description` above -- see
   // EstimateSectionCategoryDescription's own schema comment. The SAME
@@ -124,8 +124,8 @@ export interface ProposalViewSection {
   // place of the raw groupLabel -- see EstimateSection.boothDescription's
   // own schema comment. Optional/undefined (not just nullable) so an
   // existing caller/test fixture without any booth-heading concept in
-  // play never has to change just because this field exists; groupBoothLineItems
-  // below falls back to the raw boothLabel when it's absent, same as
+  // play never has to change just because this field exists; groupElementLineItems
+  // below falls back to the raw elementLabel when it's absent, same as
   // before this field was read here at all.
   boothDescription?: string | null;
   // A few client-readable sentences shown on the Proposal PDF's booth
@@ -237,7 +237,7 @@ export interface AggregatedLineItem {
   // one-off structure ("Complete Booth Build...") that a client needs to
   // know is Booth 402 vs Booth 203, not a catalog SKU where the booth
   // number is irrelevant once quantities are summed across the show.
-  boothLabel: string | null;
+  elementLabel: string | null;
   qty: number;
   unit: string | null;
   totalCost: number;
@@ -365,7 +365,7 @@ export function aggregateByCategory(
   for (const section of sections) {
     if (section.includeInProposal === false) continue;
     if (section.excludedFromTotals) continue;
-    // Excluded here too, not just in groupBoothLineItems below -- unlike
+    // Excluded here too, not just in groupElementLineItems below -- unlike
     // the two checks above, this one's cost isn't gone: foldOmittedIntoTotals
     // below re-aggregates every omittedFromProposal section separately
     // (passing includeOmittedFromProposal: true, the only caller that
@@ -385,9 +385,9 @@ export function aggregateByCategory(
     // real tagged booth's items already do), but scoped to their own
     // section (never cross-merged with a different section's items the
     // way an ordinary booth-independent line still is -- see boothScope's
-    // own comment) and boothLabel-tagged the same way, so proposal-pdf.tsx's
+    // own comment) and elementLabel-tagged the same way, so proposal-pdf.tsx's
     // existing "skip whatever a booth group already covers" filter (an
-    // item's own boothLabel truthiness) excludes them from the flat
+    // item's own elementLabel truthiness) excludes them from the flat
     // itemized render there without a second, parallel exclusion list.
     const standaloneSummaryScope = !section.groupLabel && section.summarizeOnProposal
       ? `__standalone_summary_${section.id ?? section.name}`
@@ -437,7 +437,7 @@ export function aggregateByCategory(
         bucket.set(key, {
           key,
           description: li.description,
-          boothLabel: section.groupLabel ?? standaloneSummaryScope,
+          elementLabel: section.groupLabel ?? standaloneSummaryScope,
           qty: li.qty.toNumber(),
           unit: li.unit,
           totalCost: li.totalCost.toNumber(),
@@ -458,25 +458,25 @@ export function aggregateByCategory(
 
       // Two physically-identical booths in the same numbered section (a
       // real job had two "12' x 7'" camera booths under "Section 203")
-      // share both the exact same boothLabel and description -- otherwise
+      // share both the exact same elementLabel and description -- otherwise
       // indistinguishable rows to a client reading the PDF. An ordinal is
       // the only way to tell them apart, same reasoning as the
       // estimate-editing page's groupLineItemsByBoothInstance.
       const dupeCounts = new Map<string, number>();
       for (const item of items) {
-        if (!item.boothLabel) continue;
-        const dupeKey = `${item.boothLabel}::${item.description}`;
+        if (!item.elementLabel) continue;
+        const dupeKey = `${item.elementLabel}::${item.description}`;
         dupeCounts.set(dupeKey, (dupeCounts.get(dupeKey) ?? 0) + 1);
       }
       const seen = new Map<string, number>();
       for (const item of items) {
-        if (!item.boothLabel) continue;
-        const dupeKey = `${item.boothLabel}::${item.description}`;
+        if (!item.elementLabel) continue;
+        const dupeKey = `${item.elementLabel}::${item.description}`;
         const total = dupeCounts.get(dupeKey)!;
         if (total <= 1) continue;
         const index = (seen.get(dupeKey) ?? 0) + 1;
         seen.set(dupeKey, index);
-        item.boothLabel = `${item.boothLabel} — Booth ${index} of ${total}`;
+        item.elementLabel = `${item.elementLabel} — Booth ${index} of ${total}`;
       }
 
       return { name, items };
@@ -555,7 +555,7 @@ const ELEMENT_TYPE_ORDER = ["Wall Structure", "Hardware", "Wall Covering", "Grap
 // (groupBoothLineItemsForEditing below) shares this exact mapping instead
 // of duplicating it -- the editing view and the client-facing PDF should
 // never disagree about what a raw section name means.
-export function elementTypeForSection(sectionName: string): string {
+export function tradeCategoryForSection(sectionName: string): string {
   return ELEMENT_TYPE_MAP[sectionName.trim().toLowerCase()] ?? sectionName;
 }
 
@@ -569,7 +569,7 @@ export function isMappedElementType(sectionName: string): boolean {
 
 // H3 -- a named sub-breakdown of an H2 element group's own items, see
 // LineItem.subgroupLabel's own schema comment. Deliberately NOT itself
-// summarize/hide/reorder-able (unlike BoothGroup/ElementTypeGroup) -- an
+// summarize/hide/reorder-able (unlike ElementGroup/TradeGroup) -- an
 // H3 group's visibility is entirely governed by its H2/H1 ancestors; see
 // this plan's own "not in scope" note for why that's deliberate for v1.
 export interface SubgroupGroup {
@@ -578,8 +578,8 @@ export interface SubgroupGroup {
   subtotal: number;
 }
 
-export interface ElementTypeGroup {
-  elementType: string;
+export interface TradeGroup {
+  tradeCategory: string;
   // Buried money shown inside this group's printed total -- see
   // attachBuriedDisplay. Display only: `subtotal` and `items` are
   // untouched, so nothing that sums line items is affected by it.
@@ -601,7 +601,7 @@ export interface ElementTypeGroup {
   elementSummary: string | null;
   // This ONE element group's own "hide detail, keep the price" -- see
   // EstimateSection.summarizeOnProposal's own schema comment. Distinct
-  // from BoothGroup.summarizeOnProposal below: either one being true
+  // from ElementGroup.summarizeOnProposal below: either one being true
   // skips this group's itemized rows (proposal-pdf.tsx's own rendering
   // decision), so a booth-wide summarize still covers every group inside
   // it, but a single group can also be summarized without affecting its
@@ -609,25 +609,40 @@ export interface ElementTypeGroup {
   summarizeOnProposal: boolean;
 }
 
-export interface BoothGroup {
-  boothLabel: string;
-  // Same as ElementTypeGroup.buriedCost/buriedSell above, one tier up.
+// One ELEMENT of an exhibit -- a hitting bay wall, a lit spine, a sign --
+// holding the TRADES that build it: Custom Build, Structure, Graphics,
+// Labor, Shipping.
+//
+// These were called BoothGroup and elementType, which was a tier off from
+// how the business talks and cost real confusion: an estimate is ONE
+// booth, and what this type represents is one element of it. The database
+// columns still read boothDescription/boothSummary/elementSummary, since
+// renaming those means migrations for no functional gain -- read them as
+// elementDescription/elementSummary/tradeSummary. EstimateSection.groupLabel,
+// the column behind elementLabel, is already neutral.
+//
+// Not to be confused with the genuinely booth-scoped fields elsewhere --
+// boothNumber, boothSize, boothSpace, boothType -- which really do mean
+// the booth and are correctly named.
+export interface ElementGroup {
+  elementLabel: string;
+  // Same as TradeGroup.buriedCost/buriedSell above, one tier up.
   buriedCost?: number;
   buriedSell?: number;
   // The booth's own approved H1 heading override, when it has one --
   // see EstimateSection.boothDescription's own schema comment. Null
   // until an estimator writes or approves one, in which case the raw,
-  // often-meaningless boothLabel (a pricing-schedule's own internal
+  // often-meaningless elementLabel (a pricing-schedule's own internal
   // groupLabel, e.g. "RENTAL") is what a viewer would otherwise see.
   // proposal-pdf.tsx and the web proposal page render this in place of
-  // boothLabel whenever it's set -- neither field alone is enough on its
-  // own: boothLabel is always present and is the merge/move-tool's own
+  // elementLabel whenever it's set -- neither field alone is enough on its
+  // own: elementLabel is always present and is the merge/move-tool's own
   // key, boothDescription is the friendly text a person actually reads.
   boothDescription: string | null;
-  elementGroups: ElementTypeGroup[];
+  tradeGroups: TradeGroup[];
   subtotal: number;
   // See EstimateSection.summarizeOnProposal's own schema comment --
-  // proposal-pdf.tsx skips elementGroups' itemized rows entirely (never
+  // proposal-pdf.tsx skips tradeGroups' itemized rows entirely (never
   // the header or any of the summary text below) when this is true.
   summarizeOnProposal: boolean;
   // Always-shown body text for this booth's header -- see
@@ -649,7 +664,7 @@ export interface BoothGroup {
 // Sentinel bucket key for an item with no subgroupLabel -- distinct from
 // any real subgroup label a user could type (same "prefixed sentinel"
 // idea as aggregateByCategory's own standaloneSummaryScope), so its
-// bucket can be pulled out as ElementTypeGroup.items below while every
+// bucket can be pulled out as TradeGroup.items below while every
 // other bucket becomes one SubgroupGroup.
 const UNGROUPED_SUBGROUP = "__ungrouped__";
 
@@ -684,32 +699,32 @@ const UNGROUPED_SUBGROUP = "__ungrouped__";
 // dropping it would silently remove scope the client is meant to read.
 const allClientOwned = (items: AggregatedLineItem[]) => items.length > 0 && items.every((li) => li.isClientOwned);
 
-export function dropZeroGroups(boothGroups: BoothGroup[]): BoothGroup[] {
-  const keptGroups = (booth: BoothGroup) =>
-    booth.elementGroups
+export function dropZeroGroups(elementGroups: ElementGroup[]): ElementGroup[] {
+  const keptGroups = (booth: ElementGroup) =>
+    booth.tradeGroups
       .map((group) => ({
         ...group,
         subgroups: group.subgroups.filter((sub) => sub.subtotal !== 0 || allClientOwned(sub.items)),
       }))
       .filter((group) => group.subtotal !== 0 || allClientOwned(group.items));
 
-  return boothGroups
-    .map((booth) => ({ ...booth, elementGroups: keptGroups(booth) }))
+  return elementGroups
+    .map((booth) => ({ ...booth, tradeGroups: keptGroups(booth) }))
     // Whether the booth survives is decided entirely by what survived
     // inside it, not by its own subtotal: a group only survives if it is
     // worth something or is client-owned, so a booth with one left is a
     // booth with something to print. Testing booth.subtotal here instead
     // would drop an all-client-owned booth, which sums to zero and is
     // exactly the case the guard above exists to keep.
-    .filter((booth) => booth.elementGroups.length > 0);
+    .filter((booth) => booth.tradeGroups.length > 0);
 }
 
-export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup[] {
-  // One level deeper than before H3 existed: boothLabel -> elementType ->
+export function groupElementLineItems(sections: ProposalViewSection[]): ElementGroup[] {
+  // One level deeper than before H3 existed: elementLabel -> tradeCategory ->
   // subgroupKey (UNGROUPED_SUBGROUP or a real subgroupLabel) -> merged
   // item. Splitting on subgroupKey here (not after merging) keeps two
   // items with identical description+unit in DIFFERENT H3 subgroups from
-  // merging into one row the way they would if only booth+elementType
+  // merging into one row the way they would if only booth+tradeCategory
   // scoped the merge key.
   const byBooth = new Map<string, Map<string, Map<string, Map<string, AggregatedLineItem>>>>();
   // A booth's PDF position -- the min proposalSortOrder among every
@@ -724,7 +739,7 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // editing view already reflected the move correctly).
   const elementSortOrder = new Map<string, number>();
   // Same convention one level deeper still, keyed
-  // `${boothLabel}::${elementType}::${subgroupKey}` -- an H3 subgroup's
+  // `${elementLabel}::${tradeCategory}::${subgroupKey}` -- an H3 subgroup's
   // own display order is simply the order its items were first seen in,
   // there's no separate reorder tool for it (v1 scope), so this is the
   // only ordering signal it has.
@@ -754,7 +769,7 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // still exactly what updateSectionProposalSummary's booth-wide
   // (groupLabel-scoped) update produces. Deliberately never affects
   // boothSortOrder/elementSortOrder above or the subtotal math below --
-  // only proposal-pdf.tsx's own rendering decision skips elementGroups
+  // only proposal-pdf.tsx's own rendering decision skips tradeGroups
   // for a summarized booth.
   const boothSummarize = new Map<string, boolean>();
   // Same "prefer non-null" convention as boothDescriptionText above -- see
@@ -769,19 +784,19 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
   // Same "first section wins" convention, one level down from
   // boothSummarize above -- this element group's OWN summarize flag,
   // independent of whichever booth it belongs to. See
-  // ElementTypeGroup.summarizeOnProposal's own comment for why both are
+  // TradeGroup.summarizeOnProposal's own comment for why both are
   // read (either can trigger summarization for this one group).
   const elementSummarize = new Map<string, boolean>();
 
   for (const section of sections) {
     if (!section.groupLabel || section.includeInProposal === false || section.omittedFromProposal) continue;
-    const boothLabel = section.groupLabel;
-    const elementType = elementTypeForSection(section.name);
+    const elementLabel = section.groupLabel;
+    const tradeCategory = tradeCategoryForSection(section.name);
     boothSortOrder.set(
-      boothLabel,
-      Math.min(boothSortOrder.get(boothLabel) ?? Infinity, section.proposalSortOrder ?? 0),
+      elementLabel,
+      Math.min(boothSortOrder.get(elementLabel) ?? Infinity, section.proposalSortOrder ?? 0),
     );
-    const elementKey = `${boothLabel}::${elementType}`;
+    const elementKey = `${elementLabel}::${tradeCategory}`;
     elementSortOrder.set(elementKey, Math.min(elementSortOrder.get(elementKey) ?? Infinity, section.sortOrder ?? 0));
     if (!elementSummaryText.has(elementKey)) {
       elementSummaryText.set(elementKey, section.elementSummary ?? null);
@@ -790,33 +805,33 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
       elementSummarize.set(elementKey, section.summarizeOnProposal ?? false);
     }
     boothSummarize.set(
-      boothLabel,
-      (boothSummarize.get(boothLabel) ?? true) && (section.summarizeOnProposal ?? false),
+      elementLabel,
+      (boothSummarize.get(elementLabel) ?? true) && (section.summarizeOnProposal ?? false),
     );
-    const currentBoothDescription = boothDescriptionText.get(boothLabel);
+    const currentBoothDescription = boothDescriptionText.get(elementLabel);
     if (currentBoothDescription === undefined || (currentBoothDescription === null && section.boothDescription != null)) {
-      boothDescriptionText.set(boothLabel, section.boothDescription ?? null);
+      boothDescriptionText.set(elementLabel, section.boothDescription ?? null);
     }
-    const currentBoothSummary = boothSummaryText.get(boothLabel);
+    const currentBoothSummary = boothSummaryText.get(elementLabel);
     if (currentBoothSummary === undefined || (currentBoothSummary === null && section.boothSummary != null)) {
-      boothSummaryText.set(boothLabel, section.boothSummary ?? null);
+      boothSummaryText.set(elementLabel, section.boothSummary ?? null);
     }
 
-    let byElementType = byBooth.get(boothLabel);
+    let byElementType = byBooth.get(elementLabel);
     if (!byElementType) {
       byElementType = new Map();
-      byBooth.set(boothLabel, byElementType);
+      byBooth.set(elementLabel, byElementType);
     }
-    let bySubgroup = byElementType.get(elementType);
+    let bySubgroup = byElementType.get(tradeCategory);
     if (!bySubgroup) {
       bySubgroup = new Map();
-      byElementType.set(elementType, bySubgroup);
+      byElementType.set(tradeCategory, bySubgroup);
     }
 
     for (const li of section.lineItems) {
       if (li.includeInProposal === false) continue;
       const subgroupKey = li.subgroupLabel ?? UNGROUPED_SUBGROUP;
-      const subgroupSortKey = `${boothLabel}::${elementType}::${subgroupKey}`;
+      const subgroupSortKey = `${elementLabel}::${tradeCategory}::${subgroupKey}`;
       subgroupSortOrder.set(subgroupSortKey, Math.min(subgroupSortOrder.get(subgroupSortKey) ?? Infinity, li.sortOrder));
       let bucket = bySubgroup.get(subgroupKey);
       if (!bucket) {
@@ -838,7 +853,7 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
         bucket.set(key, {
           key,
           description: li.description,
-          boothLabel: null, // redundant once the booth is already the group's own heading
+          elementLabel: null, // redundant once the booth is already the group's own heading
           qty: li.qty.toNumber(),
           unit: li.unit,
           totalCost: li.totalCost.toNumber(),
@@ -862,8 +877,8 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
     // they always rendered in, rather than shuffling once this field
     // existed.
     .sort(([a], [b]) => (boothSortOrder.get(a) ?? 0) - (boothSortOrder.get(b) ?? 0) || a.localeCompare(b))
-    .map(([boothLabel, byElementType]) => {
-      const elementGroups = [...byElementType.entries()]
+    .map(([elementLabel, byElementType]) => {
+      const tradeGroups = [...byElementType.entries()]
         // sortOrder first -- an explicit, user-set position (moveElementGroupOrder
         // now reorders every group in a booth, fixed labels included) --
         // falling back to the fixed build-sequence rank only while every
@@ -872,18 +887,18 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
         // own comment for why a fixed label no longer has to win here.
         .sort(
           ([a], [b]) =>
-            (elementSortOrder.get(`${boothLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${boothLabel}::${b}`) ?? 0) ||
+            (elementSortOrder.get(`${elementLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${elementLabel}::${b}`) ?? 0) ||
             elementTypeRank(a) - elementTypeRank(b),
         )
-        .map(([elementType, bySubgroup]) => {
+        .map(([tradeCategory, bySubgroup]) => {
           const ungrouped = bySubgroup.get(UNGROUPED_SUBGROUP);
           const items = ungrouped ? [...ungrouped.values()].sort((a, b) => a.sortOrder - b.sortOrder) : [];
           const subgroups = [...bySubgroup.entries()]
             .filter(([subgroupKey]) => subgroupKey !== UNGROUPED_SUBGROUP)
             .sort(
               ([a], [b]) =>
-                (subgroupSortOrder.get(`${boothLabel}::${elementType}::${a}`) ?? 0) -
-                (subgroupSortOrder.get(`${boothLabel}::${elementType}::${b}`) ?? 0),
+                (subgroupSortOrder.get(`${elementLabel}::${tradeCategory}::${a}`) ?? 0) -
+                (subgroupSortOrder.get(`${elementLabel}::${tradeCategory}::${b}`) ?? 0),
             )
             .map(([subgroupLabel, bucket]) => {
               const subgroupItems = [...bucket.values()].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -891,15 +906,15 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
             })
             .filter((sg) => sg.items.length > 0);
           return {
-            elementType,
+            tradeCategory,
             items,
             subgroups,
             subtotal: bucketSubtotal(items) + subgroups.reduce((sum, sg) => sum + sg.subtotal, 0),
-            elementSummary: elementSummaryText.get(`${boothLabel}::${elementType}`) ?? null,
-            summarizeOnProposal: elementSummarize.get(`${boothLabel}::${elementType}`) ?? false,
+            elementSummary: elementSummaryText.get(`${elementLabel}::${tradeCategory}`) ?? null,
+            summarizeOnProposal: elementSummarize.get(`${elementLabel}::${tradeCategory}`) ?? false,
           };
         })
-        // A section contributes an (elementType, bucket) entry the
+        // A section contributes an (tradeCategory, bucket) entry the
         // moment it's seen, before any of its line items are known to
         // survive -- on a real job, several booths were still 100%
         // draft (excluded upstream by the PDF route's own isDraft:
@@ -909,18 +924,18 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
         // now -- an element group can be all-H3-tagged, zero ungrouped
         // items, and still have real content to show.
         .filter((g) => g.items.length > 0 || g.subgroups.length > 0);
-      if (elementGroups.length === 0) return null;
-      const subtotal = elementGroups.reduce((sum, g) => sum + g.subtotal, 0);
+      if (tradeGroups.length === 0) return null;
+      const subtotal = tradeGroups.reduce((sum, g) => sum + g.subtotal, 0);
       return {
-        boothLabel,
-        boothDescription: boothDescriptionText.get(boothLabel) ?? null,
-        elementGroups,
+        elementLabel,
+        boothDescription: boothDescriptionText.get(elementLabel) ?? null,
+        tradeGroups,
         subtotal,
-        summarizeOnProposal: boothSummarize.get(boothLabel) ?? false,
-        boothSummary: boothSummaryText.get(boothLabel) ?? null,
+        summarizeOnProposal: boothSummarize.get(elementLabel) ?? false,
+        boothSummary: boothSummaryText.get(elementLabel) ?? null,
       };
     })
-    .filter((g): g is BoothGroup => g !== null);
+    .filter((g): g is ElementGroup => g !== null);
 }
 
 // Generalizes the booth-grouped build-out view from the old two hardcoded
@@ -938,7 +953,7 @@ export function groupBoothLineItems(sections: ProposalViewSection[]): BoothGroup
 export function boothGroupsByCategory(
   sections: ProposalViewSection[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
-): Map<string, BoothGroup[]> {
+): Map<string, ElementGroup[]> {
   const categoryIdByName = new Map(categories.map((c) => [c.name, c.id]));
   const sectionsByCategoryName = new Map<string, ProposalViewSection[]>();
   for (const section of sections) {
@@ -951,7 +966,7 @@ export function boothGroupsByCategory(
       else itemsByCategoryName.set(categoryName, [li]);
     }
     for (const [categoryName, items] of itemsByCategoryName) {
-      // `name` feeds elementTypeForSection (groupBoothLineItems' own H2
+      // `name` feeds tradeCategoryForSection (groupElementLineItems' own H2
       // label) below -- resolving it to this section's own approved
       // heading here (same precedence the editor's own elementDescription
       // resolves, see resolveApprovedSectionHeading's own comment) keeps
@@ -965,9 +980,9 @@ export function boothGroupsByCategory(
       else sectionsByCategoryName.set(categoryName, [clone]);
     }
   }
-  const result = new Map<string, BoothGroup[]>();
+  const result = new Map<string, ElementGroup[]>();
   for (const [categoryName, sectionsForCategory] of sectionsByCategoryName) {
-    result.set(categoryName, groupBoothLineItems(sectionsForCategory));
+    result.set(categoryName, groupElementLineItems(sectionsForCategory));
   }
   return result;
 }
@@ -985,7 +1000,7 @@ export function boothGroupsByCategory(
 // in the Line Items tab while the real Proposal PDF itemized every one
 // of its rows anyway.
 //
-// Reuses groupBoothLineItems itself (via a synthetic, per-section
+// Reuses groupElementLineItems itself (via a synthetic, per-section
 // groupLabel so a summarized section's own items never merge with any
 // OTHER section's, unlike the real cross-show merge every other
 // booth-independent item still gets -- see aggregateByCategory's own
@@ -1005,11 +1020,11 @@ export function boothGroupsByCategory(
 // `name` (often a source-document filename for an AI-imported section --
 // confirmed live on production's own Signage tab, as a standalone
 // section's H1, AND on its Audio/Visual tab, as a real booth's own H2:
-// groupBoothLineItems' elementType label reads straight off whatever
+// groupElementLineItems' tradeCategory label reads straight off whatever
 // `name` it's given, with no override awareness of its own, so both
 // boothGroupsByCategory and standaloneSummaryGroupsByCategory resolve the
 // real heading here first and rename their clones before handing them to
-// groupBoothLineItems/elementTypeForSection).
+// groupElementLineItems/tradeCategoryForSection).
 function resolveApprovedSectionHeading(
   section: ProposalViewSection,
   categoryId: string | undefined,
@@ -1023,7 +1038,7 @@ function resolveApprovedSectionHeading(
 export function standaloneSummaryGroupsByCategory(
   sections: ProposalViewSection[],
   categories: Pick<Category, "id" | "name" | "key" | "parentId">[],
-): Map<string, BoothGroup[]> {
+): Map<string, ElementGroup[]> {
   const categoryIdByName = new Map(categories.map((c) => [c.name, c.id]));
   const sectionsByCategoryName = new Map<string, ProposalViewSection[]>();
   const sectionByScopeKey = new Map<string, ProposalViewSection>();
@@ -1039,7 +1054,7 @@ export function standaloneSummaryGroupsByCategory(
       else itemsByCategoryName.set(categoryName, [li]);
     }
     for (const [categoryName, items] of itemsByCategoryName) {
-      // `name` feeds elementTypeForSection (groupBoothLineItems' own H2
+      // `name` feeds tradeCategoryForSection (groupElementLineItems' own H2
       // label) below -- resolving it to the same approved heading here
       // keeps H1 and H2 in agreement instead of only fixing one of them.
       const resolvedName = resolveApprovedSectionHeading(section, categoryIdByName.get(categoryName));
@@ -1049,22 +1064,22 @@ export function standaloneSummaryGroupsByCategory(
       else sectionsByCategoryName.set(categoryName, [clone]);
     }
   }
-  const result = new Map<string, BoothGroup[]>();
+  const result = new Map<string, ElementGroup[]>();
   for (const [categoryName, sectionsForCategory] of sectionsByCategoryName) {
-    const groups = groupBoothLineItems(sectionsForCategory).map((group) => {
-      const section = sectionByScopeKey.get(group.boothLabel);
+    const groups = groupElementLineItems(sectionsForCategory).map((group) => {
+      const section = sectionByScopeKey.get(group.elementLabel);
       const boothDescription = section
         ? resolveApprovedSectionHeading(section, categoryIdByName.get(categoryName))
-        : group.boothLabel;
+        : group.elementLabel;
       // A standalone section's own "AI proposed summary" lives in
       // elementSummary -- the H1-level SummaryEditor page.tsx wires up
       // for these sections (LineItemsTab, right below the flat-section
       // header) reads/writes that exact field, not boothSummary, since
       // a never-tagged section has no real booth to sync a boothSummary
-      // across. But groupBoothLineItems' own boothSummaryText map only
+      // across. But groupElementLineItems' own boothSummaryText map only
       // ever reads section.boothSummary -- always null here -- so this
       // group's real summary rendered one tier too low: after the H2
-      // elementType header (renderBoothGroups' own render order), which
+      // tradeCategory header (renderBoothGroups' own render order), which
       // for a lump-sum group repeats the exact same text as H1 anyway
       // (boothDescription above), instead of right after the H1 header
       // the way a real booth's own boothSummary already does. Confirmed
@@ -1075,8 +1090,8 @@ export function standaloneSummaryGroupsByCategory(
       // the one elementGroup below so the same paragraph doesn't also
       // render a second time under the (duplicate) H2.
       const boothSummary = section?.elementSummary ?? group.boothSummary;
-      const elementGroups = group.elementGroups.map((eg) => ({ ...eg, elementSummary: null }));
-      return { ...group, boothDescription, boothSummary, elementGroups };
+      const tradeGroups = group.tradeGroups.map((eg) => ({ ...eg, elementSummary: null }));
+      return { ...group, boothDescription, boothSummary, tradeGroups };
     });
     result.set(categoryName, groups);
   }
@@ -1092,15 +1107,15 @@ export interface RawSubgroup<T> {
 }
 
 export interface RawElementTypeGroup<T> {
-  elementType: string;
-  // Only this group's UNGROUPED items -- see ElementTypeGroup.items' own
+  tradeCategory: string;
+  // Only this group's UNGROUPED items -- see TradeGroup.items' own
   // comment, identical reasoning here.
   items: T[];
   subgroups: RawSubgroup<T>[];
   subtotal: number;
   // The section(s) this bucket's items came from -- almost always exactly
-  // one (a bucket is keyed by (boothLabel, elementType), and normally only
-  // one section per booth resolves to a given elementType), but a second
+  // one (a bucket is keyed by (elementLabel, tradeCategory), and normally only
+  // one section per booth resolves to a given tradeCategory), but a second
   // section sharing the same name can start contributing here the moment
   // one of its own items gets recategorized into whatever category tab
   // this bucket belongs to (confirmed live: recategorizing a "Shipping"-
@@ -1114,7 +1129,7 @@ export interface RawElementTypeGroup<T> {
   sectionIds: string[];
   description: string | null;
   pendingDescription: string | null;
-  // True only when elementType came from a real ELEMENT_TYPE_MAP entry --
+  // True only when tradeCategory came from a real ELEMENT_TYPE_MAP entry --
   // deliberately NOT also true just because sectionIds.length > 1.
   // Merging used to force this true (no edit UI, no move-group-order
   // eligibility, same treatment as a real mapped section) -- confirmed
@@ -1128,8 +1143,8 @@ export interface RawElementTypeGroup<T> {
 }
 
 export interface RawBoothGroup<T> {
-  boothLabel: string;
-  elementGroups: RawElementTypeGroup<T>[];
+  elementLabel: string;
+  tradeGroups: RawElementTypeGroup<T>[];
   subtotal: number;
   // The booth's own H1-level description/pendingDescription -- see
   // EstimateSection.boothDescription's own schema comment. Read off the
@@ -1140,7 +1155,7 @@ export interface RawBoothGroup<T> {
   boothPendingDescription: string | null;
 }
 
-// Same booth -> element-type structure as groupBoothLineItems above, but
+// Same booth -> element-type structure as groupElementLineItems above, but
 // for an editing surface (the Line Items tab's own "Components" view):
 // every raw line item stays its own row -- own id, own move/edit/delete
 // actions via LineItemRow -- instead of being merged by description+unit
@@ -1149,8 +1164,8 @@ export interface RawBoothGroup<T> {
 // passes straight through unchanged; this only ever needs `totalCost` (a
 // Decimal, for subtotal math) and `sortOrder` (for display order) off it.
 interface EditableSectionBucket<T> {
-  // Every raw item contributing to this (boothLabel, elementType) bucket,
-  // split by H3 subgroupLabel at push time (see groupBoothLineItems' own
+  // Every raw item contributing to this (elementLabel, tradeCategory) bucket,
+  // split by H3 subgroupLabel at push time (see groupElementLineItems' own
   // identical UNGROUPED_SUBGROUP convention) -- keyed by subgroupKey so
   // an item's subgroup membership is known without re-reading it off T
   // after the fact.
@@ -1180,12 +1195,12 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
   const byBooth = new Map<string, Map<string, EditableSectionBucket<T>>>();
   const boothDescriptions = new Map<string, { description: string | null; pendingDescription: string | null }>();
   // Same "min across every section contributing to this booth" convention
-  // as groupBoothLineItems' own boothSortOrder -- so the editor renders
+  // as groupElementLineItems' own boothSortOrder -- so the editor renders
   // booths in the exact order moveSectionProposalOrder's up/down actually
   // move them in, not a separate alphabetical order that would make
   // reordering invisible where a user actually clicks it.
   const boothSortOrder = new Map<string, number>();
-  // Same convention one level down: a group's (boothLabel, elementType)
+  // Same convention one level down: a group's (elementLabel, tradeCategory)
   // key maps to the min sortOrder across every section contributing to
   // it, so moveElementGroupOrder's up/down swaps land exactly where this
   // sort puts them. Unlike proposalSortOrder (deliberately per-category,
@@ -1195,19 +1210,19 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
   // section happens to have items in, not a different row per category --
   // so one plain, category-agnostic sortOrder is the correct model here.
   const elementSortOrder = new Map<string, number>();
-  // Same convention one level deeper still as groupBoothLineItems' own
+  // Same convention one level deeper still as groupElementLineItems' own
   // subgroupSortOrder -- see that comment.
   const subgroupSortOrder = new Map<string, number>();
 
   for (const section of sections) {
     if (!section.groupLabel) continue;
-    const boothLabel = section.groupLabel;
-    const elementType = elementTypeForSection(section.name);
+    const elementLabel = section.groupLabel;
+    const tradeCategory = tradeCategoryForSection(section.name);
     boothSortOrder.set(
-      boothLabel,
-      Math.min(boothSortOrder.get(boothLabel) ?? Infinity, section.proposalSortOrder ?? 0),
+      elementLabel,
+      Math.min(boothSortOrder.get(elementLabel) ?? Infinity, section.proposalSortOrder ?? 0),
     );
-    const elementKey = `${boothLabel}::${elementType}`;
+    const elementKey = `${elementLabel}::${tradeCategory}`;
     elementSortOrder.set(elementKey, Math.min(elementSortOrder.get(elementKey) ?? Infinity, section.sortOrder ?? 0));
 
     // Prefers a non-null value over whichever section is simply encountered
@@ -1217,27 +1232,27 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
     // this is the read-side backstop for the one moment a new section can
     // still be seen with a stale/null value, so a real approved H1 heading
     // never appears to silently revert just because of array order.
-    const currentBoothDescription = boothDescriptions.get(boothLabel);
+    const currentBoothDescription = boothDescriptions.get(elementLabel);
     if (!currentBoothDescription || (currentBoothDescription.description === null && section.boothDescription !== null)) {
-      boothDescriptions.set(boothLabel, {
+      boothDescriptions.set(elementLabel, {
         description: section.boothDescription,
         pendingDescription: section.boothPendingDescription,
       });
     }
 
-    let byElementType = byBooth.get(boothLabel);
+    let byElementType = byBooth.get(elementLabel);
     if (!byElementType) {
       byElementType = new Map();
-      byBooth.set(boothLabel, byElementType);
+      byBooth.set(elementLabel, byElementType);
     }
-    let bucket = byElementType.get(elementType);
+    let bucket = byElementType.get(tradeCategory);
     if (!bucket) {
       bucket = { bySubgroup: new Map(), sectionIds: [], description: section.description, pendingDescription: section.pendingDescription };
-      byElementType.set(elementType, bucket);
+      byElementType.set(tradeCategory, bucket);
     }
     for (const li of section.lineItems) {
       const subgroupKey = li.subgroupLabel ?? UNGROUPED_SUBGROUP;
-      const subgroupSortKey = `${boothLabel}::${elementType}::${subgroupKey}`;
+      const subgroupSortKey = `${elementLabel}::${tradeCategory}::${subgroupKey}`;
       subgroupSortOrder.set(subgroupSortKey, Math.min(subgroupSortOrder.get(subgroupSortKey) ?? Infinity, li.sortOrder));
       const items = bucket.bySubgroup.get(subgroupKey);
       if (items) items.push(li);
@@ -1253,25 +1268,25 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
 
   return [...byBooth.entries()]
     .sort(([a], [b]) => (boothSortOrder.get(a) ?? 0) - (boothSortOrder.get(b) ?? 0) || a.localeCompare(b))
-    .map(([boothLabel, byElementType]) => {
-      const elementGroups = [...byElementType.entries()]
-        // sortOrder first -- see groupBoothLineItems' own identical comment
+    .map(([elementLabel, byElementType]) => {
+      const tradeGroups = [...byElementType.entries()]
+        // sortOrder first -- see groupElementLineItems' own identical comment
         // (this is the editing-surface counterpart) for why a fixed
         // build-sequence label no longer wins over an explicit move.
         .sort(
           ([a], [b]) =>
-            (elementSortOrder.get(`${boothLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${boothLabel}::${b}`) ?? 0) ||
+            (elementSortOrder.get(`${elementLabel}::${a}`) ?? 0) - (elementSortOrder.get(`${elementLabel}::${b}`) ?? 0) ||
             elementTypeRank(a) - elementTypeRank(b),
         )
-        .map(([elementType, bucket]) => {
+        .map(([tradeCategory, bucket]) => {
           const ungrouped = bucket.bySubgroup.get(UNGROUPED_SUBGROUP) ?? [];
           const items = [...ungrouped].sort((a, b) => a.sortOrder - b.sortOrder);
           const subgroups = [...bucket.bySubgroup.entries()]
             .filter(([subgroupKey]) => subgroupKey !== UNGROUPED_SUBGROUP)
             .sort(
               ([a], [b]) =>
-                (subgroupSortOrder.get(`${boothLabel}::${elementType}::${a}`) ?? 0) -
-                (subgroupSortOrder.get(`${boothLabel}::${elementType}::${b}`) ?? 0),
+                (subgroupSortOrder.get(`${elementLabel}::${tradeCategory}::${a}`) ?? 0) -
+                (subgroupSortOrder.get(`${elementLabel}::${tradeCategory}::${b}`) ?? 0),
             )
             .map(([subgroupLabel, subgroupItems]) => {
               const sorted = [...subgroupItems].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -1280,32 +1295,32 @@ export function groupBoothLineItemsForEditing<T extends { totalCost: Prisma.Deci
           const subtotal =
             items.reduce((sum, li) => sum + li.totalCost.toNumber(), 0) + subgroups.reduce((sum, sg) => sum + sg.subtotal, 0);
           return {
-            elementType,
+            tradeCategory,
             items,
             subgroups,
             subtotal,
             sectionIds: bucket.sectionIds,
             description: bucket.description,
             pendingDescription: bucket.pendingDescription,
-            // elementType here is already resolved -- a mapped section's
-            // elementType is always one of ELEMENT_TYPE_ORDER's 6 fixed
-            // target names (elementTypeForSection's own mapping), so
+            // tradeCategory here is already resolved -- a mapped section's
+            // tradeCategory is always one of ELEMENT_TYPE_ORDER's 6 fixed
+            // target names (tradeCategoryForSection's own mapping), so
             // checking membership there is equivalent to (and simpler
             // than) re-deriving it from the raw section name.
-            isMapped: ELEMENT_TYPE_ORDER.includes(elementType),
+            isMapped: ELEMENT_TYPE_ORDER.includes(tradeCategory),
           };
         })
-        // Same reasoning as groupBoothLineItems' own filter above -- an
-        // all-draft section still creates an (elementType, bucket) entry
+        // Same reasoning as groupElementLineItems' own filter above -- an
+        // all-draft section still creates an (tradeCategory, bucket) entry
         // before any items are known to survive. Checks subgroups too --
         // see that function's own identical comment.
         .filter((g) => g.items.length > 0 || g.subgroups.length > 0);
-      if (elementGroups.length === 0) return null;
-      const subtotal = elementGroups.reduce((sum, g) => sum + g.subtotal, 0);
-      const boothDesc = boothDescriptions.get(boothLabel) ?? { description: null, pendingDescription: null };
+      if (tradeGroups.length === 0) return null;
+      const subtotal = tradeGroups.reduce((sum, g) => sum + g.subtotal, 0);
+      const boothDesc = boothDescriptions.get(elementLabel) ?? { description: null, pendingDescription: null };
       return {
-        boothLabel,
-        elementGroups,
+        elementLabel,
+        tradeGroups,
         subtotal,
         boothDescription: boothDesc.description,
         boothPendingDescription: boothDesc.pendingDescription,
@@ -1479,7 +1494,7 @@ export function bucketLineItemsByCategory<T extends { category: string | null }>
       // Either way this function still buckets every item; it's
       // CategoryTabContent that skips a booth-linked section's own flat
       // rendering once that booth is also being shown via its own
-      // component-grouped view (LineItemsTab's own boothGroups), so
+      // component-grouped view (LineItemsTab's own elementGroups), so
       // nothing renders twice.
       const categoryName = resolveEffectiveCategory(li, section, categories);
       let sectionMap = byCategoryThenSection.get(categoryName);
@@ -1639,7 +1654,7 @@ export interface ProposalTotalsFold {
 
 // The Grand-Total half of an omittedFromProposal ("bury the cost") H2
 // group -- see EstimateSection.omittedFromProposal's own schema comment.
-// aggregateByCategory/groupBoothLineItems both exclude these sections
+// aggregateByCategory/groupElementLineItems both exclude these sections
 // from every itemized view; this is what adds their dollar amount back
 // into the document's own totals, re-running the EXACT SAME
 // aggregateByCategory/computeRentalAndServicesTotals/sellForCategory
@@ -1761,34 +1776,34 @@ export function buriedDisplayCategory(
 // booth it lands on the biggest element group, so all three tiers of
 // heading agree with one another.
 export function attachBuriedDisplay(
-  boothGroups: BoothGroup[],
+  elementGroups: ElementGroup[],
   categoryName: string,
   plan: BuriedDisplayPlan,
   // What this category has been asked to carry beyond its own booths'
   // money -- decided by the caller, which is the only place that can see
   // every category at once. Zero for all but one category per side.
   unhomed: { cost: number; sell: number },
-): BoothGroup[] {
+): ElementGroup[] {
   let largestIndex = -1;
-  for (let i = 0; i < boothGroups.length; i += 1) {
-    if (largestIndex === -1 || boothGroups[i].subtotal > boothGroups[largestIndex].subtotal) largestIndex = i;
+  for (let i = 0; i < elementGroups.length; i += 1) {
+    if (largestIndex === -1 || elementGroups[i].subtotal > elementGroups[largestIndex].subtotal) largestIndex = i;
   }
 
-  return boothGroups.map((booth, i) => {
-    const own = plan.byBooth.get(`${categoryName}::${booth.boothLabel}`) ?? { cost: 0, sell: 0 };
+  return elementGroups.map((booth, i) => {
+    const own = plan.byBooth.get(`${categoryName}::${booth.elementLabel}`) ?? { cost: 0, sell: 0 };
     const extra =
       i === largestIndex ? { cost: own.cost + unhomed.cost, sell: own.sell + unhomed.sell } : own;
     if (extra.cost === 0 && extra.sell === 0) return booth;
 
     let groupIndex = -1;
-    for (let g = 0; g < booth.elementGroups.length; g += 1) {
-      if (groupIndex === -1 || booth.elementGroups[g].subtotal > booth.elementGroups[groupIndex].subtotal) groupIndex = g;
+    for (let g = 0; g < booth.tradeGroups.length; g += 1) {
+      if (groupIndex === -1 || booth.tradeGroups[g].subtotal > booth.tradeGroups[groupIndex].subtotal) groupIndex = g;
     }
     return {
       ...booth,
       buriedCost: extra.cost,
       buriedSell: extra.sell,
-      elementGroups: booth.elementGroups.map((group, g) =>
+      tradeGroups: booth.tradeGroups.map((group, g) =>
         g === groupIndex ? { ...group, buriedCost: extra.cost, buriedSell: extra.sell } : group,
       ),
     };

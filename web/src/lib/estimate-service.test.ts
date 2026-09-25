@@ -3856,7 +3856,7 @@ describe("moveElementGroupOrder", () => {
 
   it("still moves a merged (two-same-named-sections) unmapped group -- merging isn't a mapped category", async () => {
     // Regression companion to proposal-view-model.test.ts's own -- two
-    // sections sharing the name "Custom Build" merge into one elementType
+    // sections sharing the name "Custom Build" merge into one tradeCategory
     // bucket the moment they both carry items, and that used to force
     // isMapped true, silently excluding the whole component from
     // moveElementGroupOrder's own movable list with no indication why.

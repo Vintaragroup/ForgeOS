@@ -52,7 +52,7 @@ export interface ProposedItemForDuplicateCheck {
   // A finer-grained scope than the whole estimate version -- the source
   // file's own sheet/module/booth name, when the pipeline has one (e.g.
   // module-cost-estimate's row.sheetName, design-cost-estimate's
-  // preview.boothLabel). Real production data has entire files where the
+  // preview.elementLabel). Real production data has entire files where the
   // SAME generic description ("Mixed Hardware", "Shop Supplies") repeats
   // once per module by design -- description alone can never
   // disambiguate those, but they're never ambiguous once you also know

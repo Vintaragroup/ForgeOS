@@ -5,7 +5,7 @@ import {
   boothGroupsByCategory,
   bucketLineItemsByCategory,
   foldOmittedIntoTotals,
-  groupBoothLineItems,
+  groupElementLineItems,
   groupBoothLineItemsForEditing,
   groupPrimaryCategoryTabs,
   mergeBoothGroupsForAllMethods,
@@ -59,7 +59,7 @@ describe("aggregateByCategory -- booth-scoped grouping", () => {
     const [bucket] = aggregateByCategory(sections, categories);
 
     expect(bucket.items).toHaveLength(2);
-    const bySection = Object.fromEntries(bucket.items.map((i) => [i.boothLabel, i]));
+    const bySection = Object.fromEntries(bucket.items.map((i) => [i.elementLabel, i]));
     expect(bySection["SECTION 211"]?.qty).toBe(3);
     expect(bySection["SECTION 211"]?.totalCost).toBe(327);
     expect(bySection["SECTION 428"]?.qty).toBe(2);
@@ -83,7 +83,7 @@ describe("aggregateByCategory -- booth-scoped grouping", () => {
     expect(bucket.items).toHaveLength(1);
     expect(bucket.items[0].qty).toBe(4);
     expect(bucket.items[0].totalCost).toBe(436);
-    expect(bucket.items[0].boothLabel).toBe("SECTION 428");
+    expect(bucket.items[0].elementLabel).toBe("SECTION 428");
   });
 
   it("still sums a booth-INDEPENDENT part (no groupLabel) across the whole show, unchanged from before", () => {
@@ -97,7 +97,7 @@ describe("aggregateByCategory -- booth-scoped grouping", () => {
     expect(bucket.items).toHaveLength(1);
     expect(bucket.items[0].qty).toBe(2);
     expect(bucket.items[0].totalCost).toBe(300);
-    expect(bucket.items[0].boothLabel).toBeNull();
+    expect(bucket.items[0].elementLabel).toBeNull();
   });
 
   it("never merges a compound assembly across booths even when they share identical spec text", () => {
@@ -196,14 +196,14 @@ describe("aggregateByCategory -- booth-scoped grouping", () => {
     expect(bucket.items).toHaveLength(2);
     const totalCost = bucket.items.reduce((sum, i) => sum + i.totalCost, 0);
     expect(totalCost).toBe(10000);
-    const summarizedItem = bucket.items.find((i) => i.boothLabel?.includes("s1"));
+    const summarizedItem = bucket.items.find((i) => i.elementLabel?.includes("s1"));
     expect(summarizedItem?.qty).toBe(1);
-    expect(summarizedItem?.boothLabel).not.toBeNull();
+    expect(summarizedItem?.elementLabel).not.toBeNull();
   });
 });
 
 describe("boothGroupsByCategory", () => {
-  it("propagates omittedFromProposal through to groupBoothLineItems, excluding the section entirely", () => {
+  it("propagates omittedFromProposal through to groupElementLineItems, excluding the section entirely", () => {
     const sections: ProposalViewSection[] = [
       {
         name: "Structure",
@@ -257,7 +257,7 @@ describe("boothGroupsByCategory", () => {
     expect(booth?.subtotal).toBe(16460);
   });
 
-  it("keys a real booth's own H2 (elementType) label by its approved per-category heading, not the raw section name (confirmed live on production's Audio/Visual tab: a component approved as 'All Audio and Video elements - Rentals' in the editor still rendered as its raw import filename here)", () => {
+  it("keys a real booth's own H2 (tradeCategory) label by its approved per-category heading, not the raw section name (confirmed live on production's Audio/Visual tab: a component approved as 'All Audio and Video elements - Rentals' in the editor still rendered as its raw import filename here)", () => {
     const audioVisual = cat("Audio/Visual", "audio_visual");
     const audioVisualRental = {
       id: "audio_visual_rental",
@@ -284,7 +284,7 @@ describe("boothGroupsByCategory", () => {
 
     const [booth] = boothGroupsByCategory(sections, categoriesWithSplit).get("Audio/Visual - Rental") ?? [];
 
-    expect(booth?.elementGroups[0]?.elementType).toBe("All Audio and Video elements - Rentals");
+    expect(booth?.tradeGroups[0]?.tradeCategory).toBe("All Audio and Video elements - Rentals");
   });
 });
 
@@ -311,7 +311,7 @@ describe("standaloneSummaryGroupsByCategory", () => {
     expect(group?.summarizeOnProposal).toBe(true);
   });
 
-  it("propagates omittedFromProposal through to groupBoothLineItems on its cloned section, excluding it entirely", () => {
+  it("propagates omittedFromProposal through to groupElementLineItems on its cloned section, excluding it entirely", () => {
     const sections: ProposalViewSection[] = [
       {
         id: "s1",
@@ -345,7 +345,7 @@ describe("standaloneSummaryGroupsByCategory", () => {
     const [group] = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
 
     expect(group?.boothSummary).toBe("Approved always-shown summary for this section.");
-    expect(group?.elementGroups[0]?.elementSummary).toBeNull();
+    expect(group?.tradeGroups[0]?.elementSummary).toBeNull();
   });
 
   it("falls back to the section's raw name when it has no approved description", () => {
@@ -380,11 +380,11 @@ describe("standaloneSummaryGroupsByCategory", () => {
     const [group] = standaloneSummaryGroupsByCategory(sections, categories).get("Structure") ?? [];
 
     expect(group?.boothDescription).toBe("Suspended Baseball Signage Display");
-    // elementTypeForSection (groupBoothLineItems' own H2 label) reads
+    // tradeCategoryForSection (groupElementLineItems' own H2 label) reads
     // straight off whatever `name` it's given -- without also resolving
     // this override into the clone's `name`, H2 would still show the raw
     // filename even after H1 was fixed (exactly what production showed).
-    expect(group?.elementGroups[0]?.elementType).toBe("Suspended Baseball Signage Display");
+    expect(group?.tradeGroups[0]?.tradeCategory).toBe("Suspended Baseball Signage Display");
   });
 
   it("falls back to the shared description when a category-override row exists but hasn't been approved yet", () => {
@@ -445,19 +445,19 @@ describe("standaloneSummaryGroupsByCategory", () => {
   });
 });
 
-describe("groupBoothLineItems", () => {
+describe("groupElementLineItems", () => {
   it("groups by booth, then by element type -- keeping BeMatrix (Wall Structure) and Wall Panels (Wall Covering) separate", () => {
     const sections: ProposalViewSection[] = [
       { name: "BeMatrix", groupLabel: "SECTION 211", lineItems: [li({ id: "a", description: "310mm x 2418mm Frame", qty: 4, totalCost: 1300 })] },
       { name: "Wall Panels", groupLabel: "SECTION 211", lineItems: [li({ id: "b", description: "SEG w/ Blackout White", qty: 6, totalCost: 200, unit: "SQFT" })] },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
+    const [booth] = groupElementLineItems(sections);
 
-    expect(booth.boothLabel).toBe("SECTION 211");
-    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Wall Structure", "Wall Covering"]);
-    expect(booth.elementGroups[0].items[0].description).toBe("310mm x 2418mm Frame");
-    expect(booth.elementGroups[1].items[0].description).toBe("SEG w/ Blackout White");
+    expect(booth.elementLabel).toBe("SECTION 211");
+    expect(booth.tradeGroups.map((g) => g.tradeCategory)).toEqual(["Wall Structure", "Wall Covering"]);
+    expect(booth.tradeGroups[0].items[0].description).toBe("310mm x 2418mm Frame");
+    expect(booth.tradeGroups[1].items[0].description).toBe("SEG w/ Blackout White");
     expect(booth.subtotal).toBe(1500);
   });
 
@@ -468,9 +468,9 @@ describe("groupBoothLineItems", () => {
       { name: "Add-Ons", groupLabel: null, lineItems: [li({ id: "c", totalCost: 9999 })] },
     ];
 
-    const groups = groupBoothLineItems(sections);
+    const groups = groupElementLineItems(sections);
 
-    expect(groups.map((g) => g.boothLabel)).toEqual(["SECTION 211", "SECTION 428"]);
+    expect(groups.map((g) => g.elementLabel)).toEqual(["SECTION 211", "SECTION 428"]);
     const total = groups.reduce((sum, g) => sum + g.subtotal, 0);
     expect(total).toBe(300); // the $9999 Add-Ons item never contributes -- no groupLabel
   });
@@ -481,9 +481,9 @@ describe("groupBoothLineItems", () => {
       { name: "BeMatrix", groupLabel: "SECTION 428", proposalSortOrder: 0, lineItems: [li({ id: "b", totalCost: 200 })] },
     ];
 
-    const groups = groupBoothLineItems(sections);
+    const groups = groupElementLineItems(sections);
 
-    expect(groups.map((g) => g.boothLabel)).toEqual(["SECTION 428", "SECTION 211"]);
+    expect(groups.map((g) => g.elementLabel)).toEqual(["SECTION 428", "SECTION 211"]);
   });
 
   it("orders a booth's own custom-named groups by sortOrder -- moveElementGroupOrder must actually reach the client-facing PDF/web proposal", () => {
@@ -499,12 +499,12 @@ describe("groupBoothLineItems", () => {
       { name: "Booth Build", groupLabel: "SECTION 231", sortOrder: 0, lineItems: [li({ id: "b", totalCost: 200 })] },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
+    const [booth] = groupElementLineItems(sections);
 
-    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Booth Build", "Platform"]);
+    expect(booth.tradeGroups.map((g) => g.tradeCategory)).toEqual(["Booth Build", "Platform"]);
   });
 
-  it("carries summarizeOnProposal through to the BoothGroup, defaulting false when unset", () => {
+  it("carries summarizeOnProposal through to the ElementGroup, defaulting false when unset", () => {
     const summarized: ProposalViewSection[] = [
       { name: "Platform", groupLabel: "SECTION 231", summarizeOnProposal: true, lineItems: [li({ id: "a", totalCost: 100 })] },
     ];
@@ -512,8 +512,8 @@ describe("groupBoothLineItems", () => {
       { name: "Platform", groupLabel: "SECTION 428", lineItems: [li({ id: "b", totalCost: 100 })] },
     ];
 
-    const [summarizedBooth] = groupBoothLineItems(summarized);
-    const [plainBooth] = groupBoothLineItems(plain);
+    const [summarizedBooth] = groupElementLineItems(summarized);
+    const [plainBooth] = groupElementLineItems(plain);
 
     expect(summarizedBooth.summarizeOnProposal).toBe(true);
     expect(plainBooth.summarizeOnProposal).toBe(false);
@@ -522,9 +522,9 @@ describe("groupBoothLineItems", () => {
   it("never removes a summarized booth's items from its own subtotal -- only proposal-pdf.tsx's rendering skips them", () => {
     // The whole point of summarizeOnProposal (see its own schema comment):
     // hide the itemized detail on the client PDF without changing any
-    // total. groupBoothLineItems itself must keep computing the real
+    // total. groupElementLineItems itself must keep computing the real
     // subtotal regardless -- it's proposal-pdf.tsx's job to skip
-    // rendering elementGroups, never this function's job to drop them
+    // rendering tradeGroups, never this function's job to drop them
     // from the math.
     const sections: ProposalViewSection[] = [
       {
@@ -538,14 +538,14 @@ describe("groupBoothLineItems", () => {
       },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
+    const [booth] = groupElementLineItems(sections);
 
     expect(booth.summarizeOnProposal).toBe(true);
     expect(booth.subtotal).toBe(300);
-    expect(booth.elementGroups[0].items).toHaveLength(2);
+    expect(booth.tradeGroups[0].items).toHaveLength(2);
   });
 
-  it("uses the booth's approved boothDescription for its heading, falling back to the raw boothLabel when unset", () => {
+  it("uses the booth's approved boothDescription for its heading, falling back to the raw elementLabel when unset", () => {
     // Regression: this function -- the one the real Proposal PDF and web
     // proposal are built from -- never read boothDescription at all, so
     // an estimator's approved friendly booth name (e.g. "Large LED
@@ -565,8 +565,8 @@ describe("groupBoothLineItems", () => {
       { name: "Platform", groupLabel: "SECTION 428", lineItems: [li({ id: "b", totalCost: 100 })] },
     ];
 
-    const [describedBooth] = groupBoothLineItems(described);
-    const [plainBooth] = groupBoothLineItems(plain);
+    const [describedBooth] = groupElementLineItems(described);
+    const [plainBooth] = groupElementLineItems(plain);
 
     expect(describedBooth.boothDescription).toBe("Large LED Display Wall");
     expect(plainBooth.boothDescription).toBeNull();
@@ -589,12 +589,12 @@ describe("groupBoothLineItems", () => {
       },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
+    const [booth] = groupElementLineItems(sections);
 
     expect(booth.boothDescription).toBe("Large LED Display Wall");
   });
 
-  it("carries boothSummary through to the BoothGroup, defaulting null when unset", () => {
+  it("carries boothSummary through to the ElementGroup, defaulting null when unset", () => {
     const withSummary: ProposalViewSection[] = [
       {
         name: "Platform",
@@ -608,14 +608,14 @@ describe("groupBoothLineItems", () => {
       { name: "Platform", groupLabel: "SECTION 428", summarizeOnProposal: true, lineItems: [li({ id: "b", totalCost: 100 })] },
     ];
 
-    const [boothWithSummary] = groupBoothLineItems(withSummary);
-    const [boothWithoutSummary] = groupBoothLineItems(withoutSummary);
+    const [boothWithSummary] = groupElementLineItems(withSummary);
+    const [boothWithoutSummary] = groupElementLineItems(withoutSummary);
 
     expect(boothWithSummary.boothSummary).toBe("A custom hitting bay wall with integrated monitor mounts.");
     expect(boothWithoutSummary.boothSummary).toBeNull();
   });
 
-  it("carries elementSummary through to the ElementTypeGroup, defaulting null when unset", () => {
+  it("carries elementSummary through to the TradeGroup, defaulting null when unset", () => {
     const sections: ProposalViewSection[] = [
       {
         name: "Structure",
@@ -626,9 +626,9 @@ describe("groupBoothLineItems", () => {
       { name: "Graphics", groupLabel: "SECTION 231", lineItems: [li({ id: "b", totalCost: 50 })] },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
-    const structureGroup = booth.elementGroups.find((g) => g.elementType === "Structure");
-    const graphicsGroup = booth.elementGroups.find((g) => g.elementType === "Graphics");
+    const [booth] = groupElementLineItems(sections);
+    const structureGroup = booth.tradeGroups.find((g) => g.tradeCategory === "Structure");
+    const graphicsGroup = booth.tradeGroups.find((g) => g.tradeCategory === "Graphics");
 
     expect(structureGroup?.elementSummary).toBe("Aluminum extrusion frame with printed fabric panels.");
     expect(graphicsGroup?.elementSummary).toBeNull();
@@ -647,9 +647,9 @@ describe("groupBoothLineItems", () => {
       },
     ];
 
-    const groups = groupBoothLineItems(sections);
+    const groups = groupElementLineItems(sections);
 
-    expect(groups.map((g) => g.boothLabel)).toEqual(["SECTION 428"]);
+    expect(groups.map((g) => g.elementLabel)).toEqual(["SECTION 428"]);
     expect(groups[0].subtotal).toBe(200);
   });
 
@@ -664,9 +664,9 @@ describe("groupBoothLineItems", () => {
       { name: "Graphics", groupLabel: "SECTION 231", summarizeOnProposal: false, lineItems: [li({ id: "b", totalCost: 50 })] },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
-    const structureGroup = booth.elementGroups.find((g) => g.elementType === "Structure");
-    const graphicsGroup = booth.elementGroups.find((g) => g.elementType === "Graphics");
+    const [booth] = groupElementLineItems(sections);
+    const structureGroup = booth.tradeGroups.find((g) => g.tradeCategory === "Structure");
+    const graphicsGroup = booth.tradeGroups.find((g) => g.tradeCategory === "Graphics");
 
     expect(structureGroup?.summarizeOnProposal).toBe(true);
     expect(graphicsGroup?.summarizeOnProposal).toBe(false);
@@ -683,7 +683,7 @@ describe("groupBoothLineItems", () => {
       { name: "Graphics", groupLabel: "SECTION 231", summarizeOnProposal: true, lineItems: [li({ id: "b", totalCost: 50 })] },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
+    const [booth] = groupElementLineItems(sections);
 
     expect(booth.summarizeOnProposal).toBe(true);
   });
@@ -699,9 +699,9 @@ describe("groupBoothLineItems", () => {
       { name: "Graphics", groupLabel: "SECTION 231", lineItems: [li({ id: "b", description: "Visible", totalCost: 50 })] },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
+    const [booth] = groupElementLineItems(sections);
 
-    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Graphics"]);
+    expect(booth.tradeGroups.map((g) => g.tradeCategory)).toEqual(["Graphics"]);
     expect(booth.subtotal).toBe(50);
   });
 
@@ -710,9 +710,9 @@ describe("groupBoothLineItems", () => {
       { name: "Cleaning", groupLabel: "SECTION 211", lineItems: [li({ id: "a", description: "Post-show cleaning", totalCost: 50 })] },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
+    const [booth] = groupElementLineItems(sections);
 
-    expect(booth.elementGroups[0].elementType).toBe("Cleaning");
+    expect(booth.tradeGroups[0].tradeCategory).toBe("Cleaning");
   });
 
   it("still merges duplicate parts within the same booth+element-type, but never removes a compound assembly's booth label ambiguity across booths", () => {
@@ -727,13 +727,13 @@ describe("groupBoothLineItems", () => {
       },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
+    const [booth] = groupElementLineItems(sections);
 
-    expect(booth.elementGroups[0].items).toHaveLength(1);
-    expect(booth.elementGroups[0].items[0].qty).toBe(4);
+    expect(booth.tradeGroups[0].items).toHaveLength(1);
+    expect(booth.tradeGroups[0].items[0].qty).toBe(4);
     // The booth is already the group's own heading -- redundant per-item
     // label would just repeat it under every single row.
-    expect(booth.elementGroups[0].items[0].boothLabel).toBeNull();
+    expect(booth.tradeGroups[0].items[0].elementLabel).toBeNull();
   });
 
   it("H3: items sharing a subgroupLabel within one H2 land in one subgroups[] entry, ungrouped items stay in items unchanged", () => {
@@ -749,8 +749,8 @@ describe("groupBoothLineItems", () => {
       },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
-    const [group] = booth.elementGroups;
+    const [booth] = groupElementLineItems(sections);
+    const [group] = booth.tradeGroups;
 
     expect(group.items.map((li) => li.description)).toEqual(["Standalone stool"]);
     expect(group.subgroups).toHaveLength(1);
@@ -772,8 +772,8 @@ describe("groupBoothLineItems", () => {
       },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
-    const [group] = booth.elementGroups;
+    const [booth] = groupElementLineItems(sections);
+    const [group] = booth.tradeGroups;
 
     expect(group.items).toHaveLength(0);
     expect(group.subgroups.map((sg) => sg.subgroupLabel)).toEqual(["Counter", "Header Graphic"]);
@@ -784,10 +784,10 @@ describe("groupBoothLineItems", () => {
       { name: "BeMatrix", groupLabel: "SECTION 211", lineItems: [li({ id: "a", totalCost: 100 })] },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
+    const [booth] = groupElementLineItems(sections);
 
-    expect(booth.elementGroups[0].subgroups).toEqual([]);
-    expect(booth.elementGroups[0].items).toHaveLength(1);
+    expect(booth.tradeGroups[0].subgroups).toEqual([]);
+    expect(booth.tradeGroups[0].items).toHaveLength(1);
   });
 
   it("H3: an H2 whose items are ALL subgroup-tagged still surfaces (zero ungrouped items is not the same as zero content)", () => {
@@ -799,11 +799,11 @@ describe("groupBoothLineItems", () => {
       },
     ];
 
-    const groups = groupBoothLineItems(sections);
+    const groups = groupElementLineItems(sections);
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].elementGroups[0].items).toEqual([]);
-    expect(groups[0].elementGroups[0].subgroups[0].items).toHaveLength(1);
+    expect(groups[0].tradeGroups[0].items).toEqual([]);
+    expect(groups[0].tradeGroups[0].subgroups[0].items).toHaveLength(1);
   });
 
   it("H3: identical description+unit in DIFFERENT subgroups of the same H2 stay separate rows, not merged into one", () => {
@@ -818,8 +818,8 @@ describe("groupBoothLineItems", () => {
       },
     ];
 
-    const [booth] = groupBoothLineItems(sections);
-    const [group] = booth.elementGroups;
+    const [booth] = groupElementLineItems(sections);
+    const [group] = booth.tradeGroups;
 
     expect(group.subgroups).toHaveLength(2);
     expect(group.subgroups[0].items).toHaveLength(1);
@@ -858,10 +858,10 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
 
     const [booth] = groupBoothLineItemsForEditing(sections);
 
-    expect(booth.elementGroups[0].elementType).toBe("Custom Build");
-    expect(booth.elementGroups[0].sectionIds).toEqual(["s1"]);
-    expect(booth.elementGroups[0].description).toBe("Reception counter");
-    expect(booth.elementGroups[0].isMapped).toBe(false);
+    expect(booth.tradeGroups[0].tradeCategory).toBe("Custom Build");
+    expect(booth.tradeGroups[0].sectionIds).toEqual(["s1"]);
+    expect(booth.tradeGroups[0].description).toBe("Reception counter");
+    expect(booth.tradeGroups[0].isMapped).toBe(false);
   });
 
   it("marks a mapped section (e.g. BeMatrix -> Wall Structure) as isMapped regardless of its own description fields", () => {
@@ -869,8 +869,8 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
 
     const [booth] = groupBoothLineItemsForEditing(sections);
 
-    expect(booth.elementGroups[0].elementType).toBe("Wall Structure");
-    expect(booth.elementGroups[0].isMapped).toBe(true);
+    expect(booth.tradeGroups[0].tradeCategory).toBe("Wall Structure");
+    expect(booth.tradeGroups[0].isMapped).toBe(true);
   });
 
   it("keeps a merged (two-same-named-sections) unmapped bucket editable -- merging isn't a mapped category", () => {
@@ -890,13 +890,13 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
 
     const [booth] = groupBoothLineItemsForEditing(sections);
 
-    expect(booth.elementGroups[0].sectionIds).toEqual(["s1", "s2"]);
-    expect(booth.elementGroups[0].isMapped).toBe(false);
+    expect(booth.tradeGroups[0].sectionIds).toEqual(["s1", "s2"]);
+    expect(booth.tradeGroups[0].isMapped).toBe(false);
     // The bucket's own description is whichever section it was first
     // set from (s1, encountered first) -- s2's separate description is
     // simply not surfaced through this bucket, same simplification the
     // single-section case already makes.
-    expect(booth.elementGroups[0].description).toBe("Reception counter");
+    expect(booth.tradeGroups[0].description).toBe("Reception counter");
   });
 
   it("carries the booth-level (H1) description/pendingDescription from the first section seen for that booth", () => {
@@ -917,7 +917,7 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
 
     const [booth] = groupBoothLineItemsForEditing(sections);
 
-    expect(booth.boothLabel).toBe("SECTION 211");
+    expect(booth.elementLabel).toBe("SECTION 211");
     expect(booth.boothDescription).toBe("Acme Corp booth");
     expect(booth.boothPendingDescription).toBeNull();
   });
@@ -949,7 +949,7 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
 
     const [booth] = groupBoothLineItemsForEditing(sections);
 
-    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Booth Build", "Platform"]);
+    expect(booth.tradeGroups.map((g) => g.tradeCategory)).toEqual(["Booth Build", "Platform"]);
   });
 
   it("falls back to the fixed build-sequence rank only while every group still ties at the default sortOrder", () => {
@@ -964,7 +964,7 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
 
     const [booth] = groupBoothLineItemsForEditing(sections);
 
-    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Wall Structure", "Graphics"]);
+    expect(booth.tradeGroups.map((g) => g.tradeCategory)).toEqual(["Wall Structure", "Graphics"]);
   });
 
   it("lets an explicit sortOrder override a mapped group's fixed build-sequence rank", () => {
@@ -982,7 +982,7 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
 
     const [booth] = groupBoothLineItemsForEditing(sections);
 
-    expect(booth.elementGroups.map((g) => g.elementType)).toEqual(["Graphics", "Wall Structure"]);
+    expect(booth.tradeGroups.map((g) => g.tradeCategory)).toEqual(["Graphics", "Wall Structure"]);
   });
 
   it("H3: raw, unmerged rows split into ungrouped items[] and subgroups[] the same way the read-only PDF version does", () => {
@@ -997,14 +997,14 @@ describe("groupBoothLineItemsForEditing -- description/pendingDescription carry-
         boothPendingDescription: null,
         lineItems: [
           li({ id: "a", description: "Counter frame", totalCost: 100, subgroupLabel: "Counter" }),
-          li({ id: "b", description: "Counter frame", totalCost: 100, subgroupLabel: "Counter" }), // same description -- must NOT merge, unlike groupBoothLineItems
+          li({ id: "b", description: "Counter frame", totalCost: 100, subgroupLabel: "Counter" }), // same description -- must NOT merge, unlike groupElementLineItems
           li({ id: "c", description: "Standalone stool", totalCost: 25 }),
         ],
       },
     ];
 
     const [booth] = groupBoothLineItemsForEditing(sections);
-    const [group] = booth.elementGroups;
+    const [group] = booth.tradeGroups;
 
     expect(group.items.map((li) => li.id)).toEqual(["c"]);
     expect(group.subgroups).toHaveLength(1);
@@ -1256,15 +1256,15 @@ describe("mergeCategoryBucketsForAllMethods / mergeBoothGroupsForAllMethods", ()
 
   it("unions booth groups from the Type's own bucket and every Method bucket's category name", () => {
     const boothA: RawBoothGroup<unknown> = {
-      boothLabel: "Booth A",
-      elementGroups: [],
+      elementLabel: "Booth A",
+      tradeGroups: [],
       subtotal: 100,
       boothDescription: null,
       boothPendingDescription: null,
     };
     const boothB: RawBoothGroup<unknown> = {
-      boothLabel: "Booth B",
-      elementGroups: [],
+      elementLabel: "Booth B",
+      tradeGroups: [],
       subtotal: 200,
       boothDescription: null,
       boothPendingDescription: null,

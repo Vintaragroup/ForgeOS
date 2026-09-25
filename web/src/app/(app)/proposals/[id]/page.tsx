@@ -14,7 +14,7 @@ import {
   bucketSubtotal,
   buildTopLevelCategoryViews,
   dropZeroGroups,
-  groupBoothLineItems,
+  groupElementLineItems,
   type AggregatedLineItem,
 } from "@/lib/proposal-view-model";
 import { computeProposalTotals } from "@/lib/proposal-totals";
@@ -43,7 +43,7 @@ function ItemRow({ item }: { item: AggregatedLineItem }) {
   return (
     <tr className="border-t border-neutral-100">
       <td className="px-2 py-1.5">
-        {item.boothLabel && <div className="font-medium text-brand-navy">{item.boothLabel}</div>}
+        {item.elementLabel && <div className="font-medium text-brand-navy">{item.elementLabel}</div>}
         {item.description}
       </td>
       <td className="px-2 py-1.5 text-right">{formatQtyNumber(item.qty)}</td>
@@ -200,9 +200,9 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
   // Same $0 rule the PDF applies (see dropZeroGroups). This page has no
   // per-category price hiding, so it applies unconditionally. Dropping
   // only zeros means customRentalTotal below is unchanged by it.
-  const boothGroups = dropZeroGroups(groupBoothLineItems(visibleSections));
-  const customRentalTotal = boothGroups.reduce((sum, b) => sum + b.subtotal, 0);
-  const visibleCategoryItems = (items: AggregatedLineItem[]) => items.filter((li) => !li.boothLabel);
+  const elementGroups = dropZeroGroups(groupElementLineItems(visibleSections));
+  const customRentalTotal = elementGroups.reduce((sum, b) => sum + b.subtotal, 0);
+  const visibleCategoryItems = (items: AggregatedLineItem[]) => items.filter((li) => !li.elementLabel);
 
   return (
     <div className="flex flex-col gap-8">
@@ -405,7 +405,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
             </div>
           </div>
 
-          {boothGroups.length > 0 && (
+          {elementGroups.length > 0 && (
             <div className="mb-4">
               <div className="mb-1.5 flex items-center justify-between bg-brand-black px-2 py-2">
                 <div className="flex items-center gap-2">
@@ -415,11 +415,11 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                 <span className="text-xs font-semibold text-white">{moneyFromNumber(customRentalTotal)}</span>
               </div>
               <div className="ml-1.5 flex flex-col gap-3">
-                {boothGroups.map((booth) => (
-                  <div key={booth.boothLabel}>
+                {elementGroups.map((booth) => (
+                  <div key={booth.elementLabel}>
                     <div className="mb-1 flex items-center justify-between bg-brand-navy px-2 py-1.5">
                       <span className="text-[10px] font-semibold uppercase tracking-wide text-white">
-                        {booth.boothDescription ?? booth.boothLabel}
+                        {booth.boothDescription ?? booth.elementLabel}
                       </span>
                       <span className="text-[10px] font-semibold text-white">{moneyFromNumber(booth.subtotal)}</span>
                     </div>
@@ -433,11 +433,11 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                       </p>
                     )}
                     <div className="ml-3 flex flex-col gap-2">
-                      {booth.elementGroups.map((group) => (
-                        <div key={group.elementType}>
+                      {booth.tradeGroups.map((group) => (
+                        <div key={group.tradeCategory}>
                           <div className="mb-1 flex items-center justify-between bg-neutral-100 px-2 py-1">
                             <span className="text-[9px] font-semibold uppercase tracking-wide text-neutral-700">
-                              {group.elementType}
+                              {group.tradeCategory}
                             </span>
                             <span className="text-[9px] font-semibold text-neutral-700">
                               {moneyFromNumber(group.subtotal)}
@@ -462,7 +462,7 @@ export default async function ProposalDetailPage(props: PageProps<"/proposals/[i
                           {!booth.summarizeOnProposal && !group.summarizeOnProposal && (
                             <>
                               <CategoryTable items={group.items} />
-                              {/* H3 -- see ElementTypeGroup.subgroups' own
+                              {/* H3 -- see TradeGroup.subgroups' own
                                   comment. Empty for a group that's never used
                                   H3, so nothing extra renders for every
                                   existing booth. */}

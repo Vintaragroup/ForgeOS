@@ -429,17 +429,17 @@ export async function commitPricingImport(
   const categories = await db.category.findMany({ where: { deletedAt: null } });
 
   const groupKey = (row: ParsedPricingRow) => {
-    const boothLabel = resolveBoothLabel(row);
-    return { boothLabel, category: row.category, key: `${boothLabel ?? ""}\u0000${row.category}` };
+    const elementLabel = resolveBoothLabel(row);
+    return { elementLabel, category: row.category, key: `${elementLabel ?? ""}\u0000${row.category}` };
   };
 
   const seenKeys = new Set<string>();
-  const groups: { boothLabel: string | null; category: string }[] = [];
+  const groups: { elementLabel: string | null; category: string }[] = [];
   for (const row of rows) {
-    const { boothLabel, category, key } = groupKey(row);
+    const { elementLabel, category, key } = groupKey(row);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
-    groups.push({ boothLabel, category });
+    groups.push({ elementLabel, category });
   }
 
   let nextSortOrder = existingSectionCount;
@@ -453,10 +453,10 @@ export async function commitPricingImport(
       name: humanizeCategory(group.category),
       sectionType: "CATEGORY",
       sortOrder: nextSortOrder++,
-      groupLabel: group.boothLabel,
+      groupLabel: group.elementLabel,
     });
 
-    const rowsForGroup = rows.filter((r) => groupKey(r).key === `${group.boothLabel ?? ""}\u0000${group.category}`);
+    const rowsForGroup = rows.filter((r) => groupKey(r).key === `${group.elementLabel ?? ""}\u0000${group.category}`);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,

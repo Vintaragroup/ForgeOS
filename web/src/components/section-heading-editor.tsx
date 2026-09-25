@@ -8,7 +8,7 @@ import { SubmitButton } from "@/components/submit-button";
 // on the fourth, project-type-fields.tsx on the fifth, labor-rate-line-
 // item-picker.tsx on the sixth, quantity-or-area-fields.tsx on the
 // seventh). Replaces the plain text a heading used to render -- both the
-// section H2/flat H4 (elementTypeForSection's own raw-name fallback, e.g.
+// section H2/flat H4 (tradeCategoryForSection's own raw-name fallback, e.g.
 // literally "Custom Build") and the booth H1 (the raw groupLabel, e.g.
 // "Section 428 - Booth - Page 9") tell an estimator nothing about the
 // actual component/booth. isMapped sections (one of the 6 fixed banner

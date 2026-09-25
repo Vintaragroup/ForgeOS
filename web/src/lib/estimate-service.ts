@@ -507,21 +507,21 @@ export async function moveSectionProposalOrder(
     db.category.findMany({ where: { deletedAt: null }, select: { id: true, name: true, key: true, parentId: true } }),
   ]);
 
-  const boothGroups = boothGroupsByCategoryForEditing(sections, categories).get(categoryName) ?? [];
+  const elementGroups = boothGroupsByCategoryForEditing(sections, categories).get(categoryName) ?? [];
   const sectionsById = new Map(sections.map((s) => [s.id, s]));
 
-  const siblings = boothGroups.map((group) => {
-    const sectionIds = [...new Set(group.elementGroups.flatMap((eg) => eg.sectionIds))];
+  const siblings = elementGroups.map((group) => {
+    const sectionIds = [...new Set(group.tradeGroups.flatMap((eg) => eg.sectionIds))];
     const sortKey = Math.min(...sectionIds.map((id) => sectionsById.get(id)?.proposalSortOrder ?? 0));
-    return { boothLabel: group.boothLabel, sectionIds, sortKey };
+    return { elementLabel: group.elementLabel, sectionIds, sortKey };
   });
   // Stable, deterministic tiebreak (alphabetical) -- every existing row
   // starts at the same default 0, so without this every booth in a
   // never-yet-reordered category would compare equal and sort in
   // whatever arbitrary order the query happened to return them.
-  siblings.sort((a, b) => a.sortKey - b.sortKey || a.boothLabel.localeCompare(b.boothLabel));
+  siblings.sort((a, b) => a.sortKey - b.sortKey || a.elementLabel.localeCompare(b.elementLabel));
 
-  const index = siblings.findIndex((s) => s.boothLabel === groupLabel);
+  const index = siblings.findIndex((s) => s.elementLabel === groupLabel);
   if (index === -1) return;
   const swapWith = direction === "up" ? index - 1 : index + 1;
   if (swapWith < 0 || swapWith >= siblings.length) return;
@@ -615,7 +615,7 @@ export async function moveFlatSectionProposalOrder(
   `;
 }
 
-// Moves an H2 group (an elementType within one booth, groupBoothLineItems
+// Moves an H2 group (an tradeCategory within one booth, groupElementLineItems
 // ForEditing's own unit) up/down relative to its sibling groups in the
 // SAME booth -- unlike moveSectionProposalOrder above, this is
 // deliberately category-agnostic: an H2 group is one real physical
@@ -639,7 +639,7 @@ export async function moveFlatSectionProposalOrder(
 export async function moveElementGroupOrder(
   estimateVersionId: string,
   groupLabel: string,
-  elementType: string,
+  tradeCategory: string,
   direction: "up" | "down",
 ) {
   await assertUnlocked(estimateVersionId);
@@ -669,8 +669,8 @@ export async function moveElementGroupOrder(
   const [boothGroup] = groupBoothLineItemsForEditing(sections);
   if (!boothGroup) return;
 
-  const movable = boothGroup.elementGroups;
-  const index = movable.findIndex((g) => g.elementType === elementType);
+  const movable = boothGroup.tradeGroups;
+  const index = movable.findIndex((g) => g.tradeCategory === tradeCategory);
   if (index === -1) return;
   const swapWith = direction === "up" ? index - 1 : index + 1;
   if (swapWith < 0 || swapWith >= movable.length) return;
@@ -690,7 +690,7 @@ export async function moveElementGroupOrder(
 }
 
 // Deletes an entire H2 group -- every line item across every raw
-// EstimateSection backing this one rendered elementType block under this
+// EstimateSection backing this one rendered tradeCategory block under this
 // booth (a booth's H2 group can span more than one section row, same
 // "merged for display" case moveElementGroupOrder above already has to
 // account for), plus those now-empty section rows themselves. Re-derives
@@ -707,7 +707,7 @@ export async function deleteElementGroup(
   opportunityId: string,
   estimateVersionId: string,
   groupLabel: string,
-  elementType: string,
+  tradeCategory: string,
   actorId?: string | null,
 ) {
   await assertUnlocked(estimateVersionId);
@@ -734,7 +734,7 @@ export async function deleteElementGroup(
     },
   });
   const [boothGroup] = groupBoothLineItemsForEditing(sections);
-  const target = boothGroup?.elementGroups.find((g) => g.elementType === elementType);
+  const target = boothGroup?.tradeGroups.find((g) => g.tradeCategory === tradeCategory);
   if (!target) return;
 
   for (const item of target.items) {
@@ -748,7 +748,7 @@ export async function deleteElementGroup(
 // emptyChildSections' own comment in the page component for why this is a
 // real, separate render path from deleteElementGroup above: a section
 // with zero items never appears in groupBoothLineItemsForEditing's own
-// elementGroups (that's built entirely from existing line items), so it
+// tradeGroups (that's built entirely from existing line items), so it
 // was previously invisible to that delete tool too -- confirmed live as
 // a real "three empty groups with no way to delete them" report. No line
 // items to snapshot/audit-log here, unlike deleteElementGroup -- there's
@@ -1467,7 +1467,7 @@ export async function mergeBoothIntoAnotherBooth(estimateVersionId: string, sour
   // value" convention as resolvedBoothDescription above. Read off
   // whichever source section has one; every section sharing a groupLabel
   // is supposed to carry an identical boothDescription (the same
-  // read-side backstop groupBoothLineItems' own boothDescriptionText
+  // read-side backstop groupElementLineItems' own boothDescriptionText
   // documents).
   const wrapperName = sourceSections.find((s) => s.boothDescription)?.boothDescription ?? sourceGroupLabel;
 

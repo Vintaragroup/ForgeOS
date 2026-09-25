@@ -864,7 +864,7 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
   const importDuplicateItems =
     importPreview && !(importPreview instanceof Error) && currentVersion
       ? importPreview.kind === "design-cost-estimate"
-        ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: null, groupKey: importPreview.boothLabel }))
+        ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: null, groupKey: importPreview.elementLabel }))
         : importPreview.kind === "module-cost-estimate"
           ? importPreview.rows.map((r) => ({ description: r.description, qty: r.qty, unit: null, groupKey: r.sheetName }))
           : importPreview.kind === "pricing-schedule"
@@ -1873,10 +1873,10 @@ function SectionLineItemsBlock({
   categoryOptions: { value: string; label: string }[];
 }) {
   if (lineItems.length === 0) return null;
-  const boothGroups =
+  const elementGroups =
     lineItems.length > BOOTH_GROUP_ROW_THRESHOLD ? groupLineItemsByBoothInstance(lineItems) : null;
 
-  if (!boothGroups) {
+  if (!elementGroups) {
     return (
       <div className="mb-1 overflow-x-auto rounded-md border border-neutral-200">
         <LineItemsTable
@@ -1903,7 +1903,7 @@ function SectionLineItemsBlock({
           ))}
         </div>
       )}
-      {boothGroups.map((group, i) => (
+      {elementGroups.map((group, i) => (
         <details key={i} className="rounded-md border border-neutral-200">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium marker:content-none [&::-webkit-details-marker]:hidden">
             {group.label}
@@ -2025,7 +2025,7 @@ function LineItemsTab({
     }
   }
   const untaggedBoothLabels = allBoothGroups
-    .map((g) => g.boothLabel)
+    .map((g) => g.elementLabel)
     .filter((label) => !buildTypeByBoothLabel.get(label));
   const boothGroupsByCategoryName = boothGroupsByCategoryForEditing(version.sections, categories);
 
@@ -2246,13 +2246,13 @@ function LineItemsTab({
               instead of plain &quot;Structure&quot;, grouped by component within that category.
             </p>
             <ul className="flex flex-col gap-2">
-              {untaggedBoothLabels.map((boothLabel) => (
-                <li key={boothLabel} className="flex flex-wrap items-center gap-2">
+              {untaggedBoothLabels.map((elementLabel) => (
+                <li key={elementLabel} className="flex flex-wrap items-center gap-2">
                   <form
-                    action={updateSectionBuildTypeAction.bind(null, estimateId, version.id, boothLabel)}
+                    action={updateSectionBuildTypeAction.bind(null, estimateId, version.id, elementLabel)}
                     className="flex items-center gap-2"
                   >
-                    <span className="text-sm font-medium text-amber-900">{boothLabel}</span>
+                    <span className="text-sm font-medium text-amber-900">{elementLabel}</span>
                     <SelectField label="" name="buildType" options={BUILD_TYPE_OPTIONS.slice(1)} />
                     <Button variant="secondary" type="submit">
                       Tag
@@ -3362,7 +3362,7 @@ function PrimaryCategoryTabContent({
     return (
       <CategoryTabContent
         bucket={tab.ownBucket}
-        boothGroups={boothGroupsByCategoryName.get(tab.ownBucket.category.name)}
+        elementGroups={boothGroupsByCategoryName.get(tab.ownBucket.category.name)}
         {...rest}
       />
     );
@@ -3378,14 +3378,14 @@ function PrimaryCategoryTabContent({
         ...tab.methodBuckets.map((m) => ({ id: m.key, label: m.label, count: m.bucket.totalItems })),
       ]}
       content={{
-        all: <CategoryTabContent bucket={allBucket} boothGroups={allBoothGroups} {...rest} />,
+        all: <CategoryTabContent bucket={allBucket} elementGroups={allBoothGroups} {...rest} />,
         ...Object.fromEntries(
           tab.methodBuckets.map((m) => [
             m.key,
             <CategoryTabContent
               key={m.key}
               bucket={m.bucket}
-              boothGroups={boothGroupsByCategoryName.get(m.bucket.category.name)}
+              elementGroups={boothGroupsByCategoryName.get(m.bucket.category.name)}
               {...rest}
             />,
           ]),
@@ -3404,7 +3404,7 @@ function CategoryTabContent({
   categoryOptions,
   attachments,
   users,
-  boothGroups,
+  elementGroups,
   categories,
   marginOverrideByCategoryId,
   categorySummaryByCategoryId,
@@ -3424,7 +3424,7 @@ function CategoryTabContent({
   // (see LineItemsTab's own comment). Every one of these items already
   // renders here via this grouped view, so the flat sectionGroups list
   // below excludes them (see flatSectionGroups) -- never both.
-  boothGroups?: RawBoothGroup<SectionLineItem>[];
+  elementGroups?: RawBoothGroup<SectionLineItem>[];
   categories: { id: string; name: string; key: string; parentId: string | null }[];
   marginOverrideByCategoryId: Map<string, Prisma.Decimal>;
   // Top tier of the three-level Proposal PDF copy system -- see
@@ -3439,11 +3439,11 @@ function CategoryTabContent({
   // EstimateSection.name.
   sectionDisplayNameById: Map<string, string>;
 }) {
-  const hasBoothGroups = !!boothGroups && boothGroups.length > 0;
+  const hasBoothGroups = !!elementGroups && elementGroups.length > 0;
   const flatSectionGroups = hasBoothGroups ? bucket.sectionGroups.filter((g) => !g.groupLabel) : bucket.sectionGroups;
   // The genuinely standalone subset of flatSectionGroups (groupLabel:
   // null) -- flatSectionGroups can also carry an untagged booth (real
-  // groupLabel, just not yet buildType-tagged into boothGroups above)
+  // groupLabel, just not yet buildType-tagged into elementGroups above)
   // when hasBoothGroups is false for this category, and that one still
   // belongs to a real, eventually-taggable booth, not a one-off section.
   // Used both to gate the Hide/Summarize/Exclude/reorder controls below
@@ -3735,56 +3735,56 @@ function CategoryTabContent({
       )}
       {hasBoothGroups && (
         <div className="flex flex-col gap-8">
-          {boothGroups!.map((booth, boothIndex) => {
+          {elementGroups!.map((booth, boothIndex) => {
             // A booth has no model of its own -- its visibility is
             // whatever every section sharing this groupLabel currently
             // has (updateSectionProposalVisibility keeps them in sync),
             // so any one of them is correct to read here. Defaults to
             // visible for a version predating this field.
             const boothVisible =
-              version.sections.find((s) => s.groupLabel === booth.boothLabel)?.includeInProposal ?? true;
+              version.sections.find((s) => s.groupLabel === booth.elementLabel)?.includeInProposal ?? true;
             // Same "any one section is correct to read" reasoning as
             // boothVisible above -- updateSectionProposalSummary keeps
             // every section sharing this groupLabel in sync.
             const boothSummarized =
-              version.sections.find((s) => s.groupLabel === booth.boothLabel)?.summarizeOnProposal ?? false;
+              version.sections.find((s) => s.groupLabel === booth.elementLabel)?.summarizeOnProposal ?? false;
             // Same "any one section is correct to read" reasoning as
             // boothSummarized above -- updateBoothSummary keeps every
             // section sharing this groupLabel in sync.
-            const boothSummaryFirstSection = version.sections.find((s) => s.groupLabel === booth.boothLabel);
+            const boothSummaryFirstSection = version.sections.find((s) => s.groupLabel === booth.elementLabel);
             const boothSummary = boothSummaryFirstSection?.boothSummary ?? null;
             const boothPendingSummary = boothSummaryFirstSection?.boothPendingSummary ?? null;
             // Same "any one section is correct to read" reasoning as
             // boothVisible/boothSummarized above -- updateSectionExcludedFromTotals
             // keeps every section sharing this groupLabel in sync.
             const boothExcludedFromTotals =
-              version.sections.find((s) => s.groupLabel === booth.boothLabel)?.excludedFromTotals ?? false;
-            const otherMergeTargetOptions = mergeTargetOptions.filter((opt) => opt.groupLabel !== booth.boothLabel);
+              version.sections.find((s) => s.groupLabel === booth.elementLabel)?.excludedFromTotals ?? false;
+            const otherMergeTargetOptions = mergeTargetOptions.filter((opt) => opt.groupLabel !== booth.elementLabel);
             // A section just added to this booth via the "+ Group" tool
             // below (or one imported with no items yet) never appears in
-            // booth.elementGroups -- that's built entirely from existing
+            // booth.tradeGroups -- that's built entirely from existing
             // line items. Surfaced here instead so it isn't invisible
             // until its first item exists somewhere else in the estimate.
             const emptyChildSections = version.sections.filter(
-              (s) => s.groupLabel === booth.boothLabel && s.lineItems.length === 0,
+              (s) => s.groupLabel === booth.elementLabel && s.lineItems.length === 0,
             );
             return (
-            <div key={booth.boothLabel} className="overflow-hidden rounded-md border border-neutral-200">
+            <div key={booth.elementLabel} className="overflow-hidden rounded-md border border-neutral-200">
               <CollapsibleGroup
                 headerClassName="flex flex-wrap items-center justify-between gap-2 bg-neutral-900 px-4 py-2.5 text-white"
                 bodyClassName="flex flex-col gap-5 p-4"
                 title={
                 <h4 className="text-sm font-semibold uppercase tracking-wide">
                   <SectionHeadingEditor
-                    fallbackLabel={booth.boothLabel}
+                    fallbackLabel={booth.elementLabel}
                     description={booth.boothDescription}
                     pendingDescription={booth.boothPendingDescription}
                     isMapped={false}
                     isLocked={version.isLocked}
                     theme="dark"
-                    suggestAction={suggestBoothDescriptionAction.bind(null, estimateId, version.id, booth.boothLabel)}
-                    updateAction={updateBoothDescriptionAction.bind(null, estimateId, version.id, booth.boothLabel)}
-                    rejectAction={clearBoothPendingDescriptionAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                    suggestAction={suggestBoothDescriptionAction.bind(null, estimateId, version.id, booth.elementLabel)}
+                    updateAction={updateBoothDescriptionAction.bind(null, estimateId, version.id, booth.elementLabel)}
+                    rejectAction={clearBoothPendingDescriptionAction.bind(null, estimateId, version.id, booth.elementLabel)}
                   />
                   {/* Otherwise-silent state -- exactly the kind of thing
                       that caused a real production estimate's Proposal
@@ -3811,7 +3811,7 @@ function CategoryTabContent({
                   </div>
                   {!version.isLocked && (
                     <>
-                      <form action={moveSectionProposalOrderAction.bind(null, estimateId, version.id, booth.boothLabel, bucket.category.name, "up")}>
+                      <form action={moveSectionProposalOrderAction.bind(null, estimateId, version.id, booth.elementLabel, bucket.category.name, "up")}>
                         <button
                           disabled={boothIndex === 0}
                           className="text-xs text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400"
@@ -3820,16 +3820,16 @@ function CategoryTabContent({
                           ▲
                         </button>
                       </form>
-                      <form action={moveSectionProposalOrderAction.bind(null, estimateId, version.id, booth.boothLabel, bucket.category.name, "down")}>
+                      <form action={moveSectionProposalOrderAction.bind(null, estimateId, version.id, booth.elementLabel, bucket.category.name, "down")}>
                         <button
-                          disabled={boothIndex === boothGroups!.length - 1}
+                          disabled={boothIndex === elementGroups!.length - 1}
                           className="text-xs text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400"
                           title="Move down in the Proposal PDF (within this category)"
                         >
                           ▼
                         </button>
                       </form>
-                      <form action={updateSectionProposalVisibilityAction.bind(null, estimateId, version.id, booth.boothLabel, !boothVisible)}>
+                      <form action={updateSectionProposalVisibilityAction.bind(null, estimateId, version.id, booth.elementLabel, !boothVisible)}>
                         <button
                           type="submit"
                           className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
@@ -3845,7 +3845,7 @@ function CategoryTabContent({
                           stays counted. See
                           EstimateSection.summarizeOnProposal's own schema
                           comment. */}
-                      <form action={updateSectionProposalSummaryAction.bind(null, estimateId, version.id, booth.boothLabel, !boothSummarized)}>
+                      <form action={updateSectionProposalSummaryAction.bind(null, estimateId, version.id, booth.elementLabel, !boothSummarized)}>
                         <button
                           type="submit"
                           className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
@@ -3872,7 +3872,7 @@ function CategoryTabContent({
                           null,
                           estimateId,
                           version.id,
-                          booth.boothLabel,
+                          booth.elementLabel,
                           !boothExcludedFromTotals,
                         )}
                       >
@@ -3888,7 +3888,7 @@ function CategoryTabContent({
                           {boothExcludedFromTotals ? "Include in totals" : "Exclude from totals"}
                         </button>
                       </form>
-                      <form action={untagSectionBuildTypeAction.bind(null, estimateId, version.id, booth.boothLabel)}>
+                      <form action={untagSectionBuildTypeAction.bind(null, estimateId, version.id, booth.elementLabel)}>
                         <button
                           type="submit"
                           className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
@@ -3906,12 +3906,12 @@ function CategoryTabContent({
                           kebab menu since both are used rarely relative to
                           the buttons alongside them. */}
                       <BoothActionsMenu
-                        moveAction={moveBoothToCategoryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                        moveAction={moveBoothToCategoryAction.bind(null, estimateId, version.id, booth.elementLabel)}
                         categoryOptions={moveCategoryOptions}
                         currentCategory={bucket.category.name}
                         mergeAction={
                           otherMergeTargetOptions.length > 0
-                            ? mergeBoothAction.bind(null, estimateId, version.id, booth.boothLabel)
+                            ? mergeBoothAction.bind(null, estimateId, version.id, booth.elementLabel)
                             : null
                         }
                         targetBoothOptions={otherMergeTargetOptions.map((opt) => ({ value: opt.value, label: opt.label }))}
@@ -3920,11 +3920,11 @@ function CategoryTabContent({
                           -- groupLabel/buildType are both already fixed by
                           which booth this button lives in, so the user
                           only ever names it. It won't appear in
-                          elementGroups above until it has its own first
+                          tradeGroups above until it has its own first
                           line item; emptyChildSections surfaces it here in
                           the meantime (see that variable's own comment). */}
                       <form
-                        action={addSectionToBoothAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                        action={addSectionToBoothAction.bind(null, estimateId, version.id, booth.elementLabel)}
                         className="flex items-center gap-1"
                       >
                         <input
@@ -3957,9 +3957,9 @@ function CategoryTabContent({
                   pendingSummary={boothPendingSummary}
                   isLocked={version.isLocked}
                   emptyHint="No proposal summary yet for this booth -- optional, and never affects what's itemized below."
-                  suggestAction={suggestBoothSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
-                  updateAction={updateBoothSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
-                  rejectAction={clearBoothPendingSummaryAction.bind(null, estimateId, version.id, booth.boothLabel)}
+                  suggestAction={suggestBoothSummaryAction.bind(null, estimateId, version.id, booth.elementLabel)}
+                  updateAction={updateBoothSummaryAction.bind(null, estimateId, version.id, booth.elementLabel)}
+                  rejectAction={clearBoothPendingSummaryAction.bind(null, estimateId, version.id, booth.elementLabel)}
                 />
                 {(() => {
                   // Every group in the booth is reorderable relative to
@@ -3971,9 +3971,9 @@ function CategoryTabContent({
                   // isMapped still gates the AI-suggest/edit UI on the
                   // heading itself (SectionHeadingEditor) -- unrelated to
                   // whether this group can move.
-                  const movableElementTypes = booth.elementGroups.map((g) => g.elementType);
-                  return booth.elementGroups.map((group) => {
-                    const movableIndex = movableElementTypes.indexOf(group.elementType);
+                  const movableElementTypes = booth.tradeGroups.map((g) => g.tradeCategory);
+                  return booth.tradeGroups.map((group) => {
+                    const movableIndex = movableElementTypes.indexOf(group.tradeCategory);
                     // Bottom tier of the Proposal PDF copy system -- see
                     // EstimateSection.elementSummary's own schema comment.
                     // group.sectionIds[0] is the same underlying section
@@ -4001,7 +4001,7 @@ function CategoryTabContent({
                     const elementSummarized = elementSection?.summarizeOnProposal ?? false;
                     const elementOmitted = elementSection?.omittedFromProposal ?? false;
                     return (
-                  <div key={group.elementType}>
+                  <div key={group.tradeCategory}>
                     <CollapsibleGroup
                       headerClassName="mb-2 flex flex-wrap items-center justify-between gap-2 rounded bg-neutral-100 px-3 py-1.5"
                       chevronClassName="text-neutral-400 hover:text-neutral-900"
@@ -4009,7 +4009,7 @@ function CategoryTabContent({
                       title={
                       <h5 className="text-xs font-semibold uppercase tracking-wide text-neutral-600">
                         <SectionHeadingEditor
-                          fallbackLabel={group.elementType}
+                          fallbackLabel={group.tradeCategory}
                           description={elementDescription}
                           pendingDescription={elementPendingDescription}
                           isMapped={group.isMapped}
@@ -4038,7 +4038,7 @@ function CategoryTabContent({
                       <div className="flex items-center gap-3">
                         {!version.isLocked && movableIndex !== -1 && (
                           <div className="flex items-center gap-1">
-                            <form action={moveElementGroupOrderAction.bind(null, estimateId, version.id, booth.boothLabel, group.elementType, "up")}>
+                            <form action={moveElementGroupOrderAction.bind(null, estimateId, version.id, booth.elementLabel, group.tradeCategory, "up")}>
                               <button
                                 disabled={movableIndex === 0}
                                 className="text-xs text-neutral-500 hover:text-neutral-900 disabled:opacity-30 disabled:hover:text-neutral-500"
@@ -4047,7 +4047,7 @@ function CategoryTabContent({
                                 ▲
                               </button>
                             </form>
-                            <form action={moveElementGroupOrderAction.bind(null, estimateId, version.id, booth.boothLabel, group.elementType, "down")}>
+                            <form action={moveElementGroupOrderAction.bind(null, estimateId, version.id, booth.elementLabel, group.tradeCategory, "down")}>
                               <button
                                 disabled={movableIndex === movableElementTypes.length - 1}
                                 className="text-xs text-neutral-500 hover:text-neutral-900 disabled:opacity-30 disabled:hover:text-neutral-500"
@@ -4142,8 +4142,8 @@ function CategoryTabContent({
                         )}
                         {!version.isLocked && (
                           <ConfirmForm
-                            action={deleteElementGroupAction.bind(null, estimateId, version.id, booth.boothLabel, group.elementType)}
-                            confirmMessage={`Delete "${group.elementType}" and every line item in it? This can't be undone.`}
+                            action={deleteElementGroupAction.bind(null, estimateId, version.id, booth.elementLabel, group.tradeCategory)}
+                            confirmMessage={`Delete "${group.tradeCategory}" and every line item in it? This can't be undone.`}
                           >
                             <button
                               className="text-sm text-neutral-400 hover:text-red-600"
@@ -4178,7 +4178,7 @@ function CategoryTabContent({
                         categoryOptions={categoryOptions}
                       />
                     </div>
-                    {/* H3 -- see ElementTypeGroup.subgroups' own comment.
+                    {/* H3 -- see TradeGroup.subgroups' own comment.
                         Empty for a group that's never used H3, so nothing
                         extra renders for every existing component. One
                         visual tier lighter than this H2's own bg-neutral-100
@@ -6082,7 +6082,7 @@ function CategorySummaryTab({
               <span className="text-sm font-medium text-neutral-700">{money(categoryTotal)}</span>
             </div>
             <div className="flex flex-col gap-3">
-              {[...byBooth.entries()].map(([boothLabel, groups]) => {
+              {[...byBooth.entries()].map(([elementLabel, groups]) => {
                 const boothTotal = groups.reduce(
                   (sum, g) => sum + g.lineItems.reduce((s, li) => s + li.totalCost.toNumber(), 0),
                   0,
@@ -6094,7 +6094,7 @@ function CategorySummaryTab({
                   // disclosure, same convention as the rest of this file's
                   // collapsible controls; clicking a booth expands just that
                   // one to check its detail against the source documents.
-                  <details key={boothLabel} className="group rounded-md border border-neutral-200">
+                  <details key={elementLabel} className="group rounded-md border border-neutral-200">
                     <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-3 marker:content-none [&::-webkit-details-marker]:hidden">
                       <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                         <svg
@@ -6107,7 +6107,7 @@ function CategorySummaryTab({
                         >
                           <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
-                        {boothLabel}
+                        {elementLabel}
                       </span>
                       <span className="text-xs font-medium text-neutral-500">{money(boothTotal)}</span>
                     </summary>

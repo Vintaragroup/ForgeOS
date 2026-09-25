@@ -80,7 +80,7 @@ export interface DesignCostEstimatePreview {
   // filename does across all 13 real files checked. Falls back to
   // buildName when the filename doesn't match, so grouping still works
   // for a differently-named file.
-  boothLabel: string | null;
+  elementLabel: string | null;
   rows: ParsedDesignCostRow[];
   categories: string[];
 }
@@ -263,7 +263,7 @@ export async function previewDesignCostEstimateImport(
 
   const buildName = readBuildName(sheet);
   const sectionMatch = document.filename.match(/SECTION\s+\d+/i);
-  const boothLabel = sectionMatch ? sectionMatch[0].replace(/\s+/g, " ").toUpperCase() : buildName;
+  const elementLabel = sectionMatch ? sectionMatch[0].replace(/\s+/g, " ").toUpperCase() : buildName;
 
   const catalog = await loadCatalogForMatching();
 
@@ -326,14 +326,14 @@ export async function previewDesignCostEstimateImport(
     filename: document.filename,
     sheetName: sheet.name,
     buildName,
-    boothLabel,
+    elementLabel,
     rows,
     categories: [...new Set(rows.map((r) => r.category))],
   };
 }
 
 // Same commit shape as pricing-import-service.ts's commitPricingImport:
-// one EstimateSection per (boothLabel, category) pair via findOrCreateSection
+// one EstimateSection per (elementLabel, category) pair via findOrCreateSection
 // (reuse-safe across repeated imports into the same version), bulk-created
 // isDraft LineItems carrying documentId/sourceQuote back-references, same
 // "already imported" idempotency guard. A row with unitCost still 0 is
@@ -370,7 +370,7 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
     description: row.description,
     qty: row.qty,
     unit: null,
-    groupKey: preview.boothLabel,
+    groupKey: preview.elementLabel,
   }));
   const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
   const rows = preview.rows.filter((_, i) => !exactDuplicates.has(i));
@@ -385,7 +385,7 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
   const existingSectionCount = await db.estimateSection.count({ where: { estimateVersionId, optionId: null } });
   const categories = await db.category.findMany({ where: { deletedAt: null } });
 
-  const groupKey = (row: ParsedDesignCostRow) => `${preview.boothLabel ?? ""} ${row.category}`;
+  const groupKey = (row: ParsedDesignCostRow) => `${preview.elementLabel ?? ""} ${row.category}`;
   const seenKeys = new Set<string>();
   const groups: { category: string }[] = [];
   for (const row of rows) {
@@ -402,10 +402,10 @@ export async function commitDesignCostEstimateImport(estimateVersionId: string, 
       name: group.category,
       sectionType: "CATEGORY",
       sortOrder: nextSortOrder++,
-      groupLabel: preview.boothLabel,
+      groupLabel: preview.elementLabel,
     });
 
-    const rowsForGroup = rows.filter((r) => groupKey(r) === `${preview.boothLabel ?? ""} ${group.category}`);
+    const rowsForGroup = rows.filter((r) => groupKey(r) === `${preview.elementLabel ?? ""} ${group.category}`);
     const lineItems = await addLineItemsBulk(
       estimateVersionId,
       section.id,

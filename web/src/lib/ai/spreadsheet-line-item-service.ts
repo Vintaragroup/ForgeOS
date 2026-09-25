@@ -315,7 +315,7 @@ export async function previewAiProposedImport(
 //
 // - Sections are now grouped by (sheetName, category), not category
 //   alone -- mirrors design-cost-estimate-import-service.ts's own
-//   (boothLabel, category) grouping exactly. Confirmed necessary live: a
+//   (elementLabel, category) grouping exactly. Confirmed necessary live: a
 //   real job's 67 committed items all landed in flat, generic category
 //   buckets with zero sub-structure, because this importer never passed
 //   groupLabel the way every other one in this app does.

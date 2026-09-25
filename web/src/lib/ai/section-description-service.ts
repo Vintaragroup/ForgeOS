@@ -1,6 +1,6 @@
 // Suggests a short, human-readable title for one EstimateSection whose
 // raw name has no ELEMENT_TYPE_MAP entry (proposal-view-model.ts's
-// elementTypeForSection) -- e.g. "Custom Build" tells an estimator
+// tradeCategoryForSection) -- e.g. "Custom Build" tells an estimator
 // nothing about what was actually built. Writes into that (section,
 // category) pair's own EstimateSectionCategoryDescription.pendingDescription
 // only, never `description` directly: the user must explicitly approve (or
