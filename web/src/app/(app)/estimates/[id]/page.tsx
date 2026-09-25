@@ -5368,7 +5368,7 @@ function DocumentsTab({
                     <tbody>
                       {importPreview.rows.map((row, i) => (
                         <tr key={i} className="border-t border-neutral-100">
-                          <td className="px-2 py-1 text-neutral-500">{row.category ?? "—"}</td>
+                          <td className="px-2 py-1 text-neutral-500">{row.resolvedCategory ?? row.category ?? "—"}</td>
                           <td className="max-w-[24rem] truncate px-2 py-1" title={row.sourceQuote}>
                             {importDuplicateStatus?.[i]?.match.confidence && (
                               <span

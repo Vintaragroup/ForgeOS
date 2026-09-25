@@ -44,12 +44,28 @@ type SubTable = "sheet-goods" | "other-items" | "labor";
 export interface ParsedModuleCostRow {
   rowNumber: number;
   sheetName: string;
+  // The banner this row sits under, verbatim. Carried because it is often
+  // the strongest category signal on the row: "PURCHASED ITEMS" says
+  // nothing, but "EXISTING / CLIENT-OWNED PROPERTY" and "RENTAL BOOTH I&D
+  // CONSUMABLES" say a great deal, and the row's own description
+  // ("LOOSE REAL-WOOD / WOOD-GRAIN FURNITURE") does not always.
+  bannerText: string;
   subTable: SubTable;
   description: string;
   sourceQuote: string;
   qty: number;
   unitCost: number;
+  // The row's own Category CELL, when its sheet has one. Most dialects do
+  // not: Club Glove's blocks are ITEM/UNIT/QTY/COST, no Category column
+  // at all, so this is null for every one of its 72 rows.
   category: string | null;
+  // The category this row will actually be filed under, by the rules in
+  // resolveModuleRowCategory. Resolved during PREVIEW so the screen shows
+  // what committing would really do -- it used to be computed only at
+  // commit, and the preview displayed the raw cell above, so a workbook
+  // with no Category column showed 72 rows of "—" and looked like the
+  // importer had given up on all of them.
+  resolvedCategory: string | null;
 }
 
 export interface ModuleCostEstimatePreview {
@@ -272,6 +288,7 @@ function parseModuleSheet(sheet: ExcelJS.Worksheet): ParsedModuleCostRow[] {
   const rows: ParsedModuleCostRow[] = [];
   let state: SubTable | null = null;
   let columns: SubTableColumns | null = null;
+  let bannerLabel = "";
 
   for (let r = 1; r <= sheet.rowCount; r++) {
     const row = sheet.getRow(r);
@@ -287,6 +304,7 @@ function parseModuleSheet(sheet: ExcelJS.Worksheet): ParsedModuleCostRow[] {
     if (kind) {
       state = kind;
       columns = null;
+      bannerLabel = cellText(row.getCell(1).value).trim();
       continue;
     }
     if (!state) continue;
@@ -326,12 +344,16 @@ function parseModuleSheet(sheet: ExcelJS.Worksheet): ParsedModuleCostRow[] {
     rows.push({
       rowNumber: r,
       sheetName: sheet.name,
+      bannerText: bannerLabel,
       subTable: state,
       description,
       sourceQuote: primary || qualifier || description,
       qty,
       unitCost,
       category: columns.categoryCol ? cellText(row.getCell(columns.categoryCol).value) || null : null,
+      // Filled in by the preview, which is the first place live Category
+      // rows are available.
+      resolvedCategory: null,
     });
   }
 
@@ -380,8 +402,28 @@ function resolveModuleRowCategory(
     const resolved = resolveCategoryNameFromKey(categories, key);
     if (resolved) return resolved;
   }
+  // Three signals, most specific first, before giving up and calling it
+  // fabrication. Only the row's own description used to be consulted, and
+  // on a real workbook with no Category column that meant nearly every
+  // materials row landed on the Custom Build fallback -- a monitor kiosk,
+  // a pallet of client-owned furniture and a booth's shipping consumables
+  // all filed as Custom Build, which is not what any of them are.
+  //
+  // The banner is right there and is sometimes far more telling than the
+  // row text. Order matters -- the row's own words win whenever they say
+  // anything, so a shipping crate listed inside a furniture block is
+  // still shipping.
+  //
+  // The SHEET name is deliberately NOT consulted, though it was tried: a
+  // module sheet is named after the thing being built, and this workbook
+  // has "01 Order Writing Counter", "02 Drawer Counter". "Counter" is a
+  // furniture word, so falling back to the sheet name filed a custom-
+  // fabricated counter's own building supplies as Furniture. A signal
+  // that confident and that wrong is worse than the honest Custom Build
+  // default.
   return (
     inferCategoryFromDescription(row.description, categories) ??
+    inferCategoryFromDescription(row.bannerText, categories) ??
     resolveCategoryNameFromKey(categories, CUSTOM_BUILD_CATEGORY_KEY)
   );
 }
@@ -407,14 +449,16 @@ export async function previewModuleCostEstimateImport(
     throw new Error(`"${document.filename}" doesn't look like a per-module Sheet Goods/Other Items/Labor workbook.`);
   }
 
-  const rows = sheets.flatMap((sheet) => parseModuleSheet(sheet));
+  const parsed = sheets.flatMap((sheet) => parseModuleSheet(sheet));
+  const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
+  const rows = parsed.map((row) => ({ ...row, resolvedCategory: resolveModuleRowCategory(row, liveCategories) }));
 
   return {
     kind: "module-cost-estimate",
     documentId,
     filename: document.filename,
     rows,
-    categories: [...new Set(rows.map((r) => r.category).filter((c): c is string => !!c))],
+    categories: [...new Set(rows.map((r) => r.resolvedCategory).filter((c): c is string => !!c))],
   };
 }
 
@@ -460,13 +504,12 @@ export async function commitModuleCostEstimateImport(estimateVersionId: string, 
   const exactDuplicates = findExactDuplicates(proposedForDuplicateCheck, duplicateCandidates);
   const rows = preview.rows.filter((_, i) => !exactDuplicates.has(i));
 
-  const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
   const existingSectionCount = await db.estimateSection.count({ where: { estimateVersionId, optionId: null } });
 
-  const rowsWithCategory = rows.map((row) => ({
-    row,
-    category: resolveModuleRowCategory(row, liveCategories),
-  }));
+  // Whatever the preview showed, not a second resolution of the same
+  // rules -- the screen and the commit have to agree about which section
+  // a row lands in.
+  const rowsWithCategory = rows.map((row) => ({ row, category: row.resolvedCategory }));
 
   const groupKey = (sheetName: string, category: string | null) => `${sheetName} ${category ?? ""}`;
   const seenKeys = new Set<string>();

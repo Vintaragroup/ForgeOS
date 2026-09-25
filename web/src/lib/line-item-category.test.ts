@@ -225,3 +225,38 @@ describe("isKnownCategory", () => {
     expect(isKnownCategory([cat("Other", "other")], undefined)).toBe(false);
   });
 });
+
+// Real row text from Club Glove's PGA 2027 module workbook, which filed
+// almost every materials row as Custom Build because these words were not
+// in the list.
+describe("words a real module workbook uses", () => {
+  const categories = [
+    { key: "furniture", name: "Furniture" },
+    { key: "shipping", name: "Shipping" },
+    { key: "audio_visual", name: "Audio/Visual" },
+    { key: CUSTOM_BUILD_CATEGORY_KEY, name: "Custom Build" },
+  ];
+
+  it("reads 'furniture' as furniture", () => {
+    expect(inferCategoryFromDescription("LOOSE REAL-WOOD / WOOD-GRAIN FURNITURE", categories)).toBe("Furniture");
+  });
+
+  it("reads packaging and logistics as shipping", () => {
+    expect(inferCategoryFromDescription("RENTAL BOOTH I&D CONSUMABLES — PACKAGING", categories)).toBe("Shipping");
+    expect(inferCategoryFromDescription("Logistics and Packaging", categories)).toBe("Shipping");
+  });
+
+  it("still reads a monitor as AV", () => {
+    expect(inferCategoryFromDescription("PURCHASED MONITOR KIOSK CABINET / STAND", categories)).toBe("Audio/Visual");
+  });
+
+  // The trap behind not consulting a module's SHEET name: a sheet is
+  // named after the thing being built, and "counter" is a furniture word,
+  // so a custom-fabricated counter's own supplies would file as Furniture.
+  // This asserts the word really does match, which is exactly why the
+  // sheet name must not be used as a fallback -- see
+  // resolveModuleRowCategory.
+  it("matches 'counter' as furniture, which is why a sheet name is not a safe signal", () => {
+    expect(inferCategoryFromDescription("01 Order Writing Counter", categories)).toBe("Furniture");
+  });
+});

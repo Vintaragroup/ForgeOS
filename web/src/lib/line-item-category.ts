@@ -281,7 +281,10 @@ export function mapDesignCostCategoryToCanonical(
 // letting a worse match silently win when a category's been deleted.
 const DESCRIPTION_PATTERNS: { pattern: RegExp; key: string }[] = [
   { pattern: /\b(on[\s-]?site labor|installation|dismantle|labor)\b/i, key: "labor" },
-  { pattern: /\bshipping|drayage|freight\b/i, key: "shipping" },
+  // packaging/crating/logistics join shipping: a real "Logistics and
+  // Packaging" module priced its booth packaging consumables here and had
+  // no word in it that this list recognized.
+  { pattern: /\bshipping|drayage|freight|packaging|crating|logistics\b/i, key: "shipping" },
   { pattern: /\b(cad|engineering|project (coordination|management)|art (proofing|template|set ?up)|electrical layout)\b/i, key: "professional_services" },
   { pattern: /\b(seg|dtp|vinyl wrap|graphic|signage fabric)\b/i, key: "graphics" },
   { pattern: /\bhanging sign\b/i, key: "signage" },
@@ -296,7 +299,10 @@ const DESCRIPTION_PATTERNS: { pattern: RegExp; key: string }[] = [
   // to flooring via the pattern below, since this one doesn't claim them.
   { pattern: /\b(door|frame|backer|panel|wall|b-matrix|bematrix|roof|curtain|platform|sleeper floor|scaffold|scaffolding|truss)\b/i, key: "structure" },
   { pattern: /\bcarpet|padding|visqueen\b/i, key: "flooring" },
-  { pattern: /\b(chair|table|stool|counter|showcase|sofa)\b/i, key: "furniture" },
+  // "furniture" itself was missing from the furniture pattern -- a real
+  // module sheet reading "LOOSE REAL-WOOD / WOOD-GRAIN FURNITURE" fell
+  // all the way through to the Custom Build default.
+  { pattern: /\b(chair|table|stool|counter|showcase|sofa|furniture)\b/i, key: "furniture" },
   { pattern: /\b(monitor|screen|media player|touchscreen|led)\b/i, key: "audio_visual" },
 ];
 
