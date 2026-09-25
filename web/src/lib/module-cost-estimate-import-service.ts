@@ -74,24 +74,91 @@ function bannerKind(text: string): SubTable | null {
   return null;
 }
 
-export function detectModuleCostEstimateSheet(sheet: ExcelJS.Worksheet): boolean {
-  let sheetGoodsRow: number | null = null;
-  let otherItemsRow: number | null = null;
-  let laborRow: number | null = null;
-  for (let r = 1; r <= sheet.rowCount; r++) {
-    const text = cellText(sheet.getRow(r).getCell(1).value).trim().toLowerCase();
-    const kind = bannerKind(text);
-    if (kind === "sheet-goods" && sheetGoodsRow === null) sheetGoodsRow = r;
-    else if (kind === "other-items" && otherItemsRow === null) otherItemsRow = r;
-    else if (kind === "labor" && laborRow === null) laborRow = r;
+// A recap/rollup row that ends the itemized part of a sheet. "Estimate
+// Totals" is the shape the first two real files use; "Category Totals" is
+// what a third writes. Either way the rows after it are a cost summary,
+// not work -- see this file's header comment for the bogus $0 line item
+// this prevents.
+function isRecapBanner(text: string): boolean {
+  return text === "estimate totals" || text === "category totals";
+}
+
+// Whether a row is a banner AT ALL: its own column-1 text, and nothing
+// beside it. Both real dialects write banners as a merged cell spanning
+// the row, so anything with a second populated cell is a data or header
+// row, never a banner. This is also what keeps the Estimate Summary
+// rollup sheet out -- its "Sheet Goods"/"Other Items"/"Labor" are column
+// HEADERS sitting in columns 3-6 of a populated row.
+function isBannerRow(row: ExcelJS.Row): boolean {
+  const first = cellText(row.getCell(1).value).trim();
+  if (!first) return false;
+  // A merged cell spanning the row does not always read back as "column 1
+  // populated, rest empty" -- both proven real files serialize it as the
+  // SAME text repeated in every cell it spans. Requiring the rest to be
+  // empty rejected both of them outright, which their own tests caught.
+  let othersDiffer = false;
+  row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    if (colNumber === 1) return;
+    const text = cellText(cell.value).trim();
+    if (text && text !== first) othersDiffer = true;
+  });
+  return !othersDiffer;
+}
+
+// What KIND of block a banner opens, read from the header row underneath
+// it rather than from the banner's own words.
+//
+// The three fixed words above were every banner the first two real files
+// used. A third real file -- Club Glove's PGA 2027 estimate -- writes the
+// same three-block-per-module shape with "SHOP SUPPLIES", "PURCHASED
+// ITEMS", "RENTAL BOOTH I&D CONSUMABLES" and "EXISTING / CLIENT-OWNED
+// PROPERTY" where the others write "OTHER ITEMS". Every one of those is a
+// materials block with identical columns, and the old detector rejected
+// the entire 10-sheet workbook over the wording, so $46,076 of priced,
+// itemized work fell through to the AI scope fallback and came back as 7
+// guesses at qty 1 with no costs.
+//
+// Chasing that vocabulary with a longer list of literals only works until
+// the next estimator names a block something else. What actually decides
+// how a block parses is its header row, so that is what classifies it: a
+// header carrying HOURS is labor, anything else with a quantity and a
+// cost is materials.
+function classifyBannerByHeader(sheet: ExcelJS.Worksheet, bannerRowNumber: number): SubTable | null {
+  for (let r = bannerRowNumber + 1; r <= Math.min(bannerRowNumber + 3, sheet.rowCount); r++) {
+    const row = sheet.getRow(r);
+    const texts: string[] = [];
+    row.eachCell({ includeEmpty: false }, (cell) => texts.push(cellText(cell.value).trim().toLowerCase()));
+    if (texts.length < 3) continue;
+    const has = (aliases: string[]) => texts.some((t) => aliases.includes(t));
+    const hasQty = has(["qty", "quantity", "hours", "units"]);
+    const hasCost = has(["unit cost", "cost / item", "cost / sheet", "rate / hour", "hourly rate", "rate / hr"]);
+    if (!hasQty || !hasCost) continue;
+    return has(["hours"]) ? "labor" : "other-items";
   }
-  return (
-    sheetGoodsRow !== null &&
-    otherItemsRow !== null &&
-    laborRow !== null &&
-    sheetGoodsRow < otherItemsRow &&
-    otherItemsRow < laborRow
-  );
+  return null;
+}
+
+export function detectModuleCostEstimateSheet(sheet: ExcelJS.Worksheet): boolean {
+  // Was: sheet goods AND other items AND labor, in that order, by those
+  // exact words. That rejected a real workbook whose modules run sheet
+  // goods -> shop supplies -> labor, and also rejects any module that
+  // legitimately has no labor (a pure logistics/consumables sheet) or no
+  // materials (a pure labor sheet). Both exist in the same real file.
+  //
+  // What actually makes a sheet parseable is having priced blocks on it,
+  // so that is the test: two recognized blocks, or one plus the module
+  // rollup that only a real module sheet carries.
+  let blocks = 0;
+  let hasModuleTotal = false;
+  for (let r = 1; r <= sheet.rowCount; r++) {
+    const row = sheet.getRow(r);
+    const c1 = cellText(row.getCell(1).value).trim().toLowerCase();
+    if (c1.startsWith("module total") || c1.startsWith("project total")) hasModuleTotal = true;
+    if (isRecapBanner(c1)) break;
+    if (!isBannerRow(row)) continue;
+    if (bannerKind(c1) ?? classifyBannerByHeader(sheet, r)) blocks += 1;
+  }
+  return blocks >= 2 || (blocks >= 1 && hasModuleTotal);
 }
 
 // Scans EVERY sheet, not just the first match -- unlike
@@ -134,7 +201,7 @@ const SUBTABLE_ALIASES: Record<SubTable, { primary: string[]; qualifier?: string
   "sheet-goods": {
     primary: ["material", "item"],
     qty: ["qty", "quantity"],
-    unitCost: ["unit cost", "cost / sheet"],
+    unitCost: ["unit cost", "cost / sheet", "cost / item"],
     totalCost: ["total cost", "ext cost"],
   },
   "other-items": {
@@ -146,11 +213,13 @@ const SUBTABLE_ALIASES: Record<SubTable, { primary: string[]; qualifier?: string
     totalCost: ["total cost", "ext cost"],
   },
   labor: {
-    primary: ["labor type"],
+    // "type" is Club Glove's own header for the same column the other two
+    // files call "labor type".
+    primary: ["labor type", "type"],
     qualifier: ["description"],
     qty: ["hours"],
-    unitCost: ["hourly rate", "rate / hr"],
-    totalCost: ["total cost", "labor cost"],
+    unitCost: ["hourly rate", "rate / hr", "rate / hour"],
+    totalCost: ["total cost", "labor cost", "ext cost"],
   },
 };
 
@@ -194,6 +263,11 @@ function numericOrNaN(value: unknown): number {
   return text ? Number(text) : Number.NaN;
 }
 
+// Exported for tests only -- the dialect assertions need to read rows
+// straight out of a constructed sheet, without a document/upload round
+// trip.
+export const parseModuleSheetForTest = (sheet: ExcelJS.Worksheet) => parseModuleSheet(sheet);
+
 function parseModuleSheet(sheet: ExcelJS.Worksheet): ParsedModuleCostRow[] {
   const rows: ParsedModuleCostRow[] = [];
   let state: SubTable | null = null;
@@ -207,9 +281,9 @@ function parseModuleSheet(sheet: ExcelJS.Worksheet): ParsedModuleCostRow[] {
     // words as a compact summary, with no real column headers of its own
     // -- a hard stop, not just another banner switch. See this file's own
     // header comment for the exact bogus-row bug this prevents.
-    if (c1 === "estimate totals") break;
+    if (isRecapBanner(c1)) break;
 
-    const kind = bannerKind(c1);
+    const kind = isBannerRow(row) ? (bannerKind(c1) ?? classifyBannerByHeader(sheet, r)) : null;
     if (kind) {
       state = kind;
       columns = null;

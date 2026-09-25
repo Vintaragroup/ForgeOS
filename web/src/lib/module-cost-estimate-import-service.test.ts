@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import ExcelJS from "exceljs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
@@ -6,6 +7,8 @@ import { uploadDocument } from "@/lib/document-service";
 import { createEstimateVersion } from "@/lib/estimate-service";
 import {
   commitModuleCostEstimateImport,
+  detectModuleCostEstimateSheet,
+  parseModuleSheetForTest,
   previewModuleCostEstimateImport,
 } from "@/lib/module-cost-estimate-import-service";
 import { previewPricingImport } from "@/lib/pricing-import-service";
@@ -302,5 +305,99 @@ describe("commitModuleCostEstimateImport", () => {
     expect(after).toHaveLength(2);
     expect(after.some((li) => li.id === toKeep.id)).toBe(true);
     expect(after.some((li) => li.id === toDelete.id)).toBe(false); // recreated with a new id, not literally restored
+  });
+});
+
+// A third real dialect of the same shape, from Club Glove's PGA 2027
+// estimate. Same module-per-sheet structure, different banner vocabulary
+// and different column wording -- built here from the real file's own
+// rows, read off production before any assertion was written.
+//
+// The old detector demanded the literal words "Sheet Goods", "Other
+// Items" and "Labor", all three, in that order. This file writes "SHOP
+// SUPPLIES" where the others write "Other Items", and some of its modules
+// carry no labor at all. That single word rejected the whole 10-sheet
+// workbook, so $46,076 of priced, itemized work went through the AI scope
+// fallback and came back as 7 guesses at qty 1 with no costs.
+function clubGloveSheet(wb: ExcelJS.Workbook, name = "01 Order Writing Counter") {
+  const ws = wb.addWorksheet(name);
+  ws.addRow(["CLUB GLOVE & LINKS & KINGS @ PGA SHOW 2027", "ORDER-WRITING COUNTER"]);
+  ws.addRow([]);
+  ws.addRow(["SHEET GOODS"]);
+  ws.addRow(["ITEM", "TYPE", "THICKNESS", "SHEET SIZE", "UNIT", "QTY", "COST / ITEM", "EXT COST"]);
+  ws.addRow(["PLYWOOD RAW", "Plywood", "3/4 in.", "48 × 96", "Sheets", 6, 60.16, 360.96]);
+  ws.addRow(["LAMINATE Blk/Wht", "Laminate", "1/32 in.", "49 × 96", "Sheets", 5, 36.62, 183.1]);
+  ws.addRow(["SHEET GOODS TOTAL", 544.06]);
+  ws.addRow([]);
+  // The banner that used to sink the whole workbook.
+  ws.addRow(["SHOP SUPPLIES"]);
+  ws.addRow(["ITEM", "UNIT", "QTY", "COST / ITEM", "EXT COST"]);
+  ws.addRow(["BUILDING SUPPLIES", "Allowance $", 75, 1, 75]);
+  ws.addRow(["SHOP SUPPLIES TOTAL", 75]);
+  ws.addRow([]);
+  ws.addRow(["LABOR"]);
+  ws.addRow(["TYPE", "DESCRIPTION", "UNITS", "HOURS", "RATE / HOUR", "EXT COST"]);
+  ws.addRow(["Shop", "PRE/POST PRODUCTION", "Hours", 8, 37.95, 303.6]);
+  ws.addRow(["Shop", "FABRICATION / ASSEMBLY", "Hours", 16, 37.95, 607.2]);
+  ws.addRow(["LABOR TOTAL", 1499.025]);
+  ws.addRow([]);
+  ws.addRow(["CATEGORY TOTALS"]);
+  ws.addRow(["CATEGORY", "TOTAL"]);
+  ws.addRow(["Sheet Goods", 544.06]);
+  ws.addRow(["MODULE TOTAL", 2118.09]);
+  return ws;
+}
+
+describe("the Club Glove dialect", () => {
+  it("recognizes a module whose materials block is not called Other Items", () => {
+    const wb = new ExcelJS.Workbook();
+    expect(detectModuleCostEstimateSheet(clubGloveSheet(wb))).toBe(true);
+  });
+
+  it("reads every priced row, with the quantities and costs the sheet states", () => {
+    const wb = new ExcelJS.Workbook();
+    const rows = parseModuleSheetForTest(clubGloveSheet(wb));
+    expect(rows.map((r) => [r.description, r.qty, r.unitCost])).toEqual([
+      ["PLYWOOD RAW", 6, 60.16],
+      ["LAMINATE Blk/Wht", 5, 36.62],
+      ["BUILDING SUPPLIES", 75, 1],
+      ["Shop — PRE/POST PRODUCTION", 8, 37.95],
+      ["Shop — FABRICATION / ASSEMBLY", 16, 37.95],
+    ]);
+  });
+
+  // "Category Totals" is this dialect's recap; the rows under it are a
+  // cost summary, not work. Without the hard stop it becomes a bogus $0
+  // "Sheet Goods" line item -- the same bug "Estimate Totals" already had.
+  it("stops at the recap instead of importing it as a line item", () => {
+    const wb = new ExcelJS.Workbook();
+    const rows = parseModuleSheetForTest(clubGloveSheet(wb));
+    expect(rows.some((r) => /category|module total/i.test(r.description))).toBe(false);
+  });
+
+  // A pure logistics module: one materials block, no labor at all. The
+  // old "all three banners" rule rejected it.
+  it("recognizes a module that has materials but no labor", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("08 Logistics and Packaging");
+    ws.addRow(["CLUB GLOVE", "LOGISTICS / PACKAGING"]);
+    ws.addRow([]);
+    ws.addRow(["RENTAL BOOTH I&D CONSUMABLES"]);
+    ws.addRow(["ITEM", "UNIT", "QTY", "COST / ITEM", "EXT COST"]);
+    ws.addRow(["RENTAL BOOTH I&D CONSUMABLES — 30 × 50 BOOTH", "Sq. Ft.", 1500, 1, 1500]);
+    ws.addRow(["MODULE TOTAL", 1500]);
+    expect(detectModuleCostEstimateSheet(ws)).toBe(true);
+  });
+
+  // The rollup sheet lists the same words as column HEADERS in a
+  // populated row, which is not a banner. It must stay out.
+  it("still does not mistake the Estimate Summary rollup for a module", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Estimate Summary");
+    ws.addRow(["CLUB GLOVE & LINKS & KINGS @ PGA SHOW 2027 — ORLANDO PRODUCTION ESTIMATE"]);
+    ws.addRow(["#", "ESTIMATE MODULE", "SHEET GOODS", "OTHER ITEMS", "LABOR", "TOTAL"]);
+    ws.addRow([1, "Order-Writing Counter", 544.06, 75, 1499.025, 2118.09]);
+    ws.addRow([2, "Drawer Counters — Qty 2", 1384.56, 550, 2770.35, 4704.91]);
+    expect(detectModuleCostEstimateSheet(ws)).toBe(false);
   });
 });
