@@ -27,6 +27,40 @@ import { XLSX_MIME } from "@/lib/ai/text-extraction";
 export interface BuildEstimateResult {
   imported: { filename: string; kind: "pricing" | "scope" | "drawing"; rowsImported: number }[];
   skipped: { filename: string; reason: string }[];
+  // Set when the run ended with work still to do. Null means it finished
+  // everything there was.
+  stopped: { reason: string; remaining: number } | null;
+}
+
+// How long this run gives itself, well inside the route's own
+// maxDuration of 600s (see the estimates page).
+//
+// The point is to stop BEFORE the platform does. On The Pharmacy Hub --
+// six documents, two twelve-page drawings -- the build ran past ten
+// minutes and Vercel killed the function mid-drawing. The estimator got
+// "Something went wrong" and no way to tell what had run, because a
+// killed process cannot write down why it stopped.
+//
+// 480s leaves two minutes of headroom, which is roughly what one drawing
+// batch costs (42-83s each, measured on that job).
+const BUILD_BUDGET_MS = 480_000;
+
+// Checked BETWEEN documents, not inside one. A single document that alone
+// outruns the remaining budget can still be killed -- the redline drawing
+// on that job took 386s by itself, which fits but not by much. If that
+// starts biting, the next move is checking between batches inside
+// drawing-line-item-service, which is more invasive than this.
+class BuildBudget {
+  private readonly deadline: number;
+  constructor(budgetMs: number = BUILD_BUDGET_MS) {
+    this.deadline = Date.now() + budgetMs;
+  }
+  get exhausted(): boolean {
+    return Date.now() >= this.deadline;
+  }
+  get minutesSpent(): string {
+    return ((BUILD_BUDGET_MS - (this.deadline - Date.now())) / 60_000).toFixed(1);
+  }
 }
 
 async function alreadyCommitted(estimateVersionId: string, documentId: string): Promise<boolean> {
@@ -60,12 +94,15 @@ async function proposeAndCommit(
   proposeFn: (documentId: string, opportunityId: string, userId: string | null, versionId: string | null) => Promise<unknown>,
   imported: BuildEstimateResult["imported"],
   skipped: BuildEstimateResult["skipped"],
-) {
+  progress: BuildProgress,
+): Promise<"done" | "out-of-time"> {
   for (const doc of docs) {
+    if (progress.budget.exhausted) return "out-of-time";
     if (doc.extractionStatus !== "COMPLETE") {
       skipped.push({ filename: doc.filename, reason: "Not analyzed yet -- click Analyze on the Opportunity page first." });
       continue;
     }
+    await progress.startingOn(doc.filename);
     try {
       // proposedLineItems is cached on the Document once proposed (see
       // scope-line-item-service.ts / drawing-line-item-service.ts) --
@@ -83,12 +120,39 @@ async function proposeAndCommit(
       skipped.push({ filename: doc.filename, reason: err instanceof Error ? err.message : String(err) });
     }
   }
+  return "done";
+}
+
+// Writes what the build is doing as it goes, so an interrupted run can
+// say where it got to rather than leaving an error boundary to explain
+// itself.
+class BuildProgress {
+  readonly budget: BuildBudget;
+  private index = 0;
+  constructor(
+    private readonly estimateVersionId: string,
+    private readonly total: number,
+    budgetMs: number = BUILD_BUDGET_MS,
+  ) {
+    this.budget = new BuildBudget(budgetMs);
+  }
+
+  async startingOn(filename: string) {
+    this.index += 1;
+    await db.estimateVersion.update({
+      where: { id: this.estimateVersionId },
+      data: { buildStepIndex: this.index, buildStepTotal: this.total, buildCurrentFile: filename },
+    });
+  }
 }
 
 export async function buildEstimateFromAllDocuments(
   estimateVersionId: string,
   opportunityId: string,
   userId: string | null,
+  // Overridden only by tests, which need a budget that is already spent
+  // to exercise the stop path without waiting eight minutes for it.
+  budgetMs: number = BUILD_BUDGET_MS,
 ): Promise<BuildEstimateResult> {
   const imported: BuildEstimateResult["imported"] = [];
   const skipped: BuildEstimateResult["skipped"] = [];
@@ -111,6 +175,41 @@ export async function buildEstimateFromAllDocuments(
   const pricingDocs = await db.document.findMany({
     where: { opportunityId, deletedAt: null, documentType: "PRICING_SCHEDULE", ...notOtherProject },
     orderBy: { createdAt: "asc" },
+  });
+
+  // Every document this run could touch, counted before any work starts,
+  // so progress can say "3 of 6" rather than "3 so far".
+  const totalDocs = await db.document.count({ where: { opportunityId, deletedAt: null, ...notOtherProject } });
+  const progress = new BuildProgress(estimateVersionId, totalDocs, budgetMs);
+  await db.estimateVersion.update({
+    where: { id: estimateVersionId },
+    data: {
+      buildStartedAt: new Date(),
+      buildFinishedAt: null,
+      buildStoppedReason: null,
+      buildStepIndex: 0,
+      buildStepTotal: totalDocs,
+      buildCurrentFile: null,
+    },
+  });
+
+  // Ends the run, recording why. finish(null) means it got through
+  // everything; a reason means there is more to do and the estimator is
+  // told what and why rather than being handed an error boundary.
+  const finish = async (stopped: BuildEstimateResult["stopped"]): Promise<BuildEstimateResult> => {
+    await db.estimateVersion.update({
+      where: { id: estimateVersionId },
+      data: { buildFinishedAt: new Date(), buildStoppedReason: stopped?.reason ?? null, buildCurrentFile: null },
+    });
+    return { imported, skipped, stopped };
+  };
+
+  const outOfTime = (remaining: number): BuildEstimateResult["stopped"] => ({
+    reason:
+      `Stopped after ${progress.budget.minutesSpent} minutes to stay inside the ten-minute limit, ` +
+      `with ${remaining} document${remaining === 1 ? "" : "s"} still to process. ` +
+      "Nothing was lost -- click again to carry on from here.",
+    remaining,
   });
 
   // The client's own bid-comparison template (e.g. "Exhibit 1...") is
@@ -144,6 +243,11 @@ export async function buildEstimateFromAllDocuments(
   }
 
   for (const doc of pricingDocs) {
+    if (progress.budget.exhausted) {
+      const remaining = pricingDocs.length - imported.length - skipped.length;
+      return finish(outOfTime(remaining));
+    }
+    await progress.startingOn(doc.filename);
     // No longer hard-skipped outright just because it already contributed
     // SOME line items -- same reason proposeAndCommit's own identical
     // skip was removed above: commitPricingImport (and everything it
@@ -185,7 +289,13 @@ export async function buildEstimateFromAllDocuments(
     },
     orderBy: { createdAt: "asc" },
   });
-  await proposeAndCommit(estimateVersionId, opportunityId, userId, scopeDocs, "scope", proposeLineItemsFromScope, imported, skipped);
+  const scopeOutcome = await proposeAndCommit(
+    estimateVersionId, opportunityId, userId, scopeDocs, "scope", proposeLineItemsFromScope, imported, skipped, progress,
+  );
+  if (scopeOutcome === "out-of-time") {
+    const drawingsLeft = await db.document.count({ where: { opportunityId, deletedAt: null, documentType: "DRAWING", ...notOtherProject } });
+    return finish(outOfTime(scopeDocs.length - imported.length - skipped.length + drawingsLeft));
+  }
 
   // Real per-booth pricing schedules (Pricing Schedule or Vendor Quote --
   // the same two types the manual "Import from document" picker accepts)
@@ -212,7 +322,13 @@ export async function buildEstimateFromAllDocuments(
     });
     return false;
   });
-  await proposeAndCommit(estimateVersionId, opportunityId, userId, drawingDocs, "drawing", proposeLineItemsFromDrawing, imported, skipped);
+  const drawingOutcome = await proposeAndCommit(
+    estimateVersionId, opportunityId, userId, drawingDocs, "drawing", proposeLineItemsFromDrawing, imported, skipped, progress,
+  );
+  if (drawingOutcome === "out-of-time") {
+    const done = new Set(imported.map((i) => i.filename).concat(skipped.map((s2) => s2.filename)));
+    return finish(outOfTime(drawingDocs.filter((d) => !done.has(d.filename)).length));
+  }
 
-  return { imported, skipped };
+  return finish(null);
 }

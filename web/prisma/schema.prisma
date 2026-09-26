@@ -1835,6 +1835,17 @@ model EstimateVersion {
   marginTargetPct Decimal @default(0) @db.Decimal(5, 2)
   totalCost       Decimal @default(0) @db.Decimal(12, 2)
   grandTotal      Decimal @default(0) @db.Decimal(12, 2)
+
+  // "Build from all analyzed documents" progress and why it stopped -- see
+  // the 20260926180000_estimate_build_progress migration. The build stops
+  // itself before the platform's function timeout can, so that the reason
+  // survives; a killed process writes nothing.
+  buildStartedAt     DateTime?
+  buildFinishedAt    DateTime?
+  buildStoppedReason String?
+  buildStepIndex     Int?
+  buildStepTotal     Int?
+  buildCurrentFile   String?
   grossMarginPct  Decimal @default(0) @db.Decimal(5, 2)
   isCurrent       Boolean @default(true)
   isLocked        Boolean @default(false)

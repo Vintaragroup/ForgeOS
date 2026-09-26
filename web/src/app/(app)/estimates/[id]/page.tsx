@@ -1216,6 +1216,11 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     canImport={canImport}
                     buildEstimateAction={buildEstimateWithIds}
                     buildResult={buildResult}
+                    buildState={{
+                      stoppedReason: currentVersion.buildStoppedReason,
+                      stepIndex: currentVersion.buildStepIndex,
+                      stepTotal: currentVersion.buildStepTotal,
+                    }}
                     pricingScheduleDocuments={pricingScheduleDocuments.map((d) => ({
                       id: d.id,
                       filename: d.filename,
@@ -4992,6 +4997,7 @@ function DocumentsTab({
   canImport,
   buildEstimateAction,
   buildResult,
+  buildState,
   pricingScheduleDocuments,
   previewImportAction,
   importDocumentId,
@@ -5035,6 +5041,9 @@ function DocumentsTab({
   canImport: boolean;
   buildEstimateAction: ((formData: FormData) => void | Promise<void>) | null;
   buildResult: BuildEstimateResult | null;
+  // What the LAST run left behind, read off the version -- so a build that
+  // stopped short still says so after a page reload.
+  buildState: { stoppedReason: string | null; stepIndex: number | null; stepTotal: number | null };
   pricingScheduleDocuments: { id: string; filename: string; alreadyImported: boolean }[];
   previewImportAction: (formData: FormData) => void | Promise<void>;
   importDocumentId: string | undefined;
@@ -5169,16 +5178,44 @@ function DocumentsTab({
                   </ul>
                 </div>
               )}
-              {buildResult.imported.length === 0 && buildResult.skipped.length === 0 && (
+              {buildResult.imported.length === 0 && buildResult.skipped.length === 0 && !buildResult.stopped && (
                 <p className="text-neutral-500">No documents found for this Opportunity yet.</p>
               )}
+              {buildResult.stopped && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+                  <p className="font-medium text-amber-900">Not finished yet</p>
+                  <p className="text-amber-800">{buildResult.stopped.reason}</p>
+                </div>
+              )}
+            </div>
+          )}
+          {/* A run that stopped short says so on every later page load, not
+              just in the response that reported it -- the reason is stored
+              on the version. Before this, a build that outran the
+              platform's ten-minute limit was killed mid-document and the
+              estimator got a bare "Something went wrong": no way to tell
+              what had been imported, what had not, or whether clicking
+              again would duplicate anything. */}
+          {!buildResult && buildState.stoppedReason && (
+            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm">
+              <p className="font-medium text-amber-900">
+                Last build stopped
+                {buildState.stepIndex != null && buildState.stepTotal != null
+                  ? ` after ${buildState.stepIndex} of ${buildState.stepTotal} documents`
+                  : ""}
+              </p>
+              <p className="text-amber-800">{buildState.stoppedReason}</p>
             </div>
           )}
           <form action={buildEstimateAction}>
             <SubmitButton pendingText="Building…" variant="primary">
-              Build from all analyzed documents
+              {buildState.stoppedReason ? "Continue building" : "Build from all analyzed documents"}
             </SubmitButton>
           </form>
+          <p className="mt-2 text-xs text-neutral-500">
+            Drawings are read page by page and take about a minute each; a run stops itself after eight minutes and
+            can be continued. Nothing already imported is repeated.
+          </p>
         </Card>
       )}
 

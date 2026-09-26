@@ -448,3 +448,61 @@ describe("buildEstimateFromAllDocuments", () => {
     expect(committed).toBe(0);
   });
 });
+
+// The Pharmacy Hub, 2026-09-26: six documents including two twelve-page
+// drawings. The build ran past ten minutes, Vercel killed the function
+// mid-drawing, and the estimator got "Something went wrong" with no way
+// to tell what had run. A killed process cannot write down why it
+// stopped, so the build stops itself first.
+describe("stopping before the platform does", () => {
+  async function versionWithDocuments() {
+    const opportunity = await makeOpportunity();
+    const estimate = await db.estimate.create({ data: { opportunityId: opportunity.id } });
+    const version = await db.estimateVersion.create({ data: { estimateId: estimate.id, versionNumber: 1 } });
+    const bytes = await readFile(CLIENT_TEMPLATE_PATH);
+    await uploadDocument(opportunity.id, {
+      file: new File([bytes], "Exhibit 1.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+      documentType: "PRICING_SCHEDULE",
+    });
+    return { opportunity, version };
+  }
+
+  it("stops with a reason instead of running on, when its budget is already spent", async () => {
+    const { opportunity, version } = await versionWithDocuments();
+    // A budget of zero is spent before the first document.
+    const result = await buildEstimateFromAllDocuments(version.id, opportunity.id, null, 0);
+
+    expect(result.stopped).not.toBeNull();
+    expect(result.stopped!.remaining).toBeGreaterThan(0);
+    expect(result.stopped!.reason).toContain("click again");
+    expect(result.imported).toHaveLength(0);
+  });
+
+  // The reason has to outlive the response that carried it -- the page is
+  // reloaded before anyone reads it.
+  it("records the reason on the version, so a later page load can say so", async () => {
+    const { opportunity, version } = await versionWithDocuments();
+    await buildEstimateFromAllDocuments(version.id, opportunity.id, null, 0);
+
+    const stored = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(stored.buildStoppedReason).toContain("still to process");
+    expect(stored.buildStartedAt).not.toBeNull();
+    expect(stored.buildFinishedAt).not.toBeNull();
+    expect(stored.buildStepTotal).toBeGreaterThan(0);
+  });
+
+  // A finished run must not leave a stale "stopped" banner behind.
+  it("clears the stop reason when a run gets all the way through", async () => {
+    const { opportunity, version } = await versionWithDocuments();
+    await buildEstimateFromAllDocuments(version.id, opportunity.id, null, 0);
+    expect((await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } })).buildStoppedReason).not.toBeNull();
+
+    const result = await buildEstimateFromAllDocuments(version.id, opportunity.id, null);
+    expect(result.stopped).toBeNull();
+    const stored = await db.estimateVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(stored.buildStoppedReason).toBeNull();
+    expect(stored.buildCurrentFile).toBeNull();
+  });
+});
