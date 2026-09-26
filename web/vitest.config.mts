@@ -5,6 +5,9 @@ export default defineConfig({
   test: {
     environment: "node",
     setupFiles: ["./src/test/setup.ts"],
+    // Applies pending migrations to forgeos_test once per run, so adding a
+    // column never again fails hundreds of unrelated tests. See the file.
+    globalSetup: ["./src/test/global-setup.ts"],
     // Test files share one forgeos_test Postgres database with overlapping
     // tables (Company/Opportunity/Estimate). Running files in parallel
     // races their afterEach cleanups against each other's fixtures --
