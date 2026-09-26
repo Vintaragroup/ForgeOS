@@ -14,6 +14,7 @@
 
 import type { Opportunity } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
+import { resolveAnchorDates } from "@/lib/timeline-service";
 import { UserError } from "@/lib/user-error";
 
 export const DESIGNER_DEPARTMENT = "DE";
@@ -83,13 +84,20 @@ export async function loadIntakeStatus(opportunityId: string): Promise<IntakeSta
         boothNumber: true, boothSize: true, boothSpace: true, boothType: true,
         targetMoveIn: true, targetMoveOut: true, shipDate: true,
         intakeSubmittedAt: true, reviewMeetingAt: true, reviewCompletedAt: true, designerId: true, estimatorId: true,
+        // The four logistics dates are show-dictated -- a rep who picked
+        // the show has already supplied them, and must not be told they
+        // are missing. See resolveAnchorDates.
+        show: { select: { shipDate: true, targetMoveIn: true, targetMoveOut: true, eventStartDate: true } },
       },
     }),
     db.opportunityNote.count({
       where: { opportunityId, deletedAt: null, kind: { in: ["CLIENT_MEETING", "CLIENT_CALL"] } },
     }),
   ]);
-  const requirements = intakeRequirements(opportunity, meetingNoteCount);
+  const requirements = intakeRequirements(
+    { ...opportunity, ...resolveAnchorDates(opportunity, opportunity.show) },
+    meetingNoteCount,
+  );
   const missing = requirements.filter((r) => !r.met);
   return {
     requirements,

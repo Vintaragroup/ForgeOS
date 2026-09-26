@@ -324,6 +324,13 @@ model Show {
   eventStartDate DateTime?
   eventEndDate   DateTime?
 
+  // Show-dictated logistics dates, inherited by every opportunity on this
+  // show unless that booth overrides them. Publicly knowable -- they come
+  // off the show's own exhibitor kit, not from any one client.
+  shipDate      DateTime?
+  targetMoveIn  DateTime?
+  targetMoveOut DateTime?
+
   // When set, this person alone gets notified on an artwork-order
   // escalation for ANY opportunity under this show -- a dedicated
   // show-wide coordinator, rather than each opportunity's own scattered
@@ -413,6 +420,11 @@ model Opportunity {
   boothSpace     BoothSpace?
   boothType      BoothType?
   shipDate       DateTime?
+
+  // The date by which the client must sign for rush charges not to apply
+  // -- assigned, not observed. Anchors DEPOSIT_DUE (+5) and
+  // PRODUCTION_MEETING (+7); see timeline-service.ts.
+  signedProposalTargetDate DateTime?
   siteAddress    String?
   projectDetails String?
 

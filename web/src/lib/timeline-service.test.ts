@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import {
   CANONICAL_MILESTONES,
   buildDeterministicMilestones,
-  applyRushFeeDefaults,
+  describeDerivedRule,
+  resolveAnchorDates,
   applyAiSuggestions,
   buildEmptyMilestones,
   updateTimelineMilestone,
@@ -70,52 +71,126 @@ describe("buildDeterministicMilestones", () => {
     expect(installation.confirmed).toBe(false);
   });
 
-  it("leaves the 7 non-deterministic milestones null, unconfirmed, source MANUAL", () => {
+  // Used to assert all 7 of these stayed null and MANUAL, waiting on an AI
+  // pass to read them off a document. Six of them are now arithmetic off
+  // an anchor and the seventh is entered, so with no anchors at all they
+  // are still blank -- but blank because nothing has been entered yet,
+  // not because nobody has run a model over the paperwork.
+  it("leaves every computed milestone blank while its anchors are unset", () => {
     const milestones = buildDeterministicMilestones({
       targetMoveIn: null,
       targetMoveOut: null,
       eventStartDate: null,
       shipDate: null,
+      signedProposalTargetDate: null,
     });
     for (const type of ["SIGNED_PROPOSAL", "DEPOSIT_DUE", "PRODUCTION_MEETING", "ARTWORK_DEADLINE", "ARTWORK_RUSH_50", "ARTWORK_RUSH_100", "BALANCE_DUE"]) {
       const m = milestones.find((x) => x.type === type)!;
-      expect(m.date).toBeNull();
-      expect(m.source).toBe("MANUAL");
-      expect(m.confirmed).toBe(false);
+      expect(m.date, type).toBeNull();
+      expect(m.confirmed, type).toBe(false);
     }
   });
 });
 
-describe("applyRushFeeDefaults", () => {
-  it("fills ARTWORK_RUSH_50/100 as 14/21 days after ARTWORK_DEADLINE when both are still unset", () => {
-    const milestones = buildEmptyMilestones().map((m) =>
-      m.type === "ARTWORK_DEADLINE" ? { ...m, date: new Date("2026-12-07").toISOString() } : m,
-    );
-    const result = applyRushFeeDefaults(milestones);
-    const byType = new Map(result.map((m) => [m.type, m]));
+// The estimating workbook's own arithmetic, PROPOSAL!A14:A24 of the
+// Orlando template. Every expected date below was read off that file with
+// its formulas resolved, not derived from this implementation.
+//
+//   ship 2026-12-21  ->  artwork 2026-11-23, 50% 2026-12-07,
+//                        100% 2026-12-14, balance 2026-12-16
+//   signed 2026-08-20 -> deposit 2026-08-25, production mtg 2026-08-27
+describe("the workbook's timeline formula", () => {
+  const anchors = {
+    targetMoveIn: new Date("2027-01-14"),
+    targetMoveOut: new Date("2027-01-21"),
+    eventStartDate: new Date("2027-01-19"),
+    shipDate: new Date("2026-12-21"),
+    signedProposalTargetDate: new Date("2026-08-20"),
+  };
 
-    expect(byType.get("ARTWORK_RUSH_50")?.date).toBe(new Date("2026-12-21").toISOString());
-    expect(byType.get("ARTWORK_RUSH_50")?.source).toBe("COMPUTED");
-    expect(byType.get("ARTWORK_RUSH_50")?.confirmed).toBe(false);
-    expect(byType.get("ARTWORK_RUSH_100")?.date).toBe(new Date("2026-12-28").toISOString());
+  it("reproduces every date the workbook computes", () => {
+    const byType = new Map(buildDeterministicMilestones(anchors).map((m) => [m.type, m.date]));
+    const day = (d: string) => new Date(d).toISOString();
+    expect(byType.get("SIGNED_PROPOSAL")).toBe(day("2026-08-20"));
+    expect(byType.get("DEPOSIT_DUE")).toBe(day("2026-08-25"));
+    expect(byType.get("PRODUCTION_MEETING")).toBe(day("2026-08-27"));
+    expect(byType.get("ARTWORK_DEADLINE")).toBe(day("2026-11-23"));
+    expect(byType.get("ARTWORK_RUSH_50")).toBe(day("2026-12-07"));
+    expect(byType.get("ARTWORK_RUSH_100")).toBe(day("2026-12-14"));
+    expect(byType.get("BALANCE_DUE")).toBe(day("2026-12-16"));
+    expect(byType.get("SHIPPING")).toBe(day("2026-12-21"));
+    expect(byType.get("INSTALLATION")).toBe(day("2027-01-14"));
+    expect(byType.get("SHOW_OPEN")).toBe(day("2027-01-19"));
+    expect(byType.get("DISMANTLE")).toBe(day("2027-01-21"));
   });
 
-  it("is a no-op when ARTWORK_DEADLINE itself is unknown", () => {
-    const milestones = buildEmptyMilestones();
-    const result = applyRushFeeDefaults(milestones);
-    expect(result.find((m) => m.type === "ARTWORK_RUSH_50")?.date).toBeNull();
-    expect(result.find((m) => m.type === "ARTWORK_RUSH_100")?.date).toBeNull();
+  // A guessed deadline is worse than a visibly missing one when rush
+  // charges hang off it.
+  it("leaves a deadline blank when its anchor has not been entered", () => {
+    const withoutShip = buildDeterministicMilestones({ ...anchors, shipDate: null });
+    const byType = new Map(withoutShip.map((m) => [m.type, m]));
+    for (const type of ["ARTWORK_DEADLINE", "ARTWORK_RUSH_50", "ARTWORK_RUSH_100", "BALANCE_DUE"] as const) {
+      expect(byType.get(type)?.date, type).toBeNull();
+    }
+    // The signed-proposal side is unaffected -- one missing anchor does
+    // not blank the whole timeline.
+    expect(byType.get("DEPOSIT_DUE")?.date).toBe(new Date("2026-08-25").toISOString());
   });
 
-  it("never overwrites a rush-fee date that's already set", () => {
-    const overridden = new Date("2026-11-01").toISOString();
-    const milestones: TimelineMilestone[] = buildEmptyMilestones().map((m) => {
-      if (m.type === "ARTWORK_DEADLINE") return { ...m, date: new Date("2026-12-07").toISOString() };
-      if (m.type === "ARTWORK_RUSH_50") return { ...m, date: overridden, source: "MANUAL", confirmed: true };
-      return m;
-    });
-    const result = applyRushFeeDefaults(milestones);
-    expect(result.find((m) => m.type === "ARTWORK_RUSH_50")?.date).toBe(overridden);
+  it("leaves deposit and production meeting blank until a signing deadline is set", () => {
+    const unsigned = buildDeterministicMilestones({ ...anchors, signedProposalTargetDate: null });
+    const byType = new Map(unsigned.map((m) => [m.type, m]));
+    expect(byType.get("DEPOSIT_DUE")?.date).toBeNull();
+    expect(byType.get("PRODUCTION_MEETING")?.date).toBeNull();
+    expect(byType.get("ARTWORK_DEADLINE")?.date).toBe(new Date("2026-11-23").toISOString());
+  });
+
+  // Computed is not the same as reviewed.
+  it("marks a computed date unconfirmed, and an entered one confirmed", () => {
+    const byType = new Map(buildDeterministicMilestones(anchors).map((m) => [m.type, m]));
+    expect(byType.get("SHIPPING")?.source).toBe("DETERMINISTIC");
+    expect(byType.get("SHIPPING")?.confirmed).toBe(true);
+    expect(byType.get("BALANCE_DUE")?.source).toBe("COMPUTED");
+    expect(byType.get("BALANCE_DUE")?.confirmed).toBe(false);
+  });
+
+  it("says which date a blank milestone is waiting on", () => {
+    expect(describeDerivedRule("ARTWORK_DEADLINE")).toBe("28 days before shipping date");
+    expect(describeDerivedRule("DEPOSIT_DUE")).toBe("5 days after signed-proposal deadline");
+    expect(describeDerivedRule("SHIPPING")).toBeNull();
+  });
+});
+
+describe("resolveAnchorDates", () => {
+  const show = {
+    targetMoveIn: new Date("2027-01-14"),
+    targetMoveOut: new Date("2027-01-21"),
+    eventStartDate: new Date("2027-01-19"),
+    shipDate: new Date("2026-12-21"),
+  };
+  const blank = {
+    targetMoveIn: null,
+    targetMoveOut: null,
+    eventStartDate: null,
+    shipDate: null,
+    signedProposalTargetDate: null,
+  };
+
+  // Pick the show, the dates land.
+  it("inherits every date from the show when the booth has none", () => {
+    expect(resolveAnchorDates(blank, show)).toMatchObject(show);
+  });
+
+  // A booth that genuinely ships early says so.
+  it("lets the booth override one date without losing the others", () => {
+    const early = new Date("2026-12-01");
+    const resolved = resolveAnchorDates({ ...blank, shipDate: early }, show);
+    expect(resolved.shipDate).toBe(early);
+    expect(resolved.targetMoveIn).toBe(show.targetMoveIn);
+  });
+
+  it("changes nothing when there is no show", () => {
+    expect(resolveAnchorDates(blank, null)).toBe(blank);
   });
 });
 
@@ -284,8 +359,16 @@ describe("regenerateTimeline", () => {
 
     expect(byType.get("INSTALLATION")?.date).toBe(new Date("2027-01-22").toISOString());
     expect(byType.get("SHOW_OPEN")?.confirmed).toBe(true);
-    // No ARTWORK_DEADLINE known yet -- rush defaults can't compute either.
-    expect(byType.get("ARTWORK_RUSH_50")?.date).toBeNull();
+    // Used to assert these were null: with nothing but structured dates
+    // and no documents, the artwork and rush rows had no anchor and waited
+    // on an AI pass. They come off the ship date now, so a timeline with
+    // no documents at all is already complete. The dates are the same ones
+    // the old artwork-anchored rule produced -- 2027-01-04 less 28, 14 and
+    // 7 days -- which is the point: same answer, one anchor.
+    expect(byType.get("ARTWORK_DEADLINE")?.date).toBe(new Date("2026-12-07").toISOString());
+    expect(byType.get("ARTWORK_RUSH_50")?.date).toBe(new Date("2026-12-21").toISOString());
+    expect(byType.get("ARTWORK_RUSH_100")?.date).toBe(new Date("2026-12-28").toISOString());
+    expect(byType.get("BALANCE_DUE")?.date).toBe(new Date("2026-12-30").toISOString());
 
     const stored = await db.opportunity.findUniqueOrThrow({ where: { id: opportunity.id } });
     expect(getTimelineData(stored.timelineMilestones)?.milestones).toHaveLength(11);
@@ -351,15 +434,28 @@ describe("regenerateTimeline", () => {
     expect(byType.get("DEPOSIT_DUE")?.date).toBe(new Date("2026-09-23").toISOString());
   });
 
-  it("computes rush-fee defaults off a MANUALLY-set ARTWORK_DEADLINE, not the freshly-rebuilt (null) one", async () => {
-    const { opportunity } = await makeOpportunity();
+  // This used to assert that hand-editing ARTWORK_DEADLINE dragged both
+  // rush cutoffs along with it. They are anchored to the ship date now,
+  // with every other deadline, so moving the artwork deadline moves only
+  // the artwork deadline.
+  //
+  // That is the intended trade. Rush fees are charged on how late artwork
+  // lands relative to production, and production is scheduled off the ship
+  // date -- so the ship date is what should govern them. It also removes
+  // an ordering hazard: the old pass had to run after MANUAL rows were
+  // restored, and getting that order wrong silently left both rush rows
+  // unset on a real opportunity.
+  it("keeps the rush cutoffs on the ship date even when the artwork deadline is overridden", async () => {
+    const { opportunity } = await makeOpportunity({ shipDate: new Date("2027-01-04") });
     await regenerateTimeline(opportunity.id, null);
-    await updateTimelineMilestone(opportunity.id, "ARTWORK_DEADLINE", { date: new Date("2026-12-07"), responsibleParty: "CLIENT" });
+    await updateTimelineMilestone(opportunity.id, "ARTWORK_DEADLINE", { date: new Date("2026-11-01"), responsibleParty: "CLIENT" });
 
     const data = await regenerateTimeline(opportunity.id, null);
     const byType = new Map(data.milestones.map((m) => [m.type, m]));
 
-    expect(byType.get("ARTWORK_DEADLINE")?.date).toBe(new Date("2026-12-07").toISOString());
+    // The override stands.
+    expect(byType.get("ARTWORK_DEADLINE")?.date).toBe(new Date("2026-11-01").toISOString());
+    // And the rush cutoffs stay where the ship date puts them.
     expect(byType.get("ARTWORK_RUSH_50")?.date).toBe(new Date("2026-12-21").toISOString());
     expect(byType.get("ARTWORK_RUSH_100")?.date).toBe(new Date("2026-12-28").toISOString());
   });

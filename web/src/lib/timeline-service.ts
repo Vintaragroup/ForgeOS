@@ -80,19 +80,78 @@ export const CANONICAL_MILESTONES: {
   { type: "DISMANTLE", label: "Dismantle", defaultResponsibleParty: "EXPO_CC" },
 ];
 
-// Fixed lead-time rule, confirmed with the user -- matches the reference
-// image's 12/7 -> 12/21 -> 12/28 spacing. Rush fees escalate the closer to
-// the normal deadline artwork actually arrives; both offsets are measured
-// from ARTWORK_DEADLINE itself, independent of install date.
-const RUSH_50_OFFSET_DAYS = 14;
-const RUSH_100_OFFSET_DAYS = 21;
+// The estimating workbook's own arithmetic, lifted verbatim from
+// PROPOSAL!A14:A24 of the Orlando estimate template.
+//
+//   A15 deposit          = A14 + 5        A17 artwork ready = A18 - 14
+//   A16 production mtg   = A14 + 7        A18 50% rush      = A19 - 7
+//                                         A19 100% rush     = A21 - 7
+//                                         A20 balance due   = A21 - 5
+//
+// Collapsed, the back-chain is four offsets from the ship date and two
+// forward from the signed-proposal date. Both are written that way here
+// so one anchor moving cannot leave the four deadlines disagreeing with
+// each other -- which is what a chain of relative offsets risks.
+//
+// The two rush cutoffs used to be measured forward from ARTWORK_DEADLINE
+// (+14/+21). Same dates, since the deadline is itself ship - 28, but two
+// anchors for one set of rules; re-anchored to ship so there is one.
+//
+// Plain calendar days, no weekend or holiday shifting -- the workbook does
+// not do it and this is meant to reproduce the workbook, not improve on it.
+const DEPOSIT_AFTER_SIGNING_DAYS = 5;
+const PRODUCTION_MEETING_AFTER_SIGNING_DAYS = 7;
+const ARTWORK_BEFORE_SHIP_DAYS = 28;
+const RUSH_50_BEFORE_SHIP_DAYS = 14;
+const RUSH_100_BEFORE_SHIP_DAYS = 7;
+const BALANCE_BEFORE_SHIP_DAYS = 5;
 
-type OpportunityDateFields = {
+export type OpportunityDateFields = {
   targetMoveIn: Date | null;
   targetMoveOut: Date | null;
   eventStartDate: Date | null;
   shipDate: Date | null;
+  signedProposalTargetDate?: Date | null;
 };
+
+// Which anchor each computed milestone hangs off, and by how many days.
+// Negative counts back from the ship date, positive forward from signing.
+const DERIVED_RULES: {
+  type: TimelineMilestoneType;
+  anchor: "shipDate" | "signedProposalTargetDate";
+  offsetDays: number;
+}[] = [
+  { type: "DEPOSIT_DUE", anchor: "signedProposalTargetDate", offsetDays: DEPOSIT_AFTER_SIGNING_DAYS },
+  { type: "PRODUCTION_MEETING", anchor: "signedProposalTargetDate", offsetDays: PRODUCTION_MEETING_AFTER_SIGNING_DAYS },
+  { type: "ARTWORK_DEADLINE", anchor: "shipDate", offsetDays: -ARTWORK_BEFORE_SHIP_DAYS },
+  { type: "ARTWORK_RUSH_50", anchor: "shipDate", offsetDays: -RUSH_50_BEFORE_SHIP_DAYS },
+  { type: "ARTWORK_RUSH_100", anchor: "shipDate", offsetDays: -RUSH_100_BEFORE_SHIP_DAYS },
+  { type: "BALANCE_DUE", anchor: "shipDate", offsetDays: -BALANCE_BEFORE_SHIP_DAYS },
+];
+
+// What a milestone is waiting on, when its anchor has not been entered.
+// Said out loud on the opportunity page instead of showing a date nobody
+// chose -- a guessed deadline is worse than a visibly missing one when
+// rush charges hang off it.
+export const ANCHOR_LABEL: Record<"shipDate" | "signedProposalTargetDate", string> = {
+  shipDate: "shipping date",
+  signedProposalTargetDate: "signed-proposal deadline",
+};
+
+export function describeDerivedRule(type: TimelineMilestoneType): string | null {
+  const rule = DERIVED_RULES.find((r) => r.type === type);
+  if (!rule) return null;
+  const days = Math.abs(rule.offsetDays);
+  return rule.offsetDays < 0
+    ? `${days} days before ${ANCHOR_LABEL[rule.anchor]}`
+    : `${days} days after ${ANCHOR_LABEL[rule.anchor]}`;
+}
+
+function shiftDays(date: Date, days: number): Date {
+  const shifted = new Date(date);
+  shifted.setDate(shifted.getDate() + days);
+  return shifted;
+}
 
 // The 4 canonical types that are just existing structured Opportunity
 // fields -- no AI, no ambiguity, always fresh on every regenerate (unless
@@ -102,6 +161,9 @@ const DETERMINISTIC_FIELD_BY_TYPE: Partial<Record<TimelineMilestoneType, keyof O
   DISMANTLE: "targetMoveOut",
   SHOW_OPEN: "eventStartDate",
   SHIPPING: "shipDate",
+  // Entered like the four above, not observed: the deadline the client is
+  // given so rush charges do not apply.
+  SIGNED_PROPOSAL: "signedProposalTargetDate",
 };
 
 // Every canonical type EXCEPT the 2 pure rush-fee cutoffs -- what
@@ -136,43 +198,61 @@ export function buildEmptyMilestones(): TimelineMilestone[] {
 export function buildDeterministicMilestones(opportunity: OpportunityDateFields): TimelineMilestone[] {
   return CANONICAL_MILESTONES.map(({ type, label, defaultResponsibleParty }) => {
     const field = DETERMINISTIC_FIELD_BY_TYPE[type];
-    if (!field) return emptyMilestone(type);
-    const date = opportunity[field];
+    if (field) {
+      const date = opportunity[field] ?? null;
+      return {
+        type,
+        label,
+        date: date ? date.toISOString() : null,
+        responsibleParty: defaultResponsibleParty,
+        source: "DETERMINISTIC",
+        confirmed: date !== null,
+      };
+    }
+
+    // Computed from an anchor rather than entered -- the workbook's own
+    // arithmetic. Left blank when its anchor is, so the page can say which
+    // date it is waiting on instead of showing one nobody chose.
+    const rule = DERIVED_RULES.find((r) => r.type === type);
+    const anchorDate = rule ? (opportunity[rule.anchor] ?? null) : null;
+    if (!rule || !anchorDate) return emptyMilestone(type);
     return {
       type,
       label,
-      date: date ? date.toISOString() : null,
+      date: shiftDays(anchorDate, rule.offsetDays).toISOString(),
       responsibleParty: defaultResponsibleParty,
-      source: "DETERMINISTIC",
-      confirmed: date !== null,
+      source: "COMPUTED",
+      // Arithmetic off a date somebody entered, not a fact anybody has
+      // reviewed -- an estimator still confirms the row.
+      confirmed: false,
     };
   });
 }
 
-// Fills ARTWORK_RUSH_50/100 from ARTWORK_DEADLINE + the fixed offsets above,
-// only when a rush row is still unset -- an existing date (estimator-set or
-// otherwise) is never overwritten by the default. Still marked unconfirmed:
-// it's a computed guess, not a fact an estimator has reviewed.
-export function applyRushFeeDefaults(milestones: TimelineMilestone[]): TimelineMilestone[] {
-  const deadline = milestones.find((m) => m.type === "ARTWORK_DEADLINE");
-  const deadlineDate = deadline?.date ? new Date(deadline.date) : null;
-  if (!deadlineDate) return milestones;
-
-  return milestones.map((m) => {
-    if (m.date !== null) return m;
-    if (m.type === "ARTWORK_RUSH_50") {
-      const date = new Date(deadlineDate);
-      date.setDate(date.getDate() + RUSH_50_OFFSET_DAYS);
-      return { ...m, date: date.toISOString(), source: "COMPUTED" as const, confirmed: false };
-    }
-    if (m.type === "ARTWORK_RUSH_100") {
-      const date = new Date(deadlineDate);
-      date.setDate(date.getDate() + RUSH_100_OFFSET_DAYS);
-      return { ...m, date: date.toISOString(), source: "COMPUTED" as const, confirmed: false };
-    }
-    return m;
-  });
+// An opportunity's own date, falling back to its show's.
+//
+// Shipping, installation, show open and dismantle are dictated by the
+// show: every exhibitor at one show works to the same exhibitor kit. So
+// they are entered once on the Show and inherited here, and a booth that
+// genuinely differs overrides its own field.
+export function resolveAnchorDates(
+  opportunity: OpportunityDateFields,
+  show: Pick<OpportunityDateFields, "targetMoveIn" | "targetMoveOut" | "eventStartDate" | "shipDate"> | null,
+): OpportunityDateFields {
+  if (!show) return opportunity;
+  return {
+    ...opportunity,
+    targetMoveIn: opportunity.targetMoveIn ?? show.targetMoveIn,
+    targetMoveOut: opportunity.targetMoveOut ?? show.targetMoveOut,
+    eventStartDate: opportunity.eventStartDate ?? show.eventStartDate,
+    shipDate: opportunity.shipDate ?? show.shipDate,
+  };
 }
+
+// applyRushFeeDefaults used to live here, filling the two rush rows
+// forward from ARTWORK_DEADLINE (+14/+21). They now come off the ship date
+// with every other deadline -- same dates, one anchor instead of two. See
+// DERIVED_RULES.
 
 // Overlays AI-classified suggestions onto the deterministic/empty
 // baseline. For one of the 4 types with a matching structured Opportunity
@@ -315,23 +395,20 @@ export async function regenerateTimeline(opportunityId: string, userId: string |
       targetMoveOut: true,
       eventStartDate: true,
       shipDate: true,
+      signedProposalTargetDate: true,
       timelineMilestones: true,
+      // Logistics dates fall back to the show's -- see resolveAnchorDates.
+      show: { select: { shipDate: true, targetMoveIn: true, targetMoveOut: true, eventStartDate: true } },
     },
   });
 
   const existing = parseTimelineData(opportunity.timelineMilestones);
   const existingByType = new Map(existing?.milestones.map((m) => [m.type, m]) ?? []);
 
-  const deterministic = buildDeterministicMilestones(opportunity);
+  const deterministic = buildDeterministicMilestones(resolveAnchorDates(opportunity, opportunity.show));
   const suggestions = await runTimelineExtraction(opportunityId, userId, AI_ELIGIBLE_MILESTONE_TYPES);
   const withAi = applyAiSuggestions(deterministic, suggestions);
 
-  // MANUAL restoration has to happen BEFORE applyRushFeeDefaults, not
-  // after -- otherwise a hand-edited ARTWORK_DEADLINE (a MANUAL row) never
-  // reaches the rush-fee calculation at all: it would still compute off
-  // the freshly-rebuilt (null) deadline above, leaving both rush rows
-  // stuck unset even though the estimator already supplied a real
-  // deadline. Confirmed live against a real opportunity before this fix.
   // A MANUAL row only really represents a real edit once it has a real
   // date -- a MANUAL row with a null date is indistinguishable from
   // "never resolved yet" (emptyMilestone's own baseline defaults every
@@ -344,12 +421,15 @@ export async function regenerateTimeline(opportunityId: string, userId: string |
   // permanently frozen at Missing forever after, since every later
   // regenerate saw "MANUAL" and restored that exact stale null value
   // instead of ever giving the improved matching logic a chance to run.
-  const withManualRestored = withAi.map((m) => {
+  //
+  // The rush-fee pass that used to run after this is gone: both rush rows
+  // are computed from the ship date in buildDeterministicMilestones, so
+  // there is no longer an ordering hazard between a hand-edited artwork
+  // deadline and the rows derived from it.
+  const milestones = withAi.map((m) => {
     const existingEntry = existingByType.get(m.type);
     return existingEntry?.source === "MANUAL" && existingEntry.date !== null ? existingEntry : m;
   });
-
-  const milestones = applyRushFeeDefaults(withManualRestored);
 
   const data: TimelineData = { generatedAt: new Date().toISOString(), milestones };
   await db.opportunity.update({
