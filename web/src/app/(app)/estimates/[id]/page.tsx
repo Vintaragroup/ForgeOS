@@ -165,6 +165,7 @@ import { ElementGroupActionsMenu } from "@/components/element-group-actions-menu
 import { SectionMoveMenu } from "@/components/section-move-menu";
 import { VendorExtractionProgress } from "./vendor-extraction-progress";
 import { LineItemProposalProgress } from "./line-item-proposal-progress";
+import { BuildProgress } from "./build-progress";
 import { DRAWING_BATCH_TIME_ESTIMATE_MINUTES } from "@/lib/ai/drawing-ai-client";
 import { getDocumentAiUsageSince } from "@/lib/ai/ai-usage-service";
 import {
@@ -1215,11 +1216,18 @@ export default async function EstimateDetailPage(props: PageProps<"/estimates/[i
                     addAttachmentAction={addAttachmentWithId}
                     canImport={canImport}
                     buildEstimateAction={buildEstimateWithIds}
-                    buildResult={buildResult}
+                    // A backgrounded build has no response left to carry
+                    // its own report, so it writes it to the version --
+                    // which also means the report survives a reload,
+                    // unlike the query parameter this replaced.
+                    buildResult={buildResult ?? ((currentVersion.buildReport as unknown as BuildEstimateResult | null) ?? null)}
                     buildState={{
                       stoppedReason: currentVersion.buildStoppedReason,
                       stepIndex: currentVersion.buildStepIndex,
                       stepTotal: currentVersion.buildStepTotal,
+                      running: currentVersion.buildStartedAt !== null && currentVersion.buildFinishedAt === null,
+                      currentFile: currentVersion.buildCurrentFile,
+                      versionId: currentVersion.id,
                     }}
                     pricingScheduleDocuments={pricingScheduleDocuments.map((d) => ({
                       id: d.id,
@@ -5043,7 +5051,14 @@ function DocumentsTab({
   buildResult: BuildEstimateResult | null;
   // What the LAST run left behind, read off the version -- so a build that
   // stopped short still says so after a page reload.
-  buildState: { stoppedReason: string | null; stepIndex: number | null; stepTotal: number | null };
+  buildState: {
+    stoppedReason: string | null;
+    stepIndex: number | null;
+    stepTotal: number | null;
+    running: boolean;
+    currentFile: string | null;
+    versionId: string;
+  };
   pricingScheduleDocuments: { id: string; filename: string; alreadyImported: boolean }[];
   previewImportAction: (formData: FormData) => void | Promise<void>;
   importDocumentId: string | undefined;
@@ -5196,7 +5211,15 @@ function DocumentsTab({
               estimator got a bare "Something went wrong": no way to tell
               what had been imported, what had not, or whether clicking
               again would duplicate anything. */}
-          {!buildResult && buildState.stoppedReason && (
+          <BuildProgress
+            estimateId={estimateId}
+            versionId={buildState.versionId}
+            initialRunning={buildState.running}
+            initialStepIndex={buildState.stepIndex}
+            initialStepTotal={buildState.stepTotal}
+            initialCurrentFile={buildState.currentFile}
+          />
+          {!buildResult && !buildState.running && buildState.stoppedReason && (
             <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm">
               <p className="font-medium text-amber-900">
                 Last build stopped
@@ -5207,11 +5230,13 @@ function DocumentsTab({
               <p className="text-amber-800">{buildState.stoppedReason}</p>
             </div>
           )}
-          <form action={buildEstimateAction}>
-            <SubmitButton pendingText="Building…" variant="primary">
-              {buildState.stoppedReason ? "Continue building" : "Build from all analyzed documents"}
-            </SubmitButton>
-          </form>
+          {!buildState.running && (
+            <form action={buildEstimateAction}>
+              <SubmitButton pendingText="Starting…" variant="primary">
+                {buildState.stoppedReason ? "Continue building" : "Build from all analyzed documents"}
+              </SubmitButton>
+            </form>
+          )}
           <p className="mt-2 text-xs text-neutral-500">
             Drawings are read page by page and take about a minute each; a run stops itself after eight minutes and
             can be continued. Nothing already imported is repeated.

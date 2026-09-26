@@ -1,0 +1,11 @@
+-- What the last build actually did: imported, skipped, and why it stopped.
+--
+-- The build used to return its report through the redirect that followed
+-- it, as a query parameter. That only worked while the request blocked on
+-- the whole run. Now that the work is backgrounded via after() -- so the
+-- page can come back immediately and poll for progress -- there is no
+-- response left to carry the report by the time it exists.
+--
+-- Stored on the version instead, which also means the report survives a
+-- reload. Before, navigating away lost it.
+ALTER TABLE "estimate_versions" ADD COLUMN "buildReport" JSONB;

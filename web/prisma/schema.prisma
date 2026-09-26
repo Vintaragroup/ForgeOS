@@ -1846,6 +1846,11 @@ model EstimateVersion {
   buildStepIndex     Int?
   buildStepTotal     Int?
   buildCurrentFile   String?
+  // The last run's own report -- imported, skipped, and why it stopped.
+  // Stored rather than passed through the redirect, because a backgrounded
+  // run has no response left to carry it. See the
+  // 20260926190000_estimate_build_report migration.
+  buildReport        Json?
   grossMarginPct  Decimal @default(0) @db.Decimal(5, 2)
   isCurrent       Boolean @default(true)
   isLocked        Boolean @default(false)

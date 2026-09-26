@@ -15,6 +15,7 @@
 
 import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import type { Document } from "@/generated/prisma/client";
 import { getDocumentBytes } from "@/lib/document-service";
 import { commitPricingImport, previewPricingImport } from "@/lib/pricing-import-service";
@@ -197,11 +198,17 @@ export async function buildEstimateFromAllDocuments(
   // everything; a reason means there is more to do and the estimator is
   // told what and why rather than being handed an error boundary.
   const finish = async (stopped: BuildEstimateResult["stopped"]): Promise<BuildEstimateResult> => {
+    const report: BuildEstimateResult = { imported, skipped, stopped };
     await db.estimateVersion.update({
       where: { id: estimateVersionId },
-      data: { buildFinishedAt: new Date(), buildStoppedReason: stopped?.reason ?? null, buildCurrentFile: null },
+      data: {
+        buildFinishedAt: new Date(),
+        buildStoppedReason: stopped?.reason ?? null,
+        buildCurrentFile: null,
+        buildReport: report as unknown as Prisma.InputJsonValue,
+      },
     });
-    return { imported, skipped, stopped };
+    return report;
   };
 
   const outOfTime = (remaining: number): BuildEstimateResult["stopped"] => ({

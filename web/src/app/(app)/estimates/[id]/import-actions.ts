@@ -42,9 +42,66 @@ export async function buildFullEstimateFromDocumentsAction(
   const user = await requireEstimateAccess(estimateId);
   await assertVersionBelongsToEstimate(estimateId, versionId);
   const opportunityId = await estimateOpportunityId(estimateId);
-  const result = await buildEstimateFromAllDocuments(versionId, opportunityId, user.id);
+
+  // Backgrounded, exactly as the DRAWING branch of proposeScopeItemsAction
+  // below does it, and for a stronger version of the same reason: this run
+  // is many sequential AI calls across every document on the opportunity.
+  // Blocking the request on it left the button showing a static
+  // "Building..." for ten minutes and then, on a real job, dying to the
+  // platform's function timeout with nothing on screen but "Something went
+  // wrong".
+  //
+  // The run marks itself started here, synchronously, so the poller has
+  // something to read the instant the page comes back --
+  // build-progress.tsx reads it from getBuildProgressAction below.
+  await db.estimateVersion.update({
+    where: { id: versionId },
+    data: { buildStartedAt: new Date(), buildFinishedAt: null, buildStoppedReason: null, buildCurrentFile: null },
+  });
   revalidatePath(`/estimates/${estimateId}`);
-  redirect(`/estimates/${estimateId}?tab=documents&buildResult=${encodeURIComponent(JSON.stringify(result))}`);
+  // buildEstimateFromAllDocuments records its own outcome on the version
+  // before returning, and there is no response left to carry a rejection
+  // by the time after() runs -- so a throw is swallowed here rather than
+  // surfacing as an unhandled rejection, same as the drawing branch.
+  after(() =>
+    buildEstimateFromAllDocuments(versionId, opportunityId, user.id).catch(async (err) => {
+      await db.estimateVersion.update({
+        where: { id: versionId },
+        data: {
+          buildFinishedAt: new Date(),
+          buildStoppedReason: `The build failed: ${err instanceof Error ? err.message : String(err)}`,
+          buildCurrentFile: null,
+        },
+      });
+    }),
+  );
+  redirect(`/estimates/${estimateId}?tab=documents`);
+}
+
+// What the build is doing right now, for build-progress.tsx to poll.
+// Access-checked the same way every other action here is: an estimate id
+// the caller can reach, and a version that belongs to it.
+export async function getBuildProgressAction(estimateId: string, versionId: string) {
+  await requireEstimateAccess(estimateId);
+  await assertVersionBelongsToEstimate(estimateId, versionId);
+  const version = await db.estimateVersion.findUniqueOrThrow({
+    where: { id: versionId },
+    select: {
+      buildStartedAt: true,
+      buildFinishedAt: true,
+      buildStoppedReason: true,
+      buildStepIndex: true,
+      buildStepTotal: true,
+      buildCurrentFile: true,
+    },
+  });
+  return {
+    running: version.buildStartedAt !== null && version.buildFinishedAt === null,
+    stepIndex: version.buildStepIndex,
+    stepTotal: version.buildStepTotal,
+    currentFile: version.buildCurrentFile,
+    stoppedReason: version.buildStoppedReason,
+  };
 }
 
 export async function runClientTemplateReconciliationAction(estimateId: string, formData: FormData) {
