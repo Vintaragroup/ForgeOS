@@ -155,3 +155,68 @@ export async function getOrgAiUsageSummary() {
   ]);
   return { totals, byFeature };
 }
+
+// What one job has cost in AI, and where it went.
+//
+// Every AI call already records an AiUsageEvent carrying opportunityId --
+// the data has been there all along, aggregated only per user (/account)
+// and per organisation (admin analytics). Neither answers the question an
+// estimator actually asks, which is "what has THIS job cost me".
+//
+// Real numbers make that concrete rather than abstract: The Pharmacy Hub
+// reached 23 calls and $0.65 during a single build, most of it two
+// twelve-page drawings read page by page. Knowing which document did that
+// is what lets someone decide it was worth it, or not to re-run it.
+//
+// Cost is the same approximation estimateCostUsd makes everywhere else --
+// a cost-awareness figure, never a billing ledger. See its own comment.
+export async function getOpportunityAiUsageSummary(opportunityId: string) {
+  const [totals, byFeature, byDocument] = await Promise.all([
+    db.aiUsageEvent.aggregate({
+      where: { opportunityId },
+      _sum: { totalTokens: true, estimatedCostUsd: true },
+      _count: { _all: true },
+    }),
+    db.aiUsageEvent.groupBy({
+      by: ["feature"],
+      where: { opportunityId },
+      _sum: { totalTokens: true, estimatedCostUsd: true },
+      _count: { _all: true },
+      orderBy: { _sum: { estimatedCostUsd: "desc" } },
+    }),
+    db.aiUsageEvent.groupBy({
+      by: ["documentId"],
+      where: { opportunityId, documentId: { not: null } },
+      _sum: { totalTokens: true, estimatedCostUsd: true },
+      _count: { _all: true },
+      orderBy: { _sum: { estimatedCostUsd: "desc" } },
+      take: 10,
+    }),
+  ]);
+
+  // groupBy gives ids; the reader needs filenames.
+  const documentIds = byDocument.map((d) => d.documentId).filter((id): id is string => id !== null);
+  const documents = documentIds.length
+    ? await db.document.findMany({ where: { id: { in: documentIds } }, select: { id: true, filename: true } })
+    : [];
+  const filenameById = new Map(documents.map((d) => [d.id, d.filename]));
+
+  return {
+    callCount: totals._count._all,
+    totalTokens: totals._sum.totalTokens ?? 0,
+    estimatedCostUsd: Number(totals._sum.estimatedCostUsd ?? 0),
+    byFeature: byFeature.map((f) => ({
+      feature: f.feature,
+      callCount: f._count._all,
+      totalTokens: f._sum.totalTokens ?? 0,
+      estimatedCostUsd: Number(f._sum.estimatedCostUsd ?? 0),
+    })),
+    byDocument: byDocument.map((d) => ({
+      documentId: d.documentId,
+      filename: d.documentId ? (filenameById.get(d.documentId) ?? "(deleted document)") : "(no document)",
+      callCount: d._count._all,
+      totalTokens: d._sum.totalTokens ?? 0,
+      estimatedCostUsd: Number(d._sum.estimatedCostUsd ?? 0),
+    })),
+  };
+}

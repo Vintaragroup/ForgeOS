@@ -60,6 +60,7 @@ import {
   STAGE_AGE_CRITICAL_DAYS,
   STAGE_AGE_WARNING_DAYS,
 } from "@/lib/deal-checklist";
+import { getOpportunityAiUsageSummary } from "@/lib/ai/ai-usage-service";
 import { Button, CollapsibleSection, Field, LinkButton, PageHeader, ReadOnlyField, SelectField, StatusBanner, StatusChip } from "@/components/ui";
 import { readStatus } from "@/lib/action-status";
 import { ConfirmForm } from "@/components/confirm-form";
@@ -759,6 +760,85 @@ function StageChip({ stage }: { stage: string }) {
   }
 }
 
+
+// What this job has cost in AI, and where it went.
+//
+// Every AI call already recorded its opportunity; nothing aggregated it,
+// so the only totals anyone could see were their own (/account) or the
+// whole organisation's (admin analytics). Neither answers "what has this
+// job cost me", which is the question worth asking before re-running a
+// build over two twelve-page drawings.
+//
+// Shown to anyone who can open the opportunity, deliberately: they can
+// already see the estimate's full cost and margin, which is far more
+// sensitive than what the analysis cost to run.
+function AiUsageCard({
+  usage,
+  defaultOpen,
+}: {
+  usage: Awaited<ReturnType<typeof getOpportunityAiUsageSummary>>;
+  defaultOpen: boolean;
+}) {
+  if (usage.callCount === 0) return null;
+  const money = (n: number) => `$${n.toFixed(2)}`;
+  const tokens = (n: number) => n.toLocaleString("en-US");
+  return (
+    <CollapsibleSection title="AI usage" id="ai-usage" defaultOpen={defaultOpen}>
+      <p className="mb-4 text-sm text-neutral-500">
+        What analysing this opportunity has cost so far. Rates are approximate and maintained by hand — close enough
+        to decide whether a re-run is worth it, not a billing record.
+      </p>
+      <div className="mb-4 flex flex-wrap gap-6">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-neutral-500">Estimated cost</p>
+          <p className="text-2xl font-semibold text-brand-navy">{money(usage.estimatedCostUsd)}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-neutral-500">Tokens</p>
+          <p className="text-2xl font-semibold text-neutral-700">{tokens(usage.totalTokens)}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-neutral-500">Calls</p>
+          <p className="text-2xl font-semibold text-neutral-700">{usage.callCount}</p>
+        </div>
+      </div>
+      <div className="grid gap-6 sm:grid-cols-2">
+        <div>
+          <p className="mb-1.5 text-xs uppercase tracking-wide text-neutral-500">By feature</p>
+          <ul className="flex flex-col gap-1 text-sm">
+            {usage.byFeature.map((f) => (
+              <li key={f.feature} className="flex justify-between gap-4">
+                <span className="truncate text-neutral-700">{f.feature.replace(/_/g, " ").toLowerCase()}</span>
+                <span className="shrink-0 tabular-nums text-neutral-500">
+                  {money(f.estimatedCostUsd)} · {tokens(f.totalTokens)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <p className="mb-1.5 text-xs uppercase tracking-wide text-neutral-500">By document</p>
+          {usage.byDocument.length === 0 ? (
+            <p className="text-sm text-neutral-400">Nothing attributed to a single document.</p>
+          ) : (
+            <ul className="flex flex-col gap-1 text-sm">
+              {usage.byDocument.map((d) => (
+                <li key={d.documentId ?? "none"} className="flex justify-between gap-4">
+                  <span className="truncate text-neutral-700">{d.filename}</span>
+                  <span className="shrink-0 tabular-nums text-neutral-500">
+                    {money(d.estimatedCostUsd)} · {tokens(d.totalTokens)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </CollapsibleSection>
+  );
+}
+
+
 function fmtDate(d: Date | null): string {
   if (!d) return "";
   return d.toISOString().slice(0, 10);
@@ -866,7 +946,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
   );
   const isMultiProject = namedEstimates.length >= 2;
 
-  const [companies, users, contacts, documents, chatMessages, citableLineItems, citableQuotes, taxRates, misattributedLineItems, shows] =
+  const [companies, users, contacts, documents, chatMessages, citableLineItems, citableQuotes, taxRates, misattributedLineItems, shows, aiUsage] =
     await Promise.all([
       db.company.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
       db.user.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
@@ -883,6 +963,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
       // immediately without a query (see findMisattributedLineItems).
       isMultiProject ? findMisattributedLineItems(opportunity.id) : Promise.resolve([] as MisattributedLineItem[]),
       db.show.findMany({ where: { deletedAt: null }, orderBy: { eventStartDate: "desc" } }),
+      getOpportunityAiUsageSummary(opportunity.id),
     ]);
 
   const revisionChains = buildRevisionChains(documents);
@@ -1652,6 +1733,8 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
         documents={documents}
         defaultOpen={openSection === "timeline"}
       />
+
+      <AiUsageCard usage={aiUsage} defaultOpen={openSection === "ai-usage"} />
 
       <LineItemAuditCard opportunityId={opportunity.id} findings={misattributedLineItems} />
 
