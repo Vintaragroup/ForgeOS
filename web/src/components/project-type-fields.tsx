@@ -40,6 +40,7 @@ export interface ProjectTypeFieldDefaults {
   boothSpace: string;
   boothType: string;
   shipDate: string;
+  signedProposalTargetDate: string;
   venue: string;
   eventStartDate: string;
   eventEndDate: string;
@@ -97,6 +98,12 @@ export function ProjectTypeFields({ defaults }: { defaults: ProjectTypeFieldDefa
             options={BOOTH_SPACE_OPTIONS}
           />
           <Field label="Ship date" name="shipDate" type="date" defaultValue={defaults.shipDate} />
+          <Field
+            label="Sign-by date (avoids rush)"
+            name="signedProposalTargetDate"
+            type="date"
+            defaultValue={defaults.signedProposalTargetDate}
+          />
         </div>
       )}
 
@@ -145,6 +152,7 @@ export function ProjectTypeFieldsView({ values }: { values: ProjectTypeFieldDefa
           <ReadOnlyField label="Booth size" value={values.boothSize} />
           <ReadOnlyField label="Booth space" value={optionLabel(BOOTH_SPACE_OPTIONS, values.boothSpace)} />
           <ReadOnlyField label="Ship date" value={values.shipDate} />
+          <ReadOnlyField label="Sign-by date (avoids rush)" value={values.signedProposalTargetDate} />
         </div>
       )}
       {SHOWS_SITE_FIELDS.has(values.projectType) && (

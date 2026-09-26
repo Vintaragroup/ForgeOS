@@ -31,7 +31,13 @@ import {
 import { regenerateTimelineAction, runClarificationQuestionsAnalysisAction } from "./ai-actions";
 import { inviteToArtworkPortalAction } from "./artwork-actions";
 import { canStartArtworkOnboarding } from "@/lib/artwork-order-service";
-import { getTimelineData, buildEmptyMilestones, type TimelineData } from "@/lib/timeline-service";
+import {
+  buildEmptyMilestones,
+  derivedAnchorLabel,
+  describeDerivedRule,
+  getTimelineData,
+  type TimelineData,
+} from "@/lib/timeline-service";
 import { TimelineMilestoneRow } from "@/components/timeline-milestone-row";
 import { money } from "@/lib/money";
 import { formatOpportunityLabel } from "@/lib/opportunity-name";
@@ -528,6 +534,8 @@ function TimelineCard({
                 responsibleParty={m.responsibleParty}
                 source={m.source}
                 confirmed={m.confirmed}
+                derivedRule={describeDerivedRule(m.type)}
+                anchorLabel={derivedAnchorLabel(m.type)}
                 citationHref={href}
                 citationLabel={doc ? doc.filename : null}
                 conflictDisplayDate={
@@ -1200,6 +1208,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                   boothSpace: opportunity.boothSpace ?? "",
                   boothType: opportunity.boothType ?? "",
                   shipDate: fmtDate(opportunity.shipDate),
+                  signedProposalTargetDate: fmtDate(opportunity.signedProposalTargetDate),
                   venue: opportunity.venue ?? "",
                   eventStartDate: fmtDate(opportunity.eventStartDate),
                   eventEndDate: fmtDate(opportunity.eventEndDate),
@@ -1272,6 +1281,7 @@ export default async function OpportunityDetailPage(props: PageProps<"/opportuni
                   boothSpace: opportunity.boothSpace ?? "",
                   boothType: opportunity.boothType ?? "",
                   shipDate: fmtDate(opportunity.shipDate),
+                  signedProposalTargetDate: fmtDate(opportunity.signedProposalTargetDate),
                   venue: opportunity.venue ?? "",
                   eventStartDate: fmtDate(opportunity.eventStartDate),
                   eventEndDate: fmtDate(opportunity.eventEndDate),

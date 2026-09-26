@@ -50,6 +50,7 @@ export default async function NewOpportunityPage({
               boothSpace: "",
               boothType: "",
               shipDate: "",
+            signedProposalTargetDate: "",
               venue: prefillShow?.venue ?? "",
               eventStartDate: prefillShow?.eventStartDate?.toISOString().slice(0, 10) ?? "",
               eventEndDate: prefillShow?.eventEndDate?.toISOString().slice(0, 10) ?? "",

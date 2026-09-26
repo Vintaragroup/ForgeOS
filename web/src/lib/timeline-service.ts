@@ -138,6 +138,13 @@ export const ANCHOR_LABEL: Record<"shipDate" | "signedProposalTargetDate", strin
   signedProposalTargetDate: "signed-proposal deadline",
 };
 
+// Which entered date a computed milestone is waiting on, for a row that
+// has none yet. Null for the entered milestones, which wait on nobody.
+export function derivedAnchorLabel(type: TimelineMilestoneType): string | null {
+  const rule = DERIVED_RULES.find((r) => r.type === type);
+  return rule ? ANCHOR_LABEL[rule.anchor] : null;
+}
+
 export function describeDerivedRule(type: TimelineMilestoneType): string | null {
   const rule = DERIVED_RULES.find((r) => r.type === type);
   if (!rule) return null;

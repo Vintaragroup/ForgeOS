@@ -23,6 +23,8 @@ export function TimelineMilestoneRow({
   rawDate,
   responsibleParty,
   source,
+  derivedRule,
+  anchorLabel,
   confirmed,
   citationHref,
   citationLabel,
@@ -48,12 +50,25 @@ export function TimelineMilestoneRow({
   conflictDisplayDate?: string | null;
   conflictCitationHref?: string | null;
   conflictCitationLabel?: string | null;
+  // How this date is computed, e.g. "28 days before shipping date", and
+  // which entered date it needs. Both null for a milestone somebody enters
+  // directly. Shown so a date that moved on its own explains itself, and a
+  // blank one says what it is waiting for rather than just "Missing".
+  derivedRule?: string | null;
+  anchorLabel?: string | null;
   updateAction: (formData: FormData) => void | Promise<void>;
 }) {
   const [isEditing, setIsEditing] = useState(false);
 
   const statusChip = !displayDate ? (
-    <StatusChip tone="critical">Missing</StatusChip>
+    anchorLabel ? (
+      // A computed row with no anchor yet. Naming the date it needs is the
+      // difference between "something is missing" and "enter the ship
+      // date" -- and rush charges hang off several of these.
+      <StatusChip tone="critical">Needs {anchorLabel}</StatusChip>
+    ) : (
+      <StatusChip tone="critical">Missing</StatusChip>
+    )
   ) : conflictDisplayDate ? (
     <StatusChip tone="warning">Differs from source</StatusChip>
   ) : !confirmed ? (
@@ -108,7 +123,10 @@ export function TimelineMilestoneRow({
 
   return (
     <tr className="border-b border-neutral-100">
-      <td className="py-1.5 pr-2 text-sm font-medium">{label}</td>
+      <td className="py-1.5 pr-2 text-sm font-medium">
+        {label}
+        {derivedRule && <span className="block text-xs font-normal text-neutral-400">{derivedRule}</span>}
+      </td>
       <td className="py-1.5 pr-2 text-sm">
         {displayDate ?? "—"}
         {citationHref && (
