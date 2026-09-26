@@ -50,6 +50,15 @@ export interface VendorQuoteLine {
   // help distinguish otherwise-identical lines) AND to the human reviewer
   // in the match UI, but never treated as a deterministic key.
   unitCode: string | null;
+  // Whether this row's price was written against the row itself, or is a
+  // labelled block's SUB-TOTAL standing for components that carry no
+  // prices at all. Fuse Technical Group's quotes are entirely the latter:
+  // "LED Package" lists thirty components and prices none of them, then
+  // closes with SUB-TOTAL 8,580.00. Emitting those components as rows
+  // both loses the money and double-lists the scope, so one row stands
+  // for the block -- and a reviewer needs to know which kind they are
+  // looking at.
+  priceBasis?: "line" | "package";
   // Real PDF page number this line's sourceQuote was found on (resolved
   // via text-extraction.ts's locateQuotePage in vendor-quote-service.ts,
   // same lazy PDF-only pattern as scope-coverage-service.ts's

@@ -23,10 +23,26 @@ import { AlreadyImportedError } from "@/lib/import-errors";
 import { BASIC_MODEL, getOpenAiClient } from "@/lib/ai/openai-client";
 import { recordAiUsage } from "@/lib/ai/ai-usage-service";
 import { addLineItemsBulk, findOrCreateSection } from "@/lib/estimate-service";
+import { inferCategoryFromDescription } from "@/lib/line-item-category";
 import type { VendorQuoteLine } from "@/lib/ai/vendor-match-ai-service";
 
 const SOURCE_QUOTE_DESCRIPTION =
   "A short (under 150 characters) quote copied EXACTLY, character-for-character, from the document text above, showing where this line item and its price come from. Never paraphrase or summarize the quote itself.";
+
+// A readable section name for a quote whose blocks are unlabelled.
+// Strips the vendor's own job/quote numbering and the extension, so
+// "371520-Expo-CCI--Pharmacy-Hub--HLTH-2026--LED-V1.pdf" reads as
+// "Pharmacy Hub HLTH 2026 LED" rather than as a filename.
+export function sectionNameFromQuote(filename: string): string {
+  const withoutExtension = filename.replace(/\.[a-z0-9]+$/i, "");
+  const cleaned = withoutExtension
+    .replace(/^[\d\s-]+/, "")
+    .replace(/\bExpo[\s-]*CCI\b/gi, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return cleaned.length > 0 ? cleaned : withoutExtension;
+}
 
 function buildVendorQuoteSchema() {
   return {
@@ -54,13 +70,19 @@ function buildVendorQuoteSchema() {
                 description: "This line's own stated total/extended price, or null if the document doesn't show one separately from unitPrice.",
               },
               sourceQuote: { type: "string", description: SOURCE_QUOTE_DESCRIPTION },
+              priceBasis: {
+                type: "string",
+                enum: ["line", "package"],
+                description:
+                  "\"line\" when this row's own price is written against it. \"package\" when the price belongs to a labelled block and the components inside it carry no prices of their own.",
+              },
               unitCode: {
                 type: ["string", "null"],
                 description:
                   "The nearest preceding unit/section header this line is grouped under, if the document organizes its priced lines into labeled blocks (e.g. \"CAM-06\", \"BTH-04\", \"Section 203\") -- copy the header exactly as written. Null if the document has no such per-item grouping structure.",
               },
             },
-            required: ["description", "unit", "qty", "unitPrice", "totalPrice", "sourceQuote", "unitCode"],
+            required: ["description", "unit", "qty", "unitPrice", "totalPrice", "sourceQuote", "unitCode", "priceBasis"],
           },
         },
       },
@@ -80,7 +102,21 @@ For each item:
 - sourceQuote: a short verbatim quote copied EXACTLY from the document showing where this item and its price come from.
 - unitCode: if this document organizes its priced lines into labeled blocks (a unit or section code like "CAM-06", "BTH-04", "Section 203" that several consecutive lines fall under), copy that block's own header exactly. Otherwise null -- don't invent a code the document doesn't actually use.
 
-Only extract lines that represent an actual priced item -- skip subtotals, section headers, terms and conditions, and narrative text entirely. If the document has no priced line items at all, return an empty items array rather than inventing something.`;
+- priceBasis: "line" when the price is written against this row itself. "package" when it is a block's SUB-TOTAL and the components inside that block carry no prices of their own.
+
+MOST IMPORTANT: some quotes price by the package, not the line. A block like
+
+    LED Package
+      28 Recience EX2i BROMPTON LED Tile Kit
+      1 Brompton Tessera SX40 Processor (SM)
+      ... more components, none with a price ...
+    SUB-TOTAL 8,580.00
+
+is ONE priced item, not thirty. Return a single row for the block: description = the block's own header followed by its components, unitPrice = the SUB-TOTAL, qty = 1, priceBasis = "package". Do NOT return the components as separate rows -- they have no prices, and emitting them at zero both loses the money and double-lists the scope.
+
+When a line genuinely carries its own price, return it on its own with priceBasis "line".
+
+Never invent a price. If a block has neither line prices nor a subtotal, leave it out. Skip running totals that merely re-add blocks you have already returned (a "RENTAL Sub-Total" after several block subtotals), section headers, terms and narrative text. If the document has no prices at all, return an empty items array rather than inventing something.`;
 
 // Same ceiling and reasoning as scope-line-item-service.ts's own
 // MAX_INPUT_CHARS.
@@ -94,6 +130,7 @@ type VendorQuoteLineFromAI = {
   totalPrice: number | null;
   sourceQuote: string;
   unitCode: string | null;
+  priceBasis: "line" | "package";
 };
 
 // opportunityId is the caller's already-access-checked opportunity, NOT
@@ -183,6 +220,7 @@ export async function proposeVendorQuoteLineItems(
       totalPrice: item.totalPrice,
       sourceQuote,
       unitCode: item.unitCode || null,
+      priceBasis: item.priceBasis,
       pageNumber: pageTexts ? locateQuotePage(pageTexts, sourceQuote) : null,
     };
   });
@@ -276,14 +314,25 @@ export async function commitStandaloneVendorQuoteImport(estimateVersionId: strin
     unitCodes.push(row.unitCode ?? null);
   }
 
+  const liveCategories = await db.category.findMany({ where: { deletedAt: null } });
+
   let nextSortOrder = existingSectionCount;
   const created = [];
   for (const unitCode of unitCodes) {
     const section = await findOrCreateSection(estimateVersionId, {
-      name: preview.filename,
+      // The vendor's own block header -- "LED Package", "Power and Data",
+      // "Monitors" -- which is what the scope actually is.
+      //
+      // This used to be the FILENAME, so importing a quote created a
+      // section called "371520-Expo-CCI--Pharmacy-Hub--HLTH-2026--LED-V1.pdf"
+      // and that string printed as a heading on the client's proposal.
+      // Exactly the fault the estimating lead flagged on ABC Chicago,
+      // where "369711-VERSION-2-EXPO-CCI--FULL-SWING...PDF" was a visible
+      // H2. A filename is a fact about a file, never a name for scope.
+      name: unitCode ?? sectionNameFromQuote(preview.filename),
       sectionType: "CATEGORY",
       sortOrder: nextSortOrder++,
-      groupLabel: unitCode,
+      groupLabel: null,
     });
 
     const rowsForGroup = preview.rows.filter((r) => (r.unitCode ?? null) === unitCode);
@@ -292,6 +341,13 @@ export async function commitStandaloneVendorQuoteImport(estimateVersionId: strin
       section.id,
       rowsForGroup.map((row) => ({
         lineType: "MATERIAL" as const,
+        // Every row used to land with category null, which resolves to
+        // "Other" on the proposal -- so a vendor's LED package and its
+        // power distro both filed under Other. Inferred from the row's own
+        // text, then the block header it sits under, before falling back.
+        category:
+          inferCategoryFromDescription(row.description, liveCategories) ??
+          (unitCode ? inferCategoryFromDescription(unitCode, liveCategories) : null),
         description: row.description,
         qty: row.qty ?? 1,
         unit: row.unit,
@@ -305,7 +361,9 @@ export async function commitStandaloneVendorQuoteImport(estimateVersionId: strin
           unit: row.unit,
           unitCost: String(row.unitPrice),
           lineType: "MATERIAL" as const,
-          category: null,
+          category:
+            inferCategoryFromDescription(row.description, liveCategories) ??
+            (unitCode ? inferCategoryFromDescription(unitCode, liveCategories) : null),
           aiFeature: "VENDOR_QUOTE_LINE_ITEMS" as const,
         },
       })),

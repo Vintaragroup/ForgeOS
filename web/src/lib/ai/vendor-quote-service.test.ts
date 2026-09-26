@@ -166,9 +166,18 @@ describe("commitStandaloneVendorQuoteImport", () => {
     const signItem = lineItems.find((li) => li.description.includes("Radius Sign"));
     expect(signItem?.unitCost.toNumber()).toBe(14432.88);
 
+    // A section is NAMED for the vendor's own block header, and no longer
+    // carries a groupLabel at all.
+    //
+    // This used to be the other way round: groupLabel held the block code
+    // and every section was named after the FILE, so importing a quote put
+    // a string like "371520-Expo-CCI--Pharmacy-Hub--HLTH-2026--LED-V1.pdf"
+    // on the client's proposal as a heading. groupLabel is the booth/
+    // element key everywhere else in this app, and a vendor's block code
+    // is not an element, so claiming that field misgrouped the rows too.
     const sections = await db.estimateSection.findMany({ where: { estimateVersionId: version.id } });
-    expect(sections.map((s) => s.groupLabel).sort()).toEqual([null, "GFX-01"].sort());
-    expect(sections.every((s) => s.name === document.filename)).toBe(true);
+    expect(sections.every((s) => s.groupLabel === null)).toBe(true);
+    expect(sections.map((s) => s.name).sort()).toEqual(["GFX-01", "ShowRig quote"].sort());
   });
 
   it("stamps every committed row's aiProposalSnapshot with aiFeature VENDOR_QUOTE_LINE_ITEMS", async () => {

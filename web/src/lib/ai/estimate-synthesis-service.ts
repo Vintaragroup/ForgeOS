@@ -23,7 +23,11 @@ import { commitScopeLineItems, proposeLineItemsFromScope } from "@/lib/ai/scope-
 import { proposeLineItemsFromDrawing } from "@/lib/ai/drawing-line-item-service";
 import { filenameStem } from "@/lib/document-filename";
 import { findClientPricingTemplateSheet } from "@/lib/client-pricing-template-service";
-import { XLSX_MIME } from "@/lib/ai/text-extraction";
+import { PDF_MIME, XLSX_MIME } from "@/lib/ai/text-extraction";
+import {
+  commitStandaloneVendorQuoteImport,
+  proposeVendorQuoteLineItems,
+} from "@/lib/ai/vendor-quote-service";
 
 export interface BuildEstimateResult {
   imported: { filename: string; kind: "pricing" | "scope" | "drawing"; rowsImported: number }[];
@@ -291,11 +295,52 @@ export async function buildEstimateFromAllDocuments(
     where: {
       opportunityId,
       deletedAt: null,
-      documentType: { notIn: ["PRICING_SCHEDULE", "DRAWING"] },
+      // VENDOR_QUOTE leaves too, as of this change. It used to come
+      // through here and be read by proposeLineItemsFromScope, whose
+      // extraction schema has NO price field at all -- so two real Fuse
+      // Technical Group quotes worth $10,240 and $8,182 imported as
+      // seventeen line items at $0.00 each. The importer that reads a
+      // vendor's prices existed the whole time and this button never
+      // called it.
+      documentType: { notIn: ["PRICING_SCHEDULE", "DRAWING", "VENDOR_QUOTE"] },
       ...notOtherProject,
     },
     orderBy: { createdAt: "asc" },
   });
+  // Vendor quotes, priced. Runs before the scope pass so that a job's
+  // real money is in before anything slower and vaguer gets a look at
+  // the remaining budget.
+  const vendorQuoteDocs = await db.document.findMany({
+    where: { opportunityId, deletedAt: null, documentType: "VENDOR_QUOTE", ...notOtherProject },
+    orderBy: { createdAt: "asc" },
+  });
+  for (const doc of vendorQuoteDocs) {
+    if (progress.budget.exhausted) return finish(outOfTime(vendorQuoteDocs.length - imported.length - skipped.length));
+    if (doc.extractionStatus !== "COMPLETE") {
+      skipped.push({ filename: doc.filename, reason: "Not analyzed yet -- click Analyze on the Opportunity page first." });
+      continue;
+    }
+    if (doc.mimeType !== PDF_MIME) {
+      // A spreadsheet vendor quote is a pricing schedule in everything
+      // but its tag, and previewPricingImport already dispatches those.
+      skipped.push({
+        filename: doc.filename,
+        reason: "Tagged Vendor quote but is not a PDF -- import it from the Pricing schedule path instead.",
+      });
+      continue;
+    }
+    await progress.startingOn(doc.filename);
+    try {
+      if (!doc.vendorQuoteLineItems) {
+        await proposeVendorQuoteLineItems(doc.id, opportunityId, userId);
+      }
+      const result = await commitStandaloneVendorQuoteImport(estimateVersionId, doc.id);
+      imported.push({ filename: doc.filename, kind: "pricing", rowsImported: result.rowsImported });
+    } catch (err) {
+      skipped.push({ filename: doc.filename, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   const scopeOutcome = await proposeAndCommit(
     estimateVersionId, opportunityId, userId, scopeDocs, "scope", proposeLineItemsFromScope, imported, skipped, progress,
   );
